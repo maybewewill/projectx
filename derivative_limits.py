@@ -857,7 +857,7 @@ class Story(Scene):
              (r"\lim_{h\to 0}\frac{2xh+h^2}{h}", "x² взаимно уничтожились."),
              (r"\lim_{h\to 0}\,(2x+h)", "Сократили на h — можно, ведь под пределом h ≠ 0."),
              (r"2x", "Когда h → 0, выражение 2x + h стремится к 2x.")],
-            size=36, pos=DOWN * 0.3, max_h=5.2)
+            size=36, pos=UP * 0.15, max_h=4.7)
         box = SurroundingRectangle(self.mobjects[-1], color=C_SEC)
         res = M(r"(x^2)'=2x", size=48, color=C_SEC).to_corner(UR, buff=0.5)
         self.play(Write(res))
