@@ -940,8 +940,14 @@ class Story(Scene):
         self.say("Разностное отношение в нуле равно |h|/h: справа это +1, слева −1. "
                  "Односторонние пределы разные — предела нет.")
         ang = ValueTracker(-1)
-        rot = always_redraw(lambda: Line(ax.c2p(-2, -2 * ang.get_value()), ax.c2p(2, 2 * ang.get_value()),
-                                         color=C_SEC, stroke_width=3))
+        def rot_line():
+            k = ang.get_value()
+            lim = 2 if abs(k) < 0.25 else 0.5 / abs(k)   # не опускаемся ниже y = −0,5
+            x0 = -lim if k > 0 else -2
+            x1 = lim if k < 0 else 2
+            return Line(ax.c2p(x0, k * x0), ax.c2p(x1, k * x1), color=C_SEC, stroke_width=3)
+
+        rot = always_redraw(rot_line)
         self.add(rot)
         self.play(ang.animate.set_value(1), run_time=3)
         self.play(ang.animate.set_value(-0.3), run_time=2)
