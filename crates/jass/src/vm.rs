@@ -13,7 +13,8 @@
 //! `RunStatus::MissingTables`; they never fall back to IEEE math.
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::rc::Rc;
 
 use softfloat::{arith, conv, Tables, F32};
 
@@ -231,15 +232,19 @@ pub enum NativeResult {
 }
 
 /// Context handed to natives: string table, game time, lookup tables, the calling thread and the
-/// function namespace.
+/// function namespace. Natives can also run script functions ([`NativeCtx::call_func`]) and start
+/// action chains ([`NativeCtx::spawn_chain`]); both need the machine, so they are methods here.
 pub struct NativeCtx<'a> {
-    strings: &'a mut StringTable,
-    functions: &'a BTreeMap<String, u32>,
-    tables: Option<&'a Tables>,
-    extensions: &'a mut Vec<Box<dyn Any>>,
-    now: F32,
+    m: &'a mut Machine,
     thread: ThreadId,
-    spawns: Vec<u32>,
+    key: u32,
+    spawns: Vec<Spawn>,
+}
+
+/// A chain of script functions requested by a native. It starts after the native returns.
+struct Spawn {
+    chain: Vec<u32>,
+    key: u32,
 }
 
 impl NativeCtx<'_> {
@@ -247,20 +252,21 @@ impl NativeCtx<'_> {
     /// This is how game-state crates give natives access to their own state (e.g. the handle table)
     /// without the VM depending on them.
     pub fn extension<T: Any>(&mut self) -> Option<&mut T> {
-        self.extensions
+        self.m
+            .extensions
             .iter_mut()
             .find_map(|e| (**e).downcast_mut::<T>())
     }
 
     /// Current game time in seconds.
     pub fn now(&self) -> F32 {
-        self.now
+        self.m.now
     }
 
     /// The soft-float lookup tables, or `None` when the VM was created without them. A native that
     /// needs them returns `NativeResult::Fail(RunStatus::MissingTables)` in that case.
     pub fn tables(&self) -> Option<&Tables> {
-        self.tables
+        self.m.tables.as_ref()
     }
 
     /// The thread that is running the native.
@@ -268,34 +274,67 @@ impl NativeCtx<'_> {
         self.thread
     }
 
+    /// The context key of the calling thread (see [`Vm::run_chain`]). Threads that a native starts
+    /// from this one inherit the key unless they are given another one.
+    pub fn thread_key(&self) -> u32 {
+        self.key
+    }
+
     /// The game time at which a sleep of `seconds` that starts now ends: `now + seconds` with the
     /// soft-float add. The VM and the hosts use this same expression for wake times.
     pub fn wake_time(&self, seconds: F32) -> F32 {
-        wake_time(self.now, seconds)
+        wake_time(self.m.now, seconds)
     }
 
     pub fn intern(&mut self, s: &str) -> u32 {
-        self.strings.intern(s)
+        self.m.strings.intern(s)
     }
 
     pub fn string(&self, id: u32) -> &str {
-        self.strings.get(id)
+        self.m.strings.get(id)
     }
 
     /// Script function id by name.
     pub fn function_id(&self, name: &str) -> Option<u32> {
-        self.functions.get(name).copied()
+        self.m.module.function_index.get(name).copied()
+    }
+
+    /// Runs script function `func` synchronously in a new thread and returns its value. The new
+    /// thread inherits this thread's context key. A function that sleeps or yields returns `Err`
+    /// with that stop (its thread is dropped). Budget exhaustion is resumed transparently.
+    pub fn call_func(&mut self, func: u32, args: &[Value]) -> Result<Value, RunStatus> {
+        self.m.call_thread(func, args, self.key)
+    }
+
+    /// Like [`NativeCtx::call_func`], with the new thread's context key given explicitly.
+    pub fn call_func_keyed(
+        &mut self,
+        func: u32,
+        args: &[Value],
+        key: u32,
+    ) -> Result<Value, RunStatus> {
+        self.m.call_thread(func, args, key)
     }
 
     /// Requests a new thread running script function `func`. It starts right after the native
-    /// returns, before the calling thread continues (synchronous start, see `Machine::start_nested`).
+    /// returns, before the calling thread continues (see [`NativeCtx::spawn_chain`]).
     pub fn spawn(&mut self, func: u32) {
-        self.spawns.push(func);
+        self.spawn_chain(vec![func], self.key);
+    }
+
+    /// Requests a thread that runs the functions of `chain` one after another (no arguments, no
+    /// results). It starts right after the native returns and runs synchronously until its first
+    /// stop (a sleep, a yield or its end). A sleep inside one function suspends the rest of the
+    /// chain, which continues when the thread is resumed. `key` is the new thread's context key.
+    pub fn spawn_chain(&mut self, chain: Vec<u32>, key: u32) {
+        self.spawns.push(Spawn { chain, key });
     }
 }
 
 /// A native implementation. Arguments are already checked against the declaration.
-pub type NativeFn = Box<dyn Fn(&mut NativeCtx<'_>, &[Value]) -> NativeResult>;
+///
+/// Shared (`Rc`) so that the VM can keep the native alive while it runs a nested script function.
+pub type NativeFn = Rc<dyn Fn(&mut NativeCtx<'_>, &[Value]) -> NativeResult>;
 
 /// Natives by name. Bound to the module's declarations when the VM is created.
 #[derive(Default)]
@@ -339,7 +378,7 @@ impl NativeRegistry {
     where
         F: Fn(&mut NativeCtx<'_>, &[Value]) -> NativeResult + 'static,
     {
-        let boxed: NativeFn = Box::new(f);
+        let boxed: NativeFn = Rc::new(f);
         match self.index.get(name) {
             Some(&i) => self.entries[i].1 = boxed,
             None => {
@@ -384,6 +423,9 @@ pub enum RunStatus {
     /// A real division or a table-based real function ran in a VM created without the `softfloat`
     /// lookup tables (`Vm::new` got `None`). The thread is aborted; nothing falls back to IEEE math.
     MissingTables,
+    /// A native tried to run a script function inside too many nested runs (see `MAX_NESTED_RUNS`).
+    /// UNVERIFIED vs retail: the original has no such limit that is known.
+    NestingLimit,
 }
 
 /// Identifies a thread. Ids are assigned in creation order.
@@ -419,6 +461,10 @@ pub struct Thread {
     result: Option<Value>,
     /// Set when the thread finished or failed; the scheduler drops it.
     dead: bool,
+    /// Context key given by the host (0 for none). Natives read it through `NativeCtx::thread_key`.
+    key: u32,
+    /// Functions still to run after the current one returns (a chain, see `NativeCtx::spawn_chain`).
+    chain: VecDeque<u32>,
 }
 
 impl Thread {
@@ -429,6 +475,11 @@ impl Thread {
     /// Depth of the call stack (0 once the thread has finished).
     pub fn depth(&self) -> usize {
         self.frames.len()
+    }
+
+    /// The host's context key of this thread (0 for none).
+    pub fn key(&self) -> u32 {
+        self.key
     }
 }
 
@@ -464,6 +515,8 @@ fn new_thread(module: &Module, id: ThreadId, func: u32, args: &[Value]) -> Threa
         state: State::Runnable,
         result: None,
         dead: false,
+        key: 0,
+        chain: VecDeque::new(),
     }
 }
 
@@ -813,23 +866,20 @@ impl Machine {
                 let Some(bound) = self.bindings.get(idx).copied().flatten() else {
                     return Err(RunStatus::FunctionNotFound);
                 };
+                let native = Rc::clone(&self.registry.entries[bound].1);
                 let (result, spawns) = {
                     let mut ctx = NativeCtx {
-                        strings: &mut self.strings,
-                        functions: &self.module.function_index,
-                        tables: self.tables.as_ref(),
-                        extensions: &mut self.extensions,
-                        now: self.now,
+                        m: self,
                         thread: th.id,
+                        key: th.key,
                         spawns: Vec::new(),
                     };
-                    let f = &self.registry.entries[bound].1;
-                    let res = f(&mut ctx, &args);
+                    let res = native(&mut ctx, &args);
                     (res, ctx.spawns)
                 };
                 // Synchronous starts requested by the native run before the caller continues.
-                for func in spawns {
-                    self.start_nested(func);
+                for sp in spawns {
+                    self.start_chain(sp.chain, sp.key);
                 }
                 match result {
                     NativeResult::Return(v) => {
@@ -852,6 +902,11 @@ impl Machine {
                 };
                 match th.frames.last() {
                     None => {
+                        // A chain continues with its next function; the chain's result is discarded.
+                        if let Some(next) = th.chain.pop_front() {
+                            th.frames.push(make_frame(&self.module, next, &[], NO_SLOT));
+                            return Ok(());
+                        }
                         th.result = Some(v);
                         return Err(RunStatus::Finished);
                     }
@@ -863,16 +918,21 @@ impl Machine {
         Ok(())
     }
 
-    /// Runs a thread started by a native (ExecuteFunc) to its first stop, right now. A thread that
-    /// is not finished is queued in `spawned` for the scheduler.
-    fn start_nested(&mut self, func: u32) {
+    /// Runs a chain of functions started by a native to its first stop, right now. A thread that is
+    /// not finished is queued in `spawned` for the scheduler. A chain whose first function does not
+    /// exist (or takes arguments) fails the thread, as a call to a missing function does.
+    fn start_chain(&mut self, chain: Vec<u32>, key: u32) {
         let id = self.alloc_id();
+        let Some(first) = chain.first().copied() else {
+            return;
+        };
+        let mut child = new_thread(&self.module, id, first, &[]);
+        child.key = key;
+        child.chain = chain[1..].iter().copied().collect();
         if self.nest >= MAX_NESTED_RUNS {
-            let t = new_thread(&self.module, id, func, &[]);
-            self.spawned.push(t);
+            self.spawned.push(child);
             return;
         }
-        let mut child = new_thread(&self.module, id, func, &[]);
         self.nest += 1;
         let stop = self.run(&mut child, self.budget);
         self.nest -= 1;
@@ -886,6 +946,30 @@ impl Machine {
             }
             RunStatus::Yield | RunStatus::BudgetExhausted => self.spawned.push(child),
             err => self.failures.push((id, err)),
+        }
+    }
+
+    /// Runs script function `func` to completion in a new thread with context key `key` and returns
+    /// its value. Used by natives (see `NativeCtx::call_func`) and by hosts (see `Vm::call_code`).
+    fn call_thread(&mut self, func: u32, args: &[Value], key: u32) -> Result<Value, RunStatus> {
+        if self.nest >= MAX_NESTED_RUNS {
+            return Err(RunStatus::NestingLimit);
+        }
+        let id = self.alloc_id();
+        let mut th = new_thread(&self.module, id, func, args);
+        th.key = key;
+        self.nest += 1;
+        let budget = self.budget;
+        let stop = loop {
+            match self.run(&mut th, budget) {
+                RunStatus::BudgetExhausted => continue,
+                other => break other,
+            }
+        };
+        self.nest -= 1;
+        match stop {
+            RunStatus::Finished => Ok(th.result.unwrap_or(Value::Null)),
+            other => Err(other),
         }
     }
 }
@@ -1034,7 +1118,14 @@ fn verify(m: &Module) -> Result<(), VmError> {
                 }
                 _ => {}
             }
-            for s in [ins.dest, ins.left, ins.right] {
+            // For calls `right` is the argument count, and `left` is the first argument slot, which
+            // may sit at the end of the frame when there are no arguments (its range check is above).
+            let operands = match ins.op {
+                Op::CallScript | Op::CallNative if r == 0 => [ins.dest, NO_SLOT, NO_SLOT],
+                Op::CallScript | Op::CallNative => [ins.dest, ins.left, NO_SLOT],
+                _ => [ins.dest, ins.left, ins.right],
+            };
+            for s in operands {
                 if s != NO_SLOT && s as usize >= f.num_slots {
                     return Err(bad(pc, format!("slot {s} out of range")));
                 }
@@ -1150,6 +1241,12 @@ impl Vm {
     /// Game time as of the last `step` or `resume`.
     pub fn now(&self) -> F32 {
         self.m.now
+    }
+
+    /// Sets the game time that the next [`Vm::call_func`] runs at. Hosts that run script code at a
+    /// timer's expiry set it to that expiry first (`run_chain` and `resume` set it themselves).
+    pub fn set_now(&mut self, now: F32) {
+        self.m.now = now;
     }
 
     /// Whether the VM has the `softfloat` lookup tables.
@@ -1285,6 +1382,24 @@ impl Vm {
     fn finish_pass(&mut self) {
         self.threads.retain(|t| !t.dead);
         self.threads.append(&mut self.m.spawned);
+    }
+
+    /// Runs a chain of script functions (no arguments) as one new thread with context key `key`,
+    /// at game time `now`, and queues it for the scheduler if it has not finished. The first
+    /// function runs right away, until its first stop, like a native's `spawn_chain`. Hosts use this
+    /// for work that starts at a timer's expiry (for example a timer handler).
+    pub fn run_chain(&mut self, chain: &[u32], key: u32, now: F32) {
+        self.m.now = now;
+        self.m.start_chain(chain.to_vec(), key);
+        self.finish_pass();
+    }
+
+    /// Runs script function `func` with `args` to completion, in a new thread with context key `key`,
+    /// at the current game time, and returns its value. A suspension or an error is returned as
+    /// `Err`. Hosts use this for condition functions; natives use `NativeCtx::call_func`.
+    pub fn call_func(&mut self, func: u32, args: &[Value], key: u32) -> Result<Value, RunStatus> {
+        self.check_args(func, args)?;
+        self.m.call_thread(func, args, key)
     }
 
     /// Runs `name` synchronously to completion in a private thread and returns its value
