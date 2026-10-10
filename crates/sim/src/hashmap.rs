@@ -23,13 +23,16 @@
 //! * Removal (`0x6F3ADE10`, the element base destructor, unlinks the element from its chain and the
 //!   global list): the order of the remaining elements is kept. VERIFIED for the chain order.
 //!
-//! NOT VERIFIED: the order after a growth. The original rehashes through `0x6F3FE240` (child) and
-//! `0x6F3FE5E0` (parent) with a stack-local temporary list and a bucket array reallocation. The
-//! Unicorn harness did not reproduce a correct rehash (elements stayed in their old buckets), so this
-//! port uses a documented guess: elements are taken from the old buckets in the original's pop order
-//! (buckets ascending, tail first) and each is put back at the head of its new bucket. Once a table
-//! has grown, the destroy order of this port is therefore unverified. The divergence can begin at the
-//! first insert that reports [`Insert::Grew`]; before that, the order is exact.
+//! Order after a growth: LIKELY (read from the disassembly of the rehash `0x6F3FE240`, not run in
+//! Unicorn). The rehash (1) walks the old buckets in ascending order and repeatedly takes the element
+//! at the bucket's `E+8` end (the same end the destroy walk takes first), appending each to a
+//! stack-local temporary list in that order; (2) resizes the bucket array (`0x6F3F9EA0`) and
+//! re-initialises empty bucket sentinels; (3) takes elements from the front of the temporary list and
+//! links each into its new bucket through the terminator's previous-link field, i.e. at the end
+//! opposite to `E+8`. In this port's terms (a bucket's `Vec` end is the `E+8` end): pop from each old
+//! bucket's end, buckets ascending, and insert each at index 0 of its new bucket. The Unicorn harness
+//! could not run the rehash (its reallocation stub moves the self-referencing bucket sentinels, which
+//! the original's array resize handles), so this remains unverified by emulation.
 //!
 //! The global list (sentinel at `H+8`, newest first) affects only the link updates of the removal path
 //! and has no effect on the destroy order, so it is not modelled.
@@ -39,7 +42,7 @@
 pub enum Insert {
     /// The element went into an existing bucket; no growth.
     Placed,
-    /// The table doubled on this insert (the rehash order is unverified).
+    /// The table doubled on this insert (rehash order LIKELY, see the module notes).
     Grew,
 }
 
@@ -137,7 +140,7 @@ impl<V> BucketMap<V> {
         grew
     }
 
-    /// Doubles the bucket count (UNVERIFIED rehash order, see the module notes).
+    /// Doubles the bucket count (rehash order LIKELY, from the disassembly; see the module notes).
     fn grow(&mut self) {
         let newcount = self.buckets.len() * 2;
         self.score = 0;
