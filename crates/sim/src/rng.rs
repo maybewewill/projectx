@@ -7,7 +7,7 @@
 //! the user's own `Game.dll`.
 
 use crate::pe;
-use crate::softfloat;
+use softfloat::{arith, F32};
 
 /// Number of independent streams (combat, creep drops, ...).
 pub const STREAM_COUNT: usize = 45;
@@ -154,19 +154,22 @@ impl Rng {
     /// Real number from the two float32 bounds, as `GetRandomReal`.
     ///
     /// Always advances the state by one step, even when `a == b`. The range is
-    /// `|b - a|` (computed with [`softfloat`]), the draw `U` is in `[0, 1)`, and
+    /// `|b - a|` (computed with `softfloat::arith`), the draw `U` is in `[0, 1)`, and
     /// the result is `a + range * U`, all in the engine's soft-float arithmetic.
     pub fn random_real(&mut self, table: &RngTable, a: f32, b: f32) -> f32 {
-        let (ab, bb) = (a.to_bits(), b.to_bits());
+        let (ab, bb) = (F32::from_bits(a.to_bits()), F32::from_bits(b.to_bits()));
         let range = if b < a {
-            softfloat::sub(ab, bb)
+            arith::sub(ab, bb)
         } else {
-            softfloat::sub(bb, ab)
+            arith::sub(bb, ab)
         };
         let r = self.next_u32(table);
-        let u = softfloat::add((r & 0x007F_FFFF) | 0x3F80_0000, 0xBF80_0000);
-        let t = softfloat::mul(range, u);
-        f32::from_bits(softfloat::add(ab, t))
+        let u = arith::add(
+            F32::from_bits((r & 0x007F_FFFF) | 0x3F80_0000),
+            F32::from_bits(0xBF80_0000),
+        );
+        let t = arith::mul(range, u);
+        arith::add(ab, t).to_f32()
     }
 }
 

@@ -3,9 +3,46 @@
 //! Each check compiles `set gV = <expr>` inside a function and reads `gV` back. The declarations
 //! use the signatures of docs/spec/natives-1.26a.tsv.
 
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+use std::sync::OnceLock;
+
 use jass::compile::compile;
 use jass::natives::register_pure;
-use jass::vm::{NativeRegistry, Value, Vm};
+use jass::vm::{NativeRegistry, RunStatus, Value, Vm};
+use softfloat::{arith, conv, math, Tables, F32};
+
+/// The soft-float lookup tables read from the user's own `Game.dll` (`GAME_DLL`), once per run.
+/// `None` when `GAME_DLL` is not set.
+fn tables() -> Option<Tables> {
+    static TABLES: OnceLock<Option<Tables>> = OnceLock::new();
+    TABLES
+        .get_or_init(|| {
+            let path = std::env::var("GAME_DLL").ok()?;
+            let bytes =
+                std::fs::read(&path).unwrap_or_else(|e| panic!("reading GAME_DLL={path}: {e}"));
+            Some(Tables::from_game_dll(&bytes).expect("lookup tables in GAME_DLL"))
+        })
+        .clone()
+}
+
+/// The tables for a test that compares against them, or `None` (with a note) if `GAME_DLL` is unset.
+fn need_tables() -> Option<Tables> {
+    let t = tables();
+    if t.is_none() {
+        eprintln!("GAME_DLL not set: skipping test that needs the soft-float lookup tables");
+    }
+    t
+}
+
+/// The soft-float value of an `f32` literal (its bit pattern).
+fn sf(x: f32) -> F32 {
+    F32::from_bits(x.to_bits())
+}
+
+/// `R2I` of an `f32`, through the softfloat helper the native uses.
+fn r2i_f(x: f32) -> i32 {
+    conv::r2i(sf(x))
+}
 
 const NATIVES: &str = r#"
 native Deg2Rad takes real a returns real
@@ -51,7 +88,7 @@ fn eval_with(ty: &str, expr: &str, extra: &str) -> Vm {
     );
     let prog = jass::parse(&src).unwrap_or_else(|e| panic!("parse failed: {e}\n{src}"));
     let module = compile(&[prog]).unwrap_or_else(|e| panic!("compile failed: {e:?}\n{src}"));
-    let mut vm = Vm::new(module, registry()).unwrap_or_else(|e| panic!("vm: {e}"));
+    let mut vm = Vm::new(module, registry(), tables()).unwrap_or_else(|e| panic!("vm: {e}"));
     vm.call("Run", &[])
         .unwrap_or_else(|e| panic!("run failed: {e:?} for {expr}"));
     vm
@@ -59,7 +96,7 @@ fn eval_with(ty: &str, expr: &str, extra: &str) -> Vm {
 
 fn real(expr: &str) -> f32 {
     match eval("real", expr).global("gV") {
-        Some(Value::Real(f)) => f,
+        Some(Value::Real(f)) => f.to_f32(),
         other => panic!("expected real for {expr}, got {other:?}"),
     }
 }
@@ -87,42 +124,90 @@ fn close(a: f32, b: f32, tol: f32) -> bool {
 // Math
 // ------------------------------------------------------------------------------------------
 
+/// The table-based helpers give approximations, so the expected bits come from the softfloat crate
+/// (the same helper the native calls). The loose checks against the libm values only guard against
+/// gross errors.
 #[test]
-fn trig_and_roots_match_reference_values() {
-    assert_eq!(real("Sin(0.0)"), 0.0);
-    assert_eq!(real("Cos(0.0)"), 1.0);
-    assert_eq!(real("Tan(0.0)"), 0.0);
-    assert_eq!(real("SquareRoot(16.0)"), 4.0);
-    assert_eq!(real("Pow(2.0, 10.0)"), 1024.0);
-    assert!(close(
-        real("Atan2(1.0, 1.0)"),
-        std::f32::consts::FRAC_PI_4,
-        1e-6
-    ));
-    assert!(close(real("Atan(1.0) * 4.0"), std::f32::consts::PI, 1e-5));
-    assert!(close(real("Asin(1.0)"), std::f32::consts::FRAC_PI_2, 1e-6));
-    assert_eq!(real("Acos(1.0)"), 0.0);
+fn trig_and_roots_match_softfloat() {
+    let Some(t) = need_tables() else { return };
+    let same = |expr: &str, expected: F32| {
+        assert_eq!(real(expr).to_bits(), expected.to_bits(), "{expr}");
+    };
+    same("Sin(0.0)", math::sin(sf(0.0), &t));
+    same("Cos(0.0)", math::cos(sf(0.0), &t));
+    same("Tan(0.0)", math::tan(sf(0.0), &t));
+    same("SquareRoot(16.0)", math::sqrt(sf(16.0), &t));
+    same("Pow(2.0, 10.0)", math::pow(sf(2.0), sf(10.0), &t));
+    same("Atan2(1.0, 1.0)", math::atan2(sf(1.0), sf(1.0), &t));
+    same("Atan(1.0)", math::atan(sf(1.0), &t));
+    same("Asin(1.0)", math::asin(sf(1.0), &t));
+    same("Acos(1.0)", math::acos(sf(1.0), &t));
+    assert!(close(real("Sin(1.0)"), 1.0f32.sin(), 1e-5));
+    assert!(close(real("Cos(1.0)"), 1.0f32.cos(), 1e-5));
+    assert!(close(real("SquareRoot(16.0)"), 4.0, 1e-6));
+    assert!(close(real("Atan2(1.0, 1.0)"), FRAC_PI_4, 1e-5));
+    assert!(close(real("Atan(1.0) * 4.0"), PI, 1e-4));
+    assert!(close(real("Asin(1.0)"), FRAC_PI_2, 1e-5));
 }
 
 #[test]
-fn inverse_trig_out_of_domain_is_nan() {
-    assert!(real("Asin(2.0)").is_nan());
-    assert!(real("Acos(-2.0)").is_nan());
+fn inverse_trig_out_of_domain_follows_the_helpers() {
+    // The wrappers' argument checks are not ported (spec softfloat, open items), so the native
+    // returns the helper's value for |x| > 1. This pins that choice, not the original's wrapper.
+    let Some(t) = need_tables() else { return };
+    assert_eq!(
+        real("Asin(2.0)").to_bits(),
+        math::asin(sf(2.0), &t).to_bits()
+    );
+    assert_eq!(
+        real("Acos(-2.0)").to_bits(),
+        math::acos(sf(-2.0), &t).to_bits()
+    );
 }
 
 #[test]
 fn atan2_takes_y_first() {
+    let Some(t) = need_tables() else { return };
     // Atan2(y, x): y = 1, x = 0 is pi/2; the swapped order would give 0.
-    assert!(close(
-        real("Atan2(1.0, 0.0)"),
-        std::f32::consts::FRAC_PI_2,
-        1e-6
-    ));
+    assert_eq!(
+        real("Atan2(1.0, 0.0)").to_bits(),
+        math::atan2(sf(1.0), sf(0.0), &t).to_bits()
+    );
+    assert!(close(real("Atan2(1.0, 0.0)"), FRAC_PI_2, 1e-5));
+}
+
+#[test]
+fn table_natives_stop_the_thread_without_tables() {
+    // Runs without GAME_DLL: no table, no IEEE fallback, an explicit status.
+    for expr in [
+        "Sin(1.0)",
+        "SquareRoot(4.0)",
+        "Pow(2.0, 3.0)",
+        "Atan2(1.0, 1.0)",
+    ] {
+        let src = format!(
+            "{NATIVES}\nglobals\n    real gV\nendglobals\n\n\
+             function Run takes nothing returns nothing\n    set gV = {expr}\nendfunction\n"
+        );
+        let prog = jass::parse(&src).unwrap_or_else(|e| panic!("parse failed: {e}"));
+        let module = compile(&[prog]).unwrap_or_else(|e| panic!("compile failed: {e:?}"));
+        let mut vm = Vm::new(module, registry(), None).expect("vm");
+        assert_eq!(vm.call("Run", &[]), Err(RunStatus::MissingTables), "{expr}");
+    }
 }
 
 #[test]
 fn degree_radian_conversion() {
-    assert!(close(real("Deg2Rad(180.0)"), std::f32::consts::PI, 1e-6));
+    // Multiplies by the stored constants (spec softfloat 6) with the soft-float multiply.
+    assert_eq!(
+        real("Deg2Rad(180.0)").to_bits(),
+        arith::mul(sf(180.0), F32::from_bits(0x3C8E_FA35)).to_bits()
+    );
+    assert!(close(real("Deg2Rad(180.0)"), PI, 1e-6));
+    assert_eq!(
+        real("Rad2Deg(3.14159274)").to_bits(),
+        arith::mul(sf(PI), F32::from_bits(0x4265_2EE1)).to_bits()
+    );
     assert!(close(real("Rad2Deg(3.14159274)"), 180.0, 1e-4));
 }
 
@@ -301,7 +386,7 @@ fn convert_natives_tag_the_integer_as_a_handle() {
     );
     let prog = jass::parse(&src).unwrap_or_else(|e| panic!("parse failed: {e}"));
     let module = compile(&[prog]).unwrap_or_else(|e| panic!("compile failed: {e:?}"));
-    let mut vm = Vm::new(module, registry()).expect("vm");
+    let mut vm = Vm::new(module, registry(), tables()).expect("vm");
     vm.call("Run", &[]).expect("run");
     for (i, (name, _)) in CONVERTS.iter().enumerate() {
         assert_eq!(
@@ -361,20 +446,20 @@ const R2I_PAIRS: [(u32, i32); 33] = [
 #[test]
 fn r2i_matches_original_pairs() {
     for (bits, expected) in R2I_PAIRS {
-        let got = jass::natives::pure::r2i(f32::from_bits(bits));
+        let got = r2i_f(f32::from_bits(bits));
         assert_eq!(got, expected, "R2I of {bits:#010x}");
     }
 }
 
 #[test]
 fn r2i_truncates_and_saturates() {
-    assert_eq!(jass::natives::pure::r2i(-0.5), 0);
-    assert_eq!(jass::natives::pure::r2i(1.999), 1);
+    assert_eq!(r2i_f(-0.5), 0);
+    assert_eq!(r2i_f(1.999), 1);
     // Above 2^31 saturates by sign, and NaN follows its sign bit (not 0 as with Rust's `as`).
-    assert_eq!(jass::natives::pure::r2i(3.0e9), i32::MAX);
-    assert_eq!(jass::natives::pure::r2i(-3.0e9), i32::MIN);
-    assert_eq!(jass::natives::pure::r2i(f32::NAN), i32::MAX);
-    assert_eq!(jass::natives::pure::r2i(-f32::NAN), i32::MIN);
+    assert_eq!(r2i_f(3.0e9), i32::MAX);
+    assert_eq!(r2i_f(-3.0e9), i32::MIN);
+    assert_eq!(r2i_f(f32::NAN), i32::MAX);
+    assert_eq!(r2i_f(-f32::NAN), i32::MIN);
 }
 
 /// (name, hash type, hash) observed from Game.dll's MPQ-style hash at 0x6f68cc10 (crypt table

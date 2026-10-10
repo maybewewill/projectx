@@ -1,16 +1,15 @@
 //! Deterministic simulation primitives for the Warcraft III 1.26a rewrite.
 //!
-//! * [`softfloat`]: the single-precision add, subtract and multiply that the
-//!   original engine uses for its random real numbers, on raw IEEE bit patterns.
 //! * [`rng`]: the gameplay random generator (one global generator plus 45
 //!   streams), with the permutation table read from the user's own `Game.dll`.
+//! * [`timer`]: the agile (game) clock and the timer queue.
+//! * [`script`]: the JASS host that runs a `jass::vm::Vm` on that clock.
 //!
-//! Nothing here reads the system clock, uses hash maps with random seeds, or
-//! depends on the host floating point unit.
+//! Real arithmetic uses the bit-exact helpers of the `softfloat` crate. Nothing here reads the
+//! system clock, uses hash maps with random seeds, or depends on the host floating point unit.
 
 pub mod rng;
 pub mod script;
-pub mod softfloat;
 pub mod timer;
 
 mod pe;

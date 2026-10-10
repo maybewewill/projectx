@@ -4,19 +4,24 @@
 //! Every native below carries a short behaviour note (in words) with its implementation address in
 //! Game.dll 1.26a and a confidence tag:
 //!
-//! - `CONFIRMED`: read directly in the decompiled pseudo-C and unambiguous there.
+//! - `CONFIRMED`: read directly in the decompiled pseudo-C or in the spec, and unambiguous there.
 //! - `UNSURE`: the decompile of the native body is missing or unreadable, or the behaviour is
 //!   inferred. The implementation is our best reading and must be checked against the original.
 //!
-//! Real results are computed in f64 and rounded to f32 where the original stores a float. The
-//! MSVCR80 `_CI*` functions are not bit-exact here: `UNVERIFIED: MSVCR80 _CI* bit-exactness`.
+//! Real numbers are `softfloat::F32` bit patterns. Every real operation uses the bit-exact helpers of
+//! the `softfloat` crate (docs/spec/softfloat.md). The helpers that read the game's lookup tables
+//! (`Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Atan2`, `SquareRoot`, `Pow`) need the
+//! `softfloat::Tables` of the VM. Without them these natives stop the thread with
+//! `RunStatus::MissingTables`; they never fall back to IEEE math.
 
-use crate::vm::{real, NativeCtx, NativeRegistry, NativeResult, Value};
+use softfloat::{arith, conv, math, Tables, F32};
 
-/// pi/180 as f32, the factor used by `Deg2Rad`.
-const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
-/// 180/pi as f32, the factor used by `Rad2Deg`.
-const RAD2DEG: f32 = 180.0 / std::f32::consts::PI;
+use crate::vm::{NativeCtx, NativeRegistry, NativeResult, RunStatus, Value};
+
+/// pi/180 as stored by Game.dll (`0x6FAAE5E8`), the factor used by `Deg2Rad` (spec softfloat 6).
+const DEG2RAD: F32 = F32::from_bits(0x3C8E_FA35);
+/// 180/pi as stored by Game.dll (`0x6FAAE60C`), the factor used by `Rad2Deg` (spec softfloat 6).
+const RAD2DEG: F32 = F32::from_bits(0x4265_2EE1);
 
 /// The 44 `Convert*` natives that wrap an integer into a handle type (signature `(I)H<type>`),
 /// in the order of the natives table. Their stubs are 16 bytes apart at 0x6f3b2600..=0x6f3b28b0.
@@ -71,70 +76,80 @@ const CONVERT_NATIVES: [&str; 44] = [
 pub fn register(reg: &mut NativeRegistry) {
     // --- angles ---------------------------------------------------------------------------------
 
-    // Deg2Rad (0x6f3b29d0). Behaviour: multiplies the argument by pi/180, using the VM's real
-    // multiply. The body is not in the decompile export, so the constant and the operation are
-    // inferred from the sibling Rad2Deg. UNSURE.
+    // Deg2Rad (0x6f3b29d0). The argument times pi/180 with the soft-float multiply (CONFIRMED
+    // helper and constant, spec softfloat 6). The wrapper's own body is not in the decompile export,
+    // so the operand order is inferred from Rad2Deg. UNSURE.
     reg.register("Deg2Rad", |_, a| {
-        ret(Value::Real(real::mul(real_arg(a, 0), DEG2RAD)))
+        ret(Value::Real(arith::mul(real_arg(a, 0), DEG2RAD)))
     });
-    // Rad2Deg (0x6f3b29f0). Behaviour: multiplies the argument by 180/pi through the software
-    // multiply helper FUN_6f6eee20 (the constant lives at DAT_6faae60c, value not extracted).
-    // The result operand of that call is not visible in the decompile. UNSURE.
+    // Rad2Deg (0x6f3b29f0). The argument times 180/pi with the soft-float multiply (the same helper
+    // as Deg2Rad; the constant is at DAT_6faae60c). UNSURE for the wrapper, as above.
     reg.register("Rad2Deg", |_, a| {
-        ret(Value::Real(real::mul(real_arg(a, 0), RAD2DEG)))
+        ret(Value::Real(arith::mul(real_arg(a, 0), RAD2DEG)))
     });
 
     // --- trigonometry and powers ----------------------------------------------------------------
 
-    // Sin (0x6f3b2a10), Cos (0x6f3b2a30), Tan (0x6f3b2a50). Behaviour: the sine, cosine or tangent
-    // of the argument in radians, rounded to f32. The wrappers call software float helpers
-    // (FUN_6f6ef820 / FUN_6f6ef8d0 / FUN_6f6f0140), not the MSVCR80 `_CI*` names that the earlier
-    // math spec assumed. Here f64 math is used. UNVERIFIED: MSVCR80 _CI* bit-exactness. UNSURE.
-    reg.register("Sin", |_, a| math1(a, f64::sin));
-    reg.register("Cos", |_, a| math1(a, f64::cos));
-    reg.register("Tan", |_, a| math1(a, f64::tan));
-
-    // Asin (0x6f3b2a70), Acos (0x6f3b2ab0), Atan (0x6f3b2af0). Behaviour: inverse trigonometric
-    // functions, result in radians. Out-of-domain input gives NaN (Asin/Acos), no clamping.
-    // Bodies not read in the decompile. UNVERIFIED: MSVCR80 _CI* bit-exactness. UNSURE.
-    reg.register("Asin", |_, a| math1(a, f64::asin));
-    reg.register("Acos", |_, a| math1(a, f64::acos));
-    reg.register("Atan", |_, a| math1(a, f64::atan));
-
-    // Atan2 (0x6f3b2b10). Behaviour: atan2(y, x) with the first argument as y. Body not in the
-    // decompile export. UNVERIFIED: MSVCR80 _CI* bit-exactness. UNSURE.
-    reg.register("Atan2", |_, a| {
-        let y = real_arg(a, 0) as f64;
-        let x = real_arg(a, 1) as f64;
-        ret(Value::Real(y.atan2(x) as f32))
+    // Sin (0x6f3b2a10), Cos (0x6f3b2a30), Tan (0x6f3b2a50). The wrappers call the soft-float helpers
+    // SIN / COS / TAN (0x6F6EF820 / 0x6F6EF8D0 / 0x6F6F0140, spec softfloat 4.2), which read the sine
+    // table. CONFIRMED that these helpers are used; the table approximation is not correctly rounded.
+    // Argument checks in the wrapper are not examined. UNSURE for the wrapper.
+    reg.register("Sin", |ctx, a| {
+        with_tables(ctx, |t| math::sin(real_arg(a, 0), t))
+    });
+    reg.register("Cos", |ctx, a| {
+        with_tables(ctx, |t| math::cos(real_arg(a, 0), t))
+    });
+    reg.register("Tan", |ctx, a| {
+        with_tables(ctx, |t| math::tan(real_arg(a, 0), t))
     });
 
-    // SquareRoot (0x6f3b2ba0). Behaviour: square root of the argument. The x87 FSQRT at double
-    // precision is IEEE-correct, so f64 sqrt rounded to f32 gives the same value (the rounding
-    // cannot double-round for sqrt). The wrapper body is not in the decompile. UNSURE.
-    reg.register("SquareRoot", |_, a| math1(a, f64::sqrt));
+    // Asin (0x6f3b2a70), Acos (0x6f3b2ab0), Atan (0x6f3b2af0). The soft-float ASIN / ACOS / ATAN
+    // helpers (spec softfloat 4.3, 4.4) with the arc-sine tables. The wrappers' argument range
+    // checks are not ported (spec softfloat, open items): for |x| > 1 the helper result is returned
+    // here, and the original's wrapper may return something else. UNSURE for the wrapper.
+    reg.register("Asin", |ctx, a| {
+        with_tables(ctx, |t| math::asin(real_arg(a, 0), t))
+    });
+    reg.register("Acos", |ctx, a| {
+        with_tables(ctx, |t| math::acos(real_arg(a, 0), t))
+    });
+    reg.register("Atan", |ctx, a| {
+        with_tables(ctx, |t| math::atan(real_arg(a, 0), t))
+    });
 
-    // Pow (0x6f3b2c00). Behaviour: x raised to y. Body not in the decompile export; the game
-    // calls the CRT `_CIpow` per math.md. UNVERIFIED: MSVCR80 _CI* bit-exactness. UNSURE.
-    reg.register("Pow", |_, a| {
-        let x = real_arg(a, 0) as f64;
-        let y = real_arg(a, 1) as f64;
-        ret(Value::Real(x.powf(y) as f32))
+    // Atan2 (0x6f3b2b10). The soft-float ATAN2 helper with y first (spec softfloat 4.4, standard
+    // argument order). The wrapper body is not in the decompile export. UNSURE for the wrapper.
+    reg.register("Atan2", |ctx, a| {
+        with_tables(ctx, |t| math::atan2(real_arg(a, 0), real_arg(a, 1), t))
+    });
+
+    // SquareRoot (0x6f3b2ba0). The soft-float SQRT helper (0x6F6EF750, spec softfloat 4.1). It does
+    // not read the tables, but the helper's signature takes them, so the native requires them too.
+    // The wrapper body is not in the decompile export. UNSURE for the wrapper.
+    reg.register("SquareRoot", |ctx, a| {
+        with_tables(ctx, |t| math::sqrt(real_arg(a, 0), t))
+    });
+
+    // Pow (0x6f3b2c00). The soft-float POW helper (0x6F6F0810, spec softfloat 4.7): an integer
+    // exponent goes through POW_INT, otherwise EXP(e * LN(base)). The wrapper's special cases are not
+    // ported (spec softfloat, open items). UNSURE for the wrapper.
+    reg.register("Pow", |ctx, a| {
+        with_tables(ctx, |t| math::pow(real_arg(a, 0), real_arg(a, 1), t))
     });
 
     // --- integer / real conversion --------------------------------------------------------------
 
-    // I2R (0x6f3b2cc0). CONFIRMED: the wrapper calls the software integer-to-float helper
-    // FUN_6f6ef350 and returns its result. That helper takes the magnitude, shifts it so its top
-    // bit lands at bit 23 and drops the bits below, so the conversion truncates the magnitude
-    // toward zero and does not round to nearest. Exact for |i| <= 2^24.
-    reg.register("I2R", |_, a| ret(Value::Real(i2r(int_arg(a, 0)))));
+    // I2R (0x6f3b2cc0). CONFIRMED: the wrapper calls the soft-float integer-to-real helper
+    // (0x6F6EF350, spec softfloat 3.5). It truncates the magnitude to 24 significant bits
+    // (I2R(16777219) = 16777218). The wrapper body is a plain call.
+    reg.register("I2R", |_, a| ret(Value::Real(conv::i2r(int_arg(a, 0)))));
 
     // R2I (0x6f3b2ce0). CONFIRMED: the wrapper's whole body is a call to the float-to-int helper
-    // FUN_6f6eec70, which works on the bits of the f32. It truncates toward zero, gives 0 for
-    // |x| < 1, and saturates to INT_MAX/INT_MIN by sign for |x| >= 2^31, NaN included (see `r2i`).
-    // Checked against the original in Unicorn (tests/natives_pure.rs, tools/emu/verify_strings.py).
-    reg.register("R2I", |_, a| ret(Value::Integer(r2i(real_arg(a, 0)))));
+    // (0x6F6EEC70, `softfloat::conv::r2i`). It truncates toward zero, gives 0 for |x| < 1, and
+    // saturates to INT_MAX/INT_MIN by sign for |x| >= 2^31, NaN included. Checked against the
+    // original in Unicorn (21,626 cases, spec softfloat 3.5).
+    reg.register("R2I", |_, a| ret(Value::Integer(conv::r2i(real_arg(a, 0)))));
 
     // S2I (0x6f3b2d10). CONFIRMED: the wrapper returns 0 for a null or empty string, otherwise the
     // C library `atoi` of the text (import MSVCR80 `atoi`). So leading white space and a sign are
@@ -145,12 +160,13 @@ pub fn register(reg: &mut NativeRegistry) {
         ret(Value::Integer(atoi(&s)))
     });
 
-    // S2R (0x6f3b2d50). Behaviour: real value of a string using `parse_real` (CONFIRMED parser
-    // shape from FUN_6f6f0520: digits, one dot, stops at the first other character, a leading space
-    // gives 0). Sign handling and the exact software-float rounding are UNSURE.
+    // S2R (0x6f3b2d50). Behaviour: real value of a string, digits with one dot, read by the
+    // original's parser FUN_6f6f0520 (spec softfloat 10: S2R is NOT ported). This native uses Rust's
+    // decimal parser for the digits, rounded to f32 by the host. So the value is only as exact as
+    // that parse, not the soft-float text parser. UNSURE.
     reg.register("S2R", |ctx, a| {
         let s = str_arg(ctx, a, 0);
-        ret(Value::Real(parse_real(&s)))
+        ret(Value::Real(F32::from_bits(parse_real(&s).to_bits())))
     });
 
     // I2S (0x6f3baaa0). CONFIRMED: the format string at 0x6f915d68 is "%d", written by the Storm
@@ -161,18 +177,19 @@ pub fn register(reg: &mut NativeRegistry) {
         ret(Value::String(ctx.intern(&s)))
     });
 
-    // R2S (0x6f3baaf0). Behaviour: text of the real with two decimals ("%.2f"-style, rounded). Body
-    // and format string not in the decompile export. UNSURE.
+    // R2S (0x6f3baaf0). Behaviour: text of the real with two decimals ("%.2f"-style, rounded). The
+    // text is formatted by Rust, not by the original's R2S (0x6F6F0360, spec softfloat 10: not
+    // ported). UNSURE.
     reg.register("R2S", |ctx, a| {
-        let s = c_fmt_f(real_arg(a, 0), 0, 2);
+        let s = c_fmt_f(real_arg(a, 0).to_f32(), 0, 2);
         ret(Value::String(ctx.intern(&s)))
     });
 
     // R2SW (0x6f3bab40). Behaviour: like R2S with a width and a precision argument, "%*.*f"-style:
     // a negative width means left-justified with the absolute width, a negative precision means the
-    // C default of 6 decimals. Body not in the decompile export. UNSURE.
+    // C default of 6 decimals. Formatted by Rust, as R2S. UNSURE.
     reg.register("R2SW", |ctx, a| {
-        let s = c_fmt_f(real_arg(a, 0), int_arg(a, 1), int_arg(a, 2));
+        let s = c_fmt_f(real_arg(a, 0).to_f32(), int_arg(a, 1), int_arg(a, 2));
         ret(Value::String(ctx.intern(&s)))
     });
 
@@ -251,69 +268,25 @@ fn int_arg(a: &[Value], i: usize) -> i32 {
     a.get(i).and_then(|v| v.as_integer()).unwrap_or(0)
 }
 
-fn real_arg(a: &[Value], i: usize) -> f32 {
-    a.get(i).and_then(|v| v.as_real()).unwrap_or(0.0)
+fn real_arg(a: &[Value], i: usize) -> F32 {
+    a.get(i).and_then(|v| v.as_real()).unwrap_or(F32::ZERO)
+}
+
+/// Runs a native that reads the lookup tables. Without tables the thread stops with
+/// `MissingTables`: the native never falls back to IEEE math.
+fn with_tables<F>(ctx: &NativeCtx<'_>, f: F) -> NativeResult
+where
+    F: FnOnce(&Tables) -> F32,
+{
+    match ctx.tables() {
+        Some(t) => ret(Value::Real(f(t))),
+        None => NativeResult::Fail(RunStatus::MissingTables),
+    }
 }
 
 fn str_arg(ctx: &NativeCtx<'_>, a: &[Value], i: usize) -> String {
     let id = a.get(i).and_then(|v| v.as_string_id()).unwrap_or(0);
     ctx.string(id).to_string()
-}
-
-/// Applies a one-argument f64 function to a real argument and rounds the result to f32.
-fn math1(a: &[Value], f: fn(f64) -> f64) -> NativeResult {
-    ret(Value::Real(f(real_arg(a, 0) as f64) as f32))
-}
-
-/// Integer to real with truncation of the magnitude (see the I2R note). The magnitude is
-/// normalised by shifting its top bit to bit 23; bits below that are dropped, not rounded.
-pub fn i2r(i: i32) -> f32 {
-    if i == 0 {
-        return 0.0;
-    }
-    let mag = i.unsigned_abs();
-    let top = 31 - mag.leading_zeros();
-    let mant = if top <= 23 {
-        mag << (23 - top)
-    } else {
-        mag >> (top - 23)
-    };
-    let f = f32::from_bits(((top + 127) << 23) | (mant & 0x7f_ffff));
-    if i < 0 {
-        -f
-    } else {
-        f
-    }
-}
-
-/// Real to integer, as the original's helper 0x6f6eec70 does it, from the bits of the f32:
-/// - |x| < 1 (biased exponent below 0x7f, including zeros and denormals) gives 0;
-/// - the magnitude is the 24-bit mantissa shifted right (truncation toward zero) or left, so the
-///   fraction is dropped, never rounded;
-/// - exponent above 0x9d (|x| >= 2^31, infinities and NaN) saturates to INT_MIN for a set sign bit
-///   and INT_MAX otherwise. (Rust's `as` would give 0 for NaN, which is not what the original does.)
-pub fn r2i(r: f32) -> i32 {
-    let bits = r.to_bits();
-    let neg = bits >> 31 != 0;
-    let e = (bits >> 23) & 0xff;
-    if e < 0x7f {
-        return 0;
-    }
-    if e > 0x9d {
-        return if neg { i32::MIN } else { i32::MAX };
-    }
-    let m = (bits & 0x7f_ffff) | 0x80_0000;
-    let mag = if e <= 0x96 {
-        m >> (0x96 - e)
-    } else {
-        m << (e - 0x96)
-    };
-    let v = mag as i32;
-    if neg {
-        v.wrapping_neg()
-    } else {
-        v
-    }
 }
 
 /// C library `atoi` (MSVCR80 import used by S2I). Skips leading white space (space, \t, \n, \v,
@@ -533,11 +506,12 @@ mod tests {
     #[test]
     fn i2r_truncates_above_24_bits() {
         // 2^24 + 3 is a tie between 2^24 + 2 and 2^24 + 4; truncation picks 2^24 + 2.
-        assert_eq!(i2r(16_777_219), 16_777_218.0);
-        assert_eq!(i2r(-16_777_219), -16_777_218.0);
-        assert_eq!(i2r(i32::MIN), -2_147_483_648.0);
-        assert_eq!(i2r(i32::MAX), 2_147_483_520.0);
-        assert_eq!(i2r(0), 0.0);
+        let f = |n: i32| conv::i2r(n).to_f32();
+        assert_eq!(f(16_777_219), 16_777_218.0);
+        assert_eq!(f(-16_777_219), -16_777_218.0);
+        assert_eq!(f(i32::MIN), -2_147_483_648.0);
+        assert_eq!(f(i32::MAX), 2_147_483_520.0);
+        assert_eq!(f(0), 0.0);
     }
 
     #[test]

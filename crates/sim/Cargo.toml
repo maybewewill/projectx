@@ -7,3 +7,4 @@ description = "Deterministic simulation primitives (RNG, single-precision soft f
 
 [dependencies]
 jass = { path = "../jass" }
+softfloat = { path = "../softfloat" }

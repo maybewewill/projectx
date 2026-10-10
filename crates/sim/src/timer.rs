@@ -2,7 +2,7 @@
 //!
 //! * [`AgileClock`]: game time in seconds as an f32 bit pattern. It advances by
 //!   [`STEP`] (0.1 s, bits `0x3DCCCCCD`) per simulation step, using the truncating
-//!   soft-float add from [`crate::softfloat`].
+//!   soft-float add from the `softfloat` crate (`softfloat::arith::add`).
 //! * [`TimerQueue`]: a 1-based binary min-heap ordered by expiry, then by a
 //!   monotonically increasing sequence number (FIFO for equal expiry). The
 //!   original is a `CPriorityQ` with the same two keys (spec 3.4).
@@ -14,7 +14,7 @@
 //!
 //! Decisions marked UNVERIFIED are not confirmed against the original binary.
 
-use crate::softfloat;
+use softfloat::{arith, F32};
 
 /// One simulation step in seconds: the f32 constant 0.1 (`0x6FAAE4A0` in Game.dll).
 pub const STEP_BITS: u32 = 0x3DCC_CCCD;
@@ -50,7 +50,7 @@ impl AgileClock {
 
     /// Advances the clock by one step.
     pub fn advance_step(&mut self) {
-        self.bits = softfloat::add(self.bits, STEP_BITS);
+        self.bits = arith::add(F32::from_bits(self.bits), F32::from_bits(STEP_BITS)).to_bits();
     }
 }
 
@@ -72,7 +72,11 @@ fn clamp_timeout(t: f32) -> f32 {
 /// are not checked against the soft-float overflow behaviour.
 fn expiry_for(now: f32, timeout: f32) -> f32 {
     if timeout.is_finite() {
-        f32::from_bits(softfloat::add(now.to_bits(), timeout.to_bits()))
+        arith::add(
+            F32::from_bits(now.to_bits()),
+            F32::from_bits(timeout.to_bits()),
+        )
+        .to_f32()
     } else {
         f32::INFINITY
     }

@@ -6,7 +6,22 @@
 
 mod data;
 
-use sim::softfloat;
+use softfloat::{arith, F32};
+
+/// Soft-float add on raw bit patterns (the `softfloat` crate's `arith::add`).
+fn sfadd(x: u32, y: u32) -> u32 {
+    arith::add(F32::from_bits(x), F32::from_bits(y)).to_bits()
+}
+
+/// Soft-float subtract on raw bit patterns.
+fn sfsub(x: u32, y: u32) -> u32 {
+    arith::sub(F32::from_bits(x), F32::from_bits(y)).to_bits()
+}
+
+/// Soft-float multiply on raw bit patterns.
+fn sfmul(x: u32, y: u32) -> u32 {
+    arith::mul(F32::from_bits(x), F32::from_bits(y)).to_bits()
+}
 use sim::{Rng, RngTable, Streams, STREAM_COUNT};
 
 /// Loads the permutation table from `GAME_DLL`, or `None` (with a note) if unset.
@@ -140,21 +155,21 @@ fn stream_init_matches_original() {
 #[test]
 fn soft_float_matches_original() {
     for &(x, y, r) in data::SOFT_ADD {
-        assert_eq!(softfloat::add(x, y), r, "add({x:#010x}, {y:#010x})");
+        assert_eq!(sfadd(x, y), r, "add({x:#010x}, {y:#010x})");
     }
     for &(x, y, r) in data::SOFT_SUB {
-        assert_eq!(softfloat::sub(x, y), r, "sub({x:#010x}, {y:#010x})");
+        assert_eq!(sfsub(x, y), r, "sub({x:#010x}, {y:#010x})");
     }
     for &(x, y, r) in data::SOFT_MUL {
-        assert_eq!(softfloat::mul(x, y), r, "mul({x:#010x}, {y:#010x})");
+        assert_eq!(sfmul(x, y), r, "mul({x:#010x}, {y:#010x})");
     }
     for &(x, y, r) in data::SOFT_UNIFORM_ADD {
-        assert_eq!(softfloat::add(x, y), r, "add({x:#010x}, {y:#010x})");
+        assert_eq!(sfadd(x, y), r, "add({x:#010x}, {y:#010x})");
     }
     for &(x, y, r) in data::SOFT_UNIFORM_SUB {
-        assert_eq!(softfloat::sub(x, y), r, "sub({x:#010x}, {y:#010x})");
+        assert_eq!(sfsub(x, y), r, "sub({x:#010x}, {y:#010x})");
     }
     for &(x, y, r) in data::SOFT_UNIFORM_MUL {
-        assert_eq!(softfloat::mul(x, y), r, "mul({x:#010x}, {y:#010x})");
+        assert_eq!(sfmul(x, y), r, "mul({x:#010x}, {y:#010x})");
     }
 }

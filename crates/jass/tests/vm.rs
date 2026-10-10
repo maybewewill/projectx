@@ -1,10 +1,45 @@
 //! VM tests on hand-written JASS (and a few hand-assembled modules for opcodes the AST cannot reach).
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use jass::bytecode::{Instr, Op};
 use jass::compile::{compile, FuncDef, Module, Ty};
-use jass::vm::{NativeRegistry, NativeResult, RunStatus, Value, Vm, VmError};
+use jass::vm::{NativeRegistry, NativeResult, ResumeError, RunStatus, Value, Vm, VmError};
+use softfloat::{arith, conv, Tables, F32};
+
+/// The soft-float lookup tables read from the user's own `Game.dll` (`GAME_DLL`), once per run.
+/// `None` when `GAME_DLL` is not set. Tests that divide or call table-based natives return early then.
+fn tables() -> Option<Tables> {
+    static TABLES: OnceLock<Option<Tables>> = OnceLock::new();
+    TABLES
+        .get_or_init(|| {
+            let path = std::env::var("GAME_DLL").ok()?;
+            let bytes =
+                std::fs::read(&path).unwrap_or_else(|e| panic!("reading GAME_DLL={path}: {e}"));
+            Some(Tables::from_game_dll(&bytes).expect("lookup tables in GAME_DLL"))
+        })
+        .clone()
+}
+
+/// Whether the lookup tables are available; prints a note and returns false otherwise.
+fn have_tables() -> bool {
+    let ok = tables().is_some();
+    if !ok {
+        eprintln!("GAME_DLL not set: skipping test that needs the soft-float lookup tables");
+    }
+    ok
+}
+
+/// A real value from an `f32` literal (its bit pattern, which is what the VM stores).
+fn real_val(x: f32) -> Value {
+    Value::Real(F32::from_bits(x.to_bits()))
+}
+
+/// The VM time for an `f32` literal.
+fn ft(x: f32) -> F32 {
+    F32::from_bits(x.to_bits())
+}
 
 /// Declarations shared by the snippets. Natives are implemented by `NativeRegistry::with_builtins`
 /// plus `MakeAgent` (registered by `build`).
@@ -39,11 +74,15 @@ fn registry() -> NativeRegistry {
     r
 }
 
-fn build_with(src: &str, reg: NativeRegistry) -> Vm {
+fn build_opt(src: &str, reg: NativeRegistry, tables: Option<Tables>) -> Vm {
     let full = format!("{PRELUDE}\n{src}");
     let prog = jass::parse(&full).unwrap_or_else(|e| panic!("parse failed: {e}\n{full}"));
     let module = compile(&[prog]).unwrap_or_else(|e| panic!("compile failed: {e}"));
-    Vm::new(module, reg).unwrap_or_else(|e| panic!("vm creation failed: {e}"))
+    Vm::new(module, reg, tables).unwrap_or_else(|e| panic!("vm creation failed: {e}"))
+}
+
+fn build_with(src: &str, reg: NativeRegistry) -> Vm {
+    build_opt(src, reg, tables())
 }
 
 fn build(src: &str) -> Vm {
@@ -66,7 +105,7 @@ fn log(vm: &Vm) -> Vec<i32> {
 /// Runs scheduler passes at the given game times.
 fn steps(vm: &mut Vm, times: &[f32]) {
     for &t in times {
-        vm.step(t);
+        vm.step(ft(t));
     }
 }
 
@@ -129,8 +168,7 @@ endfunction
 
 #[test]
 fn real_arithmetic_and_divide_by_zero() {
-    let mut vm = build(
-        r#"
+    let src = r#"
 function RDiv takes real a, real b returns real
     return a / b
 endfunction
@@ -145,23 +183,48 @@ endfunction
 function Less takes nothing returns boolean
     return 1 < 1.5
 endfunction
-"#,
-    );
+"#;
+    // A zero divisor aborts before any lookup table is read, so this needs no tables.
+    let mut vm = build_opt(src, registry(), None);
     assert_eq!(
-        vm.call("RDiv", &[Value::Real(1.0), Value::Real(4.0)]),
-        Ok(Value::Real(0.25))
-    );
-    assert_eq!(
-        vm.call("RDiv", &[Value::Real(1.0), Value::Real(0.0)]),
+        vm.call("RDiv", &[real_val(1.0), real_val(0.0)]),
         Err(RunStatus::DivideByZero)
     );
     assert_eq!(
-        vm.call("RDiv", &[Value::Real(1.0), Value::Real(-0.0)]),
+        vm.call("RDiv", &[real_val(1.0), real_val(-0.0)]),
         Err(RunStatus::DivideByZero)
     );
-    assert_eq!(vm.call("Mix", &[]), Ok(Value::Real(1.75)));
-    assert_eq!(vm.call("Widen", &[]), Ok(Value::Real(3.0)));
+    // Real division with a non-zero divisor reads the reciprocal table: without it the thread stops.
+    assert_eq!(
+        vm.call("RDiv", &[real_val(1.0), real_val(4.0)]),
+        Err(RunStatus::MissingTables)
+    );
+    // Addition, multiplication, I2R and the ordered compares need no table.
+    assert_eq!(vm.call("Widen", &[]), Ok(real_val(3.0)));
     assert_eq!(vm.call("Less", &[]), Ok(Value::Boolean(true)));
+
+    if !have_tables() {
+        return;
+    }
+    // Expected bits come from the softfloat crate itself (the division is not correctly rounded).
+    let t = tables().expect("tables");
+    let mut vm = build(src);
+    let q = arith::div(ft(1.0), ft(4.0), &t);
+    assert_eq!(
+        vm.call("RDiv", &[real_val(1.0), real_val(4.0)]),
+        Ok(Value::Real(q))
+    );
+    let two = ft(2.0);
+    let mix = arith::add(arith::div(conv::i2r(3), two, &t), ft(0.25));
+    assert_eq!(vm.call("Mix", &[]), Ok(Value::Real(mix)));
+    assert_eq!(
+        vm.call("Widen", &[]),
+        Ok(Value::Real(arith::mul(conv::i2r(2), ft(1.5))))
+    );
+    assert_eq!(
+        vm.call("RDiv", &[real_val(1.0), real_val(0.0)]),
+        Err(RunStatus::DivideByZero)
+    );
 }
 
 #[test]
@@ -174,11 +237,8 @@ function Trunc takes real r returns integer
 endfunction
 "#,
     );
-    assert_eq!(vm.call("Trunc", &[Value::Real(2.9)]), Ok(Value::Integer(2)));
-    assert_eq!(
-        vm.call("Trunc", &[Value::Real(-2.9)]),
-        Ok(Value::Integer(-2))
-    );
+    assert_eq!(vm.call("Trunc", &[real_val(2.9)]), Ok(Value::Integer(2)));
+    assert_eq!(vm.call("Trunc", &[real_val(-2.9)]), Ok(Value::Integer(-2)));
 }
 
 #[test]
@@ -236,8 +296,12 @@ fn int_binop(op: Op, a: i32, b: i32) -> Vec<Instr> {
 }
 
 fn eval_int(op: Op, a: i32, b: i32) -> Result<Value, RunStatus> {
-    let mut vm =
-        Vm::new(hand_module(int_binop(op, a, b), 3), NativeRegistry::new()).expect("valid module");
+    let mut vm = Vm::new(
+        hand_module(int_binop(op, a, b), 3),
+        NativeRegistry::new(),
+        None,
+    )
+    .expect("valid module");
     vm.call("F", &[])
 }
 
@@ -364,7 +428,7 @@ endfunction
 "#,
     );
     assert_eq!(vm.global("gB"), Some(Value::Integer(6)));
-    assert_eq!(vm.global("gR"), Some(Value::Real(0.5)));
+    assert_eq!(vm.global("gR"), Some(real_val(0.5)));
     assert_eq!(vm.call("Read", &[]), Ok(Value::Integer(10 + 6 + 10)));
     assert_eq!(vm.global("gA"), Some(Value::Integer(10)));
 }
@@ -522,7 +586,7 @@ endfunction
     );
     vm.start("Bad", &[]).unwrap();
     vm.start("Good", &[]).unwrap();
-    vm.step(0.0);
+    vm.step(ft(0.0));
     assert_eq!(vm.failures().len(), 1);
     assert_eq!(vm.failures()[0].1, RunStatus::DivideByZero);
     assert_eq!(vm.thread_count(), 0);
@@ -548,7 +612,7 @@ endfunction
     vm.start("Count", &[Value::Integer(100)]).unwrap();
     let mut passes = 0;
     while vm.thread_count() > 0 {
-        vm.step(0.0);
+        vm.step(ft(0.0));
         passes += 1;
         assert!(passes < 100_000, "thread never finished");
     }
@@ -589,11 +653,11 @@ endfunction
     );
     vm.set_budget(0);
     vm.start("Once", &[]).unwrap();
-    vm.step(0.0);
+    vm.step(ft(0.0));
     assert_eq!(vm.thread_count(), 1);
     assert_eq!(vm.global("gN"), Some(Value::Integer(0)));
     vm.set_budget(300_000);
-    vm.step(0.0);
+    vm.step(ft(0.0));
     assert_eq!(vm.thread_count(), 0);
     assert_eq!(log(&vm), vec![1]);
 }
@@ -609,11 +673,11 @@ function Sleeper takes real t, integer id returns nothing
 endfunction
 "#,
     );
-    vm.start("Sleeper", &[Value::Real(1.0), Value::Integer(1)])
+    vm.start("Sleeper", &[real_val(1.0), Value::Integer(1)])
         .unwrap();
-    vm.start("Sleeper", &[Value::Real(0.5), Value::Integer(2)])
+    vm.start("Sleeper", &[real_val(0.5), Value::Integer(2)])
         .unwrap();
-    vm.start("Sleeper", &[Value::Real(0.0), Value::Integer(3)])
+    vm.start("Sleeper", &[real_val(0.0), Value::Integer(3)])
         .unwrap();
 
     steps(&mut vm, &[0.0]);
@@ -664,15 +728,12 @@ endfunction
         let mut vm = build(src);
         vm.set_budget(budget);
         for id in 1..=4 {
-            vm.start(
-                "Sleeper",
-                &[Value::Real(0.25 * id as f32), Value::Integer(id)],
-            )
-            .unwrap();
+            vm.start("Sleeper", &[real_val(0.25 * id as f32), Value::Integer(id)])
+                .unwrap();
         }
         let mut t = 0.0f32;
         while vm.thread_count() > 0 && t < 100.0 {
-            vm.step(t);
+            vm.step(ft(t));
             t += 0.125;
         }
         assert!(vm.failures().is_empty());
@@ -718,12 +779,12 @@ endfunction
 "#,
     );
     vm.start("Parent", &[]).unwrap();
-    vm.step(0.0);
+    vm.step(ft(0.0));
     assert_eq!(log(&vm), vec![4], "parent continues while the child sleeps");
     assert_eq!(vm.thread_count(), 1);
-    vm.step(0.5);
+    vm.step(ft(0.5));
     assert_eq!(log(&vm), vec![4]);
-    vm.step(1.0);
+    vm.step(ft(1.0));
     assert_eq!(log(&vm), vec![4, 20]);
     assert_eq!(vm.thread_count(), 0);
 }
@@ -758,7 +819,7 @@ endfunction
     );
     vm.start("Two", &[Value::Integer(1), Value::Integer(2)])
         .unwrap();
-    vm.step(0.0);
+    vm.step(ft(0.0));
     assert_eq!(log(&vm), vec![3]);
 }
 
@@ -781,7 +842,7 @@ fn invalid_bytecode_is_rejected_at_creation() {
         vec![Instr::new(Op::Jump).imm(99), Instr::new(Op::Return)],
         1,
     );
-    match Vm::new(m, NativeRegistry::new()) {
+    match Vm::new(m, NativeRegistry::new(), None) {
         Err(VmError::Invalid { function, pc, .. }) => {
             assert_eq!(function, "F");
             assert_eq!(pc, 0);
@@ -797,7 +858,7 @@ fn global_initializer_failure_is_reported() {
     let prog = jass::parse(&src).unwrap();
     let module = compile(&[prog]).unwrap();
     assert!(matches!(
-        Vm::new(module, registry()),
+        Vm::new(module, registry(), tables()),
         Err(VmError::InitFailed(RunStatus::DivideByZero))
     ));
 }
@@ -826,10 +887,10 @@ endfunction
         reg,
     );
     vm.start("Worker", &[]).unwrap();
-    vm.step(0.0);
+    vm.step(ft(0.0));
     assert_eq!(log(&vm), vec![1]);
     assert_eq!(vm.thread_count(), 1, "a yielded thread stays scheduled");
-    vm.step(0.0);
+    vm.step(ft(0.0));
     assert_eq!(log(&vm), vec![1, 2]);
     assert_eq!(vm.thread_count(), 0);
 }
@@ -862,4 +923,62 @@ endfunction
     let target = vm.module().function_index["Target"];
     assert_eq!(vm.call("Give", &[]), Ok(Value::Null));
     assert_eq!(seen.get(), Some(Value::Code(target)));
+}
+
+#[test]
+fn resume_runs_only_the_named_thread() {
+    let mut vm = build(
+        r#"
+function Worker takes integer id returns nothing
+    call Log(id)
+    call TriggerSleepAction(1.0)
+    call Log(id + 10)
+endfunction
+"#,
+    );
+    let a = vm.start("Worker", &[Value::Integer(1)]).unwrap();
+    let b = vm.start("Worker", &[Value::Integer(2)]).unwrap();
+    vm.step(ft(0.0));
+    assert_eq!(log(&vm), vec![1, 2]);
+
+    // Resuming b at its wake time runs b alone; a stays asleep.
+    assert_eq!(vm.resume(b, ft(1.0)), Ok(()));
+    assert_eq!(log(&vm), vec![1, 2, 12]);
+    assert_eq!(vm.thread_count(), 1);
+
+    // Before its wake time a sleeping thread is not run.
+    assert_eq!(
+        vm.resume(a, ft(0.5)),
+        Err(ResumeError::NotDue { until: ft(1.0) })
+    );
+    assert_eq!(log(&vm), vec![1, 2, 12]);
+
+    assert_eq!(vm.resume(a, ft(1.0)), Ok(()));
+    assert_eq!(log(&vm), vec![1, 2, 12, 11]);
+    assert_eq!(vm.resume(a, ft(2.0)), Err(ResumeError::NoSuchThread(a)));
+    assert_eq!(vm.thread_count(), 0);
+    assert!(vm.failures().is_empty());
+}
+
+#[test]
+fn wake_time_is_now_plus_seconds_with_softfloat_add() {
+    let mut vm = build(
+        r#"
+function Napper takes nothing returns nothing
+    call TriggerSleepAction(0.1)
+    call Log(1)
+endfunction
+"#,
+    );
+    let t = vm.start("Napper", &[]).unwrap();
+    vm.step(ft(1.0));
+    // The wake time is the soft-float sum (no IEEE rounding involved).
+    let wake = arith::add(ft(1.0), ft(0.1));
+    let one_ulp_early = F32::from_bits(wake.to_bits() - 1);
+    assert_eq!(
+        vm.resume(t, one_ulp_early),
+        Err(ResumeError::NotDue { until: wake })
+    );
+    assert_eq!(vm.resume(t, wake), Ok(()));
+    assert_eq!(log(&vm), vec![1]);
 }

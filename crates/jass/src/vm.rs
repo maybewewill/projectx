@@ -4,9 +4,17 @@
 //! is marked `UNVERIFIED vs retail` in the code and listed in the crate report.
 //!
 //! Determinism: no wall clock, no randomness, no hash-map iteration in observable behaviour.
-//! Game time is supplied by the caller through `Vm::step(now)`.
+//! Game time is supplied by the caller through `Vm::step(now)` or `Vm::resume(id, now)`.
+//!
+//! Real numbers are `softfloat::F32` bit patterns and every real operation goes through the
+//! bit-exact helpers of the `softfloat` crate. The helpers that use the game's lookup tables
+//! (division, trigonometry, powers, logarithms, square root) need a `softfloat::Tables`
+//! read from the user's own `Game.dll`. Without tables those operations stop the thread with
+//! `RunStatus::MissingTables`; they never fall back to IEEE math.
 
 use std::collections::BTreeMap;
+
+use softfloat::{arith, conv, Tables, F32};
 
 use crate::bytecode::{Instr, Op, NO_SLOT};
 use crate::compile::{Module, Ty, ARRAY_SIZE};
@@ -35,8 +43,8 @@ const MAX_NESTED_RUNS: u32 = 16;
 pub enum Value {
     Null,
     Integer(i32),
-    /// IEEE binary32.
-    Real(f32),
+    /// IEEE binary32 bit pattern, operated on by `softfloat`.
+    Real(F32),
     Boolean(bool),
     /// Index into the string table. 0 is the null (empty) string.
     String(u32),
@@ -51,7 +59,7 @@ impl Value {
     pub fn default_for(ty: Ty) -> Value {
         match ty {
             Ty::Integer => Value::Integer(0),
-            Ty::Real => Value::Real(0.0),
+            Ty::Real => Value::Real(F32::ZERO),
             Ty::Boolean => Value::Boolean(false),
             Ty::String => Value::String(0),
             Ty::Handle => Value::Handle(0),
@@ -66,7 +74,7 @@ impl Value {
         }
     }
 
-    pub fn as_real(self) -> Option<f32> {
+    pub fn as_real(self) -> Option<F32> {
         match self {
             Value::Real(r) => Some(r),
             _ => None,
@@ -118,42 +126,25 @@ impl Value {
     }
 }
 
-/// JASS `==`. Null equals any null-like value. Integer against real compares as real.
+/// JASS `==`. Null equals any null-like value. Reals compare with `softfloat::arith::approx_eq`
+/// (`|a - b| < 0.001`, the original's real equality, spec softfloat 2 and 3.4). An integer against
+/// a real converts the integer with `I2R` first (UNVERIFIED vs retail: the original's mixed-type
+/// behaviour is not in the spec).
 pub fn jass_equal(a: Value, b: Value) -> bool {
     if a.is_null_like() || b.is_null_like() {
         return a.is_null_like() && b.is_null_like();
     }
     match (a, b) {
         (Value::Integer(x), Value::Integer(y)) => x == y,
-        (Value::Real(x), Value::Real(y)) => x == y,
-        (Value::Integer(x), Value::Real(y)) | (Value::Real(y), Value::Integer(x)) => x as f32 == y,
+        (Value::Real(x), Value::Real(y)) => arith::approx_eq(x, y),
+        (Value::Integer(x), Value::Real(y)) | (Value::Real(y), Value::Integer(x)) => {
+            arith::approx_eq(conv::i2r(x), y)
+        }
         (Value::Boolean(x), Value::Boolean(y)) => x == y,
         (Value::String(x), Value::String(y)) => x == y,
         (Value::Handle(x), Value::Handle(y)) => x == y,
         (Value::Code(x), Value::Code(y)) => x == y,
         _ => false,
-    }
-}
-
-/// Real arithmetic. Every real operation goes through this module so the rounding model can be
-/// replaced in one place.
-///
-/// TODO (spec 2.5): the original does real arithmetic in software on the f32 bit pattern, and the
-/// spec says its multiply truncates the mantissa product instead of rounding to nearest. That is
-/// not implemented: these are plain IEEE f32 operations.
-pub mod real {
-    pub fn add(a: f32, b: f32) -> f32 {
-        a + b
-    }
-    pub fn sub(a: f32, b: f32) -> f32 {
-        a - b
-    }
-    pub fn mul(a: f32, b: f32) -> f32 {
-        a * b
-    }
-    /// The caller checks for a zero divisor first.
-    pub fn div(a: f32, b: f32) -> f32 {
-        a / b
     }
 }
 
@@ -231,25 +222,45 @@ pub enum NativeResult {
     Return(Value),
     /// Suspend the calling thread for this many seconds of game time. The call completes with no
     /// value; the thread continues after the call once the time has passed.
-    Sleep(f32),
+    Sleep(F32),
     /// Give up the rest of this pass. The call completes with no value.
     Yield,
     /// Abort the calling thread with this status.
     Fail(RunStatus),
 }
 
-/// Context handed to natives: string table, game time and the function namespace.
+/// Context handed to natives: string table, game time, lookup tables, the calling thread and the
+/// function namespace.
 pub struct NativeCtx<'a> {
     strings: &'a mut StringTable,
     functions: &'a BTreeMap<String, u32>,
-    now: f32,
+    tables: Option<&'a Tables>,
+    now: F32,
+    thread: ThreadId,
     spawns: Vec<u32>,
 }
 
 impl NativeCtx<'_> {
     /// Current game time in seconds.
-    pub fn now(&self) -> f32 {
+    pub fn now(&self) -> F32 {
         self.now
+    }
+
+    /// The soft-float lookup tables, or `None` when the VM was created without them. A native that
+    /// needs them returns `NativeResult::Fail(RunStatus::MissingTables)` in that case.
+    pub fn tables(&self) -> Option<&Tables> {
+        self.tables
+    }
+
+    /// The thread that is running the native.
+    pub fn thread(&self) -> ThreadId {
+        self.thread
+    }
+
+    /// The game time at which a sleep of `seconds` that starts now ends: `now + seconds` with the
+    /// soft-float add. The VM and the hosts use this same expression for wake times.
+    pub fn wake_time(&self, seconds: F32) -> F32 {
+        wake_time(self.now, seconds)
     }
 
     pub fn intern(&mut self, s: &str) -> u32 {
@@ -294,7 +305,8 @@ impl NativeRegistry {
         let mut r = Self::new();
         crate::natives::register_pure(&mut r);
         r.register("TriggerSleepAction", |_, a| {
-            NativeResult::Sleep(a[0].as_real().unwrap_or(0.0).max(0.0))
+            let seconds = a.first().and_then(|v| v.as_real()).unwrap_or(F32::ZERO);
+            NativeResult::Sleep(clamp_sleep(seconds))
         });
         // UNVERIFIED vs retail: exact-name lookup; an unknown name aborts the calling thread.
         r.register("ExecuteFunc", |ctx, a| {
@@ -343,7 +355,7 @@ pub enum RunStatus {
     /// The instruction budget ran out. The thread is still runnable and resumes exactly where it stopped.
     BudgetExhausted,
     /// A native asked to sleep for this many seconds.
-    Sleep(f32),
+    Sleep(F32),
     /// A native yielded.
     Yield,
     /// A call target does not exist, or a native is not bound.
@@ -358,6 +370,9 @@ pub enum RunStatus {
     /// A value had the wrong runtime type for an operation or a native signature. Cannot happen for
     /// code that passed the type checker; reported instead of panicking.
     TypeError,
+    /// A real division or a table-based real function ran in a VM created without the `softfloat`
+    /// lookup tables (`Vm::new` got `None`). The thread is aborted; nothing falls back to IEEE math.
+    MissingTables,
 }
 
 /// Identifies a thread. Ids are assigned in creation order.
@@ -367,9 +382,9 @@ pub struct ThreadId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
     Runnable,
-    /// Not scheduled until game time reaches `until`.
+    /// Not scheduled until game time reaches `until` (`now + seconds`, soft-float add).
     Sleeping {
-        until: f32,
+        until: F32,
     },
 }
 
@@ -458,7 +473,9 @@ struct Machine {
     registry: NativeRegistry,
     /// Per module native: the index of its implementation in `registry`, if bound.
     bindings: Vec<Option<usize>>,
-    now: f32,
+    /// Lookup tables of the soft-float helpers (`None` when not loaded).
+    tables: Option<Tables>,
+    now: F32,
     budget: u32,
     nest: u32,
     next_thread: u32,
@@ -492,11 +509,34 @@ fn int_of(v: Value) -> Result<i32, RunStatus> {
     }
 }
 
-fn real_of(v: Value) -> Result<f32, RunStatus> {
+fn real_of(v: Value) -> Result<F32, RunStatus> {
     match v {
         Value::Real(r) => Ok(r),
         Value::Null => Err(RunStatus::NullError),
         _ => Err(RunStatus::TypeError),
+    }
+}
+
+/// A numeric operand of a comparison as a real: integers go through `I2R`.
+fn num_real(v: Value) -> Result<F32, RunStatus> {
+    match v {
+        Value::Integer(i) => Ok(conv::i2r(i)),
+        other => real_of(other),
+    }
+}
+
+/// The wake time of a sleep that starts at `now`: `now + seconds` with the soft-float add.
+pub fn wake_time(now: F32, seconds: F32) -> F32 {
+    arith::add(now, seconds)
+}
+
+/// Sleep durations as the VM stores them: a negative or NaN duration becomes `0.0`
+/// (the `max(0)` clamp of `TriggerSleepAction`; UNVERIFIED vs retail, see the spec's open items).
+pub fn clamp_sleep(seconds: F32) -> F32 {
+    if seconds.to_bits() & 0x8000_0000 != 0 || seconds.to_f32().is_nan() {
+        F32::ZERO
+    } else {
+        seconds
     }
 }
 
@@ -510,18 +550,6 @@ fn bool_of(v: Value) -> Result<bool, RunStatus> {
 
 fn str_of(v: Value) -> Result<u32, RunStatus> {
     v.as_string_id().ok_or(RunStatus::TypeError)
-}
-
-/// Numeric ordering for `<`, `<=`, `>`, `>=`. `None` for NaN.
-fn num_cmp(a: Value, b: Value) -> Result<Option<std::cmp::Ordering>, RunStatus> {
-    Ok(match (a, b) {
-        (Value::Integer(x), Value::Integer(y)) => Some(x.cmp(&y)),
-        (Value::Integer(x), Value::Real(y)) => (x as f32).partial_cmp(&y),
-        (Value::Real(x), Value::Integer(y)) => x.partial_cmp(&(y as f32)),
-        (Value::Real(x), Value::Real(y)) => x.partial_cmp(&y),
-        (Value::Null, _) | (_, Value::Null) => return Err(RunStatus::NullError),
-        _ => return Err(RunStatus::TypeError),
-    })
 }
 
 impl Machine {
@@ -566,7 +594,7 @@ impl Machine {
         let d = ins.dest;
         match ins.op {
             Op::LoadInt => wr(th, d, Value::Integer(ins.imm as i32)),
-            Op::LoadReal => wr(th, d, Value::Real(f32::from_bits(ins.imm))),
+            Op::LoadReal => wr(th, d, Value::Real(F32::from_bits(ins.imm))),
             Op::LoadBool => wr(th, d, Value::Boolean(ins.imm != 0)),
             Op::LoadString => wr(th, d, Value::String(ins.imm)),
             Op::LoadNull => wr(th, d, Value::Null),
@@ -645,24 +673,27 @@ impl Machine {
             }
 
             Op::AddR => {
-                let v = real::add(real_of(rd(th, l))?, real_of(rd(th, r))?);
+                let v = arith::add(real_of(rd(th, l))?, real_of(rd(th, r))?);
                 wr(th, d, Value::Real(v));
             }
             Op::SubR => {
-                let v = real::sub(real_of(rd(th, l))?, real_of(rd(th, r))?);
+                let v = arith::sub(real_of(rd(th, l))?, real_of(rd(th, r))?);
                 wr(th, d, Value::Real(v));
             }
             Op::MulR => {
-                let v = real::mul(real_of(rd(th, l))?, real_of(rd(th, r))?);
+                let v = arith::mul(real_of(rd(th, l))?, real_of(rd(th, r))?);
                 wr(th, d, Value::Real(v));
             }
             Op::DivR => {
                 let a = real_of(rd(th, l))?;
                 let b = real_of(rd(th, r))?;
-                if b == 0.0 {
+                // Zero divisor: either sign of zero aborts the thread (spec jass-vm 3).
+                if b.to_bits() & 0x7fff_ffff == 0 {
                     return Err(RunStatus::DivideByZero);
                 }
-                wr(th, d, Value::Real(real::div(a, b)));
+                let tables = self.tables.as_ref().ok_or(RunStatus::MissingTables)?;
+                let v = arith::div(a, b, tables);
+                wr(th, d, Value::Real(v));
             }
 
             Op::Concat => {
@@ -678,7 +709,7 @@ impl Machine {
                 wr(th, d, Value::Integer(v));
             }
             Op::NegR => {
-                let v = -real_of(rd(th, l))?;
+                let v = arith::neg(real_of(rd(th, l))?);
                 wr(th, d, Value::Real(v));
             }
             Op::Not => {
@@ -686,7 +717,7 @@ impl Machine {
                 wr(th, d, Value::Boolean(v));
             }
             Op::IntToReal => {
-                let v = int_of(rd(th, l))? as f32;
+                let v = conv::i2r(int_of(rd(th, l))?);
                 wr(th, d, Value::Real(v));
             }
             Op::And => {
@@ -707,14 +738,25 @@ impl Machine {
                 wr(th, d, Value::Boolean(v));
             }
             Op::Lt | Op::Le | Op::Gt | Op::Ge => {
-                use std::cmp::Ordering::*;
-                let ord = num_cmp(rd(th, l), rd(th, r))?;
-                let v = match (ins.op, ord) {
-                    (_, None) => false,
-                    (Op::Lt, Some(o)) => o == Less,
-                    (Op::Le, Some(o)) => o != Greater,
-                    (Op::Gt, Some(o)) => o == Greater,
-                    (_, Some(o)) => o != Less,
+                let (a, b) = (rd(th, l), rd(th, r));
+                let v = match (a, b) {
+                    (Value::Integer(x), Value::Integer(y)) => match ins.op {
+                        Op::Lt => x < y,
+                        Op::Le => x <= y,
+                        Op::Gt => x > y,
+                        _ => x >= y,
+                    },
+                    // Reals use the ordered soft-float compares: false when either side is NaN.
+                    _ => {
+                        let x = num_real(a)?;
+                        let y = num_real(b)?;
+                        match ins.op {
+                            Op::Lt => arith::lt(x, y),
+                            Op::Le => arith::le(x, y),
+                            Op::Gt => arith::gt(x, y),
+                            _ => arith::le(y, x),
+                        }
+                    }
                 };
                 wr(th, d, Value::Boolean(v));
             }
@@ -762,7 +804,9 @@ impl Machine {
                     let mut ctx = NativeCtx {
                         strings: &mut self.strings,
                         functions: &self.module.function_index,
+                        tables: self.tables.as_ref(),
                         now: self.now,
+                        thread: th.id,
                         spawns: Vec::new(),
                     };
                     let f = &self.registry.entries[bound].1;
@@ -822,7 +866,7 @@ impl Machine {
             RunStatus::Finished => {}
             RunStatus::Sleep(seconds) => {
                 child.state = State::Sleeping {
-                    until: self.now + seconds,
+                    until: wake_time(self.now, seconds),
                 };
                 self.spawned.push(child);
             }
@@ -875,6 +919,15 @@ fn check_signature(params: &[Ty], args: &[Value]) -> Result<(), RunStatus> {
 // ---------------------------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------------------------
+
+/// Why `Vm::resume` did not run a thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResumeError {
+    /// No live thread has this id (it finished, failed, or never existed).
+    NoSuchThread(ThreadId),
+    /// The thread is sleeping and `now` is before its wake time `until`.
+    NotDue { until: F32 },
+}
 
 /// Errors from creating a VM.
 #[derive(Debug, Clone, PartialEq)]
@@ -993,7 +1046,15 @@ pub struct Vm {
 impl Vm {
     /// Creates the VM: verifies the module, binds natives, initializes globals and runs the global
     /// initializers to completion.
-    pub fn new(module: Module, natives: NativeRegistry) -> Result<Vm, VmError> {
+    ///
+    /// `tables` are the `softfloat` lookup tables read from the user's `Game.dll`. Pass `None` when
+    /// they are not available: real division and the table-based natives then stop their thread with
+    /// `RunStatus::MissingTables` (and a global initializer that needs them fails `Vm::new`).
+    pub fn new(
+        module: Module,
+        natives: NativeRegistry,
+        tables: Option<Tables>,
+    ) -> Result<Vm, VmError> {
         verify(&module)?;
         let bindings: Vec<Option<usize>> = module
             .natives
@@ -1020,7 +1081,8 @@ impl Vm {
                 globals,
                 registry: natives,
                 bindings,
-                now: 0.0,
+                tables,
+                now: F32::ZERO,
                 budget: DEFAULT_BUDGET,
                 nest: 0,
                 next_thread: 0,
@@ -1042,9 +1104,14 @@ impl Vm {
         self.m.budget = budget;
     }
 
-    /// Game time as of the last `step`.
-    pub fn now(&self) -> f32 {
+    /// Game time as of the last `step` or `resume`.
+    pub fn now(&self) -> F32 {
         self.m.now
+    }
+
+    /// Whether the VM has the `softfloat` lookup tables.
+    pub fn has_tables(&self) -> bool {
+        self.m.tables.is_some()
     }
 
     pub fn module(&self) -> &Module {
@@ -1108,32 +1175,71 @@ impl Vm {
     /// Threads run in list order (insertion order). A sleeping thread is skipped until
     /// `now >= wake time`. A thread that exhausts its budget or yields stays in place. A thread that
     /// finishes or fails is removed. Threads started during the pass are appended after the pass.
-    pub fn step(&mut self, now: f32) {
+    pub fn step(&mut self, now: F32) {
         self.m.now = now;
-        let budget = self.m.budget;
         for i in 0..self.threads.len() {
-            let th = &mut self.threads[i];
-            if let State::Sleeping { until } = th.state {
-                if now < until {
-                    continue;
-                }
-            }
-            th.state = State::Runnable;
-            let stop = self.m.run(th, budget);
-            match stop {
-                RunStatus::BudgetExhausted | RunStatus::Yield => {}
-                RunStatus::Sleep(seconds) => {
-                    th.state = State::Sleeping {
-                        until: now + seconds,
-                    };
-                }
-                RunStatus::Finished => th.dead = true,
-                err => {
-                    th.dead = true;
-                    self.m.failures.push((th.id, err));
-                }
+            if self.is_due(i, now) {
+                self.run_slot(i);
             }
         }
+        self.finish_pass();
+    }
+
+    /// Runs exactly one thread, `id`, at game time `now`, and nothing else.
+    ///
+    /// This is how a host wakes a thread whose sleep timer fired: the thread runs once, at the
+    /// timer's expiry, and the other threads keep their state. A sleeping thread can only be resumed
+    /// once `now >= wake time`; otherwise nothing runs and `ResumeError::NotDue` is returned. Threads
+    /// started by the resumed thread are appended to the list after it, as in `step`.
+    pub fn resume(&mut self, id: ThreadId, now: F32) -> Result<(), ResumeError> {
+        let i = self
+            .threads
+            .iter()
+            .position(|t| t.id == id)
+            .ok_or(ResumeError::NoSuchThread(id))?;
+        if let State::Sleeping { until } = self.threads[i].state {
+            if arith::lt(now, until) {
+                return Err(ResumeError::NotDue { until });
+            }
+        }
+        self.m.now = now;
+        self.run_slot(i);
+        self.finish_pass();
+        Ok(())
+    }
+
+    /// Whether thread `i` may run at `now` (runnable, or sleeping and its wake time has come).
+    fn is_due(&self, i: usize, now: F32) -> bool {
+        match self.threads[i].state {
+            State::Runnable => true,
+            State::Sleeping { until } => !arith::lt(now, until),
+        }
+    }
+
+    /// Runs thread `i` until it stops, and records the outcome in its state.
+    fn run_slot(&mut self, i: usize) {
+        let now = self.m.now;
+        let budget = self.m.budget;
+        let th = &mut self.threads[i];
+        th.state = State::Runnable;
+        let stop = self.m.run(th, budget);
+        match stop {
+            RunStatus::BudgetExhausted | RunStatus::Yield => {}
+            RunStatus::Sleep(seconds) => {
+                th.state = State::Sleeping {
+                    until: wake_time(now, seconds),
+                };
+            }
+            RunStatus::Finished => th.dead = true,
+            err => {
+                th.dead = true;
+                self.m.failures.push((th.id, err));
+            }
+        }
+    }
+
+    /// Drops finished and failed threads and appends the threads started during the pass.
+    fn finish_pass(&mut self) {
         self.threads.retain(|t| !t.dead);
         self.threads.append(&mut self.m.spawned);
     }
