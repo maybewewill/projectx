@@ -160,6 +160,11 @@ tools/
 - One case-insensitive name table shared with string literals (ids from 2, strings deduplicated); 8-bit temp slots wrap after 255. `%` is a syntax error (although the grammar has the node). **Calling an undeclared function is a compile error** (test 57).
 - ✅ **Our compiler emits the same bytecode**: `tools/emu/jasscomp/parity.py` — **150/151 snippets identical** (3,821 instructions; the only difference is that this entry point rejects `native`, not a codegen issue). 40 vectors from the original in `crates/jass/tests/bytecode_parity.rs`. The VM executes this bytecode, budget = 1 per executed instruction (incl. HDR/DL/LBL/BIND/PUSH/POP) → **the op limit counts like the original**. UNVERIFIED: native call encoding 0x15 (imm = native index), DebugSkip semantics, ArrayLoad element code for handle/code arrays, an int returned from a real function isn't converted on return.
 
+### 4.3n Units (spec: docs/spec/unit-core.md, pass 1)
+- All unit natives resolve the handle through `0x6F3BDCB0` (default if the handle is invalid / tag ≠ 0x2B61676C / removed flag at unit+0x20). CreateUnit: check the player → build the object (type fields, vtable slot 107 init: type id → +0x30, the setup event sequence 0xD0153…0xD01D4, abilities from the type list) → owner/food → slot 35 → **the handle id is allocated last** (`0x6F430C80`).
+- Position/facing/speed live in the mover sub-object unit+0x164; HP in the stat block unit+0x98; mana through unit+0x08; owner = index at unit+0x58. KillUnit = SetLife(0) + event 0xD01E6 (doesn't remove). SetUnitState only applies life(0)/mana(2), max values are ignored. RemoveUnit is synchronous: hide, unlink, flag +0x20, events 0xD015A, 0xD0164, 0xD0156, 0xD0178, 0xD0144; the id is freed when its refcount reaches 0. SetUnitPosition goes through the full move path (slot 96), SetUnitX/Y write directly. SetUnitFacing × π/180.
+- Unread: ability factories (RNG during creation?), the type data the fields are copied from.
+
 ### 4.3c Handles (spec: docs/spec/handles-2.md) ✅ checked in Unicorn (21/21, `tools/emu/handle_alloc_emu.py`)
 - GetHandleId `0x6F3B2D00` = identity. **Base 0x100000**, new id = 0x100000 + table size (allocator `0x6F430C80`); freed ids go on a **LIFO stack** (push `0x6F3A3D20`) → the most recently freed one is reused.
 - Entry is 12 bytes: refcount, agent smart pointer, flag. Created with count 1; release `0x6F42DD40` → when it reaches 0 the id goes on the free stack. Hashtable saves AddRef the id (it stays reserved). Agent death (event 0x80267, `0x6F42DD80`) releases the creation reference (LIKELY).
@@ -176,6 +181,11 @@ tools/
   - GetRandomInt(i32::MIN, i32::MAX): size wraps to 0 → returns lo (one step still taken).
   - Open: the constant at `0x6FAAE464` is assumed = -1.0 (zeros in the file, filled at runtime; needs reading from a live process). The game-start seed fold over slots is not implemented (input to `start_game(s)`).
 - The 256-byte table is **not committed**; the engine should read it from the user's Game.dll (or the original data). Game seed = rotl fold over slots (0x8000 → constant 0x77617233); the link to the seed field in .w3g isn't confirmed yet.
+
+### 4.3m Constants filled in at startup ✅ (`tools/emu/runtime_consts.py`)
+- Many simulation constants are **zero in the file** and set by the CRT/C++ static initializers. The script runs all initializers (2,061, `jasscomp` harness) in Unicorn and dumps every changed dword in .data (8,989).
+- Confirmed: `0x6FAAE464` = **-1.0** (the GetRandomReal assumption is confirmed), `0x6FAAE4F4` = 1.0, `0x6FAAE4A0` = 0.1, `0x6FAAE5E8` = π/180 (0x3C8EFA35), `0x6FAAE60C` = 180/π (0x42652EE1), `0x6FAAE600` = π, `0x6FAAE570` = 90.0, `0x6FAAE614` = 2e-7, `0x6FAB7748` = -128000.0 (0xC7FA0001), `0x6FAAE470` = 0.0, **`0x6FAAE564` = 32.0** → the rect clamp is `max - 32` (the earlier assumption C = 0 was **wrong**, fixed in location.rs, confirmed by the disassembly of `0x6F469490`).
+- **Rule for agents**: before assuming the value of a constant from .data, check it with this script.
 
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).
@@ -225,7 +235,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~29%** of the 1:1 rewrite.
+**Overall: ~29.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|

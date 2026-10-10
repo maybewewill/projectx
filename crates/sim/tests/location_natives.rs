@@ -178,8 +178,9 @@ endfunction
     clamped.step();
     assert_eq!(real(&clamped, "gMinX"), 0.0);
     assert_eq!(real(&clamped, "gMinY"), 0.0);
-    assert_eq!(real(&clamped, "gMaxX"), 100.0);
-    assert_eq!(real(&clamped, "gMaxY"), 50.0);
+    // The upper bound is max - 32.0 (the start-up value of the float at 0x6FAAE564).
+    assert_eq!(real(&clamped, "gMaxX"), 68.0);
+    assert_eq!(real(&clamped, "gMaxY"), 50.0); // below 100 - 32, not clamped
 
     // No playable area: the rect keeps the values it was given (no clamp is modelled).
     let mut raw = host_for(src);
@@ -205,7 +206,7 @@ endglobals
 
 function Main takes nothing returns nothing
     set gR = Rect(I2R(-10), I2R(-10), I2R(200), I2R(50))
-    // The clamped rect is (0, 0) - (100, 50), its center (50, 25).
+    // The clamped rect is (0, 0) - (68, 50) (upper bound max - 32 = 68), its center (34, 25).
     call MoveRectTo(gR, I2R(10), I2R(10))
     set gCx = GetRectCenterX(gR)
     set gCy = GetRectCenterY(gR)
@@ -222,9 +223,9 @@ endfunction
     let mut host = host_with(src, Some(PLAYABLE));
     host.start("Main", &[]).unwrap();
     host.step();
-    assert_eq!(real(&host, "gMinX"), -40.0);
+    assert_eq!(real(&host, "gMinX"), -24.0);
     assert_eq!(real(&host, "gMinY"), -15.0);
-    assert_eq!(real(&host, "gMaxX"), 60.0);
+    assert_eq!(real(&host, "gMaxX"), 44.0);
     assert_eq!(real(&host, "gMaxY"), 35.0);
     assert_eq!(real(&host, "gCx"), -5.0);
     assert_eq!(real(&host, "gCy"), -6.0);

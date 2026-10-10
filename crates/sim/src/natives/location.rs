@@ -20,8 +20,10 @@
 //!   `RectFromLoc`, CONFIRMED).
 //! * Clamp (0x6F469490, called on each corner pair): the pair (x, y) is clamped into the playable
 //!   area. The x value is clamped to [min x, max x] and y to [min y, max y], lower bound first. The
-//!   upper bound is `max - C` where C is the float at 0x6FAAE564; that global is never written by the
-//!   module, so C = 0.0 and the bound is the max itself (CONFIRMED for the code, LIKELY for C = 0).
+//!   upper bound is `max - C` (softfloat sub 0x6F6EEEF0) where C is the float at 0x6FAAE564. That
+//!   global is zero in the file image and set to 32.0 by a start-up initialiser (read by running the
+//!   CRT initialisers in Unicorn, `tools/emu/runtime_consts.py`), so the bound is `max - 32.0`
+//!   (CONFIRMED: code and constant).
 //!   The playable area is the world struct's (+0x6C..+0x78) values. It is not loaded by the
 //!   simulation yet, so with no playable area set the clamp does nothing (UNSURE, see
 //!   `Game::set_playable`).
@@ -250,6 +252,9 @@ fn make_rect(playable: Option<Playable>, p: (F32, F32), q: (F32, F32)) -> RectOb
     }
 }
 
+/// The float at 0x6FAAE564 after start-up: 32.0 (zero in the file image).
+const CLAMP_MARGIN: F32 = F32::from_bits(0x4200_0000);
+
 /// Clamps the corner (x, y) into the playable area (0x6F469490). Without a playable area it is kept.
 fn clamp_corner(playable: Option<Playable>, x: F32, y: F32) -> (F32, F32) {
     match playable {
@@ -262,10 +267,10 @@ fn clamp_corner(playable: Option<Playable>, x: F32, y: F32) -> (F32, F32) {
 }
 
 /// One axis of the clamp. The lower bound is applied first; the upper bound only when the value was
-/// not raised. The upper bound is `hi - C` with C = 0.0 (CONFIRMED structure, LIKELY constant).
+/// not raised. The upper bound is `hi - CLAMP_MARGIN` (CONFIRMED structure and constant).
 /// The compares are IEEE, as the original's x87 `fcom`.
 fn clamp_axis(v: F32, lo: F32, hi: F32) -> F32 {
-    let hi = arith::sub(hi, F32::ZERO);
+    let hi = arith::sub(hi, CLAMP_MARGIN);
     if lo.to_f32() > v.to_f32() {
         return lo;
     }
