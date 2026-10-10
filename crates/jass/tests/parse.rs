@@ -73,21 +73,66 @@ fn parses_sample() {
     }
 }
 
-#[test]
-fn and_or_share_precedence_left_assoc() {
-    // `a or b and c` parses as `(a or b) and c` under pjass rules.
-    let p = jass::parse(
-        "function F takes nothing returns boolean\nreturn true or false and false\nendfunction\n",
-    )
+/// Renders an expression fully parenthesised, to compare tree shapes compactly.
+fn shape(e: &Expr) -> String {
+    match e {
+        Expr::Var(v) => v.clone(),
+        Expr::Int(i) => i.to_string(),
+        Expr::Not(x) => format!("(not {})", shape(x)),
+        Expr::Neg(x) => format!("(-{})", shape(x)),
+        Expr::Binary(op, a, b) => {
+            let o = match op {
+                BinOp::Or => "or",
+                BinOp::And => "and",
+                BinOp::Eq => "==",
+                BinOp::Ne => "!=",
+                BinOp::Lt => "<",
+                BinOp::Le => "<=",
+                BinOp::Gt => ">",
+                BinOp::Ge => ">=",
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
+                BinOp::Div => "/",
+            };
+            format!("({} {o} {})", shape(a), shape(b))
+        }
+        other => format!("{other:?}"),
+    }
+}
+
+fn parse_expr(src: &str) -> String {
+    let p = jass::parse(&format!(
+        "function F takes nothing returns boolean\nreturn {src}\nendfunction\n"
+    ))
     .unwrap();
-    let Stmt::Return {
-        value: Some(Expr::Binary(BinOp::And, lhs, _)),
-        ..
-    } = &p.functions[0].body[0]
-    else {
+    let Stmt::Return { value: Some(e), .. } = &p.functions[0].body[0] else {
         panic!()
     };
-    assert!(matches!(**lhs, Expr::Binary(BinOp::Or, _, _)));
+    shape(e)
+}
+
+#[test]
+fn precedence_matches_original_parser() {
+    // Expected shapes from docs/spec/jass-precedence.md (decoded from Game.dll 1.26a yacc tables
+    // and checked against the real parser in emulation).
+    let cases = [
+        ("a - b - c", "((a - b) - c)"),
+        ("a / b / c", "((a / b) / c)"),
+        ("a + b * c", "(a + (b * c))"),
+        ("a or b and c", "((a or b) and c)"),
+        ("a and b or c", "(a and (b or c))"),
+        ("a and b and c", "(a and (b and c))"),
+        ("a or b or c", "(a or (b or c))"),
+        ("not a == b", "((not a) == b)"),
+        ("a == b == c", "((a == b) == c)"),
+        ("a < b == c < d", "((a < b) == (c < d))"),
+        ("- a * b", "((-a) * b)"),
+        ("a < b + c", "(a < (b + c))"),
+    ];
+    for (src, want) in cases {
+        assert_eq!(parse_expr(src), want, "{src}");
+    }
 }
 
 #[test]

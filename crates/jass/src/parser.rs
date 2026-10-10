@@ -344,31 +344,48 @@ impl Parser {
         Ok(args)
     }
 
-    // Precedence follows pjass: `and`/`or` share the lowest level (left-assoc), then comparisons,
-    // then `not`, then + -, then * /, then unary minus.
-    // TODO: verify against the original game's parser in Game.dll (parser.cpp) — affects behaviour.
+    // Precedence and associativity as implemented by the original parser in Game.dll 1.26a
+    // (yacc tables decoded and checked against the real parser in emulation, see
+    // docs/spec/jass-precedence.md), loosest first:
+    //   and (right) < or (right) < == != (left) < < <= > >= (left) < + - (left) < * / (left)
+    //   < prefix not / unary minus.
+    // Note `or` binds tighter than `and`, unlike most languages.
     pub fn expr(&mut self) -> Result<Expr, Error> {
-        let mut lhs = self.cmp()?;
-        loop {
-            let op = if self.is_kw("or") {
-                BinOp::Or
-            } else if self.is_kw("and") {
-                BinOp::And
-            } else {
-                return Ok(lhs);
-            };
-            self.bump();
-            let rhs = self.cmp()?;
-            lhs = Expr::Binary(op, Box::new(lhs), Box::new(rhs));
+        let lhs = self.or_expr()?;
+        if self.eat_kw("and") {
+            let rhs = self.expr()?;
+            return Ok(Expr::Binary(BinOp::And, Box::new(lhs), Box::new(rhs)));
         }
+        Ok(lhs)
     }
 
-    fn cmp(&mut self) -> Result<Expr, Error> {
-        let mut lhs = self.not()?;
+    fn or_expr(&mut self) -> Result<Expr, Error> {
+        let lhs = self.equality()?;
+        if self.eat_kw("or") {
+            let rhs = self.or_expr()?;
+            return Ok(Expr::Binary(BinOp::Or, Box::new(lhs), Box::new(rhs)));
+        }
+        Ok(lhs)
+    }
+
+    fn equality(&mut self) -> Result<Expr, Error> {
+        let mut lhs = self.relational()?;
         loop {
             let op = match self.peek() {
                 Tok::Eq => BinOp::Eq,
                 Tok::Ne => BinOp::Ne,
+                _ => return Ok(lhs),
+            };
+            self.bump();
+            let rhs = self.relational()?;
+            lhs = Expr::Binary(op, Box::new(lhs), Box::new(rhs));
+        }
+    }
+
+    fn relational(&mut self) -> Result<Expr, Error> {
+        let mut lhs = self.add()?;
+        loop {
+            let op = match self.peek() {
                 Tok::Lt => BinOp::Lt,
                 Tok::Le => BinOp::Le,
                 Tok::Gt => BinOp::Gt,
@@ -376,16 +393,8 @@ impl Parser {
                 _ => return Ok(lhs),
             };
             self.bump();
-            let rhs = self.not()?;
+            let rhs = self.add()?;
             lhs = Expr::Binary(op, Box::new(lhs), Box::new(rhs));
-        }
-    }
-
-    fn not(&mut self) -> Result<Expr, Error> {
-        if self.eat_kw("not") {
-            Ok(Expr::Not(Box::new(self.not()?)))
-        } else {
-            self.add()
         }
     }
 
@@ -424,8 +433,13 @@ impl Parser {
                 Ok(Expr::Neg(Box::new(self.unary()?)))
             }
             Tok::Plus => {
+                // UNVERIFIED vs retail: unary plus is not among the decoded grammar's prefix rules.
                 self.bump();
                 self.unary()
+            }
+            Tok::Ident(s) if s == "not" => {
+                self.bump();
+                Ok(Expr::Not(Box::new(self.unary()?)))
             }
             _ => self.primary(),
         }
@@ -446,7 +460,7 @@ impl Parser {
                 "false" => Ok(Expr::Bool(false)),
                 "null" => Ok(Expr::Null),
                 "function" => Ok(Expr::FuncRef(self.ident()?)),
-                "not" => Ok(Expr::Not(Box::new(self.not()?))),
+                "not" => Ok(Expr::Not(Box::new(self.unary()?))),
                 kw if is_keyword(kw) => {
                     self.pos -= 1;
                     self.err("unexpected keyword in expression")

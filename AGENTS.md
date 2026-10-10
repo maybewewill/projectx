@@ -97,7 +97,9 @@ tools/
 ### 4.3b JASS front end (spec: docs/spec/jass-frontend.md, Haiku, partly UNSURE)
 - Lexer is **flex** (`0x6F45FF30`), parser is **yacc** (stack 600). Integers: decimal/octal (leading 0)/hex (`0x`, `$`), 32-bit wrap with no checks (matches our lexer). Rawcode 1 or 4 characters, with escapes. **String literals are not unescaped in the lexer** (our lexer does it; check where the original does it).
 - There is an AST node for `%` (NodeMod) — check whether the grammar accepts it.
-- **Precedence/associativity live in the yacc tables** (`DAT_6FA822A8…` in .rdata) and haven't been decoded yet. TODO: extract the tables from the binary and decode them (yacc yyact/yypact/yyr1/yyr2), or run the original compiler under Unicorn on test expressions.
+- ✅ **Precedence decoded from the yacc tables and checked against the real parser in Unicorn** (docs/spec/jass-precedence.md; 21 named + 60 random expressions match the real engine, 3000 random trees match the table). Loosest first:
+  `and` (right) < `or` (right) < `== !=` (left) < `< <= > >=` (left) < `+ -` (left) < `* / %` (left) < prefix `not`, unary `-`.
+  **`or` binds tighter than `and`** (`a and b or c` = `a and (b or c)`), `not` is tighter than comparisons (`not a == b` = `(not a) == b`). The grammar accepts `%`. Our parser is **already fixed** to this (test `precedence_matches_original_parser`).
 - Symbol table: 1024-bucket hash. The declaration-order rule is not found yet.
 
 ### 4.3d JASS VM (spec: docs/spec/jass-vm.md, Haiku, partly UNSURE)
@@ -106,6 +108,11 @@ tools/
 - Integer +,-,* wrap. **Integer division by 0 and real division by 0.0 abort the thread** (status 7). Modulo by 0 gives 0.
 - Execution budget: the executor runs at most N instructions; at the call sites N = **300000**. The agent guessed a timer, but **this matches the well-known JASS "op limit" ≈ 300k** → most likely an instruction limit per run (LIKELY). What happens on overflow (thread ends vs continues next tick) needs checking: the spec says status 2 and the thread stays runnable.
 - Statuses: 1 done, 2 budget, 3 sleep, 4 yield, 5 function not found, 6 null, 7 divide by zero. Threads are in a circular list and run in list order every tick (`0x6F44B400`, LIKELY). No call-depth limit found.
+
+### 4.3g Software float (important!)
+- From the natives analysis: real arithmetic in the JASS VM and in natives goes through **Blizzard's own software float helpers** (multiply `0x6F6EEE20`, Sin/Cos/Tan wrappers `0x6F3B2A10/2A30/2A50` call software helpers `0x6F6EF820/0x6F6EF8D0/0x6F6F0140`, not `_CI*`). `I2R` truncates the mantissa to 24 bits (`I2R(16777219) = 16777218`), not round-to-nearest. S2R parser `0x6F6F0520`. GetRandomReal uses the same helpers.
+- → Exact port of the softfloat library is **TOP PRIORITY for determinism**, checked through `tools/emu/`. Where `_CI*` from MSVCR80 is actually used (other code paths) needs a separate look.
+- The decompile export is **missing the bodies of many natives** (Ghidra didn't create functions at those addresses: Deg2Rad, Atan2, SquareRoot, Pow, R2I, S2I, StringHash, I2S, R2S, R2SW, StringLength, StringCase, Convert*). Fix: create functions at the addresses from natives-1.26a.tsv and re-export, or test them black-box in Unicorn.
 
 ### 4.3e Native table
 - `docs/spec/natives-1.26a.tsv`: **1,291 natives** (1,167 `common`, registered in `0x6F3D4020`; plus 124 AI natives in `0x6F71D9E0`) with signatures and implementation addresses. Extracted by `tools/analysis/extract_natives.py` (parses push name/signature/function before the register call).
@@ -169,14 +176,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~8%** of the 1:1 rewrite.
+**Overall: ~9%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~2% | RNG spec checked in emulation (Rust port still to do) |
-| JASS VM + ~1000 natives | 12% | ~15% | parser, type checker, VM; natives: 6 of ~1000 |
+| JASS VM + ~1000 natives | 12% | ~20% | parser (precedence = original), type checker, VM; natives ~65 of 1291, unconfirmed |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
@@ -194,7 +201,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/mpq` v0.2: Huffman + ADPCM (Haiku agent, port from OpenRealm, see THIRD_PARTY_NOTICES.md). Checked only by round-trips with a test encoder.
 - [ ] `crates/mpq`: check codecs on real WAVs (the Huffman model updates the tree only on escape, as in the reference; check first if decoding fails), check on real War3.mpq/War3x.mpq (`cargo run -p mpq --example mpqls -- War3.mpq`), streaming instead of loading the whole file
 - [x] `crates/jass` v0.1: lexer (rawcodes, hex/$/octal, real, escapes), parser of the whole grammar (type/globals/native/function/locals/set/call/if-elseif-else/loop/exitwhen/return/debug), 5 tests.
-- [ ] `crates/jass`: check on common.j/blizzard.j from the user's MPQ; **verify operator precedence and literal overflow against the original parser in Game.dll** (`parser.cpp`, `scanner.cpp`); type checker; VM (bytecode like the original, handles, threads/TriggerSleepAction, op limit)
+- [x] JASS operator precedence matches the original (2026-10-10).
+- [ ] `crates/jass`: check on common.j/blizzard.j from the user's MPQ; literal overflow, `%` in the AST (`parser.cpp`, `scanner.cpp`); type checker; VM (bytecode like the original, handles, threads/TriggerSleepAction, op limit)
 - [x] `crates/blp` v0.1 (9 tests, wasm32 OK). **TODO on real files**: BLP1-JPEG is, as far as is known, 4-component BGRA without color conversion (alpha in the 4th channel); right now zune-jpeg converts it to RGB and drops alpha. This probably needs raw component output. Also check JPEG mip levels > 0 and the nibble order of 4-bit alpha.
 - [x] `crates/gamedata` v0.1 (21 tests). **TODO on real files**: a duplicate row key in an SLK is currently an error; it should probably be first-wins or last-wins like the game (find out in Game.dll). Case-sensitivity of profile keys is unknown.
 - [x] `crates/w3map` v0.1 (15 tests incl. truncation/corruption sweeps). **TODO on a real map**: the special-doodads section layout (currently assumed version 0 with strict checking, so the whole DOO parse may fail), SHD (maybe bit-packed), WPM header, the tail of w3i (upgrades/tech/random tables) is kept raw.
@@ -202,6 +210,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/jass` v0.2: type checker (39 tests). Statements in the AST now have `line`. **Known mismatch to fix**: it currently allows calling a function before it is declared; in retail JASS, as far as is known, a function has to be declared above the call site (this is why vJass has `.evaluate`). Check in Game.dll and switch to the strict rule.
 - [x] `crates/viewer` v0.1 (17 tests on pure logic, builds for wasm32). **Not checked**: never drawn (no GPU), no wasm-bindgen/JS glue, bind pose only (no animation/skinning), one texture for all geosets.
 - [x] `crates/jass` v0.3: compiler to bytecode + VM + deterministic scheduler (30 VM tests). **UNVERIFIED vs the original**: real arithmetic is IEEE f32 (the spec hints at software float), R2I truncates, opcode numbering and codegen are ours (so the op limit won't count the same as the original until the codegen matches), and/or without short-circuit, behavior on array index out of range, strings are never freed.
+- [x] `crates/jass` natives v1: math/strings/Convert* (`natives/pure.rs`, 17 tests), mostly UNSURE (bodies missing from the export); StringHash not implemented.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
@@ -209,6 +218,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (11)**: precedence decoded and checked in emulation → parser fixed. Natives v1 merged. Found the software float.
 - **2026-10-10 (10)**: RNG spec (Haiku agent + Unicorn); I re-ran it: 0 mismatches for Int/seed/streams. `tools/emu/` committed.
 - **2026-10-10 (9)**: JASS VM merged (Haiku). Native table extracted (1,291). Launched the agent for pure natives (math/strings/Convert*).
 - **2026-10-10 (8)**: full decompile export (70,526 functions, 1.58M lines, 0 failures; scratchpad only). Analysis agents: specs `docs/spec/{jass-frontend,jass-vm,math,handles}.md`. **Correction**: math comes from MSVCR80 `_CI*`, not software inside Game.dll.
