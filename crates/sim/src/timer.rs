@@ -228,13 +228,23 @@ impl<P: Clone> TimerQueue<P> {
     where
         F: FnMut(&mut Self, Fired<P>),
     {
-        if target.is_nan() || target < self.now {
-            return;
+        while let Some(ev) = self.pop_due(target) {
+            fire(self, ev);
         }
-        while let Some(top) = self.heap.first() {
-            if top.expiry > target {
-                break;
-            }
+    }
+
+    /// Takes the next timer that is due at or before `target`, or `None` when none is left.
+    ///
+    /// This is [`TimerQueue::pump`] one event at a time, for hosts whose callbacks need to reach
+    /// state that owns this queue (the queue must not be borrowed while they run). The queue time is
+    /// the returned expiry until the next call; when `None` is returned the queue time is `target`.
+    /// A periodic timer is re-armed exactly as in `pump`. A `target` before the current time (or
+    /// NaN) returns `None` and changes nothing.
+    pub fn pop_due(&mut self, target: f32) -> Option<Fired<P>> {
+        if target.is_nan() || target < self.now {
+            return None;
+        }
+        if self.heap.first().is_some_and(|top| top.expiry <= target) {
             let e = self.pop_min();
             if let Some(period) = e.period {
                 let next = expiry_for(e.expiry, period);
@@ -252,19 +262,27 @@ impl<P: Clone> TimerQueue<P> {
                 }
             }
             self.now = e.expiry;
-            fire(
-                self,
-                Fired {
-                    id: e.id,
-                    expiry: e.expiry,
-                    payload: e.payload,
-                },
-            );
+            return Some(Fired {
+                id: e.id,
+                expiry: e.expiry,
+                payload: e.payload,
+            });
         }
         self.now = target;
         for e in std::mem::take(&mut self.deferred) {
             self.push_heap(e);
         }
+        None
+    }
+
+    /// The expiry of a pending timer, or `None` if it is not pending (fired or cancelled).
+    /// Linear search, like [`TimerQueue::cancel`].
+    pub fn expiry_of(&self, id: TimerId) -> Option<f32> {
+        self.heap
+            .iter()
+            .chain(self.deferred.iter())
+            .find(|e| e.id == id)
+            .map(|e| e.expiry)
     }
 
     fn alloc_id(&mut self) -> TimerId {

@@ -1,16 +1,18 @@
-//! JASS host: runs a [`jass::vm::Vm`] on the game clock and timer queue.
+//! JASS host: runs a [`jass::vm::Vm`] on the game clock, the timer queue and the trigger state.
 //!
-//! `TriggerSleepAction(t)` stores the sleep in the VM as usual (`t` clamped to `>= 0`). The host
-//! also records the thread and the wake time `now + t` (soft-float add, [`jass::vm::ScriptHost`]
-//! uses the same expression as the VM) and starts a timer for that thread at that time.
+//! `TriggerSleepAction(t)` stores the sleep in the VM as usual (`t` clamped to `>= 0`) and queues
+//! the thread's wake time (`now + t`, soft-float add, the same expression the VM uses) in the
+//! timer queue (see `natives`). Timer handles, timer expiries and trigger events are queued in the
+//! same queue.
 //!
 //! One host step ([`ScriptHost::step`]) does, in this order:
 //!
 //! 1. Advances the agile clock by one step (0.1 s, soft-float add) to `target`.
-//! 2. Fires every timer with expiry `<= target`, in expiry order and then by insertion order
-//!    (the [`TimerQueue`] order). Each fired timer resumes exactly its own thread at the timer's
-//!    expiry with [`Vm::resume`]. Other threads are not touched. A sleep started by a resumed thread
-//!    with an expiry `<= target` fires in the same pump, after the timers that were already due.
+//! 2. Pops every queue entry with expiry `<= target`, in expiry order and then by insertion order.
+//!    A sleep resumes exactly its own thread at the expiry ([`Vm::resume`]). A timer expiry runs the
+//!    timer's handler and fires its listening triggers. A trigger event fires its trigger. Each of
+//!    these runs at the expiry as the game time, so timers started from there are relative to it.
+//!    Entries queued by a callback with an expiry `<= target` are popped in the same step.
 //! 3. Runs one scheduler pass at `target` ([`Vm::step`]): every runnable thread (budget exhausted,
 //!    yielded, or started during the step) runs once, in list order. Sleeping threads that are not
 //!    due are skipped.
@@ -18,60 +20,44 @@
 //! So a thread that was resumed in step 2 and used up its budget gets one more budget slice in step 3
 //! of the same host step. This follows from the order above, and it is deterministic. It is
 //! UNVERIFIED against the original, whose exact resume order is not in the spec (game-loop-2 4.5).
-//!
-//! UNVERIFIED: the wake time is stored as f32 bits in the timer queue (the queue's API is f32). The
-//! value is the soft-float result, so no information is lost.
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 
 use jass::compile::Module;
-use jass::vm::{
-    clamp_sleep, NativeRegistry, NativeResult, ResumeError, RunStatus, ThreadId, Value, Vm, VmError,
-};
+use jass::vm::{NativeRegistry, ResumeError, RunStatus, ThreadId, Value, Vm, VmError};
 use softfloat::{Tables, F32};
 
+use crate::natives::{self, Game, Payload};
 use crate::timer::{AgileClock, TimerQueue};
 
-/// A JASS VM driven by the agile clock and a timer queue.
+/// A JASS VM driven by the agile clock, the timer queue and the trigger state.
 pub struct ScriptHost {
     vm: Vm,
     clock: AgileClock,
-    timers: TimerQueue<ThreadId>,
-    /// `(thread, wake time)` of `TriggerSleepAction` calls not yet turned into timers.
-    pending_sleeps: Rc<RefCell<Vec<(ThreadId, f32)>>>,
+    game: Rc<RefCell<Game>>,
     /// Resumes the host refused. Empty in normal operation (see [`ScriptHost::misfires`]).
     misfires: Vec<(ThreadId, ResumeError)>,
 }
 
 impl ScriptHost {
     /// Creates the VM for `module` with the soft-float `tables` (`None` if they are not loaded; see
-    /// [`Vm::new`]). `TriggerSleepAction` is replaced by a version that also records the wake time
-    /// for the host.
+    /// [`Vm::new`]). The timer, trigger and sleep natives of [`crate::natives`] are registered on
+    /// `natives`, replacing any native with the same name (`TriggerSleepAction` included).
     pub fn new(
         module: Module,
         mut natives: NativeRegistry,
         tables: Option<Tables>,
     ) -> Result<Self, VmError> {
-        let pending_sleeps: Rc<RefCell<Vec<(ThreadId, f32)>>> = Rc::new(RefCell::new(Vec::new()));
-        let record = Rc::clone(&pending_sleeps);
-        natives.register("TriggerSleepAction", move |ctx, a| {
-            let seconds = clamp_sleep(a.first().and_then(|v| v.as_real()).unwrap_or(F32::ZERO));
-            // The VM's own wake time for this sleep: `now + seconds` (soft-float add).
-            let wake = ctx.wake_time(seconds);
-            record.borrow_mut().push((ctx.thread(), wake.to_f32()));
-            NativeResult::Sleep(seconds)
-        });
+        let game = Rc::new(RefCell::new(Game::new()));
+        natives::register(&mut natives, &game);
         let vm = Vm::new(module, natives, tables)?;
-        let mut host = ScriptHost {
+        Ok(ScriptHost {
             vm,
             clock: AgileClock::new(),
-            timers: TimerQueue::new(),
-            pending_sleeps,
+            game,
             misfires: Vec::new(),
-        };
-        host.schedule_pending();
-        Ok(host)
+        })
     }
 
     /// The JASS VM (globals, thread count, failures).
@@ -89,13 +75,18 @@ impl ScriptHost {
         &self.clock
     }
 
-    /// The timer queue (for inspection).
-    pub fn timers(&self) -> &TimerQueue<ThreadId> {
-        &self.timers
+    /// The timer queue (sleeps, timers and trigger events), for inspection.
+    pub fn timers(&self) -> Ref<'_, TimerQueue<Payload>> {
+        Ref::map(self.game.borrow(), |g| &g.timers)
     }
 
-    /// Timers whose resume was refused by the VM. Always empty unless the host and the VM disagree
-    /// about a wake time, which the shared soft-float expression prevents.
+    /// The shared game state (timer and trigger objects and handles), for inspection.
+    pub fn game(&self) -> Ref<'_, Game> {
+        self.game.borrow()
+    }
+
+    /// Resumes the host refused. Always empty unless the host and the VM disagree about a wake time,
+    /// which the shared soft-float expression prevents.
     pub fn misfires(&self) -> &[(ThreadId, ResumeError)] {
         &self.misfires
     }
@@ -106,34 +97,41 @@ impl ScriptHost {
     }
 
     /// Runs one host step (see the module documentation for the order) and returns the number of
-    /// sleep timers that fired.
+    /// queue entries that fired (sleeps, timer expiries and trigger events).
     pub fn step(&mut self) -> usize {
         self.clock.advance_step();
         let target = self.clock.now();
         let mut fired = 0usize;
-        let vm = &mut self.vm;
-        let pending = &self.pending_sleeps;
-        let misfires = &mut self.misfires;
-        self.timers.pump(target, |queue, event| {
+        loop {
+            let next = self.game.borrow_mut().timers.pop_due(target);
+            let Some(event) = next else {
+                break;
+            };
             fired += 1;
-            let at = F32::from_bits(event.expiry.to_bits());
-            if let Err(e) = vm.resume(event.payload, at) {
-                misfires.push((event.payload, e));
+            let expiry = F32::from_bits(event.expiry.to_bits());
+            match event.payload {
+                Payload::Sleep(thread) => {
+                    if let Err(e) = self.vm.resume(thread, expiry) {
+                        self.misfires.push((thread, e));
+                    }
+                }
+                Payload::Timer(timer) => {
+                    self.vm.set_now(expiry);
+                    natives::expire_timer(&self.game, &mut self.vm, timer);
+                }
+                Payload::Event(ev) => {
+                    self.vm.set_now(expiry);
+                    let trigger = match self.game.borrow().object(ev) {
+                        natives::game::Object::Event(e) => Some(e.trigger),
+                        _ => None,
+                    };
+                    if let Some(trigger) = trigger {
+                        natives::fire_trigger(&self.game, &mut self.vm, trigger, Some(ev));
+                    }
+                }
             }
-            drain_pending(pending, queue);
-        });
+        }
         self.vm.step(F32::from_bits(target.to_bits()));
-        self.schedule_pending();
         fired
-    }
-
-    fn schedule_pending(&mut self) {
-        drain_pending(&self.pending_sleeps, &mut self.timers);
-    }
-}
-
-fn drain_pending(pending: &RefCell<Vec<(ThreadId, f32)>>, queue: &mut TimerQueue<ThreadId>) {
-    for (thread, until) in pending.borrow_mut().drain(..) {
-        queue.start_at(until, thread);
     }
 }
