@@ -29,6 +29,7 @@ crates/
   mpq/        MPQ archive reader                                        [v0.2: + Huffman (profile 7) and ADPCM mono/stereo, ported from OpenRealm]
   wc3-math/   bit-exact WC3 math (x87 rounding, software sin/cos/sqrt)  [todo — waiting on Ghidra]
   jass/       JASS lexer/parser/VM                                      [v0.3: + bytecode compiler and VM (8-byte instructions, threads, sleep, 300k budget)]
+  softfloat/  bit-exact port of Game.dll's software float (~27 functions, 540k cases, 0 mismatches) [v1]
   sim/        deterministic simulation: rng.rs + softfloat.rs (add/sub/mul) bit-exact [v0.1]; units/abilities/pathing todo
   blp/        BLP1 textures → RGBA8 (paletted + JPEG), builds for wasm32   [v0.1, Haiku agent]
   gamedata/   SLK tables + profile .txt (INI), merging layers, deterministic BTreeMap [v0.1, Haiku agent]
@@ -111,7 +112,11 @@ tools/
 
 ### 4.3g Software float (important!)
 - From the natives analysis: real arithmetic in the JASS VM and in natives goes through **Blizzard's own software float helpers** (multiply `0x6F6EEE20`, Sin/Cos/Tan wrappers `0x6F3B2A10/2A30/2A50` call software helpers `0x6F6EF820/0x6F6EF8D0/0x6F6F0140`, not `_CI*`). `I2R` truncates the mantissa to 24 bits (`I2R(16777219) = 16777218`), not round-to-nearest. S2R parser `0x6F6F0520`. GetRandomReal uses the same helpers.
-- → Exact port of the softfloat library is **TOP PRIORITY for determinism**, checked through `tools/emu/`. Where `_CI*` from MSVCR80 is actually used (other code paths) needs a separate look.
+- ✅ **`crates/softfloat` (docs/spec/softfloat.md) is a bit-exact port of the whole library**, checked in Unicorn on **two independent vector sets of ~10,000 cases per function (≈540k cases total), 0 mismatches** (re-run by the lead with SOFTFLOAT_VECTORS + GAME_DLL):
+  add `0x6F6EF000`, sub `0x6F6EEEF0`, mul `0x6F6EEE20`, div `0x6F6EFE10` (recip `0x6F6EF100`), i2r `0x6F6EF350`, f2i `0x6F6EEC20`, r2i `0x6F6EEC70`, compares lt/le/gt/eq (`0x6F00C110/0x6F01FD60/0x6F01FD40/0x6F009AE0`), approx_eq `0x6F00C3F0` (|a-b|<0.001), sqrt `0x6F6EF750`, sin/cos/tan `0x6F6EF820/0x6F6EF8D0/0x6F6F0140`, asin/acos `0x6F6EFC70/0x6F6EFB00`, atan/atan2 `0x6F6F0170/0x6F6F02D0`, exp `0x6F6F07B0`, ln `0x6F6F0060`, pow `0x6F6F0810`, floor/ceil/round/trunc.
+  Tables (recip `0x6F9774C8`, sine `0x6F9784D0`, asin `0x6F9794D8`, 1025×u32 each) are read at runtime from Game.dll and **not committed**. The original's quirks are reproduced (ceil(±0)=1.0, floor(-0)=+0).
+  Open: R2S/R2SW `0x6F6F0360` and S2R `0x6F6F0520` (text) are not ported; pow with a negative integer count hangs in the original (the port diverges, UNVERIFIED); native argument wrappers (Asin/Acos range, Pow special cases) not ported; `0x6F6EFE50`, `0x6F6F08B0` not identified. `crates/sim/softfloat.rs` should be switched over to this crate.
+- ⚠ docs/spec/math.md section 0 (the `_CI*` theory) is **wrong for gameplay math**: the natives and the VM use the software helpers above. `_CI*` from MSVCR80 is probably only used in rendering/UI (still to check).
 - The bodies of all 1,291 natives are restored (`ExportNatives.java` creates functions at the addresses from natives-1.26a.tsv; output `scratchpad/decomp/natives.c`, not in the repo).
 - Natives pass 2 (checked): **R2I** = truncation toward 0, saturation at |x|≥2^31 incl. NaN (21,626 cases in Unicorn, 0 mismatches). **StringHash** = MPQ string hash type 0 via Storm ord. 590 (Game.dll's own copy `0x6F68CC10` matches us on 33 cases; that Storm is the same is LIKELY). **S2I** = atoi (leading spaces and sign allowed). **Convert*** = just `return param_1`, no tables. **StringLength/StringCase** substitute `TRIGSTR_nnn` from war3map.wts (not done yet). Storm.dll + msvcr80.dll are needed for full checks.
 
@@ -197,13 +202,13 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~11.5%** of the 1:1 rewrite.
+**Overall: ~13%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~4% | RNG + softfloat add/sub/mul in Rust, bit-exact vs original |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~7% | RNG + full softfloat library bit-exact vs original; timer queue in progress |
 | JASS VM + ~1000 natives | 12% | ~20% | parser (precedence = original), type checker, VM; natives ~65 of 1291, unconfirmed |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
@@ -239,6 +244,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (14)**: `crates/softfloat`: the whole software float library is bit-exact (540k cases). 0x6FAAE4A0 = 0.1f (step 100 ms).
 - **2026-10-10 (13)**: specs game-loop (2 passes) and attack-damage (dice confirmed in Unicorn). RTTI→vtable map. Two agent launches were interrupted by the safety classifier → those tasks were dropped.
 - **2026-10-10 (12)**: `crates/sim` (RNG + softfloat add/sub/mul) bit-exact vs the original (re-ran it myself with GAME_DLL). Natives pass 2. Running: softfloat (full library), game-loop spec, attack/damage spec.
 - **2026-10-10 (11)**: precedence decoded and checked in emulation → parser fixed. Natives v1 merged. Found the software float.
