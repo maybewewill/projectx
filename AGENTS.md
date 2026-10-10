@@ -29,7 +29,7 @@ crates/
   mpq/        MPQ archive reader                                        [v0.2: + Huffman (profile 7) and ADPCM mono/stereo, ported from OpenRealm]
   wc3-math/   bit-exact WC3 math (x87 rounding, software sin/cos/sqrt)  [todo — waiting on Ghidra]
   jass/       JASS lexer/parser/VM                                      [v0.3: + bytecode compiler and VM (8-byte instructions, threads, sleep, 300k budget)]
-  sim/        deterministic simulation (units, abilities, pathing)      [todo]
+  sim/        deterministic simulation: rng.rs + softfloat.rs (add/sub/mul) bit-exact [v0.1]; units/abilities/pathing todo
   blp/        BLP1 textures → RGBA8 (paletted + JPEG), builds for wasm32   [v0.1, Haiku agent]
   gamedata/   SLK tables + profile .txt (INI), merging layers, deterministic BTreeMap [v0.1, Haiku agent]
   w3map/      map files: w3e terrain, w3i info (v25), doo doodads (v8/11), shd, wpm [v0.1, Haiku agent]
@@ -126,7 +126,11 @@ tools/
 - Generator: 8-byte state (A,B); B's bytes index a 256-byte permutation table at `0x6F953650`; mix = rotl(T,3)^rotl(T,2)^T^rotl(T,1); A += mix; output = A. Seeding: A=S, B = S mod 59/61/53 and (17*(S/47)+S) mod 64 in bit fields.
 - 45 separate streams (combat = stream 2: dice/evasion/crit/miss; 32/34/35 for ChooseRandom*; 42 for percentages, ...). SetRandomSeed reseeds the global generator and all streams.
 - GetRandomInt(lo,hi): lo==hi → lo without a draw; otherwise lo + floor(r*(|hi-lo|+1)/2^32) (lo>hi goes up from lo).
-- **Checked in Unicorn against the original** (`tools/emu/`): seed, step, GetRandomInt (300 cases), SetRandomSeed + 45 streams: **0 mismatches**. GetRandomReal: 125/300 differ by ≤1.2e-4 → the original's soft-float helpers still need porting.
+- **Checked in Unicorn against the original** (`tools/emu/`): seed, step, GetRandomInt (300 cases), SetRandomSeed + 45 streams: **0 mismatches**.
+- ✅ **Rust port `crates/sim` (rng.rs + softfloat.rs) is bit-exact**: seeder/step/GetRandomInt/GetRandomReal 3000/3000 each (GetRandomReal also on random bit patterns incl. NaN/inf/denormals), SetRandomSeed + 45 streams 300/300, stream init 300/300, soft add/sub/mul 3000+3000 each. Tests with `GAME_DLL=...` compare against vectors from the original.
+  - GetRandomReal: range = |b-a|, U = (low23(step) | 0x3F800000) - 1.0, result = a + range*U, always one step, everything through the truncating soft-float.
+  - GetRandomInt(i32::MIN, i32::MAX): size wraps to 0 → returns lo (one step still taken).
+  - Open: the constant at `0x6FAAE464` is assumed = -1.0 (zeros in the file, filled at runtime; needs reading from a live process). The game-start seed fold over slots is not implemented (input to `start_game(s)`).
 - The 256-byte table is **not committed**; the engine should read it from the user's Game.dll (or the original data). Game seed = rotl fold over slots (0x8000 → constant 0x77617233); the link to the seed field in .w3g isn't confirmed yet.
 
 ### 4.4 Known desync traps (must be reproduced)
@@ -177,13 +181,13 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~9.5%** of the 1:1 rewrite.
+**Overall: ~10.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~2% | RNG spec checked in emulation (Rust port still to do) |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~4% | RNG + softfloat add/sub/mul in Rust, bit-exact vs original |
 | JASS VM + ~1000 natives | 12% | ~20% | parser (precedence = original), type checker, VM; natives ~65 of 1291, unconfirmed |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
@@ -219,6 +223,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (12)**: `crates/sim` (RNG + softfloat add/sub/mul) bit-exact vs the original (re-ran it myself with GAME_DLL). Natives pass 2. Running: softfloat (full library), game-loop spec, attack/damage spec.
 - **2026-10-10 (11)**: precedence decoded and checked in emulation → parser fixed. Natives v1 merged. Found the software float.
 - **2026-10-10 (10)**: RNG spec (Haiku agent + Unicorn); I re-ran it: 0 mismatches for Int/seed/streams. `tools/emu/` committed.
 - **2026-10-10 (9)**: JASS VM merged (Haiku). Native table extracted (1,291). Launched the agent for pure natives (math/strings/Convert*).
