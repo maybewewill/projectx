@@ -28,7 +28,7 @@ crates/
   w3g/        replay parser .w3g (1.26a) — the test oracle            [v0.1: header, blocks, players, slots, seed, ticks; actions raw]
   mpq/        MPQ archive reader                                        [v0.2: + Huffman (profile 7) and ADPCM mono/stereo, ported from OpenRealm]
   wc3-math/   bit-exact WC3 math (x87 rounding, software sin/cos/sqrt)  [todo — waiting on Ghidra]
-  jass/       JASS lexer/parser/VM                                      [v0.2: + type checker (check.rs, 12 UNVERIFIED decisions); VM todo]
+  jass/       JASS lexer/parser/VM                                      [v0.3: + bytecode compiler and VM (8-byte instructions, threads, sleep, 300k budget)]
   sim/        deterministic simulation (units, abilities, pathing)      [todo]
   blp/        BLP1 textures → RGBA8 (paletted + JPEG), builds for wasm32   [v0.1, Haiku agent]
   gamedata/   SLK tables + profile .txt (INI), merging layers, deterministic BTreeMap [v0.1, Haiku agent]
@@ -158,14 +158,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~5.5%** of the 1:1 rewrite.
+**Overall: ~6.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | 0% | |
-| JASS VM + ~1000 natives | 12% | ~6% | parser + type checker |
+| JASS VM + ~1000 natives | 12% | ~15% | parser, type checker, VM; natives: 6 of ~1000 |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
@@ -190,6 +190,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/mdx` v0.1 (12 tests, corruption sweep). **TODO on real models**: TEXS/MODL unknown u32 fields, GEOS tail order (UVAS/UVBS), SEQS flags, KMTF tangents; after an unknown track tag the rest of the node is skipped. Interpolation 0/1/2/3 = none/linear/hermite/bezier (believed correct).
 - [x] `crates/jass` v0.2: type checker (39 tests). Statements in the AST now have `line`. **Known mismatch to fix**: it currently allows calling a function before it is declared; in retail JASS, as far as is known, a function has to be declared above the call site (this is why vJass has `.evaluate`). Check in Game.dll and switch to the strict rule.
 - [x] `crates/viewer` v0.1 (17 tests on pure logic, builds for wasm32). **Not checked**: never drawn (no GPU), no wasm-bindgen/JS glue, bind pose only (no animation/skinning), one texture for all geosets.
+- [x] `crates/jass` v0.3: compiler to bytecode + VM + deterministic scheduler (30 VM tests). **UNVERIFIED vs the original**: real arithmetic is IEEE f32 (the spec hints at software float), R2I truncates, opcode numbering and codegen are ours (so the op limit won't count the same as the original until the codegen matches), and/or without short-circuit, behavior on array index out of range, strings are never freed.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
@@ -198,7 +199,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 ## 7. Log
 
 - **2026-10-10 (8)**: full decompile export (70,526 functions, 1.58M lines, 0 failures; scratchpad only). Analysis agents: specs `docs/spec/{jass-frontend,jass-vm,math,handles}.md`. **Correction**: math comes from MSVCR80 `_CI*`, not software inside Game.dll.
-- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker, the viewer. 145 tests in the workspace, clippy clean.
+- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker, the viewer, the JASS VM. 175 tests in the workspace, clippy clean.
 - **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
 - **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
 - **2026-10-10 (4)**: `crates/mpq` v0.1 (reader + tests + `examples/mpqls.rs`). Dependencies: flate2, bzip2 (pure-Rust backend libbz2-rs-sys, works in wasm), explode (DCL).
