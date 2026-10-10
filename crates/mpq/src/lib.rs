@@ -1,10 +1,20 @@
 //! Read-only MPQ archive reader (format v1, as used by Warcraft III).
 //!
 //! Supports hash/block tables, file and sector encryption (incl. FIX_KEY), single-unit and
-//! sectored files, and zlib / bzip2 / PKWARE DCL compression. Huffman and ADPCM (used by some
-//! WAV files) are reported as unsupported for now.
+//! sectored files, zlib / bzip2 / PKWARE DCL compression, and the adaptive Huffman and Blizzard
+//! ADPCM codecs used by WAV files. Mask bits can be combined; see `decode_sector`.
 
+mod adpcm;
 pub mod crypto;
+mod huffman;
+
+/// Compression mask bits (first byte of a compressed sector).
+const MASK_HUFFMAN: u8 = 0x01;
+const MASK_ZLIB: u8 = 0x02;
+const MASK_DCL: u8 = 0x08;
+const MASK_BZIP2: u8 = 0x10;
+const MASK_ADPCM_MONO: u8 = 0x40;
+const MASK_ADPCM_STEREO: u8 = 0x80;
 
 use crypto::{
     decrypt_bytes, file_key, hash_string, HASH_FILE_KEY, HASH_NAME_A, HASH_NAME_B,
@@ -295,13 +305,7 @@ fn decode_sector(buf: &[u8], expected: usize, flags: u32) -> Result<Vec<u8>, Err
         let (&mask, data) = buf
             .split_first()
             .ok_or_else(|| Error::Decompress("empty sector".into()))?;
-        match mask {
-            0x02 => inflate(flate2::read::ZlibDecoder::new(data), expected)?,
-            0x08 => explode_dcl(data)?,
-            0x10 => inflate(bzip2::read::BzDecoder::new(data), expected)?,
-            // Huffman (0x01) and ADPCM (0x40/0x80) combinations appear in some WAV files.
-            _ => return Err(Error::UnsupportedCompression(mask)),
-        }
+        decode_masked(mask, data, expected)?
     } else if flags & FLAG_IMPLODE != 0 {
         explode_dcl(buf)?
     } else {
@@ -316,6 +320,39 @@ fn decode_sector(buf: &[u8], expected: usize, flags: u32) -> Result<Vec<u8>, Err
     Ok(out)
 }
 
+/// Undoes the stages named by a compression mask. Stages were applied in the order ADPCM, then
+/// Huffman, then the general compressor (zlib, bzip2 or DCL), so they are undone in reverse:
+/// general compressor, then Huffman, then ADPCM.
+fn decode_masked(mask: u8, data: &[u8], expected: usize) -> Result<Vec<u8>, Error> {
+    let general = mask & (MASK_ZLIB | MASK_DCL | MASK_BZIP2);
+    let adpcm = mask & (MASK_ADPCM_MONO | MASK_ADPCM_STEREO);
+    let known =
+        MASK_HUFFMAN | MASK_ZLIB | MASK_DCL | MASK_BZIP2 | MASK_ADPCM_MONO | MASK_ADPCM_STEREO;
+    if mask & !known != 0
+        || general.count_ones() > 1
+        || adpcm == (MASK_ADPCM_MONO | MASK_ADPCM_STEREO)
+    {
+        return Err(Error::UnsupportedCompression(mask));
+    }
+
+    let stage1 = match general {
+        0 => data.to_vec(),
+        MASK_ZLIB => inflate(flate2::read::ZlibDecoder::new(data), expected)?,
+        MASK_DCL => explode_dcl(data)?,
+        _ => inflate(bzip2::read::BzDecoder::new(data), expected)?,
+    };
+    let stage2 = if mask & MASK_HUFFMAN != 0 {
+        huffman::decompress(&stage1, expected)?
+    } else {
+        stage1
+    };
+    match adpcm {
+        0 => Ok(stage2),
+        MASK_ADPCM_MONO => adpcm::decompress(&stage2, 1, expected),
+        _ => adpcm::decompress(&stage2, 2, expected),
+    }
+}
+
 fn inflate(mut r: impl std::io::Read, expected: usize) -> Result<Vec<u8>, Error> {
     let mut out = Vec::with_capacity(expected);
     r.read_to_end(&mut out)
@@ -325,4 +362,142 @@ fn inflate(mut r: impl std::io::Read, expected: usize) -> Result<Vec<u8>, Error>
 
 fn explode_dcl(data: &[u8]) -> Result<Vec<u8>, Error> {
     explode::explode(data).map_err(|e| Error::Decompress(format!("{e:?}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn pcm(n: usize, amp: f64, period: f64) -> Vec<i16> {
+        (0..n)
+            .map(|i| (amp * (i as f64 * std::f64::consts::TAU / period).sin()).round() as i16)
+            .collect()
+    }
+
+    fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
+        samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+    }
+
+    /// Mono sector with mask 0x40 (ADPCM only).
+    fn adpcm_sector(samples: &[i16], channels: usize) -> Vec<u8> {
+        let mut buf = vec![if channels == 1 { 0x40 } else { 0x80 }];
+        buf.extend(adpcm::encode(samples, channels, 2));
+        buf
+    }
+
+    /// Sector with the given mask bits, built in compression order: ADPCM, then Huffman, then
+    /// the general compressor.
+    fn sector(mask: u8, samples: &[i16], channels: usize) -> (Vec<u8>, usize) {
+        let expected = samples.len() * 2;
+        let body = if mask & (MASK_ADPCM_MONO | MASK_ADPCM_STEREO) != 0 {
+            adpcm::encode(samples, channels, 2)
+        } else {
+            pcm_bytes(samples)
+        };
+        let body = if mask & MASK_HUFFMAN != 0 {
+            huffman::encode(&body)
+        } else {
+            body
+        };
+        let body = if mask & MASK_ZLIB != 0 {
+            let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            enc.write_all(&body).unwrap();
+            enc.finish().unwrap()
+        } else {
+            body
+        };
+        let mut buf = vec![mask];
+        buf.extend(body);
+        (buf, expected)
+    }
+
+    fn decode(buf: &[u8], expected: usize) -> Vec<i16> {
+        // Compressed sectors must be smaller than the output, or the raw path is taken.
+        assert!(buf.len() < expected, "test sector is not compressed");
+        let out = decode_sector(buf, expected, FLAG_COMPRESS).unwrap();
+        out.chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect()
+    }
+
+    fn max_error(a: &[i16], b: &[i16]) -> i32 {
+        a.iter()
+            .zip(b)
+            .map(|(&x, &y)| (i32::from(x) - i32::from(y)).abs())
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn huffman_only_sector() {
+        let data = vec![b'A'; 2000];
+        let mut buf = vec![MASK_HUFFMAN];
+        buf.extend(huffman::encode(&data));
+        // Must be smaller than the output, or decode_sector would take the stored-sector path.
+        assert!(buf.len() < data.len());
+        assert_eq!(
+            decode_sector(&buf, data.len(), FLAG_COMPRESS).unwrap(),
+            data
+        );
+    }
+
+    #[test]
+    fn adpcm_only_sectors() {
+        let mono = pcm(400, 5000.0, 40.0);
+        let got = decode(&adpcm_sector(&mono, 1), mono.len() * 2);
+        assert_eq!(got.len(), mono.len());
+        assert!(max_error(&mono, &got) <= 64);
+
+        let stereo = pcm(400, 3000.0, 80.0);
+        let got = decode(&adpcm_sector(&stereo, 2), stereo.len() * 2);
+        assert_eq!(got.len(), stereo.len());
+        assert!(max_error(&stereo, &got) <= 64);
+    }
+
+    #[test]
+    fn huffman_then_adpcm_masks() {
+        let mono = pcm(256, 5000.0, 40.0);
+        let (buf, expected) = sector(0x41, &mono, 1);
+        let got = decode(&buf, expected);
+        assert_eq!(got.len(), mono.len());
+        assert!(max_error(&mono, &got) <= 64);
+
+        let stereo = pcm(256, 3000.0, 80.0);
+        let (buf, expected) = sector(0x81, &stereo, 2);
+        let got = decode(&buf, expected);
+        assert_eq!(got.len(), stereo.len());
+        assert!(max_error(&stereo, &got) <= 64);
+    }
+
+    #[test]
+    fn zlib_then_huffman_mask() {
+        // Mask 0x03: zlib is undone first, then Huffman.
+        let data: Vec<u8> = (0..600u32).map(|i| (i % 37) as u8).collect();
+        let body = huffman::encode(&data);
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        enc.write_all(&body).unwrap();
+        let mut buf = vec![MASK_ZLIB | MASK_HUFFMAN];
+        buf.extend(enc.finish().unwrap());
+        assert_eq!(
+            decode_sector(&buf, data.len(), FLAG_COMPRESS).unwrap(),
+            data
+        );
+    }
+
+    #[test]
+    fn unsupported_masks_are_rejected() {
+        let data = [0u8; 64];
+        for mask in [0x04u8, 0x20, 0x0a, 0xc0] {
+            let mut buf = vec![mask];
+            buf.extend(&data[..16]);
+            assert!(
+                matches!(
+                    decode_sector(&buf, 64, FLAG_COMPRESS),
+                    Err(Error::UnsupportedCompression(m)) if m == mask
+                ),
+                "mask {mask:#04x} should be rejected"
+            );
+        }
+    }
 }
