@@ -56,17 +56,18 @@ fn parses_sample() {
     assert_eq!(p.functions.len(), 2);
     let fib = &p.functions[0];
     assert_eq!(fib.locals.len(), 3);
-    assert!(matches!(&fib.body[0], Stmt::Loop(b) if b.len() == 5));
+    assert!(matches!(&fib.body[0], Stmt::Loop { body, .. } if body.len() == 5));
     let main = &p.functions[1];
     assert!(matches!(&main.locals[0].init, Some(Expr::Int(0x68666F6F))));
     match &main.body[0] {
         Stmt::If {
             branches,
             otherwise,
+            ..
         } => {
             assert_eq!(branches.len(), 2);
             assert!(matches!(otherwise[0], Stmt::Debug(_)));
-            assert!(matches!(otherwise[1], Stmt::Return(None)));
+            assert!(matches!(otherwise[1], Stmt::Return { value: None, .. }));
         }
         s => panic!("{s:?}"),
     }
@@ -79,7 +80,11 @@ fn and_or_share_precedence_left_assoc() {
         "function F takes nothing returns boolean\nreturn true or false and false\nendfunction\n",
     )
     .unwrap();
-    let Stmt::Return(Some(Expr::Binary(BinOp::And, lhs, _))) = &p.functions[0].body[0] else {
+    let Stmt::Return {
+        value: Some(Expr::Binary(BinOp::And, lhs, _)),
+        ..
+    } = &p.functions[0].body[0]
+    else {
         panic!()
     };
     assert!(matches!(**lhs, Expr::Binary(BinOp::Or, _, _)));

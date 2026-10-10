@@ -2,6 +2,7 @@
 //! The interpreter/VM that must match the original's behaviour comes later.
 
 pub mod ast;
+pub mod check;
 pub mod lexer;
 pub mod parser;
 

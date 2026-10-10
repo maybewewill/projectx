@@ -105,12 +105,13 @@ impl Parser {
             if *self.peek() == Tok::Eof {
                 return Ok(p);
             }
+            let line = self.line();
             let constant = self.eat_kw("constant");
             if self.eat_kw("type") {
                 let name = self.ident()?;
                 self.expect_kw("extends")?;
                 let parent = self.ident()?;
-                p.types.push(TypeDef { name, parent });
+                p.types.push(TypeDef { name, parent, line });
                 self.newline()?;
             } else if self.eat_kw("globals") {
                 self.newline()?;
@@ -126,6 +127,7 @@ impl Parser {
                 p.natives.push(Native {
                     constant,
                     sig: self.signature()?,
+                    line,
                 });
                 self.newline()?;
             } else if self.is_kw("function") {
@@ -197,6 +199,7 @@ impl Parser {
         let mut locals = Vec::new();
         loop {
             self.skip_newlines();
+            let line = self.line();
             if !self.eat_kw("local") {
                 break;
             }
@@ -215,6 +218,7 @@ impl Parser {
                 array,
                 name,
                 init,
+                line,
             });
         }
         let body = self.block(&["endfunction"])?;
@@ -245,6 +249,7 @@ impl Parser {
     }
 
     fn statement(&mut self) -> Result<Stmt, Error> {
+        let line = self.line();
         if self.eat_kw("debug") {
             return Ok(Stmt::Debug(Box::new(self.statement()?)));
         }
@@ -263,12 +268,14 @@ impl Parser {
                 name,
                 index,
                 value: self.expr()?,
+                line,
             }
         } else if self.eat_kw("call") {
             let name = self.ident()?;
             Stmt::Call {
                 name,
                 args: self.args()?,
+                line,
             }
         } else if self.eat_kw("if") {
             let mut branches = Vec::new();
@@ -295,20 +302,25 @@ impl Parser {
             Stmt::If {
                 branches,
                 otherwise,
+                line,
             }
         } else if self.eat_kw("loop") {
             self.newline()?;
             let body = self.block(&["endloop"])?;
             self.expect_kw("endloop")?;
-            Stmt::Loop(body)
+            Stmt::Loop { body, line }
         } else if self.eat_kw("exitwhen") {
-            Stmt::ExitWhen(self.expr()?)
-        } else if self.eat_kw("return") {
-            if matches!(self.peek(), Tok::Newline | Tok::Eof) {
-                Stmt::Return(None)
-            } else {
-                Stmt::Return(Some(self.expr()?))
+            Stmt::ExitWhen {
+                cond: self.expr()?,
+                line,
             }
+        } else if self.eat_kw("return") {
+            let value = if matches!(self.peek(), Tok::Newline | Tok::Eof) {
+                None
+            } else {
+                Some(self.expr()?)
+            };
+            Stmt::Return { value, line }
         } else {
             return self.err("expected statement");
         };

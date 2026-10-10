@@ -10,6 +10,7 @@ pub struct Program {
 pub struct TypeDef {
     pub name: String,
     pub parent: String,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +41,7 @@ pub struct Signature {
 pub struct Native {
     pub constant: bool,
     pub sig: Signature,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +50,7 @@ pub struct Local {
     pub array: bool,
     pub name: String,
     pub init: Option<Expr>,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,24 +62,39 @@ pub struct Function {
     pub line: u32,
 }
 
+/// Statements carry the source line of their first token. `Debug` wraps the statement it prefixes,
+/// which has its own line.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Set {
         name: String,
         index: Option<Expr>,
         value: Expr,
+        line: u32,
     },
     Call {
         name: String,
         args: Vec<Expr>,
+        line: u32,
     },
+    /// `line` is the line of the `if`; `elseif` conditions report that line too.
     If {
         branches: Vec<(Expr, Vec<Stmt>)>,
         otherwise: Vec<Stmt>,
+        line: u32,
     },
-    Loop(Vec<Stmt>),
-    ExitWhen(Expr),
-    Return(Option<Expr>),
+    Loop {
+        body: Vec<Stmt>,
+        line: u32,
+    },
+    ExitWhen {
+        cond: Expr,
+        line: u32,
+    },
+    Return {
+        value: Option<Expr>,
+        line: u32,
+    },
     /// `debug` prefix: the statement is skipped in release builds of the original game.
     Debug(Box<Stmt>),
 }
