@@ -235,14 +235,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~29.5%** of the 1:1 rewrite.
+**Overall: ~30.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~45% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~16% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
-| JASS VM + ~1000 natives | 12% | ~58% | parser/declarations/bytecode = original, VM on softfloat; natives ~580 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~18% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
+| JASS VM + ~1000 natives | 12% | ~58% | parser/declarations/bytecode = original, VM on softfloat; natives ~605 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
@@ -280,6 +280,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/engine` + `w3boot`: map boot (12 tests on a synthetic map). UNSURE: playable area = camera bounds from w3i; order config (at load) → main (first step); w3i→controller/race mapping; w3i alliances not applied. **First thing to do once you have files**: `w3boot --dll Game.dll --mpq War3.mpq --mpq War3x.mpq map.w3x` → list of missing natives = the work queue.
 - [x] RNG natives GetRandomInt/GetRandomReal/SetRandomSeed on the bit-exact RNG; engine seeds from the raw seed (`w3boot --seed`), the slot fold isn't done.
 - [x] `crates/sim/natives/presentation.rs`: **298 presentation natives** (camera, sound, texttag, quest, multiboard, leaderboard, dialog, effects, lightning, image, ubersplat, weather, ...) + `PresentationLog` for a future renderer. Handles exactly like the original: in the handle table (flag 0: effects/quests/dialogs/multiboards...; flag 1: sounds, locations from getters); **texttag/lightning/image/ubersplat/weather/deformations are NOT in the handle table** (pool, value = slot+1, numbering UNSURE). Finds: VolumeGroupSetVolume ignores the group; SetTerrainFog is empty.
+- [x] `crates/sim/natives/unit.rs`: **core units** (~25 natives: CreateUnit*/RemoveUnit/KillUnit/position/facing/owner/state/widget life/show/pause), UnitTypes registry (filled from SLK later), UnitEvent queue. The id is allocated last (failed creation doesn't consume an id). Facing through softfloat: SetUnitFacing(45) → GetUnitFacing = 44.999996 (0x4233FFFF) — this is what our truncating softfloat gives, not yet checked against the original. Open: unit events in triggers, IsUnitType, placement at creation, food, whether RemoveUnit releases the creation reference.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
