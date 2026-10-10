@@ -164,6 +164,120 @@ pub struct Event {
     pub source: EventSource,
 }
 
+/// A handle type the simulation models. Typed natives (`SaveTimerHandle`, `LoadLocationHandle`, ...)
+/// accept a handle only when its object has this kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleKind {
+    Timer,
+    Trigger,
+    BoolExpr,
+    Event,
+    Condition,
+    Action,
+    Location,
+    Rect,
+    Hashtable,
+    GameCache,
+}
+
+/// A `location` handle: a point with raw coordinates (no clamping, no terrain height).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LocationObj {
+    pub x: F32,
+    pub y: F32,
+}
+
+/// A `rect` handle. The four edges are stored raw; `SetRect` and friends sort and clamp them first
+/// (see `natives/location.rs`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RectObj {
+    pub min_x: F32,
+    pub min_y: F32,
+    pub max_x: F32,
+    pub max_y: F32,
+}
+
+/// A reference held by a saved handle value. `owned` is the original's entry flag: when it is set the
+/// table holds one reference to `id` (taken with `add_ref`, dropped with `release`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SavedHandle {
+    pub id: u32,
+    pub owned: bool,
+}
+
+/// The saved values of one hashtable or game cache. Every value kind has its own map, keyed by the
+/// pair (parent key, child key). Missing keys read as the default of the kind (0, 0.0, false, "").
+#[derive(Debug, Clone)]
+pub struct Slots<P: Ord + Clone, C: Ord + Clone> {
+    pub ints: BTreeMap<(P, C), i32>,
+    pub reals: BTreeMap<(P, C), F32>,
+    pub bools: BTreeMap<(P, C), bool>,
+    pub strings: BTreeMap<(P, C), String>,
+    pub handles: BTreeMap<(P, C), SavedHandle>,
+}
+
+impl<P: Ord + Clone, C: Ord + Clone> Slots<P, C> {
+    pub fn new() -> Self {
+        Slots {
+            ints: BTreeMap::new(),
+            reals: BTreeMap::new(),
+            bools: BTreeMap::new(),
+            strings: BTreeMap::new(),
+            handles: BTreeMap::new(),
+        }
+    }
+
+    /// Removes every value of parent `parent` (all kinds). Returns the ids whose references the
+    /// table held, in key order; the caller releases them.
+    pub fn remove_parent(&mut self, parent: &P) -> Vec<u32> {
+        let released = self
+            .handles
+            .iter()
+            .filter(|((p, _), h)| p == parent && h.owned)
+            .map(|(_, h)| h.id)
+            .collect();
+        self.ints.retain(|(p, _), _| p != parent);
+        self.reals.retain(|(p, _), _| p != parent);
+        self.bools.retain(|(p, _), _| p != parent);
+        self.strings.retain(|(p, _), _| p != parent);
+        self.handles.retain(|(p, _), _| p != parent);
+        released
+    }
+
+    /// Removes every value. Returns the ids whose references the table held, in key order.
+    pub fn clear(&mut self) -> Vec<u32> {
+        let released = self
+            .handles
+            .values()
+            .filter(|h| h.owned)
+            .map(|h| h.id)
+            .collect();
+        self.ints.clear();
+        self.reals.clear();
+        self.bools.clear();
+        self.strings.clear();
+        self.handles.clear();
+        released
+    }
+}
+
+impl<P: Ord + Clone, C: Ord + Clone> Default for Slots<P, C> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The playable area, as the original keeps it in its game-state struct (min x, min y, max x, max y).
+/// Rect coordinates are clamped to it. The map loader does not fill it in yet, so until a host sets
+/// it ([`Game::set_playable`]) rects are not clamped (UNSURE, see `natives/location.rs`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Playable {
+    pub min_x: F32,
+    pub min_y: F32,
+    pub max_x: F32,
+    pub max_y: F32,
+}
+
 /// One game object of the arena.
 #[derive(Debug, Clone)]
 pub enum Object {
@@ -173,6 +287,30 @@ pub enum Object {
     Condition(Condition),
     Action(Action),
     Event(Event),
+    Location(LocationObj),
+    Rect(RectObj),
+    /// A hashtable: saved values keyed by (parent, child) integers.
+    Hashtable(Slots<i32, i32>),
+    /// A game cache: saved values keyed by (mission, key) strings.
+    GameCache(Slots<String, String>),
+}
+
+impl Object {
+    /// The handle type of this object.
+    pub fn handle_kind(&self) -> HandleKind {
+        match self {
+            Object::Timer(_) => HandleKind::Timer,
+            Object::Trigger(_) => HandleKind::Trigger,
+            Object::BoolExpr(_) => HandleKind::BoolExpr,
+            Object::Condition(_) => HandleKind::Condition,
+            Object::Action(_) => HandleKind::Action,
+            Object::Event(_) => HandleKind::Event,
+            Object::Location(_) => HandleKind::Location,
+            Object::Rect(_) => HandleKind::Rect,
+            Object::Hashtable(_) => HandleKind::Hashtable,
+            Object::GameCache(_) => HandleKind::GameCache,
+        }
+    }
 }
 
 /// The timer and trigger state of one game. Shared between the natives and the host through an
@@ -187,6 +325,10 @@ pub struct Game {
     /// `Ctx` of key `i + 1` is `contexts[i]`.
     contexts: Vec<Ctx>,
     context_keys: BTreeMap<Ctx, u32>,
+    /// Game caches by name. A cache is created by `InitGameCache` and never destroyed.
+    caches: BTreeMap<String, ObjKey>,
+    /// The playable area that rect coordinates are clamped to, or `None` (no clamp) until a host sets it.
+    playable: Option<Playable>,
 }
 
 impl Default for Game {
@@ -203,7 +345,29 @@ impl Game {
             timers: TimerQueue::new(),
             contexts: Vec::new(),
             context_keys: BTreeMap::new(),
+            caches: BTreeMap::new(),
+            playable: None,
         }
+    }
+
+    /// Sets the playable area (`None` disables the rect clamp). See [`Playable`].
+    pub fn set_playable(&mut self, playable: Option<Playable>) {
+        self.playable = playable;
+    }
+
+    /// The playable area, if one is set.
+    pub fn playable(&self) -> Option<Playable> {
+        self.playable
+    }
+
+    /// The game cache named `name`, if `InitGameCache` created it and it is still alive.
+    pub fn cache_named(&self, name: &str) -> Option<ObjKey> {
+        self.caches.get(name).copied().filter(|&k| self.is_alive(k))
+    }
+
+    /// Records `key` as the game cache named `name`.
+    pub fn set_cache_named(&mut self, name: &str, key: ObjKey) {
+        self.caches.insert(name.to_string(), key);
     }
 
     /// Number of objects ever created (destroyed ones included).
@@ -239,6 +403,32 @@ impl Game {
     /// was destroyed.
     pub fn handle_object(&self, id: u32) -> Option<ObjKey> {
         self.handles.get(id).copied()
+    }
+
+    /// The live object of handle `id` if it has the handle type `kind` (the typed check of the
+    /// original's natives: a null, freed or wrong-type handle gives `None`).
+    pub fn handle_of_kind(&self, id: u32, kind: HandleKind) -> Option<ObjKey> {
+        let k = self.handle_object(id)?;
+        (self.object(k).handle_kind() == kind).then_some(k)
+    }
+
+    /// Adds one reference to handle `id` (the original's AddRef, used by hashtable saves). Null and
+    /// unknown ids are ignored.
+    pub fn add_ref(&mut self, id: u32) {
+        self.handles.add_ref(id);
+    }
+
+    /// Drops one reference to handle `id`. The id is freed when its count reaches 0. Null and unknown
+    /// ids are ignored.
+    pub fn release(&mut self, id: u32) {
+        self.handles.release(id);
+    }
+
+    /// Drops one reference to each id in `ids`, in order.
+    pub fn release_all(&mut self, ids: &[u32]) {
+        for &id in ids {
+            self.handles.release(id);
+        }
     }
 
     /// The handle id of a live object, or 0 when it has none.

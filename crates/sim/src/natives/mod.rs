@@ -4,8 +4,8 @@
 //! They share one [`Game`] through an `Rc<RefCell<_>>`, which the host also holds, so the host can run
 //! expiries and trigger events against the same state (see `ScriptHost::step`).
 //!
-//! The notes for each native (addresses, CONFIRMED / LIKELY / UNSURE) are in `timer.rs` and
-//! `trigger.rs`. The semantics that the notes rely on are checked by the tests in
+//! The notes for each native (addresses, CONFIRMED / LIKELY / UNSURE) are in `timer.rs`, `trigger.rs`,
+//! `hashtable.rs`, `gamecache.rs` and `location.rs`. The semantics that the notes rely on are checked by the tests in
 //! `tests/timer_natives.rs` and `tests/trigger_natives.rs`.
 
 use std::cell::RefCell;
@@ -15,10 +15,13 @@ use jass::vm::{clamp_sleep, NativeRegistry, NativeResult};
 use softfloat::F32;
 
 pub mod game;
+mod gamecache;
+mod hashtable;
+mod location;
 mod timer;
 mod trigger;
 
-pub use game::{Ctx, Game, ObjKey, Payload, ScriptRuntime};
+pub use game::{Ctx, Game, HandleKind, ObjKey, Payload, Playable, ScriptRuntime};
 pub use timer::expire as expire_timer;
 pub use trigger::fire as fire_trigger;
 
@@ -38,4 +41,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
     timer::register(reg, game);
     trigger::register(reg, game);
+    hashtable::register(reg, game);
+    gamecache::register(reg, game);
+    location::register(reg, game);
 }

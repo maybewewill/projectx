@@ -23,7 +23,7 @@ pub mod timer;
 mod pe;
 
 pub use handles::{HandleTable, HANDLE_BASE};
-pub use natives::{Game, Payload};
+pub use natives::{Game, HandleKind, Payload, Playable};
 pub use rng::{Rng, RngError, RngTable, Streams, FIXED_GAME_SEED, STREAM_COUNT};
 pub use script::ScriptHost;
 pub use timer::{AgileClock, Fired, TimerId, TimerQueue, STEP, STEP_BITS};
