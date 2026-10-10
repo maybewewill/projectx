@@ -245,30 +245,34 @@ fn i2s_and_s2i() {
     assert_eq!(int("S2I(\"1.9\")"), 1);
 }
 
+/// S2R results are the original's bits (recorded in the emulator): "1.5" is one ulp above 1.5.
 #[test]
 fn s2r_parses_leading_number() {
-    assert_eq!(real("S2R(\"1.5\")"), 1.5);
-    assert_eq!(real("S2R(\"2.5abc\")"), 2.5);
-    assert_eq!(real("S2R(\"-2.25\")"), -2.25);
-    assert_eq!(real("S2R(\"\")"), 0.0);
-    assert_eq!(real("S2R(\" 3\")"), 0.0);
-    assert_eq!(real("S2R(\"1.2.3\")"), 1.2);
+    let Some(_) = need_tables() else { return };
+    assert_eq!(real("S2R(\"1.5\")").to_bits(), 0x3FC0_0001);
+    assert_eq!(real("S2R(\"2.5abc\")").to_bits(), 0x4020_0000);
+    assert_eq!(real("S2R(\"-2.25\")").to_bits(), 0xC010_0000);
+    assert_eq!(real("S2R(\"\")").to_bits(), 0);
+    assert_eq!(real("S2R(\" 3\")").to_bits(), 0);
+    assert_eq!(real("S2R(\"1.2.3\")").to_bits(), 0x3F99_999A);
 }
 
+/// R2S prints three decimals (the helper is called with precision 3, see docs/spec/softfloat.md).
 #[test]
-fn r2s_has_two_decimals() {
-    assert_eq!(string("R2S(3.14159)"), "3.14");
-    assert_eq!(string("R2S(-0.5)"), "-0.50");
-    assert_eq!(string("R2S(10.0)"), "10.00");
+fn r2s_has_three_decimals() {
+    assert_eq!(string("R2S(3.14159)"), "3.142");
+    assert_eq!(string("R2S(-0.5)"), "-0.500");
+    assert_eq!(string("R2S(10.0)"), "10.000");
 }
 
 #[test]
 fn r2sw_width_and_precision() {
-    assert_eq!(string("R2SW(3.14159, 8, 3)"), "   3.142");
-    // A negative width left-justifies.
-    assert_eq!(string("R2SW(1.5, -6, 1)"), "1.5   ");
-    // A negative precision means 6 decimals.
-    assert_eq!(string("R2SW(1.5, 0, -1)"), "1.500000");
+    assert_eq!(string("R2SW(3.14159, 8, 3)"), "    3.142");
+    // The integer part is padded to `width - precision` columns, at least one. A negative width
+    // gives less than one column, so no padding.
+    assert_eq!(string("R2SW(1.5, -6, 1)"), "1.5");
+    // A negative precision means 6 decimals with trailing zeros removed (one kept).
+    assert_eq!(string("R2SW(1.5, 0, -1)"), "1.5");
 }
 
 // ------------------------------------------------------------------------------------------
@@ -537,4 +541,36 @@ fn atoi_rules() {
     assert_eq!(atoi("2147483647"), i32::MAX);
     assert_eq!(atoi("-2147483648"), i32::MIN);
     assert_eq!(atoi("0x1F"), 0);
+}
+
+// ------------------------------------------------------------------------------------------
+// Text conversions: R2S, R2SW and S2R (softfloat::text, checked against Game.dll in Unicorn)
+// ------------------------------------------------------------------------------------------
+
+/// Values the original prints (recorded with tools/emu/text_vectors.py). They need no table.
+#[test]
+fn r2s_r2sw_match_the_original() {
+    assert_eq!(string("R2S(1.5)"), "1.500");
+    assert_eq!(string("R2S(-3.25)"), "-3.250");
+    assert_eq!(string("R2S(0.0)"), "0.000");
+    assert_eq!(string("R2S(-0.0)"), "0.000");
+    assert_eq!(string("R2S(0.0049999)"), "0.005");
+    assert_eq!(string("R2SW(1.0, 10, 2)"), "       1.00");
+    assert_eq!(string("R2SW(-1.5, 10, 2)"), "-       1.50");
+    assert_eq!(string("R2SW(1.5, 0, 0)"), "2.0");
+    assert_eq!(string("R2SW(2.5, 0, -1)"), "2.5");
+    assert_eq!(string("R2SW(1.5, -6, -1)"), "1.5");
+}
+
+#[test]
+fn s2r_matches_the_original() {
+    let Some(_) = need_tables() else { return };
+    // "1.5" is one ulp above 1.5: the original divides 15 by 10 with the soft DIV.
+    assert_eq!(real("S2R(\"1.5\")").to_bits(), 0x3FC0_0001);
+    assert_eq!(real("S2R(\"-3.25\")").to_bits(), 0xC050_0000);
+    assert_eq!(real("S2R(\"1000000\")").to_bits(), 0x4974_2400);
+    assert_eq!(real("S2R(\"0.1\")").to_bits(), 0x3DCC_CCCE);
+    assert_eq!(real("S2R(\"12abc\")").to_bits(), 0x4140_0000);
+    // Empty text gives 0.0 without the parser.
+    assert_eq!(real("S2R(\"\")").to_bits(), 0);
 }

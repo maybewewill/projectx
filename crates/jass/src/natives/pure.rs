@@ -14,7 +14,7 @@
 //! `softfloat::Tables` of the VM. Without them these natives stop the thread with
 //! `RunStatus::MissingTables`; they never fall back to IEEE math.
 
-use softfloat::{arith, conv, math, Tables, F32};
+use softfloat::{arith, conv, math, text, Tables, F32};
 
 use crate::vm::{NativeCtx, NativeRegistry, NativeResult, RunStatus, Value};
 
@@ -160,13 +160,19 @@ pub fn register(reg: &mut NativeRegistry) {
         ret(Value::Integer(atoi(&s)))
     });
 
-    // S2R (0x6f3b2d50). Behaviour: real value of a string, digits with one dot, read by the
-    // original's parser FUN_6f6f0520 (spec softfloat 10: S2R is NOT ported). This native uses Rust's
-    // decimal parser for the digits, rounded to f32 by the host. So the value is only as exact as
-    // that parse, not the soft-float text parser. UNSURE.
+    // S2R (0x6f3b2d50, CONFIRMED). An empty string gives 0.0 without the parser. Otherwise the
+    // soft-float parser `0x6F6F0520` runs (`softfloat::text::s2r`, checked in Unicorn): optional sign,
+    // up to nine significant digits, then a soft DIV or MUL by a power of ten. It needs the tables
+    // (the DIV), so without them the thread stops with MissingTables.
     reg.register("S2R", |ctx, a| {
         let s = str_arg(ctx, a, 0);
-        ret(Value::Real(F32::from_bits(parse_real(&s).to_bits())))
+        if s.is_empty() {
+            return ret(Value::Real(F32::ZERO));
+        }
+        match text::s2r(ctx.tables(), s.as_bytes()) {
+            Some(v) => ret(Value::Real(v)),
+            None => NativeResult::Fail(RunStatus::MissingTables),
+        }
     });
 
     // I2S (0x6f3baaa0). CONFIRMED: the format string at 0x6f915d68 is "%d", written by the Storm
@@ -177,20 +183,24 @@ pub fn register(reg: &mut NativeRegistry) {
         ret(Value::String(ctx.intern(&s)))
     });
 
-    // R2S (0x6f3baaf0). Behaviour: text of the real with two decimals ("%.2f"-style, rounded). The
-    // text is formatted by Rust, not by the original's R2S (0x6F6F0360, spec softfloat 10: not
-    // ported). UNSURE.
+    // R2S (0x6f3baaf0, CONFIRMED): the helper `0x6F6F0360` with width 0 and precision 3, so
+    // 1.5 gives "1.500". The helper is ported as `softfloat::text::r2s` (checked in Unicorn).
     reg.register("R2S", |ctx, a| {
-        let s = c_fmt_f(real_arg(a, 0).to_f32(), 0, 2);
-        ret(Value::String(ctx.intern(&s)))
+        match text::r2s(ctx.tables(), real_arg(a, 0)) {
+            Some(s) => ret(Value::String(ctx.intern(&s))),
+            None => NativeResult::Fail(RunStatus::MissingTables),
+        }
     });
 
-    // R2SW (0x6f3bab40). Behaviour: like R2S with a width and a precision argument, "%*.*f"-style:
-    // a negative width means left-justified with the absolute width, a negative precision means the
-    // C default of 6 decimals. Formatted by Rust, as R2S. UNSURE.
+    // R2SW (0x6f3bab40, CONFIRMED): the same helper with the width (argument 2) and the precision
+    // (argument 3). Negative values print their sign before the width padding, a negative
+    // precision means 6 decimals with trailing zeros removed. See `softfloat::text::r2sw`.
     reg.register("R2SW", |ctx, a| {
-        let s = c_fmt_f(real_arg(a, 0).to_f32(), int_arg(a, 1), int_arg(a, 2));
-        ret(Value::String(ctx.intern(&s)))
+        let s = text::r2sw(ctx.tables(), real_arg(a, 0), int_arg(a, 1), int_arg(a, 2));
+        match s {
+            Some(s) => ret(Value::String(ctx.intern(&s))),
+            None => NativeResult::Fail(RunStatus::MissingTables),
+        }
     });
 
     // --- strings --------------------------------------------------------------------------------
@@ -397,85 +407,6 @@ pub fn string_case(s: &str, upper: bool) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Text of a real in C `%*.*f` style: `width` (negative means left-justified with its absolute
-/// value) and `precision` (negative means 6). NaN and infinities print as `nan` / `inf`.
-pub fn c_fmt_f(v: f32, width: i32, precision: i32) -> String {
-    let left = width < 0;
-    let width = width.unsigned_abs() as usize;
-    let prec = if precision < 0 { 6 } else { precision as usize };
-    let v = v as f64;
-    let body = if v.is_nan() {
-        if v.is_sign_negative() {
-            "-nan".to_string()
-        } else {
-            "nan".to_string()
-        }
-    } else if v.is_infinite() {
-        if v < 0.0 {
-            "-inf".to_string()
-        } else {
-            "inf".to_string()
-        }
-    } else {
-        format!("{v:.prec$}")
-    };
-    if body.len() >= width {
-        body
-    } else if left {
-        format!("{body:<width$}")
-    } else {
-        format!("{body:>width$}")
-    }
-}
-
-/// Parses the leading real of a string (S2R note, decompile FUN_6f6f0520).
-///
-/// Rules: one optional leading `+` or `-`; then digits with at most one `.`; the first other
-/// character (space, tab, `;`, letter, a second dot) ends the number, so trailing text is ignored.
-/// A string with no digits, or one that starts with a space, gives 0. A leading `.5` and a trailing
-/// `5.` are accepted. The sign is applied here; the original's handling of the sign is UNSURE.
-pub fn parse_real(s: &str) -> f32 {
-    let b = s.as_bytes();
-    let mut i = 0;
-    let mut neg = false;
-    if let Some(&c) = b.first() {
-        if c == b'+' || c == b'-' {
-            neg = c == b'-';
-            i = 1;
-        }
-    }
-    let mut text = String::new();
-    let mut seen_dot = false;
-    let mut digits = 0usize;
-    while let Some(&c) = b.get(i) {
-        if c.is_ascii_digit() {
-            text.push(c as char);
-            digits += 1;
-        } else if c == b'.' && !seen_dot {
-            seen_dot = true;
-            text.push('.');
-        } else {
-            break;
-        }
-        i += 1;
-    }
-    if digits == 0 {
-        return 0.0;
-    }
-    if text.starts_with('.') {
-        text.insert(0, '0');
-    }
-    if text.ends_with('.') {
-        text.push('0');
-    }
-    let v: f32 = text.parse().unwrap_or(0.0);
-    if neg {
-        -v
-    } else {
-        v
-    }
-}
-
 /// SubString (see the native's note). `start` and `end` are first truncated to 16 bits, because the
 /// original's helper takes `short` arguments. Returns "" when the source is empty or `start` is
 /// past its end (UNSURE: the original raises an error there).
@@ -512,28 +443,6 @@ mod tests {
         assert_eq!(f(i32::MIN), -2_147_483_648.0);
         assert_eq!(f(i32::MAX), 2_147_483_520.0);
         assert_eq!(f(0), 0.0);
-    }
-
-    #[test]
-    fn parse_real_rules() {
-        assert_eq!(parse_real("1.5"), 1.5);
-        assert_eq!(parse_real("2.5abc"), 2.5);
-        assert_eq!(parse_real(" 3"), 0.0);
-        assert_eq!(parse_real(""), 0.0);
-        assert_eq!(parse_real("-"), 0.0);
-        assert_eq!(parse_real("+7"), 7.0);
-        assert_eq!(parse_real(".5"), 0.5);
-        assert_eq!(parse_real("5."), 5.0);
-        assert_eq!(parse_real("1.2.3"), 1.2);
-    }
-
-    #[test]
-    fn fixed_format() {
-        assert_eq!(c_fmt_f(1.23456, 0, 2), "1.23");
-        assert_eq!(c_fmt_f(-0.5, 0, 2), "-0.50");
-        assert_eq!(c_fmt_f(1.23456, 8, 3), "   1.235");
-        assert_eq!(c_fmt_f(1.5, -6, 1), "1.5   ");
-        assert_eq!(c_fmt_f(1.5, 0, -1), "1.500000");
     }
 
     #[test]

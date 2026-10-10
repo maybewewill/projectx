@@ -15,6 +15,7 @@
 //! - [`tables`]: lookup tables, read at runtime from the user's own `Game.dll`.
 //!   Nothing from the DLL is embedded in this crate.
 //! - [`math`]: square root and the trigonometric / inverse / power helpers.
+//! - [`text`]: real to text (R2S / R2SW) and text to real (S2R), with the same helpers.
 //!
 //! The crate is `no_std` (it uses `alloc` only for the table storage).
 
@@ -27,6 +28,7 @@ pub mod arith;
 pub mod conv;
 pub mod math;
 pub mod tables;
+pub mod text;
 
 pub use tables::{Tables, TablesError};
 
