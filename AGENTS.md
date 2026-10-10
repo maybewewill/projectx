@@ -106,7 +106,15 @@ tools/
 ### 4.7 OpenRealm (github.com/corepunch/open-realm): main open-source reference
 - MIT, C, ~365k lines, active (commit 2026-10-10). WC3 is the main target and already playable (Windows/Linux/macOS/iPad); also WoW and SC2.
 - Architecture is Quake 2-style (client/server, `game.dll` + universal client), **not WC3 lockstep**, so it gives no 1:1 replay compatibility, but it is a big reference for behavior (abilities, damage, JASS natives, FDF UI, formats) and has docs in `docs/games/warcraft-3/`.
-- MIT allows borrowing code with attribution (keep the copyright notice). Research reports are being written (parity/netcode, JASS, formats, gameplay); conclusions go here.
+- MIT allows borrowing code with attribution (keep the copyright notice). Full reports (Haiku agents, read-only, with file:line references): `docs/research/openrealm/01..04-*.md`.
+- **Conclusions for us:**
+  - Netcode: authoritative server, 10 Hz (`FRAMETIME=100`), snapshots. No lockstep, no replays, no .w3g parser.
+  - RNG: global libc `rand()`, which rendering and sound also draw from → not deterministic. **Not suitable for 1:1.**
+  - Retail analysis was done on **game.dll 1.27.1.7085**, not 1.26a → their addresses don't carry over. But the *method* is valuable: `tools/ghidra` + a **Unicorn differential** (runs the original x86 function against C on 12k inputs). Take this for our function-level tests.
+  - JASS: AST interpreter; **arithmetic is right-associative** (verified: `jparser.c` is right-recursive, `10-3-2 = 9`) → not a reference for precedence. and/or on one level, no short-circuit (both unverified against retail).
+  - MPQ (`common/mpq.c`): has ADPCM and Huffman (in the 0x41/0x81 combination), a reference for our missing codecs. DCL via vendored `blast` (zlib license).
+  - Formats: MDX, BLP1/BLP2, W3E, W3I, DOO, SLK, FDF parsers exist, a reference for `crates/formats`.
+  - Gameplay docs (`docs/games/warcraft-3/*`): damage formula (armor K=0.06; 1/(1+K·A) / 2-(1-K)^-A, min 1), damage/armor type table from Misc.slk, 16-entry order queue, 32-unit pathing grid, A* + flow fields (an approximation, not retail). A good list of mechanics and gaps, but numbers have to be checked against 1.26a.
 
 ## 5. How to reproduce the analysis
 
@@ -142,6 +150,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
 - **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
 - **2026-10-10 (4)**: `crates/mpq` v0.1 (reader + tests + `examples/mpqls.rs`). Dependencies: flate2, bzip2 (pure-Rust backend libbz2-rs-sys, works in wasm), explode (DCL).
 - **2026-10-10 (3)**: Found the FPU mode: `_control87(0x9001F)` = PC_53 + RC_NEAR. Added `tools/analysis/fpu_control.py`, `find_callers.py`.
