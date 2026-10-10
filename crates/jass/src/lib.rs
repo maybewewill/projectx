@@ -1,10 +1,13 @@
-//! JASS (Warcraft III scripting language) front end: lexer and parser.
-//! The interpreter/VM that must match the original's behaviour comes later.
+//! JASS (Warcraft III scripting language): lexer, parser, type checker, bytecode compiler and VM.
+//! The VM's behaviour is modelled on docs/spec/jass-vm.md; see the UNVERIFIED notes in each module.
 
 pub mod ast;
+pub mod bytecode;
 pub mod check;
+pub mod compile;
 pub mod lexer;
 pub mod parser;
+pub mod vm;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum Error {
