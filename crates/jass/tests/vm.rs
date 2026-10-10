@@ -282,20 +282,18 @@ endfunction
 fn hand_module(code: Vec<Instr>, num_slots: usize) -> Module {
     let init = FuncDef {
         name: "<globals>".into(),
+        sym: 0,
         params: vec![],
         ret: None,
-        num_slots: 0,
-        locals: vec![],
-        local_arrays: vec![],
+        num_slots: 1,
         code: vec![Instr::new(Op::Return)],
     };
     let f = FuncDef {
         name: "F".into(),
+        sym: 2,
         params: vec![],
         ret: Some(Ty::Integer),
         num_slots,
-        locals: vec![],
-        local_arrays: vec![],
         code,
     };
     Module {
@@ -305,7 +303,8 @@ fn hand_module(code: Vec<Instr>, num_slots: usize) -> Module {
         global_index: BTreeMap::new(),
         natives: vec![],
         native_index: BTreeMap::new(),
-        strings: vec![String::new()],
+        symbols: vec![String::new(), String::new(), "f".into()],
+        prelude: vec![],
         init: 1,
     }
 }
@@ -313,10 +312,11 @@ fn hand_module(code: Vec<Instr>, num_slots: usize) -> Module {
 /// Code computing `slot0 OP slot1` for two integer immediates, returning the result.
 fn int_binop(op: Op, a: i32, b: i32) -> Vec<Instr> {
     vec![
-        Instr::new(Op::LoadInt).imm(a as u32).dest(0),
-        Instr::new(Op::LoadInt).imm(b as u32).dest(1),
+        Instr::new(Op::LoadConst).left(4).imm(a as u32).dest(0),
+        Instr::new(Op::LoadConst).left(4).imm(b as u32).dest(1),
         Instr::new(op).left(0).right(1).dest(2),
-        Instr::new(Op::Return).right(2),
+        Instr::new(Op::Move).left(2).dest(0),
+        Instr::new(Op::Return),
     ]
 }
 
@@ -331,16 +331,13 @@ fn eval_int(op: Op, a: i32, b: i32) -> Result<Value, RunStatus> {
 }
 
 #[test]
-fn modulo_by_zero_is_zero_and_sign_follows_dividend() {
-    assert_eq!(eval_int(Op::ModI, 7, 0), Ok(Value::Integer(0)));
-    assert_eq!(eval_int(Op::ModI, 7, 3), Ok(Value::Integer(1)));
-    assert_eq!(eval_int(Op::ModI, -7, 3), Ok(Value::Integer(-1)));
-    assert_eq!(eval_int(Op::ModI, 7, -3), Ok(Value::Integer(1)));
-    assert_eq!(eval_int(Op::ModI, i32::MIN, -1), Ok(Value::Integer(0)));
+fn integer_division_wraps_on_minimum_by_minus_one() {
+    // JASS has no `%`; integer division truncates and wraps like the original's i32 division.
     assert_eq!(
-        eval_int(Op::DivI, i32::MIN, -1),
+        eval_int(Op::Div, i32::MIN, -1),
         Ok(Value::Integer(i32::MIN))
     );
+    assert_eq!(eval_int(Op::Div, -7, 2), Ok(Value::Integer(-3)));
 }
 
 // ------------------------------------------------------------------------------------------

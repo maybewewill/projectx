@@ -1,0 +1,402 @@
+[
+[
+"int_to_real_add",
+"function f takes nothing returns nothing\nlocal real r = 1 + 2.5\nendfunction\n"
+],
+[
+"int_to_real_assign",
+"function f takes nothing returns nothing\nlocal real r = 1\nendfunction\n"
+],
+[
+"int_var_to_real",
+"function f takes nothing returns nothing\nlocal integer i = 1\nlocal real r = i\nendfunction\n"
+],
+[
+"real_neg",
+"function f takes nothing returns nothing\nlocal real r = -1.5\nendfunction\n"
+],
+[
+"real_mul_int",
+"function f takes nothing returns nothing\nlocal real r = 2.5 * 2\nendfunction\n"
+],
+[
+"real_cmp_int",
+"function f takes nothing returns nothing\nlocal boolean b = 1.5 < 2\nendfunction\n"
+],
+[
+"call_real_param_int",
+"function N takes real x returns nothing\nendfunction\nfunction f takes nothing returns nothing\ncall N(1)\nendfunction\n"
+],
+[
+"local_handle",
+"function f takes nothing returns nothing\nlocal handle h\nendfunction\n"
+],
+[
+"local_code",
+"function f takes nothing returns nothing\nlocal code c\nendfunction\n"
+],
+[
+"local_real_array",
+"function f takes nothing returns nothing\nlocal real array ra\nlocal real x = ra[1]\nendfunction\n"
+],
+[
+"local_bool_array",
+"function f takes nothing returns nothing\nlocal boolean array ba\nset ba[1] = true\nendfunction\n"
+],
+[
+"local_string_array",
+"function f takes nothing returns nothing\nlocal string array sa\nset sa[1] = \"x\"\nendfunction\n"
+],
+[
+"global_real_array",
+"globals\nreal array gr\nendglobals\nfunction f takes nothing returns nothing\nendfunction\n"
+],
+[
+"real_var_load",
+"function f takes nothing returns nothing\nlocal real r = 1.0\nlocal real s = r\nendfunction\n"
+],
+[
+"bool_var_load",
+"function f takes nothing returns nothing\nlocal boolean b = true\nlocal boolean c = b\nendfunction\n"
+],
+[
+"string_var_load",
+"function f takes nothing returns nothing\nlocal string s = \"a\"\nlocal string t = s\nendfunction\n"
+],
+[
+"null_init",
+"function f takes nothing returns nothing\nlocal handle h = null\nendfunction\n"
+],
+[
+"debug_set",
+"function f takes nothing returns nothing\nlocal integer a = 1\ndebug set a = 2\nendfunction\n"
+],
+[
+"nested_loop",
+"function f takes nothing returns nothing\nloop\nloop\nexitwhen true\nendloop\nexitwhen true\nendloop\nendfunction\n"
+],
+[
+"globals_no_init",
+"globals\ninteger g\nendglobals\nfunction f takes nothing returns nothing\nendfunction\n"
+],
+[
+"type_decl",
+"type foo extends handle\nfunction f takes nothing returns nothing\nlocal foo x\nendfunction\n"
+],
+[
+"case_literal_first",
+"function f takes nothing returns nothing\nlocal string s = \"Hi\"\nlocal string t = \"hi\"\nendfunction\n"
+],
+[
+"ident_then_literal",
+"function f takes nothing returns nothing\nlocal integer Hi = 1\nlocal string s = \"hi\"\nendfunction\n"
+],
+[
+"real_div_int",
+"function f takes nothing returns nothing\nlocal real r = 1.0 / 2\nendfunction\n"
+],
+[
+"string_eq",
+"function f takes nothing returns nothing\nlocal boolean b = \"a\" == \"b\"\nendfunction\n"
+],
+[
+"ret_int_in_real_fn",
+"function r takes nothing returns real\nreturn 1\nendfunction\n"
+],
+[
+"handle_eq_null",
+"function f takes nothing returns nothing\nlocal handle h = null\nlocal boolean b = h == null\nendfunction\n"
+],
+[
+"int_plus_real_var",
+"function f takes nothing returns nothing\nlocal integer i = 2\nlocal real r = i + 0.5\nendfunction\n"
+],
+[
+"exitwhen_in_if_in_loop",
+"function f takes nothing returns nothing\nloop\nif true then\nexitwhen true\nendif\nexitwhen false\nendloop\nendfunction\n"
+],
+[
+"loop_only",
+"function f takes nothing returns nothing\nloop\nendloop\nendfunction\n"
+],
+[
+"code_null",
+"function f takes nothing returns nothing\nlocal code c = null\nendfunction\n"
+],
+[
+"funcref_local",
+"function g takes nothing returns nothing\nendfunction\nfunction f takes nothing returns nothing\nlocal code c = function g\nendfunction\n"
+],
+[
+"loop_body_no_exit",
+"function f takes nothing returns nothing\nlocal integer a = 1\nloop\nset a = 2\nendloop\nendfunction\n"
+],
+[
+"loop_exit_only",
+"function f takes nothing returns nothing\nloop\nexitwhen true\nendloop\nendfunction\n"
+],
+[
+"loop_empty_then_stmt",
+"function f takes nothing returns nothing\nloop\nendloop\nlocal integer a = 1\nendfunction\n"
+],
+[
+"null_in_set",
+"function f takes nothing returns nothing\nlocal handle h\nset h = null\nendfunction\n"
+],
+[
+"null_call_arg",
+"function N takes handle h returns nothing\nendfunction\nfunction f takes nothing returns nothing\ncall N(null)\nendfunction\n"
+],
+[
+"null_return",
+"function r takes nothing returns handle\nreturn null\nendfunction\n"
+],
+[
+"null_ne_handle_lhs",
+"function f takes nothing returns nothing\nlocal handle h\nlocal boolean b = null != h\nendfunction\n"
+],
+[
+"null_eq_string",
+"function f takes nothing returns nothing\nlocal string s\nlocal boolean b = s == null\nendfunction\n"
+],
+[
+"code_array",
+"function f takes nothing returns nothing\nlocal code array ca\nendfunction\n"
+],
+[
+"handle_array",
+"function f takes nothing returns nothing\nlocal handle array ha\nendfunction\n"
+],
+[
+"type_two",
+"type foo extends handle\ntype bar extends foo\nfunction f takes nothing returns nothing\nlocal bar x\nendfunction\n"
+],
+[
+"type_after_fn",
+"function f takes nothing returns nothing\nendfunction\ntype foo extends handle\n"
+],
+[
+"type_then_global",
+"type foo extends handle\nglobals\ninteger g\nendglobals\nfunction f takes nothing returns nothing\nendfunction\n"
+],
+[
+"wrap300",
+"function f takes nothing returns nothing\nlocal integer a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nendfunction\n"
+],
+[
+"real_init_from_int_expr",
+"function f takes nothing returns nothing\nlocal integer i = 1\nlocal real r = i + 1\nendfunction\n"
+],
+[
+"and_vars",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal boolean b = false\nlocal boolean c = a and b\nendfunction\n"
+],
+[
+"or_in_if",
+"function f takes nothing returns nothing\nlocal boolean a = true\nif a or a then\nendif\nendfunction\n"
+],
+[
+"if_nested",
+"function f takes nothing returns nothing\nlocal boolean a = true\nif a then\nif a then\nendif\nendif\nendfunction\n"
+],
+[
+"call_nested_args",
+"function g takes integer x returns integer\nreturn x\nendfunction\nfunction f takes nothing returns nothing\nlocal integer r = g(g(1))\nendfunction\n"
+],
+[
+"call_coerce_result",
+"function g takes nothing returns integer\nreturn 1\nendfunction\nfunction N takes real x returns nothing\nendfunction\nfunction f takes nothing returns nothing\ncall N(g())\nendfunction\n"
+],
+[
+"not_compare",
+"function f takes nothing returns nothing\nlocal integer a = 1\nlocal boolean b = not (a < 2)\nendfunction\n"
+],
+[
+"real_neg_var",
+"function f takes nothing returns nothing\nlocal real a = 1.0\nset a = -a\nendfunction\n"
+],
+[
+"param_only",
+"function N takes integer a, real b, handle c, string d, boolean e returns nothing\nendfunction\n"
+],
+[
+"constant_real_global",
+"globals\nconstant real K = 2.0\nendglobals\nfunction f takes nothing returns nothing\nendfunction\n"
+],
+[
+"array_index_expr",
+"function f takes nothing returns nothing\nlocal integer array arr\nlocal integer i = 1\nset arr[i + 1] = arr[i] + 2\nendfunction\n"
+],
+[
+"string_concat_var",
+"function f takes nothing returns nothing\nlocal string s = \"a\"\nset s = s + s\nendfunction\n"
+],
+[
+"set_global_arr_real",
+"globals\nreal array gr\nendglobals\nfunction f takes nothing returns nothing\nset gr[1] = 2.0\nendfunction\n"
+],
+[
+"real_int_mixed_cmp_var",
+"function f takes nothing returns nothing\nlocal integer a = 1\nlocal real b = 2.0\nlocal boolean c = a < b\nendfunction\n"
+],
+[
+"two_real_ops_chain",
+"function f takes nothing returns nothing\nlocal real r = 1.0 + 2.0 + 3.0\nendfunction\n"
+],
+[
+"unary_minus_call",
+"function g takes nothing returns integer\nreturn 1\nendfunction\nfunction f takes nothing returns nothing\nlocal integer r = -g()\nendfunction\n"
+],
+[
+"real_return_var",
+"function r takes real x returns real\nreturn x\nendfunction\n"
+],
+[
+"handle_var_load",
+"function f takes nothing returns nothing\nlocal handle h = null\nlocal handle k = h\nendfunction\n"
+],
+[
+"bool_not_var",
+"function f takes nothing returns nothing\nlocal boolean a = true\nset a = not a\nendfunction\n"
+],
+[
+"global_init_order",
+"globals\ninteger a = 1\nreal b = 2\nendglobals\nfunction f takes nothing returns nothing\nendfunction\n"
+],
+[
+"wrap300_b",
+"function f takes nothing returns nothing\nlocal integer a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nset a = 1\nendfunction\n"
+],
+[
+"wrap130_binop",
+"function f takes nothing returns nothing\nlocal integer a = 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nset a = a + 1\nendfunction\n"
+],
+[
+"empty_loop",
+"function f takes nothing returns nothing\nloop\nendloop\nendfunction\n"
+],
+[
+"empty_if",
+"function f takes nothing returns nothing\nlocal boolean a = true\nif a then\nendif\nendfunction\n"
+],
+[
+"if_else_empty_then",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal integer x = 0\nif a then\nelse\nset x = 1\nendif\nendfunction\n"
+],
+[
+"if_then_empty_else",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal integer x = 0\nif a then\nset x = 1\nelse\nendif\nendfunction\n"
+],
+[
+"if_empty_then_elseif",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal integer x = 0\nif a then\nelseif a then\nset x = 1\nendif\nendfunction\n"
+],
+[
+"if_then_elseif_empty",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal integer x = 0\nif a then\nset x = 1\nelseif a then\nendif\nendfunction\n"
+],
+[
+"if_empty_else_only",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal integer x = 0\nif a then\nelse\nendif\nendfunction\n"
+],
+[
+"loop_empty_nested",
+"function f takes nothing returns nothing\nloop\nloop\nendloop\nexitwhen true\nendloop\nendfunction\n"
+],
+[
+"debug_block",
+"function f takes nothing returns nothing\nlocal integer a = 1\ndebug if a == 1 then\nset a = 2\nendif\nendfunction\n"
+],
+[
+"if_with_empty_inner_loop",
+"function f takes nothing returns nothing\nlocal boolean a = true\nif a then\nloop\nendloop\nset a = false\nendif\nendfunction\n"
+],
+[
+"if_and_cond",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal boolean b = true\nlocal integer x = 0\nif a and b then\nset x = 1\nendif\nendfunction\n"
+],
+[
+"loop_exit_and",
+"function f takes nothing returns nothing\nlocal boolean a = true\nloop\nexitwhen a and a\nendloop\nendfunction\n"
+],
+[
+"globals_string_init",
+"globals\nstring s = \"Q\"\nendglobals\nfunction f takes nothing returns nothing\nlocal string t = \"Q\"\nendfunction\n"
+],
+[
+"if_and_or_nested",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal boolean b = true\nlocal boolean c = true\nlocal integer x = 0\nif a and (b or c) then\nset x = 1\nendif\nendfunction\n"
+],
+[
+"ret_codes_bool",
+"function r takes nothing returns boolean\nreturn true\nendfunction\nfunction s takes nothing returns string\nreturn \"x\"\nendfunction\nfunction c takes nothing returns code\nreturn null\nendfunction\n"
+],
+[
+"if_call_cond",
+"function g takes nothing returns boolean\nreturn true\nendfunction\nfunction f takes nothing returns nothing\nif g() then\nendif\nendfunction\n"
+],
+[
+"if_call_cond_body",
+"function g takes nothing returns boolean\nreturn true\nendfunction\nfunction f takes nothing returns nothing\nlocal integer x = 0\nif g() then\nset x = 1\nendif\nendfunction\n"
+],
+[
+"set_arr_call_index",
+"function g takes nothing returns integer\nreturn 1\nendfunction\nfunction f takes nothing returns nothing\nlocal integer array arr\nset arr[g()] = 1\nendfunction\n"
+],
+[
+"read_arr_call_index",
+"function g takes nothing returns integer\nreturn 1\nendfunction\nfunction f takes nothing returns nothing\nlocal integer array arr\nlocal integer x = arr[g()]\nendfunction\n"
+],
+[
+"bool_eq_vars",
+"function f takes nothing returns nothing\nlocal boolean a = true\nlocal boolean b = true\nlocal boolean c = a == b\nendfunction\n"
+],
+[
+"int_sub_to_real",
+"function f takes nothing returns nothing\nlocal real r = 1 - 2\nendfunction\n"
+],
+[
+"string_ne",
+"function f takes nothing returns nothing\nlocal string s = \"a\"\nlocal boolean b = s != \"b\"\nendfunction\n"
+],
+[
+"neg_paren",
+"function f takes nothing returns nothing\nlocal integer a = -(1 + 2)\nendfunction\n"
+],
+[
+"not_not",
+"function f takes nothing returns nothing\nlocal boolean a = true\nset a = not not a\nendfunction\n"
+],
+[
+"and_calls",
+"function g takes nothing returns boolean\nreturn true\nendfunction\nfunction f takes nothing returns nothing\nlocal boolean x = g() and g()\nendfunction\n"
+],
+[
+"or_calls_bin_ops",
+"function f takes nothing returns nothing\nlocal integer a = 1\nlocal boolean x = a == 1 or a == 2\nendfunction\n"
+],
+[
+"set_real_from_real_div",
+"function f takes nothing returns nothing\nlocal real r = 1.0\nset r = r / 2.0\nendfunction\n"
+],
+[
+"nested_if_loop_labels",
+"function f takes nothing returns nothing\nlocal boolean a = true\nloop\nif a then\nexitwhen true\nendif\nendloop\nendfunction\n"
+],
+[
+"three_fns_labels",
+"function f takes nothing returns nothing\nlocal boolean a = true\nif a then\nset a = false\nendif\nendfunction\nfunction g takes nothing returns nothing\nloop\nexitwhen true\nendloop\nendfunction\n"
+],
+[
+"call_stmt_returns_value",
+"function g takes nothing returns integer\nreturn 1\nendfunction\nfunction f takes nothing returns nothing\ncall g()\nendfunction\n"
+],
+[
+"return_bool_expr",
+"function b takes integer x returns boolean\nreturn x == 1\nendfunction\n"
+],
+[
+"handle_default_in_init",
+"globals\nhandle h\nendglobals\nfunction f takes nothing returns nothing\nendfunction\n"
+]
+]

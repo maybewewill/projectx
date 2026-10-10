@@ -1,34 +1,38 @@
-//! Compiles checked JASS programs to bytecode (`bytecode::Instr`).
+//! Compiles checked JASS programs to the original compiler's bytecode (see `bytecode.rs`).
 //!
-//! The input is the same slice of programs that `check::check` accepts (common.j, blizzard.j,
-//! the map script, ...). The programs are type checked first; any diagnostic aborts compilation.
+//! The emitted stream is the one of the original (Game.dll 1.26a), instruction for instruction:
+//! type declarations first, then the globals initializer (if there are globals), then the functions
+//! in source order, then `End`. The rules below were read from streams the original produced for
+//! test texts (`tools/emu/jasscomp/parity.py` compares them):
 //!
-//! Code shape:
-//! - Each script function becomes a `FuncDef`. Parameters occupy slots `0..n`, scalar locals get
-//!   their own slots, and temporaries are allocated above them with stack discipline (reset after
-//!   each statement).
-//! - Array variables (globals and locals) are not slots; they are indexed by the `imm` of the
-//!   array opcodes.
-//! - Implicit integer-to-real widening is made explicit with `IntToReal`, so the VM never sees a
-//!   mixed integer/real operation.
-//! - Global initializers are compiled into one synthetic function, `Module::init`, that the VM
-//!   runs once when it is created.
+//! - Symbols: one table, case-insensitive, ids from 2 in order of appearance in the source. String
+//!   literals share it. Type parents (`type x extends handle`) are interned after all other names,
+//!   and the globals initializer takes the last id.
+//! - Temporaries come from a counter that runs over the whole script (slots 1..=255, wrapping to 1).
+//!   Declarations take no slot. Slot 0 is the return slot.
+//! - Labels are numbered per script from 1. An `if` allocates its two labels after its condition,
+//!   a `loop` allocates its top and exit labels before its body, `and`/`or` allocate the false/true
+//!   label before the right operand and the end label after it.
+//! - An `if` whose then-part and else-part are both empty emits only its condition. An empty `loop`
+//!   emits nothing.
+//! - Binary operators: left operand, PUSH, right operand, POP into a fresh slot, then the operator
+//!   with dest = that slot. Integer operands of a mixed operation are converted with IntToReal
+//!   right after they are evaluated.
+//! - Calls: arguments are evaluated and pushed, CALL, then POP_ARGS with the count. The result is
+//!   slot 0.
 //!
-//! UNVERIFIED vs retail: evaluation order is left to right, and for `set a[i] = v` the index is
-//! evaluated before the value. `debug` statements are not compiled (the AST documents them as
-//! skipped in release builds).
+//! UNVERIFIED: the native call encoding (see `bytecode.rs`) and the runtime meaning of `debug`.
 
 use std::collections::BTreeMap;
 
 use crate::ast::{self, ident_key, BinOp, Expr, Program, Stmt};
-use crate::bytecode::{Instr, Op, NO_SLOT};
+use crate::bytecode::{ty as tc, Instr, Op};
 use crate::check::{self, Diagnostic};
 
 /// Number of elements of every array variable (globals and locals).
 pub const ARRAY_SIZE: usize = 8192;
 
-/// Runtime type of a value. `Null` appears only as the type of the `null` literal and is never a
-/// declared type.
+/// Runtime type of a value. `Null` appears only as the static type of the `null` literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ty {
     Integer,
@@ -42,7 +46,8 @@ pub enum Ty {
 }
 
 impl Ty {
-    fn from_name(name: &str) -> Ty {
+    /// The type named by a JASS type name (case-insensitive). User types are handles.
+    pub fn from_name(name: &str) -> Ty {
         match ident_key(name).as_str() {
             "integer" => Ty::Integer,
             "real" => Ty::Real,
@@ -52,27 +57,40 @@ impl Ty {
             _ => Ty::Handle,
         }
     }
+
+    /// The type code the original writes for this type (`bytecode::ty`).
+    pub fn code(self) -> u8 {
+        match self {
+            Ty::Integer => tc::INTEGER,
+            Ty::Real => tc::REAL,
+            Ty::Boolean => tc::BOOLEAN,
+            Ty::String => tc::STRING,
+            Ty::Handle => tc::HANDLE,
+            Ty::Code => tc::CODE,
+            Ty::Null => tc::NOTHING,
+        }
+    }
 }
 
-/// A compiled script function.
+/// A compiled script function. `code` is the function's part of the stream: `FuncHdr` first,
+/// `FuncEnd` last. Jump targets are label ids (see `Op::Label`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncDef {
     pub name: String,
+    /// Symbol id of the name (what `CallScript` and `LoadFuncRef` refer to).
+    pub sym: u32,
     pub params: Vec<Ty>,
     /// `None` for `returns nothing`.
     pub ret: Option<Ty>,
-    /// Number of frame slots (parameters, locals and temporaries).
+    /// Frame size: one more than the highest temporary slot used.
     pub num_slots: usize,
-    /// Scalar locals as (slot, type). Each frame starts them at the type's default value.
-    pub locals: Vec<(u8, Ty)>,
-    /// Element type of each array local, indexed by the array opcodes' `imm`.
-    pub local_arrays: Vec<Ty>,
     pub code: Vec<Instr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalDef {
     pub name: String,
+    pub sym: u32,
     pub ty: Ty,
     pub array: bool,
 }
@@ -84,27 +102,45 @@ pub struct NativeDef {
     pub ret: Option<Ty>,
 }
 
-/// A compiled program: functions, globals, natives and the constant string table.
+/// A compiled program.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
+    /// Index 0 is the globals initializer (empty when there are no globals); the rest are the
+    /// script functions in source order.
     pub functions: Vec<FuncDef>,
+    /// Folded function name (`ast::ident_key`) to index in `functions`.
     pub function_index: BTreeMap<String, u32>,
     pub globals: Vec<GlobalDef>,
+    /// Folded name to index in `globals`.
     pub global_index: BTreeMap<String, u32>,
     pub natives: Vec<NativeDef>,
+    /// Folded name to index in `natives`.
     pub native_index: BTreeMap<String, u32>,
-    /// Index 0 is always the empty (null) string.
-    pub strings: Vec<String>,
-    /// Function that initializes the globals; the VM runs it once.
+    /// Symbol id to the spelling of its first occurrence (ids 0 and 1 are unused).
+    pub symbols: Vec<String>,
+    /// Type declarations, emitted before everything else.
+    pub prelude: Vec<Instr>,
+    /// Index of the globals initializer in `functions` (always 0).
     pub init: u32,
+}
+
+impl Module {
+    /// The flat instruction stream exactly as the original lays it out.
+    pub fn stream(&self) -> Vec<Instr> {
+        let mut v = self.prelude.clone();
+        for f in &self.functions {
+            v.extend_from_slice(&f.code);
+        }
+        v.push(Instr::new(Op::End));
+        v
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompileError {
     /// The programs did not type check.
     Check(Vec<Diagnostic>),
-    /// Something the compiler cannot express, e.g. a native used as a code value, or more than
-    /// 255 slots in one function.
+    /// Something the compiler cannot express.
     Unsupported { line: u32, message: String },
 }
 
@@ -125,252 +161,259 @@ impl std::error::Error for CompileError {}
 
 type CResult<T> = Result<T, CompileError>;
 
-/// Compiles `programs` (in load order) into a `Module`.
-pub fn compile(programs: &[Program]) -> Result<Module, CompileError> {
-    let diags = check::check(programs);
-    if !diags.is_empty() {
-        return Err(CompileError::Check(diags));
+// ---------------------------------------------------------------------------------------------
+// Symbols
+// ---------------------------------------------------------------------------------------------
+
+/// The script-wide name table. Names fold case; the spelling kept is the first one seen.
+#[derive(Debug)]
+struct Symbols {
+    ids: BTreeMap<String, u32>,
+    names: Vec<String>,
+}
+
+impl Symbols {
+    fn new() -> Self {
+        Symbols {
+            ids: BTreeMap::new(),
+            names: vec![String::new(), String::new()],
+        }
     }
 
-    let mut syms = Symbols::default();
-    let mut module = Module {
-        functions: Vec::new(),
-        function_index: BTreeMap::new(),
-        globals: Vec::new(),
-        global_index: BTreeMap::new(),
-        natives: Vec::new(),
-        native_index: BTreeMap::new(),
-        strings: vec![String::new()],
-        init: 0,
-    };
-    syms.intern(""); // id 0 is the null string
+    fn intern(&mut self, name: &str) -> u32 {
+        let key = ident_key(name);
+        if let Some(&id) = self.ids.get(&key) {
+            return id;
+        }
+        let id = self.names.len() as u32;
+        self.names.push(name.to_string());
+        self.ids.insert(key, id);
+        id
+    }
 
-    // Declarations first, so every call and global reference resolves regardless of order.
-    let mut script_funcs: Vec<&ast::Function> = Vec::new();
-    let mut global_inits: Vec<(u32, &ast::Global)> = Vec::new();
+    /// An id that no name refers to (the globals initializer).
+    fn anonymous(&mut self) -> u32 {
+        self.names.push(String::new());
+        (self.names.len() - 1) as u32
+    }
+
+    fn get(&self, name: &str) -> Option<u32> {
+        self.ids.get(&ident_key(name)).copied()
+    }
+}
+
+/// Interns every name in the order the original's parser meets them. Items of one program are
+/// visited by source line (types, globals, natives and functions interleave in the source).
+fn assign_symbols(programs: &[Program], syms: &mut Symbols, parents: &mut Vec<String>) {
+    enum Item<'a> {
+        Type(&'a ast::TypeDef),
+        Global(&'a ast::Global),
+        Native(&'a ast::Native),
+        Function(&'a ast::Function),
+    }
     for p in programs {
-        for g in &p.globals {
-            let id = module.globals.len() as u32;
-            let ty = Ty::from_name(&g.ty);
-            module.globals.push(GlobalDef {
-                name: g.name.clone(),
-                ty,
-                array: g.array,
-            });
-            module.global_index.insert(ident_key(&g.name), id);
-            syms.globals.insert(
-                ident_key(&g.name),
-                GlobalInfo {
-                    id,
-                    ty,
-                    array: g.array,
-                },
-            );
-            if g.init.is_some() {
-                global_inits.push((id, g));
-            }
-        }
-        for n in &p.natives {
-            let id = module.natives.len() as u32;
-            let params: Vec<Ty> = n.sig.params.iter().map(|p| Ty::from_name(&p.ty)).collect();
-            let ret = n.sig.returns.as_deref().map(Ty::from_name);
-            module.natives.push(NativeDef {
-                name: n.sig.name.clone(),
-                params: params.clone(),
-                ret,
-            });
-            module.native_index.insert(ident_key(&n.sig.name), id);
-            syms.funcs.insert(
-                ident_key(&n.sig.name),
-                Callee {
-                    script: false,
-                    id,
-                    params,
-                    ret,
-                },
-            );
-        }
-        for f in &p.functions {
-            let id = script_funcs.len() as u32;
-            let params: Vec<Ty> = f.sig.params.iter().map(|p| Ty::from_name(&p.ty)).collect();
-            let ret = f.sig.returns.as_deref().map(Ty::from_name);
-            syms.funcs.insert(
-                ident_key(&f.sig.name),
-                Callee {
-                    script: true,
-                    id,
-                    params,
-                    ret,
-                },
-            );
-            script_funcs.push(f);
-        }
-    }
-
-    for f in &script_funcs {
-        let def = compile_function(&mut syms, f)?;
-        module
-            .function_index
-            .insert(ident_key(&f.sig.name), module.functions.len() as u32);
-        module.functions.push(def);
-    }
-
-    // Global initializer function.
-    let mut init = FnCompiler::new(&mut syms, None, 0);
-    for (gid, g) in global_inits {
-        init.line = g.line;
-        let init_expr = g.init.as_ref().expect("filtered above");
-        let mark = init.next;
-        let (s, t) = init.expr(init_expr)?;
-        let ty = module.globals[gid as usize].ty;
-        let s = init.coerce(s, t, ty)?;
-        init.emit(Instr::new(Op::GlobalSet).imm(gid).right(s));
-        init.next = mark;
-    }
-    init.emit(Instr::new(Op::Return));
-    let init_def = init.finish("<globals>".to_string(), Vec::new());
-    module.init = module.functions.len() as u32;
-    module.functions.push(init_def);
-
-    module.strings = syms.strings;
-    Ok(module)
-}
-
-fn compile_function(syms: &mut Symbols, f: &ast::Function) -> CResult<FuncDef> {
-    let params: Vec<Ty> = f.sig.params.iter().map(|p| Ty::from_name(&p.ty)).collect();
-    let ret = f.sig.returns.as_deref().map(Ty::from_name);
-    let mut fc = FnCompiler::new(syms, ret, params.len());
-    fc.line = f.line;
-    for (i, (p, ty)) in f.sig.params.iter().zip(&params).enumerate() {
-        fc.locals
-            .insert(ident_key(&p.name), LocalVar::Slot(i as u8, *ty));
-    }
-
-    for l in &f.locals {
-        fc.line = l.line;
-        let ty = Ty::from_name(&l.ty);
-        if l.array {
-            let idx = fc.local_arrays.len() as u32;
-            fc.local_arrays.push(ty);
-            fc.locals
-                .insert(ident_key(&l.name), LocalVar::Array(idx, ty));
-        } else {
-            let slot = fc.alloc()?;
-            fc.locals
-                .insert(ident_key(&l.name), LocalVar::Slot(slot, ty));
-            fc.local_defaults.push((slot, ty));
-            if let Some(init) = &l.init {
-                let mark = fc.next;
-                let (s, t) = fc.expr(init)?;
-                let s = fc.coerce(s, t, ty)?;
-                if s != slot {
-                    fc.emit(Instr::new(Op::Move).left(s).dest(slot));
+        let mut items: Vec<(u32, Item<'_>)> = Vec::new();
+        items.extend(p.types.iter().map(|t| (t.line, Item::Type(t))));
+        items.extend(p.globals.iter().map(|g| (g.line, Item::Global(g))));
+        items.extend(p.natives.iter().map(|n| (n.line, Item::Native(n))));
+        items.extend(p.functions.iter().map(|f| (f.line, Item::Function(f))));
+        items.sort_by_key(|(line, _)| *line);
+        for (_, item) in items {
+            match item {
+                Item::Type(t) => {
+                    syms.intern(&t.name);
+                    parents.push(t.parent.clone());
                 }
-                fc.next = mark;
+                Item::Global(g) => {
+                    syms.intern(&g.name);
+                    if let Some(e) = &g.init {
+                        walk_expr(e, syms);
+                    }
+                }
+                Item::Native(n) => {
+                    syms.intern(&n.sig.name);
+                    for prm in &n.sig.params {
+                        syms.intern(&prm.name);
+                    }
+                }
+                Item::Function(f) => {
+                    syms.intern(&f.sig.name);
+                    for prm in &f.sig.params {
+                        syms.intern(&prm.name);
+                    }
+                    for l in &f.locals {
+                        syms.intern(&l.name);
+                        if let Some(e) = &l.init {
+                            walk_expr(e, syms);
+                        }
+                    }
+                    walk_stmts(&f.body, syms);
+                }
             }
         }
     }
+}
 
-    fc.block(&f.body)?;
-    // Falling off the end returns the default value of the return type.
-    match ret {
-        None => {
-            fc.emit(Instr::new(Op::Return));
-        }
-        Some(t) => {
-            let s = fc.alloc()?;
-            fc.emit_default(t, s);
-            fc.emit(Instr::new(Op::Return).right(s));
+fn walk_stmts(body: &[Stmt], syms: &mut Symbols) {
+    for s in body {
+        match s {
+            Stmt::Set {
+                name, index, value, ..
+            } => {
+                syms.intern(name);
+                if let Some(i) = index {
+                    walk_expr(i, syms);
+                }
+                walk_expr(value, syms);
+            }
+            Stmt::Call { name, args, .. } => {
+                syms.intern(name);
+                for a in args {
+                    walk_expr(a, syms);
+                }
+            }
+            Stmt::If {
+                branches,
+                otherwise,
+                ..
+            } => {
+                for (c, b) in branches {
+                    walk_expr(c, syms);
+                    walk_stmts(b, syms);
+                }
+                walk_stmts(otherwise, syms);
+            }
+            Stmt::Loop { body, .. } => walk_stmts(body, syms),
+            Stmt::ExitWhen { cond, .. } => walk_expr(cond, syms),
+            Stmt::Return { value, .. } => {
+                if let Some(v) = value {
+                    walk_expr(v, syms);
+                }
+            }
+            Stmt::Debug(inner) => walk_stmts(std::slice::from_ref(inner.as_ref()), syms),
         }
     }
-    Ok(fc.finish(f.sig.name.clone(), params))
 }
 
-#[derive(Debug, Clone, Copy)]
-struct GlobalInfo {
-    id: u32,
-    ty: Ty,
-    array: bool,
+fn walk_expr(e: &Expr, syms: &mut Symbols) {
+    match e {
+        Expr::Str(s) => {
+            syms.intern(s);
+        }
+        Expr::Var(n) | Expr::FuncRef(n) => {
+            syms.intern(n);
+        }
+        Expr::Index(n, i) => {
+            syms.intern(n);
+            walk_expr(i, syms);
+        }
+        Expr::Call(n, args) => {
+            syms.intern(n);
+            for a in args {
+                walk_expr(a, syms);
+            }
+        }
+        Expr::Neg(x) | Expr::Not(x) => walk_expr(x, syms),
+        Expr::Binary(_, l, r) => {
+            walk_expr(l, syms);
+            walk_expr(r, syms);
+        }
+        Expr::Int(_) | Expr::Real(_) | Expr::Bool(_) | Expr::Null => {}
+    }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Script-wide code generation state
+// ---------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Callee {
     script: bool,
-    id: u32,
+    /// Symbol of a script function.
+    sym: u32,
+    /// Index of a native.
+    idx: u32,
     params: Vec<Ty>,
     ret: Option<Ty>,
 }
 
-/// Module-wide symbol information used while compiling bodies.
-#[derive(Debug, Default)]
-struct Symbols {
-    globals: BTreeMap<String, GlobalInfo>,
-    funcs: BTreeMap<String, Callee>,
-    strings: Vec<String>,
-    string_index: BTreeMap<String, u32>,
+#[derive(Debug, Clone, Copy)]
+struct GlobalInfo {
+    sym: u32,
+    ty: Ty,
+    array: bool,
 }
 
-impl Symbols {
-    fn intern(&mut self, s: &str) -> u32 {
-        if let Some(&id) = self.string_index.get(s) {
-            return id;
-        }
-        let id = self.strings.len() as u32;
-        self.strings.push(s.to_string());
-        self.string_index.insert(s.to_string(), id);
-        id
+/// State shared by all functions of one script: names, temporaries and labels.
+struct Gen {
+    syms: Symbols,
+    funcs: BTreeMap<String, Callee>,
+    globals: BTreeMap<String, GlobalInfo>,
+    /// Next temporary slot (1..=255, wraps to 1).
+    slot: u8,
+    /// Next label id.
+    label: u32,
+}
+
+impl Gen {
+    fn alloc_slot(&mut self) -> u8 {
+        let s = self.slot;
+        self.slot = if s == 255 { 1 } else { s + 1 };
+        s
+    }
+
+    fn new_label(&mut self) -> u32 {
+        let l = self.label;
+        self.label += 1;
+        l
     }
 }
 
+/// A variable reference as seen from the current function.
 #[derive(Debug, Clone, Copy)]
-enum LocalVar {
-    Slot(u8, Ty),
-    Array(u32, Ty),
+struct VarRef {
+    sym: u32,
+    ty: Ty,
+    array: bool,
 }
 
-/// Compiles one function body. Owns the code buffer; `finish` produces the `FuncDef`.
-struct FnCompiler<'a> {
-    syms: &'a mut Symbols,
-    locals: BTreeMap<String, LocalVar>,
-    local_arrays: Vec<Ty>,
-    local_defaults: Vec<(u8, Ty)>,
-    ret: Option<Ty>,
+/// Compiles one function body (or the globals initializer).
+struct FnCx<'a> {
+    g: &'a mut Gen,
     code: Vec<Instr>,
-    /// Next free slot (temporaries live at and above this).
-    next: u8,
-    /// One past the highest slot ever used.
-    high: usize,
-    /// Exit jumps of each enclosing loop, patched when the loop ends.
-    loops: Vec<Vec<usize>>,
+    /// Folded name to (type, is array) of the function's parameters and locals.
+    locals: BTreeMap<String, (Ty, bool)>,
+    /// Exit label of each enclosing loop.
+    loops: Vec<u32>,
+    /// Highest temporary slot allocated by this function.
+    high: u8,
     line: u32,
 }
 
-impl<'a> FnCompiler<'a> {
-    fn new(syms: &'a mut Symbols, ret: Option<Ty>, nparams: usize) -> Self {
-        FnCompiler {
-            syms,
-            locals: BTreeMap::new(),
-            local_arrays: Vec::new(),
-            local_defaults: Vec::new(),
-            ret,
+impl<'a> FnCx<'a> {
+    fn new(g: &'a mut Gen) -> Self {
+        FnCx {
+            g,
             code: Vec::new(),
-            next: nparams as u8,
-            high: nparams,
+            locals: BTreeMap::new(),
             loops: Vec::new(),
+            high: 0,
             line: 0,
         }
     }
 
-    fn finish(self, name: String, params: Vec<Ty>) -> FuncDef {
-        FuncDef {
-            name,
-            params,
-            ret: self.ret,
-            num_slots: self.high,
-            locals: self.local_defaults,
-            local_arrays: self.local_arrays,
-            code: self.code,
-        }
+    fn emit(&mut self, i: Instr) {
+        self.code.push(i);
+    }
+
+    fn alloc(&mut self) -> u8 {
+        let s = self.g.alloc_slot();
+        self.high = self.high.max(s);
+        s
+    }
+
+    fn label(&mut self) -> u32 {
+        self.g.new_label()
     }
 
     fn unsupported<T>(&self, message: impl Into<String>) -> CResult<T> {
@@ -380,52 +423,283 @@ impl<'a> FnCompiler<'a> {
         })
     }
 
-    fn emit(&mut self, i: Instr) -> usize {
-        self.code.push(i);
-        self.code.len() - 1
-    }
-
-    fn pc(&self) -> u32 {
-        self.code.len() as u32
-    }
-
-    fn alloc(&mut self) -> CResult<u8> {
-        if self.next == NO_SLOT {
-            return self.unsupported("function needs more than 255 slots");
+    fn sym(&self, name: &str) -> CResult<u32> {
+        match self.g.syms.get(name) {
+            Some(s) => Ok(s),
+            None => self.unsupported(format!("name '{name}' was not interned")),
         }
-        let s = self.next;
-        self.next += 1;
-        self.high = self.high.max(self.next as usize);
-        Ok(s)
     }
 
-    fn alloc_n(&mut self, n: usize) -> CResult<u8> {
-        let base = self.next;
-        for _ in 0..n {
-            self.alloc()?;
+    fn var(&self, name: &str) -> CResult<VarRef> {
+        let key = ident_key(name);
+        if let Some(&(ty, array)) = self.locals.get(&key) {
+            return Ok(VarRef {
+                sym: self.sym(name)?,
+                ty,
+                array,
+            });
         }
-        Ok(base)
+        match self.g.globals.get(&key) {
+            Some(g) => Ok(VarRef {
+                sym: g.sym,
+                ty: g.ty,
+                array: g.array,
+            }),
+            None => self.unsupported(format!("unknown variable '{name}'")),
+        }
     }
 
-    fn emit_default(&mut self, ty: Ty, dest: u8) {
-        let i = match ty {
-            Ty::Integer => Instr::new(Op::LoadInt).imm(0),
-            Ty::Real => Instr::new(Op::LoadReal).imm(0f32.to_bits()),
-            Ty::Boolean => Instr::new(Op::LoadBool).imm(0),
-            Ty::String => Instr::new(Op::LoadString).imm(0),
-            Ty::Handle | Ty::Code | Ty::Null => Instr::new(Op::LoadNull),
-        };
-        self.emit(i.dest(dest));
+    fn var_ty(&self, name: &str) -> Ty {
+        let key = ident_key(name);
+        if let Some(&(ty, _)) = self.locals.get(&key) {
+            return ty;
+        }
+        self.g.globals.get(&key).map_or(Ty::Null, |g| g.ty)
     }
 
-    /// Makes a value of type `from` usable as `to`. Only integer-to-real widening changes the code.
-    fn coerce(&mut self, slot: u8, from: Ty, to: Ty) -> CResult<u8> {
+    /// The type of an expression, computed without generating code. Used to decide conversions and
+    /// the context of a `null` literal.
+    fn static_ty(&self, e: &Expr) -> Ty {
+        match e {
+            Expr::Int(_) => Ty::Integer,
+            Expr::Real(_) => Ty::Real,
+            Expr::Str(_) => Ty::String,
+            Expr::Bool(_) => Ty::Boolean,
+            Expr::Null => Ty::Null,
+            Expr::Var(n) | Expr::Index(n, _) => self.var_ty(n),
+            Expr::Call(n, _) => self
+                .g
+                .funcs
+                .get(&ident_key(n))
+                .and_then(|c| c.ret)
+                .unwrap_or(Ty::Null),
+            Expr::FuncRef(_) => Ty::Code,
+            Expr::Neg(x) => self.static_ty(x),
+            Expr::Not(_) => Ty::Boolean,
+            Expr::Binary(op, l, r) => match op {
+                BinOp::And
+                | BinOp::Or
+                | BinOp::Eq
+                | BinOp::Ne
+                | BinOp::Lt
+                | BinOp::Le
+                | BinOp::Gt
+                | BinOp::Ge => Ty::Boolean,
+                _ => {
+                    let (lt, rt) = (self.static_ty(l), self.static_ty(r));
+                    if *op == BinOp::Add && lt == Ty::String {
+                        Ty::String
+                    } else if lt == Ty::Real || rt == Ty::Real {
+                        Ty::Real
+                    } else {
+                        Ty::Integer
+                    }
+                }
+            },
+        }
+    }
+
+    /// Integer-to-real conversion of `slot` in place, when needed.
+    fn coerce(&mut self, slot: u8, from: Ty, to: Ty) -> u8 {
         if from == Ty::Integer && to == Ty::Real {
-            let d = self.alloc()?;
-            self.emit(Instr::new(Op::IntToReal).left(slot).dest(d));
-            return Ok(d);
+            self.emit(Instr::new(Op::IntToReal).dest(slot));
         }
-        Ok(slot)
+        slot
+    }
+
+    /// Expression code. Returns the slot that holds the value and its type. `hint` is the type of
+    /// the other operand of `==`/`!=`, which types a `null` literal.
+    fn expr(&mut self, e: &Expr, hint: Option<Ty>) -> CResult<(u8, Ty)> {
+        match e {
+            Expr::Int(i) => {
+                let d = self.alloc();
+                self.emit(
+                    Instr::new(Op::LoadConst)
+                        .left(tc::INTEGER)
+                        .dest(d)
+                        .imm(*i as u32),
+                );
+                Ok((d, Ty::Integer))
+            }
+            Expr::Real(r) => {
+                let d = self.alloc();
+                self.emit(
+                    Instr::new(Op::LoadConst)
+                        .left(tc::REAL)
+                        .dest(d)
+                        .imm(r.to_bits()),
+                );
+                Ok((d, Ty::Real))
+            }
+            Expr::Str(s) => {
+                let sym = self.sym(s)?;
+                let d = self.alloc();
+                self.emit(Instr::new(Op::LoadConst).left(tc::STRING).dest(d).imm(sym));
+                Ok((d, Ty::String))
+            }
+            Expr::Bool(b) => {
+                let d = self.alloc();
+                self.emit(
+                    Instr::new(Op::LoadConst)
+                        .left(tc::BOOLEAN)
+                        .dest(d)
+                        .imm(*b as u32),
+                );
+                Ok((d, Ty::Boolean))
+            }
+            Expr::Null => {
+                let code = match hint {
+                    Some(t) if t != Ty::Null => t.code(),
+                    _ => tc::NULL,
+                };
+                let d = self.alloc();
+                self.emit(Instr::new(Op::LoadConst).left(code).dest(d));
+                Ok((d, Ty::Null))
+            }
+            Expr::Var(n) => {
+                let v = self.var(n)?;
+                if v.array {
+                    return self.unsupported("array used without an index");
+                }
+                let d = self.alloc();
+                self.emit(Instr::new(Op::LoadVar).left(v.ty.code()).dest(d).imm(v.sym));
+                Ok((d, v.ty))
+            }
+            Expr::Index(n, idx) => {
+                let v = self.var(n)?;
+                if !v.array {
+                    return self.unsupported(format!("'{n}' is not an array"));
+                }
+                let (i, _) = self.expr(idx, None)?;
+                let d = self.alloc();
+                self.emit(
+                    Instr::new(Op::ArrayLoad)
+                        .right(v.ty.code())
+                        .left(i)
+                        .dest(d)
+                        .imm(v.sym),
+                );
+                Ok((d, v.ty))
+            }
+            Expr::Call(n, args) => self.call(n, args),
+            Expr::FuncRef(n) => {
+                let callee = self.callee(n)?;
+                if !callee.script {
+                    return self
+                        .unsupported(format!("native '{n}' used as a code value (not supported)"));
+                }
+                let d = self.alloc();
+                self.emit(Instr::new(Op::LoadFuncRef).left(3).dest(d).imm(callee.sym));
+                Ok((d, Ty::Code))
+            }
+            Expr::Neg(x) => {
+                let (s, t) = self.expr(x, None)?;
+                self.emit(Instr::new(Op::Neg).dest(s));
+                Ok((s, t))
+            }
+            Expr::Not(x) => {
+                let (s, _) = self.expr(x, None)?;
+                self.emit(Instr::new(Op::Not).dest(s));
+                Ok((s, Ty::Boolean))
+            }
+            Expr::Binary(op, l, r) => self.binary(*op, l, r),
+        }
+    }
+
+    fn callee(&self, name: &str) -> CResult<Callee> {
+        match self.g.funcs.get(&ident_key(name)) {
+            Some(c) => Ok(c.clone()),
+            None => self.unsupported(format!("unknown function '{name}'")),
+        }
+    }
+
+    /// A call. Arguments are pushed, then CALL, then POP_ARGS. The result is in slot 0.
+    fn call(&mut self, name: &str, args: &[Expr]) -> CResult<(u8, Ty)> {
+        let c = self.callee(name)?;
+        for (i, a) in args.iter().enumerate() {
+            let (s, t) = self.expr(a, None)?;
+            let to = c.params.get(i).copied().unwrap_or(t);
+            let s = self.coerce(s, t, to);
+            self.emit(Instr::new(Op::Push).dest(s));
+        }
+        if c.script {
+            self.emit(Instr::new(Op::CallScript).imm(c.sym));
+        } else {
+            self.emit(Instr::new(Op::CallNative).imm(c.idx));
+        }
+        if !args.is_empty() {
+            self.emit(Instr::new(Op::PopArgs).dest(args.len() as u8));
+        }
+        Ok((0, c.ret.unwrap_or(Ty::Null)))
+    }
+
+    fn binary(&mut self, op: BinOp, l: &Expr, r: &Expr) -> CResult<(u8, Ty)> {
+        if op == BinOp::And || op == BinOp::Or {
+            return self.logical(op == BinOp::Or, l, r);
+        }
+        let (lst, rst) = (self.static_ty(l), self.static_ty(r));
+        let equality = op == BinOp::Eq || op == BinOp::Ne;
+        let (ls, lt) = self.expr(l, equality.then_some(rst))?;
+        let ls = if lt == Ty::Integer && rst == Ty::Real {
+            self.coerce(ls, lt, Ty::Real)
+        } else {
+            ls
+        };
+        self.emit(Instr::new(Op::Push).dest(ls));
+        let (rs, rt) = self.expr(r, equality.then_some(lst))?;
+        let rs = if rt == Ty::Integer && lt == Ty::Real {
+            self.coerce(rs, rt, Ty::Real)
+        } else {
+            rs
+        };
+        let p = self.alloc();
+        self.emit(Instr::new(Op::Pop).dest(p));
+        let opcode = match op {
+            BinOp::Add => Op::Add,
+            BinOp::Sub => Op::Sub,
+            BinOp::Mul => Op::Mul,
+            BinOp::Div => Op::Div,
+            BinOp::Eq => Op::Eq,
+            BinOp::Ne => Op::Ne,
+            BinOp::Lt => Op::Lt,
+            BinOp::Le => Op::Le,
+            BinOp::Gt => Op::Gt,
+            BinOp::Ge => Op::Ge,
+            BinOp::And | BinOp::Or => unreachable!("handled by logical"),
+        };
+        self.emit(Instr::new(opcode).right(rs).left(p).dest(p));
+        let ty = match op {
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Ty::Boolean,
+            BinOp::Add if lt == Ty::String => Ty::String,
+            _ if lt == Ty::Real || rt == Ty::Real => Ty::Real,
+            _ => Ty::Integer,
+        };
+        Ok((p, ty))
+    }
+
+    /// Short-circuit `and` / `or` with jumps. The result is the right operand's slot; the
+    /// short-circuit path loads the constant into that same slot.
+    fn logical(&mut self, is_or: bool, l: &Expr, r: &Expr) -> CResult<(u8, Ty)> {
+        let (ls, _) = self.expr(l, None)?;
+        let short = self.label();
+        let jump = if is_or {
+            Op::JumpIfTrue
+        } else {
+            Op::JumpIfFalse
+        };
+        self.emit(Instr::new(jump).dest(ls).imm(short));
+        let (rs, _) = self.expr(r, None)?;
+        let end = self.label();
+        self.emit(Instr::new(Op::Jump).imm(end));
+        self.emit(Instr::new(Op::Label).imm(short));
+        self.emit(
+            Instr::new(Op::LoadConst)
+                .left(tc::BOOLEAN)
+                .dest(rs)
+                .imm(is_or as u32),
+        );
+        self.emit(Instr::new(Op::Label).imm(end));
+        Ok((rs, Ty::Boolean))
     }
 
     fn block(&mut self, body: &[Stmt]) -> CResult<()> {
@@ -436,7 +710,6 @@ impl<'a> FnCompiler<'a> {
     }
 
     fn stmt(&mut self, s: &Stmt) -> CResult<()> {
-        let mark = self.next;
         match s {
             Stmt::Set {
                 name,
@@ -445,39 +718,27 @@ impl<'a> FnCompiler<'a> {
                 line,
             } => {
                 self.line = *line;
-                let idx = match index {
-                    Some(e) => Some(self.expr(e)?.0),
-                    None => None,
-                };
-                let (vs, vt) = self.expr(value)?;
-                if let Some(local) = self.locals.get(&ident_key(name)).copied() {
-                    match local {
-                        LocalVar::Slot(d, ty) => {
-                            let v = self.coerce(vs, vt, ty)?;
-                            if v != d {
-                                self.emit(Instr::new(Op::Move).left(v).dest(d));
-                            }
-                        }
-                        LocalVar::Array(ai, ty) => {
-                            let v = self.coerce(vs, vt, ty)?;
-                            let i = self.need_index(idx)?;
-                            self.emit(Instr::new(Op::LocalArraySet).imm(ai).left(i).right(v));
-                        }
+                let v = self.var(name)?;
+                match index {
+                    None => {
+                        let (vs, vt) = self.expr(value, None)?;
+                        let vs = self.coerce(vs, vt, v.ty);
+                        self.emit(Instr::new(Op::StoreVar).dest(vs).imm(v.sym));
                     }
-                } else {
-                    let g = self.global(name)?;
-                    let v = self.coerce(vs, vt, g.ty)?;
-                    if g.array {
-                        let i = self.need_index(idx)?;
-                        self.emit(Instr::new(Op::GlobalArraySet).imm(g.id).left(i).right(v));
-                    } else {
-                        self.emit(Instr::new(Op::GlobalSet).imm(g.id).right(v));
+                    Some(ix) => {
+                        let (is, _) = self.expr(ix, None)?;
+                        self.emit(Instr::new(Op::Push).dest(is));
+                        let (vs, vt) = self.expr(value, None)?;
+                        let vs = self.coerce(vs, vt, v.ty);
+                        let p = self.alloc();
+                        self.emit(Instr::new(Op::Pop).dest(p));
+                        self.emit(Instr::new(Op::ArrayStore).left(vs).dest(p).imm(v.sym));
                     }
                 }
             }
             Stmt::Call { name, args, line } => {
                 self.line = *line;
-                self.call(name, args, false)?;
+                self.call(name, args)?;
             }
             Stmt::If {
                 branches,
@@ -485,296 +746,353 @@ impl<'a> FnCompiler<'a> {
                 line,
             } => {
                 self.line = *line;
-                let mut end_jumps = Vec::new();
-                for (cond, body) in branches {
-                    let m = self.next;
-                    let (c, _) = self.expr(cond)?;
-                    let jf = self.emit(Instr::new(Op::JumpIfFalse).left(c));
-                    self.next = m;
-                    self.block(body)?;
-                    end_jumps.push(self.emit(Instr::new(Op::Jump)));
-                    let here = self.pc();
-                    self.code[jf].imm = here;
-                }
-                self.block(otherwise)?;
-                let end = self.pc();
-                for j in end_jumps {
-                    self.code[j].imm = end;
-                }
+                self.chain(branches, otherwise)?;
             }
             Stmt::Loop { body, line } => {
                 self.line = *line;
-                let start = self.pc();
-                self.loops.push(Vec::new());
-                self.block(body)?;
-                self.emit(Instr::new(Op::Jump).imm(start));
-                let end = self.pc();
-                for j in self.loops.pop().unwrap_or_default() {
-                    self.code[j].imm = end;
+                if body.is_empty() {
+                    return Ok(());
                 }
+                let top = self.label();
+                let exit = self.label();
+                self.emit(Instr::new(Op::Label).imm(top));
+                self.loops.push(exit);
+                self.block(body)?;
+                self.loops.pop();
+                self.emit(Instr::new(Op::Jump).imm(top));
+                self.emit(Instr::new(Op::Label).imm(exit));
             }
             Stmt::ExitWhen { cond, line } => {
                 self.line = *line;
-                if self.loops.is_empty() {
+                let Some(&exit) = self.loops.last() else {
                     return self.unsupported("'exitwhen' outside of a loop");
-                }
-                let (c, _) = self.expr(cond)?;
-                let j = self.emit(Instr::new(Op::JumpIfTrue).left(c));
-                if let Some(exits) = self.loops.last_mut() {
-                    exits.push(j);
-                }
+                };
+                let (c, _) = self.expr(cond, None)?;
+                self.emit(Instr::new(Op::JumpIfTrue).dest(c).imm(exit));
             }
             Stmt::Return { value, line } => {
                 self.line = *line;
                 match value {
                     Some(v) => {
-                        let (s, t) = self.expr(v)?;
-                        let s = match self.ret {
-                            Some(rt) => self.coerce(s, t, rt)?,
-                            None => s,
-                        };
-                        self.emit(Instr::new(Op::Return).right(s));
-                    }
-                    None => {
+                        let (s, _) = self.expr(v, None)?;
+                        self.emit(Instr::new(Op::Move).left(s).dest(0));
                         self.emit(Instr::new(Op::Return));
                     }
+                    None => self.emit(Instr::new(Op::Return)),
                 }
             }
-            // UNVERIFIED vs retail: `debug` statements are skipped (release-build behaviour).
-            Stmt::Debug(_) => {}
+            Stmt::Debug(inner) => {
+                let skip = self.label();
+                self.emit(Instr::new(Op::DebugSkip).imm(skip));
+                self.stmt(inner)?;
+                self.emit(Instr::new(Op::Label).imm(skip));
+            }
         }
-        self.next = mark;
         Ok(())
     }
 
-    fn need_index(&self, idx: Option<u8>) -> CResult<u8> {
-        match idx {
-            Some(i) => Ok(i),
-            None => self.unsupported("array used without an index"),
+    /// `if` / `elseif` / `else`. An `elseif` is an `if` in the else part.
+    fn chain(&mut self, branches: &[(Expr, Vec<Stmt>)], otherwise: &[Stmt]) -> CResult<()> {
+        let Some(((cond, body), rest)) = branches.split_first() else {
+            return self.block(otherwise);
+        };
+        if body.is_empty() && rest.is_empty() && otherwise.is_empty() {
+            self.expr(cond, None)?;
+            return Ok(());
         }
+        let (c, _) = self.expr(cond, None)?;
+        let next = self.label();
+        let end = self.label();
+        self.emit(Instr::new(Op::JumpIfFalse).dest(c).imm(next));
+        self.block(body)?;
+        self.emit(Instr::new(Op::Jump).imm(end));
+        self.emit(Instr::new(Op::Label).imm(next));
+        self.chain(rest, otherwise)?;
+        self.emit(Instr::new(Op::Label).imm(end));
+        Ok(())
     }
 
-    fn global(&self, name: &str) -> CResult<GlobalInfo> {
-        match self.syms.globals.get(&ident_key(name)) {
-            Some(g) => Ok(*g),
-            None => self.unsupported(format!("unknown variable '{name}'")),
+    fn finish(self, name: String, sym: u32, params: Vec<Ty>, ret: Option<Ty>) -> FuncDef {
+        FuncDef {
+            name,
+            sym,
+            params,
+            ret,
+            num_slots: self.high as usize + 1,
+            code: self.code,
         }
-    }
-
-    /// Compiles a call. Returns the result slot (or `NO_SLOT` when `want` is false) and the type.
-    fn call(&mut self, name: &str, args: &[Expr], want: bool) -> CResult<(u8, Ty)> {
-        let Some(callee) = self.syms.funcs.get(&ident_key(name)).cloned() else {
-            return self.unsupported(format!("unknown function '{name}'"));
-        };
-        let saved = self.next;
-        let dest = if want {
-            match callee.ret {
-                Some(_) => self.alloc()?,
-                None => return self.unsupported(format!("'{name}' returns nothing")),
-            }
-        } else {
-            NO_SLOT
-        };
-        let base = self.alloc_n(args.len())?;
-        let mark = self.next;
-        for (i, (arg, pty)) in args.iter().zip(&callee.params).enumerate() {
-            let (s, t) = self.expr(arg)?;
-            let s = self.coerce(s, t, *pty)?;
-            let target = base + i as u8;
-            if s != target {
-                self.emit(Instr::new(Op::Move).left(s).dest(target));
-            }
-            self.next = mark;
-        }
-        let argc = args.len() as u32;
-        let op = if callee.script {
-            Op::CallScript
-        } else {
-            Op::CallNative
-        };
-        let ins = Instr {
-            right: argc as u8,
-            left: base,
-            dest,
-            op,
-            imm: callee.id,
-        };
-        self.emit(ins);
-        self.next = saved;
-        if dest != NO_SLOT {
-            self.next = dest + 1;
-        }
-        Ok((dest, callee.ret.unwrap_or(Ty::Null)))
-    }
-
-    fn expr(&mut self, e: &Expr) -> CResult<(u8, Ty)> {
-        match e {
-            Expr::Int(i) => {
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::LoadInt).imm(*i as u32).dest(d));
-                Ok((d, Ty::Integer))
-            }
-            Expr::Real(r) => {
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::LoadReal).imm(r.to_bits()).dest(d));
-                Ok((d, Ty::Real))
-            }
-            Expr::Str(s) => {
-                let id = self.syms.intern(s);
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::LoadString).imm(id).dest(d));
-                Ok((d, Ty::String))
-            }
-            Expr::Bool(b) => {
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::LoadBool).imm(*b as u32).dest(d));
-                Ok((d, Ty::Boolean))
-            }
-            Expr::Null => {
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::LoadNull).dest(d));
-                Ok((d, Ty::Null))
-            }
-            Expr::Var(name) => {
-                if let Some(local) = self.locals.get(&ident_key(name)).copied() {
-                    return match local {
-                        LocalVar::Slot(s, ty) => Ok((s, ty)),
-                        LocalVar::Array(..) => self.unsupported("array used without an index"),
-                    };
-                }
-                let g = self.global(name)?;
-                if g.array {
-                    return self.unsupported("array used without an index");
-                }
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::GlobalGet).imm(g.id).dest(d));
-                Ok((d, g.ty))
-            }
-            Expr::Index(name, idx) => {
-                let (i, _) = self.expr(idx)?;
-                if let Some(local) = self.locals.get(&ident_key(name)).copied() {
-                    let LocalVar::Array(ai, ty) = local else {
-                        return self.unsupported(format!("'{name}' is not an array"));
-                    };
-                    let d = self.alloc()?;
-                    self.emit(Instr::new(Op::LocalArrayGet).imm(ai).left(i).dest(d));
-                    return Ok((d, ty));
-                }
-                let g = self.global(name)?;
-                if !g.array {
-                    return self.unsupported(format!("'{name}' is not an array"));
-                }
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::GlobalArrayGet).imm(g.id).left(i).dest(d));
-                Ok((d, g.ty))
-            }
-            Expr::Call(name, args) => self.call(name, args, true),
-            Expr::FuncRef(name) => {
-                let Some(callee) = self.syms.funcs.get(&ident_key(name)).cloned() else {
-                    return self.unsupported(format!("unknown function '{name}'"));
-                };
-                if !callee.script {
-                    return self.unsupported(format!(
-                        "native '{name}' used as a code value (not supported)"
-                    ));
-                }
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::LoadCode).imm(callee.id).dest(d));
-                Ok((d, Ty::Code))
-            }
-            Expr::Neg(inner) => {
-                let (s, t) = self.expr(inner)?;
-                let d = self.alloc()?;
-                let op = if t == Ty::Real { Op::NegR } else { Op::NegI };
-                self.emit(Instr::new(op).left(s).dest(d));
-                Ok((d, t))
-            }
-            Expr::Not(inner) => {
-                let (s, _) = self.expr(inner)?;
-                let d = self.alloc()?;
-                self.emit(Instr::new(Op::Not).left(s).dest(d));
-                Ok((d, Ty::Boolean))
-            }
-            Expr::Binary(op, l, r) => self.binary(*op, l, r),
-        }
-    }
-
-    fn binary(&mut self, op: BinOp, l: &Expr, r: &Expr) -> CResult<(u8, Ty)> {
-        let (ls, lt) = self.expr(l)?;
-        let (rs, rt) = self.expr(r)?;
-        let numeric_real = lt == Ty::Real || rt == Ty::Real;
-        // Operands of arithmetic and ordering are widened to real when either side is real.
-        let (ls, rs, num_ty) = if numeric_real {
-            let ls = self.coerce(ls, lt, Ty::Real)?;
-            let rs = self.coerce(rs, rt, Ty::Real)?;
-            (ls, rs, Ty::Real)
-        } else {
-            (ls, rs, Ty::Integer)
-        };
-        let (opcode, result) = match op {
-            BinOp::And => (Op::And, Ty::Boolean),
-            BinOp::Or => (Op::Or, Ty::Boolean),
-            BinOp::Eq => (Op::Eq, Ty::Boolean),
-            BinOp::Ne => (Op::Ne, Ty::Boolean),
-            BinOp::Lt => (Op::Lt, Ty::Boolean),
-            BinOp::Le => (Op::Le, Ty::Boolean),
-            BinOp::Gt => (Op::Gt, Ty::Boolean),
-            BinOp::Ge => (Op::Ge, Ty::Boolean),
-            BinOp::Add if lt == Ty::String && rt == Ty::String => (Op::Concat, Ty::String),
-            BinOp::Add => arith(num_ty, Op::AddI, Op::AddR),
-            BinOp::Sub => arith(num_ty, Op::SubI, Op::SubR),
-            BinOp::Mul => arith(num_ty, Op::MulI, Op::MulR),
-            BinOp::Div => arith(num_ty, Op::DivI, Op::DivR),
-        };
-        let d = self.alloc()?;
-        self.emit(Instr::new(opcode).left(ls).right(rs).dest(d));
-        Ok((d, result))
     }
 }
 
-fn arith(num_ty: Ty, int_op: Op, real_op: Op) -> (Op, Ty) {
-    if num_ty == Ty::Real {
-        (real_op, Ty::Real)
-    } else {
-        (int_op, Ty::Integer)
+fn compile_function(g: &mut Gen, f: &ast::Function) -> CResult<FuncDef> {
+    let mut cx = FnCx::new(g);
+    cx.line = f.line;
+    let sym = cx.sym(&f.sig.name)?;
+    let ret = f.sig.returns.as_deref().map(Ty::from_name);
+    let params: Vec<Ty> = f.sig.params.iter().map(|p| Ty::from_name(&p.ty)).collect();
+    cx.emit(
+        Instr::new(Op::FuncHdr)
+            .dest(ret.map_or(tc::NOTHING, Ty::code))
+            .imm(sym),
+    );
+    let n = f.sig.params.len();
+    for (i, (p, ty)) in f.sig.params.iter().zip(&params).enumerate() {
+        cx.locals.insert(ident_key(&p.name), (*ty, false));
+        let psym = cx.sym(&p.name)?;
+        cx.emit(
+            Instr::new(Op::ParamBind)
+                .left((n - i) as u8)
+                .dest(ty.code())
+                .imm(psym),
+        );
     }
+    for l in &f.locals {
+        cx.line = l.line;
+        let ty = Ty::from_name(&l.ty);
+        let lsym = cx.sym(&l.name)?;
+        cx.locals.insert(ident_key(&l.name), (ty, l.array));
+        if l.array {
+            if ty == Ty::Code {
+                return cx.unsupported("code arrays are not supported");
+            }
+            cx.emit(
+                Instr::new(Op::DeclLocal)
+                    .dest(ty.code() + tc::ARRAY_OFFSET)
+                    .imm(lsym),
+            );
+        } else {
+            cx.emit(Instr::new(Op::DeclLocal).dest(ty.code()).imm(lsym));
+            if let Some(init) = &l.init {
+                let (s, t) = cx.expr(init, None)?;
+                let s = cx.coerce(s, t, ty);
+                cx.emit(Instr::new(Op::StoreVar).dest(s).imm(lsym));
+            }
+        }
+    }
+    cx.block(&f.body)?;
+    // Falling off the end: the default value (slot 0 is loaded with the type-0 null constant).
+    cx.emit(Instr::new(Op::LoadConst).left(tc::NOTHING).dest(0));
+    cx.emit(Instr::new(Op::Return));
+    cx.emit(Instr::new(Op::FuncEnd));
+    Ok(cx.finish(f.sig.name.clone(), sym, params, ret))
+}
+
+fn compile_init(g: &mut Gen, programs: &[Program], sym: u32) -> CResult<FuncDef> {
+    let mut cx = FnCx::new(g);
+    cx.emit(Instr::new(Op::FuncHdr).imm(sym));
+    for p in programs {
+        for gl in &p.globals {
+            cx.line = gl.line;
+            let info = cx.g.globals[&ident_key(&gl.name)];
+            let code = if info.array {
+                info.ty.code() + tc::ARRAY_OFFSET
+            } else {
+                info.ty.code()
+            };
+            let op = if gl.constant {
+                Op::DeclConstGlobal
+            } else {
+                Op::DeclGlobal
+            };
+            cx.emit(Instr::new(op).dest(code).imm(info.sym));
+            if let Some(init) = &gl.init {
+                let (s, t) = cx.expr(init, None)?;
+                let s = cx.coerce(s, t, info.ty);
+                cx.emit(Instr::new(Op::StoreVar).dest(s).imm(info.sym));
+            }
+        }
+    }
+    cx.emit(Instr::new(Op::Return));
+    cx.emit(Instr::new(Op::FuncEnd));
+    Ok(cx.finish("<globals>".to_string(), sym, Vec::new(), None))
+}
+
+/// Compiles `programs` (in load order) into a `Module`.
+pub fn compile(programs: &[Program]) -> Result<Module, CompileError> {
+    let diags = check::check(programs);
+    if !diags.is_empty() {
+        return Err(CompileError::Check(diags));
+    }
+
+    let mut syms = Symbols::new();
+    let mut parents = Vec::new();
+    assign_symbols(programs, &mut syms, &mut parents);
+    for p in &parents {
+        syms.intern(p);
+    }
+    let has_globals = programs.iter().any(|p| !p.globals.is_empty());
+    let init_sym = if has_globals { syms.anonymous() } else { 0 };
+
+    let mut g = Gen {
+        syms,
+        funcs: BTreeMap::new(),
+        globals: BTreeMap::new(),
+        slot: 1,
+        label: 1,
+    };
+    let mut globals = Vec::new();
+    let mut natives = Vec::new();
+    for p in programs {
+        for gl in &p.globals {
+            let sym = g.syms.get(&gl.name).unwrap_or(0);
+            let ty = Ty::from_name(&gl.ty);
+            globals.push(GlobalDef {
+                name: gl.name.clone(),
+                sym,
+                ty,
+                array: gl.array,
+            });
+            g.globals.insert(
+                ident_key(&gl.name),
+                GlobalInfo {
+                    sym,
+                    ty,
+                    array: gl.array,
+                },
+            );
+        }
+        for n in &p.natives {
+            let idx = natives.len() as u32;
+            let params: Vec<Ty> = n.sig.params.iter().map(|p| Ty::from_name(&p.ty)).collect();
+            let ret = n.sig.returns.as_deref().map(Ty::from_name);
+            natives.push(NativeDef {
+                name: n.sig.name.clone(),
+                params: params.clone(),
+                ret,
+            });
+            g.funcs.insert(
+                ident_key(&n.sig.name),
+                Callee {
+                    script: false,
+                    sym: 0,
+                    idx,
+                    params,
+                    ret,
+                },
+            );
+        }
+        for f in &p.functions {
+            let params: Vec<Ty> = f.sig.params.iter().map(|p| Ty::from_name(&p.ty)).collect();
+            let ret = f.sig.returns.as_deref().map(Ty::from_name);
+            let sym = g.syms.get(&f.sig.name).unwrap_or(0);
+            g.funcs.insert(
+                ident_key(&f.sig.name),
+                Callee {
+                    script: true,
+                    sym,
+                    idx: 0,
+                    params,
+                    ret,
+                },
+            );
+        }
+    }
+
+    let mut prelude = Vec::new();
+    for p in programs {
+        for t in &p.types {
+            let parent = g.syms.get(&t.parent).unwrap_or(0);
+            let name = g.syms.get(&t.name).unwrap_or(0);
+            prelude.push(Instr::new(Op::TypeParent).imm(parent));
+            prelude.push(Instr::new(Op::TypeName).imm(name));
+        }
+    }
+
+    let init = if has_globals {
+        compile_init(&mut g, programs, init_sym)?
+    } else {
+        FuncDef {
+            name: "<globals>".to_string(),
+            sym: 0,
+            params: Vec::new(),
+            ret: None,
+            num_slots: 1,
+            code: Vec::new(),
+        }
+    };
+    let mut functions = vec![init];
+    let mut function_index = BTreeMap::new();
+    for p in programs {
+        for f in &p.functions {
+            let def = compile_function(&mut g, f)?;
+            function_index.insert(ident_key(&f.sig.name), functions.len() as u32);
+            functions.push(def);
+        }
+    }
+
+    let global_index = globals
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (ident_key(&d.name), i as u32))
+        .collect();
+    let native_index = natives
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (ident_key(&d.name), i as u32))
+        .collect();
+    Ok(Module {
+        functions,
+        function_index,
+        globals,
+        global_index,
+        natives,
+        native_index,
+        symbols: g.syms.names,
+        prelude,
+        init: 0,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn compiles_a_function_with_params_and_return() {
-        let p = crate::parse(
-            "function Add takes integer a, integer b returns integer\n\
-             return a + b\n\
-             endfunction",
-        )
-        .unwrap();
-        let m = compile(&[p]).unwrap();
-        let f = &m.functions[m.function_index["add"] as usize];
-        assert_eq!(f.params, vec![Ty::Integer, Ty::Integer]);
-        assert_eq!(f.ret, Some(Ty::Integer));
-        assert_eq!(f.code[0].op, Op::AddI);
-        assert_eq!(f.code[0].left, 0);
-        assert_eq!(f.code[0].right, 1);
-        assert_eq!(f.code.last().map(|i| i.op), Some(Op::Return));
+    fn ops(f: &FuncDef) -> Vec<Op> {
+        f.code.iter().map(|i| i.op).collect()
     }
 
     #[test]
-    fn widens_integer_to_real() {
+    fn empty_function_frame() {
+        let p = crate::parse("function F takes nothing returns nothing\nendfunction").unwrap();
+        let m = compile(&[p]).unwrap();
+        assert_eq!(
+            ops(&m.functions[1]),
+            vec![Op::FuncHdr, Op::LoadConst, Op::Return, Op::FuncEnd]
+        );
+        assert_eq!(m.stream().last().map(|i| i.op), Some(Op::End));
+    }
+
+    #[test]
+    fn binary_op_pushes_and_pops() {
         let p = crate::parse(
-            "function F takes nothing returns real\n\
-             local integer i = 2\n\
-             return i + 0.5\n\
-             endfunction",
+            "function F takes nothing returns nothing\nlocal integer a = 1 + 2\nendfunction",
         )
         .unwrap();
         let m = compile(&[p]).unwrap();
-        let f = &m.functions[0];
-        assert!(f.code.iter().any(|i| i.op == Op::IntToReal));
-        assert!(f.code.iter().any(|i| i.op == Op::AddR));
+        assert_eq!(
+            ops(&m.functions[1])[1..],
+            [
+                Op::DeclLocal,
+                Op::LoadConst,
+                Op::Push,
+                Op::LoadConst,
+                Op::Pop,
+                Op::Add,
+                Op::StoreVar,
+                Op::LoadConst,
+                Op::Return,
+                Op::FuncEnd
+            ]
+        );
+    }
+
+    #[test]
+    fn integer_to_real_is_converted_in_place() {
+        let p =
+            crate::parse("function F takes nothing returns nothing\nlocal real r = 1\nendfunction")
+                .unwrap();
+        let m = compile(&[p]).unwrap();
+        assert!(m.functions[1].code.iter().any(|i| i.op == Op::IntToReal));
     }
 
     #[test]

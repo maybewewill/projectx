@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use softfloat::{arith, conv, Tables, F32};
 
-use crate::bytecode::{Instr, Op, NO_SLOT};
+use crate::bytecode::{Instr, Op};
 use crate::compile::{Module, Ty, ARRAY_SIZE};
 
 /// Instructions a thread may execute per scheduler pass.
@@ -175,16 +175,19 @@ impl StringTable {
         t
     }
 
-    /// Builds a table from a module's string list (index i keeps id i).
-    pub fn from_list(list: &[String]) -> Self {
+    /// Builds a table from the module's symbol names: entry i is symbol i, so a string literal's
+    /// value is its symbol id (see `bytecode::Op::LoadConst`). A name that occurs twice keeps its
+    /// first id for lookups.
+    pub fn from_symbols(list: &[String]) -> Self {
         let mut t = StringTable::default();
-        for s in list {
-            t.intern(s);
+        for (i, s) in list.iter().enumerate() {
+            t.list.push(s.clone());
+            t.index.entry(s.clone()).or_insert(i as u32);
         }
         if t.list.is_empty() {
             t.list.push(String::new());
-            t.index.insert(String::new(), 0);
         }
+        t.index.entry(String::new()).or_insert(0);
         t
     }
 
@@ -201,6 +204,11 @@ impl StringTable {
     /// The id of `s` if it has been interned.
     pub fn find(&self, s: &str) -> Option<u32> {
         self.index.get(&ident_key(s)).copied()
+    }
+
+    /// The id of exactly this text (no case folding).
+    pub fn exact_id(&self, s: &str) -> Option<u32> {
+        self.index.get(s).copied()
     }
 
     pub fn get(&self, id: u32) -> &str {
@@ -449,9 +457,10 @@ struct Frame {
     func: u32,
     pc: usize,
     slots: Vec<Value>,
-    arrays: Vec<Vec<Value>>,
-    /// Slot of the caller that receives the return value (`NO_SLOT` to discard).
-    ret_dest: u8,
+    /// Scalar locals and parameters, keyed by symbol id (`DeclLocal`, `ParamBind`).
+    vars: Vec<(u32, Value)>,
+    /// Local arrays, keyed by symbol id (`DeclLocal` with an array type code).
+    arrays: Vec<(u32, Vec<Value>)>,
 }
 
 /// An interpreter thread: a call stack of frames plus scheduling state.
@@ -468,6 +477,8 @@ pub struct Thread {
     key: u32,
     /// Functions still to run after the current one returns (a chain, see `NativeCtx::spawn_chain`).
     chain: VecDeque<u32>,
+    /// The value stack: pushed call arguments (`Push`, `ParamBind`, `PopArgs`).
+    stack: Vec<Value>,
 }
 
 impl Thread {
@@ -486,40 +497,28 @@ impl Thread {
     }
 }
 
-fn make_frame(module: &Module, func: u32, args: &[Value], ret_dest: u8) -> Frame {
-    let f = &module.functions[func as usize];
-    let mut slots = vec![Value::Null; f.num_slots];
-    for &(slot, ty) in &f.locals {
-        if let Some(s) = slots.get_mut(slot as usize) {
-            *s = Value::default_for(ty);
-        }
-    }
-    for (slot, &a) in slots.iter_mut().zip(args) {
-        *slot = a;
-    }
-    let arrays = f
-        .local_arrays
-        .iter()
-        .map(|&ty| vec![Value::default_for(ty); ARRAY_SIZE])
-        .collect();
+fn make_frame(module: &Module, func: u32) -> Frame {
     Frame {
         func,
         pc: 0,
-        slots,
-        arrays,
-        ret_dest,
+        slots: vec![Value::Null; module.functions[func as usize].num_slots],
+        vars: Vec::new(),
+        arrays: Vec::new(),
     }
 }
 
+/// A new thread at `func`. The arguments are pushed on its value stack; the function's `ParamBind`
+/// instructions read them from there.
 fn new_thread(module: &Module, id: ThreadId, func: u32, args: &[Value]) -> Thread {
     Thread {
         id,
-        frames: vec![make_frame(module, func, args, NO_SLOT)],
+        frames: vec![make_frame(module, func)],
         state: State::Runnable,
         result: None,
         dead: false,
         key: 0,
         chain: VecDeque::new(),
+        stack: args.to_vec(),
     }
 }
 
@@ -535,9 +534,17 @@ enum GlobalCell {
 
 struct Machine {
     module: Module,
+    /// Decoded code per function (see `verify`): jump operands are instruction indices, call and
+    /// function-reference operands are function indices.
+    code: Vec<Vec<Instr>>,
+    /// Global index per symbol id (`u32::MAX` when the symbol is not a global).
+    global_by_sym: Vec<u32>,
     strings: StringTable,
     /// Host state shared with natives, one value per type (see [`Vm::insert_extension`]).
     extensions: Vec<Box<dyn Any>>,
+    /// String value of each string literal symbol: the canonical id of its text (so `""` is the
+    /// null string, id 0, and equal texts compare equal).
+    sym_string: Vec<u32>,
     globals: Vec<GlobalCell>,
     registry: NativeRegistry,
     /// Per module native: the index of its implementation in `registry`, if bound.
@@ -552,8 +559,7 @@ struct Machine {
     spawned: Vec<Thread>,
     failures: Vec<(ThreadId, RunStatus)>,
 }
-
-/// Reads a slot. Out-of-range (including `NO_SLOT`) reads as null.
+/// Reads a slot. Out-of-range reads as null.
 fn rd(th: &Thread, slot: usize) -> Value {
     th.frames
         .last()
@@ -561,7 +567,7 @@ fn rd(th: &Thread, slot: usize) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// Writes a slot. Writes to `NO_SLOT` or out of range are discarded.
+/// Writes a slot. Writes out of range are discarded.
 fn wr(th: &mut Thread, slot: u8, v: Value) {
     if let Some(f) = th.frames.last_mut() {
         if let Some(s) = f.slots.get_mut(slot as usize) {
@@ -617,10 +623,6 @@ fn bool_of(v: Value) -> Result<bool, RunStatus> {
     }
 }
 
-fn str_of(v: Value) -> Result<u32, RunStatus> {
-    v.as_string_id().ok_or(RunStatus::TypeError)
-}
-
 impl Machine {
     fn alloc_id(&mut self) -> ThreadId {
         let id = ThreadId(self.next_thread);
@@ -629,7 +631,8 @@ impl Machine {
     }
 
     /// Runs `th` for at most `budget` instructions. Returns why it stopped. A stop that is not
-    /// `Finished`, `Sleep` or `Yield` is an error and the thread must be dropped.
+    /// `Finished`, `Sleep` or `Yield` is an error and the thread must be dropped. Every executed
+    /// instruction costs one unit of budget, labels and declarations included.
     fn run(&mut self, th: &mut Thread, budget: u32) -> RunStatus {
         let mut left = budget;
         loop {
@@ -644,8 +647,10 @@ impl Machine {
                 let Some(f) = th.frames.last_mut() else {
                     return RunStatus::Finished;
                 };
-                let code = &self.module.functions[f.func as usize].code;
-                let ins = code.get(f.pc).copied().unwrap_or(Instr::new(Op::Return));
+                let ins = self.code[f.func as usize]
+                    .get(f.pc)
+                    .copied()
+                    .unwrap_or(Instr::new(Op::Return));
                 f.pc += 1;
                 ins
             };
@@ -658,156 +663,130 @@ impl Machine {
     /// Executes one instruction. `Err` ends the run: `Finished`, `Sleep` and `Yield` are normal stops,
     /// everything else is an error.
     fn exec(&mut self, th: &mut Thread, ins: Instr) -> Result<(), RunStatus> {
-        let l = ins.left as usize;
-        let r = ins.right as usize;
+        let l = ins.left;
+        let r = ins.right;
         let d = ins.dest;
         match ins.op {
-            Op::LoadInt => wr(th, d, Value::Integer(ins.imm as i32)),
-            Op::LoadReal => wr(th, d, Value::Real(F32::from_bits(ins.imm))),
-            Op::LoadBool => wr(th, d, Value::Boolean(ins.imm != 0)),
-            Op::LoadString => wr(th, d, Value::String(ins.imm)),
-            Op::LoadNull => wr(th, d, Value::Null),
-            Op::LoadCode => wr(th, d, Value::Code(ins.imm)),
-            Op::Move => {
-                let v = rd(th, l);
-                wr(th, d, v);
+            Op::End => return Err(RunStatus::Finished),
+            Op::FuncHdr
+            | Op::Label
+            | Op::TypeParent
+            | Op::TypeName
+            | Op::DeclGlobal
+            | Op::DeclConstGlobal => {}
+            Op::DebugSkip | Op::Jump => set_pc(th, ins.imm),
+            Op::FuncEnd => return self.do_return(th, Value::Null),
+            Op::Return => {
+                let v = rd(th, 0);
+                return self.do_return(th, v);
             }
-            Op::GlobalGet => match self.globals.get(ins.imm as usize) {
-                Some(GlobalCell::Scalar(v)) => {
-                    let v = *v;
-                    wr(th, d, v);
-                }
-                _ => return Err(RunStatus::TypeError),
-            },
-            Op::GlobalSet => {
-                let v = rd(th, r);
-                match self.globals.get_mut(ins.imm as usize) {
-                    Some(GlobalCell::Scalar(slot)) => *slot = v,
-                    _ => return Err(RunStatus::TypeError),
+            Op::DeclLocal => {
+                let Some(f) = th.frames.last_mut() else {
+                    return Err(RunStatus::TypeError);
+                };
+                // Array type codes are the element code plus 5 (integer array = 9).
+                if d >= 9 {
+                    let elem = Value::default_for(ty_of_code(d - 5));
+                    f.arrays.push((ins.imm, vec![elem; ARRAY_SIZE]));
+                } else {
+                    f.vars.push((ins.imm, Value::default_for(ty_of_code(d))));
                 }
             }
-            Op::GlobalArrayGet => {
-                let i = array_index(int_of(rd(th, l))?)?;
-                let v = match self.globals.get(ins.imm as usize) {
-                    Some(GlobalCell::Array(a)) => a[i],
-                    _ => return Err(RunStatus::TypeError),
+            Op::ParamBind => {
+                let v = th
+                    .stack
+                    .len()
+                    .checked_sub(l as usize)
+                    .and_then(|i| th.stack.get(i))
+                    .copied()
+                    .ok_or(RunStatus::TypeError)?;
+                let Some(f) = th.frames.last_mut() else {
+                    return Err(RunStatus::TypeError);
+                };
+                f.vars.push((ins.imm, v));
+            }
+            Op::PopArgs => {
+                let n = d as usize;
+                let len = th.stack.len();
+                if n > len {
+                    return Err(RunStatus::TypeError);
+                }
+                th.stack.truncate(len - n);
+            }
+            Op::LoadConst => {
+                let v = match l {
+                    4 => Value::Integer(ins.imm as i32),
+                    5 => Value::Real(F32::from_bits(ins.imm)),
+                    6 => Value::String(self.sym_string.get(ins.imm as usize).copied().unwrap_or(0)),
+                    8 => Value::Boolean(ins.imm != 0),
+                    // 0 (default return), 2 and the handle/code null literals.
+                    _ => Value::Null,
                 };
                 wr(th, d, v);
             }
-            Op::GlobalArraySet => {
-                let i = array_index(int_of(rd(th, l))?)?;
-                let v = rd(th, r);
-                match self.globals.get_mut(ins.imm as usize) {
-                    Some(GlobalCell::Array(a)) => a[i] = v,
-                    _ => return Err(RunStatus::TypeError),
-                }
-            }
-            Op::LocalArrayGet => {
-                let i = array_index(int_of(rd(th, l))?)?;
-                let v = local_array(th, ins.imm)?[i];
+            Op::Move => {
+                let v = rd(th, l as usize);
                 wr(th, d, v);
             }
-            Op::LocalArraySet => {
-                let i = array_index(int_of(rd(th, l))?)?;
-                let v = rd(th, r);
-                local_array_mut(th, ins.imm)?[i] = v;
+            Op::LoadVar => {
+                let v = self.load_var(th, ins.imm)?;
+                wr(th, d, v);
             }
-
-            Op::AddI => {
-                let v = int_of(rd(th, l))?.wrapping_add(int_of(rd(th, r))?);
-                wr(th, d, Value::Integer(v));
+            Op::StoreVar => {
+                let v = rd(th, d as usize);
+                self.store_var(th, ins.imm, v)?;
             }
-            Op::SubI => {
-                let v = int_of(rd(th, l))?.wrapping_sub(int_of(rd(th, r))?);
-                wr(th, d, Value::Integer(v));
+            Op::LoadFuncRef => wr(th, d, Value::Code(ins.imm)),
+            Op::ArrayLoad => {
+                let i = array_index(int_of(rd(th, l as usize))?)?;
+                let v = self.array_get(th, ins.imm, i)?;
+                wr(th, d, v);
             }
-            Op::MulI => {
-                let v = int_of(rd(th, l))?.wrapping_mul(int_of(rd(th, r))?);
-                wr(th, d, Value::Integer(v));
+            Op::ArrayStore => {
+                // The index is in `dest`, the value in `left`.
+                let i = array_index(int_of(rd(th, d as usize))?)?;
+                let v = rd(th, l as usize);
+                self.array_set(th, ins.imm, i, v)?;
             }
-            Op::DivI => {
-                let a = int_of(rd(th, l))?;
-                let b = int_of(rd(th, r))?;
-                if b == 0 {
-                    return Err(RunStatus::DivideByZero);
-                }
-                wr(th, d, Value::Integer(a.wrapping_div(b)));
+            Op::Push => {
+                let v = rd(th, d as usize);
+                th.stack.push(v);
             }
-            Op::ModI => {
-                let a = int_of(rd(th, l))?;
-                let b = int_of(rd(th, r))?;
-                // Zero divisor gives 0 and no error (spec section 3).
-                let v = if b == 0 { 0 } else { a.wrapping_rem(b) };
-                wr(th, d, Value::Integer(v));
-            }
-
-            Op::AddR => {
-                let v = arith::add(real_of(rd(th, l))?, real_of(rd(th, r))?);
-                wr(th, d, Value::Real(v));
-            }
-            Op::SubR => {
-                let v = arith::sub(real_of(rd(th, l))?, real_of(rd(th, r))?);
-                wr(th, d, Value::Real(v));
-            }
-            Op::MulR => {
-                let v = arith::mul(real_of(rd(th, l))?, real_of(rd(th, r))?);
-                wr(th, d, Value::Real(v));
-            }
-            Op::DivR => {
-                let a = real_of(rd(th, l))?;
-                let b = real_of(rd(th, r))?;
-                // Zero divisor: either sign of zero aborts the thread (spec jass-vm 3).
-                if b.to_bits() & 0x7fff_ffff == 0 {
-                    return Err(RunStatus::DivideByZero);
-                }
-                let tables = self.tables.as_ref().ok_or(RunStatus::MissingTables)?;
-                let v = arith::div(a, b, tables);
-                wr(th, d, Value::Real(v));
-            }
-
-            Op::Concat => {
-                let a = str_of(rd(th, l))?;
-                let b = str_of(rd(th, r))?;
-                let s = format!("{}{}", self.strings.get(a), self.strings.get(b));
-                let id = self.strings.intern(&s);
-                wr(th, d, Value::String(id));
-            }
-
-            Op::NegI => {
-                let v = int_of(rd(th, l))?.wrapping_neg();
-                wr(th, d, Value::Integer(v));
-            }
-            Op::NegR => {
-                let v = arith::neg(real_of(rd(th, l))?);
-                wr(th, d, Value::Real(v));
-            }
-            Op::Not => {
-                let v = !bool_of(rd(th, l))?;
-                wr(th, d, Value::Boolean(v));
+            Op::Pop => {
+                let v = th.stack.pop().ok_or(RunStatus::TypeError)?;
+                wr(th, d, v);
             }
             Op::IntToReal => {
-                let v = conv::i2r(int_of(rd(th, l))?);
+                let v = conv::i2r(int_of(rd(th, d as usize))?);
                 wr(th, d, Value::Real(v));
             }
-            Op::And => {
-                let v = bool_of(rd(th, l))? && bool_of(rd(th, r))?;
+            Op::Neg => {
+                let v = match rd(th, d as usize) {
+                    Value::Integer(i) => Value::Integer(i.wrapping_neg()),
+                    Value::Real(x) => Value::Real(arith::neg(x)),
+                    other => return Err(operand_error(other)),
+                };
+                wr(th, d, v);
+            }
+            Op::Not => {
+                let v = !bool_of(rd(th, d as usize))?;
                 wr(th, d, Value::Boolean(v));
             }
-            Op::Or => {
-                let v = bool_of(rd(th, l))? || bool_of(rd(th, r))?;
-                wr(th, d, Value::Boolean(v));
+            Op::Add | Op::Sub | Op::Mul | Op::Div => {
+                let (a, b) = (rd(th, l as usize), rd(th, r as usize));
+                let v = self.arith(ins.op, a, b)?;
+                wr(th, d, v);
             }
-
             Op::Eq => {
-                let v = jass_equal(rd(th, l), rd(th, r));
+                let v = jass_equal(rd(th, l as usize), rd(th, r as usize));
                 wr(th, d, Value::Boolean(v));
             }
             Op::Ne => {
-                let v = !jass_equal(rd(th, l), rd(th, r));
+                let v = !jass_equal(rd(th, l as usize), rd(th, r as usize));
                 wr(th, d, Value::Boolean(v));
             }
             Op::Lt | Op::Le | Op::Gt | Op::Ge => {
-                let (a, b) = (rd(th, l), rd(th, r));
+                let (a, b) = (rd(th, l as usize), rd(th, r as usize));
                 let v = match (a, b) {
                     (Value::Integer(x), Value::Integer(y)) => match ins.op {
                         Op::Lt => x < y,
@@ -829,43 +808,34 @@ impl Machine {
                 };
                 wr(th, d, Value::Boolean(v));
             }
-
-            Op::Jump => set_pc(th, ins.imm),
             Op::JumpIfFalse => {
-                if !bool_of(rd(th, l))? {
+                if !bool_of(rd(th, d as usize))? {
                     set_pc(th, ins.imm);
                 }
             }
             Op::JumpIfTrue => {
-                if bool_of(rd(th, l))? {
+                if bool_of(rd(th, d as usize))? {
                     set_pc(th, ins.imm);
                 }
             }
-
             Op::CallScript => {
-                let func = ins.imm;
-                let n = self
-                    .module
-                    .functions
-                    .get(func as usize)
-                    .map(|f| f.params.len());
-                let argc = r;
-                match n {
-                    Some(n) if n == argc => {}
-                    _ => return Err(RunStatus::FunctionNotFound),
-                }
-                let args: Vec<Value> = (0..argc).map(|i| rd(th, l + i)).collect();
-                let frame = make_frame(&self.module, func, &args, d);
-                th.frames.push(frame);
+                // Arguments are already on the value stack; the callee's ParamBind instructions read them.
+                th.frames.push(make_frame(&self.module, ins.imm));
             }
             Op::CallNative => {
                 let idx = ins.imm as usize;
                 let Some(def) = self.module.natives.get(idx) else {
                     return Err(RunStatus::FunctionNotFound);
                 };
-                let args: Vec<Value> = (0..r).map(|i| rd(th, l + i)).collect();
-                check_signature(&def.params, &args)?;
+                let params = def.params.clone();
                 let ret = def.ret;
+                let base = th
+                    .stack
+                    .len()
+                    .checked_sub(params.len())
+                    .ok_or(RunStatus::TypeError)?;
+                let args: Vec<Value> = th.stack[base..].to_vec();
+                check_signature(&params, &args)?;
                 let Some(bound) = self.bindings.get(idx).copied().flatten() else {
                     return Err(RunStatus::FunctionNotFound);
                 };
@@ -891,34 +861,147 @@ impl Machine {
                                 return Err(RunStatus::TypeError);
                             }
                         }
-                        wr(th, d, v);
+                        wr(th, 0, v);
                     }
                     NativeResult::Sleep(seconds) => return Err(RunStatus::Sleep(seconds)),
                     NativeResult::Yield => return Err(RunStatus::Yield),
                     NativeResult::Fail(status) => return Err(status),
                 }
             }
-            Op::Return => {
-                let v = rd(th, r);
-                let Some(popped) = th.frames.pop() else {
-                    return Err(RunStatus::Finished);
-                };
-                match th.frames.last() {
-                    None => {
-                        // A chain continues with its next function; the chain's result is discarded.
-                        if let Some(next) = th.chain.pop_front() {
-                            th.frames.push(make_frame(&self.module, next, &[], NO_SLOT));
-                            return Ok(());
-                        }
-                        th.result = Some(v);
-                        return Err(RunStatus::Finished);
-                    }
-                    // The caller's slot for the result is recorded in the popped frame.
-                    Some(_) => wr(th, popped.ret_dest, v),
-                }
-            }
         }
         Ok(())
+    }
+
+    /// Pops the current frame with return value `v`. The caller finds it in its slot 0. The value
+    /// is converted to the function's return type when it is null (falling off the end).
+    fn do_return(&mut self, th: &mut Thread, v: Value) -> Result<(), RunStatus> {
+        let Some(popped) = th.frames.pop() else {
+            return Err(RunStatus::Finished);
+        };
+        let v = match (v, self.module.functions[popped.func as usize].ret) {
+            (Value::Null, Some(t)) => Value::default_for(t),
+            _ => v,
+        };
+        if let Some(caller) = th.frames.last_mut() {
+            if let Some(s) = caller.slots.get_mut(0) {
+                *s = v;
+            }
+            return Ok(());
+        }
+        // A chain continues with its next function; the chain's result is discarded.
+        if let Some(next) = th.chain.pop_front() {
+            th.frames.push(make_frame(&self.module, next));
+            return Ok(());
+        }
+        th.result = Some(v);
+        Err(RunStatus::Finished)
+    }
+
+    fn load_var(&self, th: &Thread, sym: u32) -> Result<Value, RunStatus> {
+        if let Some(f) = th.frames.last() {
+            if let Some(&(_, v)) = f.vars.iter().rev().find(|(s, _)| *s == sym) {
+                return Ok(v);
+            }
+        }
+        match self.global_of(sym).and_then(|g| self.globals.get(g)) {
+            Some(GlobalCell::Scalar(v)) => Ok(*v),
+            _ => Err(RunStatus::TypeError),
+        }
+    }
+
+    fn store_var(&mut self, th: &mut Thread, sym: u32, v: Value) -> Result<(), RunStatus> {
+        if let Some(f) = th.frames.last_mut() {
+            if let Some(e) = f.vars.iter_mut().rev().find(|(s, _)| *s == sym) {
+                e.1 = v;
+                return Ok(());
+            }
+        }
+        match self.global_of(sym).and_then(|g| self.globals.get_mut(g)) {
+            Some(GlobalCell::Scalar(slot)) => {
+                *slot = v;
+                Ok(())
+            }
+            _ => Err(RunStatus::TypeError),
+        }
+    }
+
+    fn array_get(&self, th: &Thread, sym: u32, i: usize) -> Result<Value, RunStatus> {
+        if let Some(f) = th.frames.last() {
+            if let Some((_, a)) = f.arrays.iter().rev().find(|(s, _)| *s == sym) {
+                return Ok(a[i]);
+            }
+        }
+        match self.global_of(sym).and_then(|g| self.globals.get(g)) {
+            Some(GlobalCell::Array(a)) => Ok(a[i]),
+            _ => Err(RunStatus::TypeError),
+        }
+    }
+
+    fn array_set(
+        &mut self,
+        th: &mut Thread,
+        sym: u32,
+        i: usize,
+        v: Value,
+    ) -> Result<(), RunStatus> {
+        if let Some(f) = th.frames.last_mut() {
+            if let Some((_, a)) = f.arrays.iter_mut().rev().find(|(s, _)| *s == sym) {
+                a[i] = v;
+                return Ok(());
+            }
+        }
+        match self.global_of(sym).and_then(|g| self.globals.get_mut(g)) {
+            Some(GlobalCell::Array(a)) => {
+                a[i] = v;
+                Ok(())
+            }
+            _ => Err(RunStatus::TypeError),
+        }
+    }
+
+    fn global_of(&self, sym: u32) -> Option<usize> {
+        match self.global_by_sym.get(sym as usize) {
+            Some(&g) if g != u32::MAX => Some(g as usize),
+            _ => None,
+        }
+    }
+
+    /// Arithmetic on values of one type: integers wrap, reals use soft-float, and `+` on strings
+    /// concatenates. Division by zero aborts the thread.
+    fn arith(&mut self, op: Op, a: Value, b: Value) -> Result<Value, RunStatus> {
+        Ok(match (a, b) {
+            (Value::Integer(x), Value::Integer(y)) => Value::Integer(match op {
+                Op::Add => x.wrapping_add(y),
+                Op::Sub => x.wrapping_sub(y),
+                Op::Mul => x.wrapping_mul(y),
+                _ => {
+                    if y == 0 {
+                        return Err(RunStatus::DivideByZero);
+                    }
+                    x.wrapping_div(y)
+                }
+            }),
+            (Value::Real(x), Value::Real(y)) => match op {
+                Op::Add => Value::Real(arith::add(x, y)),
+                Op::Sub => Value::Real(arith::sub(x, y)),
+                Op::Mul => Value::Real(arith::mul(x, y)),
+                _ => {
+                    // Zero divisor: either sign of zero aborts the thread (spec jass-vm 3).
+                    if y.to_bits() & 0x7fff_ffff == 0 {
+                        return Err(RunStatus::DivideByZero);
+                    }
+                    let tables = self.tables.as_ref().ok_or(RunStatus::MissingTables)?;
+                    Value::Real(arith::div(x, y, tables))
+                }
+            },
+            (Value::String(_) | Value::Null, Value::String(_) | Value::Null) if op == Op::Add => {
+                let sa = a.as_string_id().unwrap_or(0);
+                let sb = b.as_string_id().unwrap_or(0);
+                let s = format!("{}{}", self.strings.get(sa), self.strings.get(sb));
+                Value::String(self.strings.intern(&s))
+            }
+            _ => return Err(operand_error(if a == Value::Null { a } else { b })),
+        })
     }
 
     /// Runs a chain of functions started by a native to its first stop, right now. A thread that is
@@ -983,26 +1066,33 @@ fn set_pc(th: &mut Thread, target: u32) {
     }
 }
 
+/// The value type of a type code (`bytecode::ty`). Unknown codes are handles.
+fn ty_of_code(c: u8) -> Ty {
+    match c {
+        3 => Ty::Code,
+        4 => Ty::Integer,
+        5 => Ty::Real,
+        6 => Ty::String,
+        8 => Ty::Boolean,
+        _ => Ty::Handle,
+    }
+}
+
+/// The error for an operand that is null or of the wrong type.
+fn operand_error(v: Value) -> RunStatus {
+    if v == Value::Null {
+        RunStatus::NullError
+    } else {
+        RunStatus::TypeError
+    }
+}
+
 fn array_index(i: i32) -> Result<usize, RunStatus> {
     if (0..ARRAY_SIZE as i32).contains(&i) {
         Ok(i as usize)
     } else {
         Err(RunStatus::IndexOutOfRange)
     }
-}
-
-fn local_array(th: &Thread, idx: u32) -> Result<&Vec<Value>, RunStatus> {
-    th.frames
-        .last()
-        .and_then(|f| f.arrays.get(idx as usize))
-        .ok_or(RunStatus::TypeError)
-}
-
-fn local_array_mut(th: &mut Thread, idx: u32) -> Result<&mut Vec<Value>, RunStatus> {
-    th.frames
-        .last_mut()
-        .and_then(|f| f.arrays.get_mut(idx as usize))
-        .ok_or(RunStatus::TypeError)
 }
 
 fn check_signature(params: &[Ty], args: &[Value]) -> Result<(), RunStatus> {
@@ -1058,82 +1148,56 @@ impl std::fmt::Display for VmError {
 
 impl std::error::Error for VmError {}
 
-/// Checks every immediate and every slot range a `run` would index unchecked.
-fn verify(m: &Module) -> Result<(), VmError> {
+/// Checks the module and decodes its code for the interpreter: jump operands become instruction
+/// indices, call and function-reference operands become function indices.
+fn verify(m: &Module) -> Result<Vec<Vec<Instr>>, VmError> {
+    let mut sym_func: BTreeMap<u32, u32> = BTreeMap::new();
+    for (i, f) in m.functions.iter().enumerate().skip(1) {
+        sym_func.entry(f.sym).or_insert(i as u32);
+    }
+    let mut out = Vec::with_capacity(m.functions.len());
     for f in &m.functions {
         let bad = |pc: usize, reason: String| VmError::Invalid {
             function: f.name.clone(),
             pc,
             reason,
         };
-        if f.num_slots > NO_SLOT as usize {
-            return Err(bad(0, "more than 255 slots".into()));
-        }
+        let mut labels: BTreeMap<u32, u32> = BTreeMap::new();
         for (pc, ins) in f.code.iter().enumerate() {
-            let imm = ins.imm as usize;
-            let fits_jump = imm < f.code.len();
-            let r = ins.right as usize;
-            let l = ins.left as usize;
+            if ins.op == Op::Label {
+                labels.entry(ins.imm).or_insert(pc as u32);
+            }
+        }
+        let mut code = f.code.clone();
+        for (pc, ins) in code.iter_mut().enumerate() {
             match ins.op {
-                Op::Jump | Op::JumpIfFalse | Op::JumpIfTrue => {
-                    if !fits_jump {
-                        return Err(bad(pc, format!("jump target {imm} out of range")));
-                    }
+                Op::Jump | Op::JumpIfTrue | Op::JumpIfFalse | Op::DebugSkip => {
+                    let Some(&target) = labels.get(&ins.imm) else {
+                        return Err(bad(
+                            pc,
+                            format!("label {} is not in this function", ins.imm),
+                        ));
+                    };
+                    ins.imm = target;
                 }
-                Op::LoadString => {
-                    if imm >= m.strings.len() {
-                        return Err(bad(pc, format!("string id {imm} out of range")));
-                    }
-                }
-                Op::LoadCode => {
-                    if imm >= m.functions.len() {
-                        return Err(bad(pc, format!("function id {imm} out of range")));
-                    }
-                }
-                Op::GlobalGet | Op::GlobalSet => match m.globals.get(imm) {
-                    Some(g) if !g.array => {}
-                    _ => return Err(bad(pc, format!("bad scalar global {imm}"))),
-                },
-                Op::GlobalArrayGet | Op::GlobalArraySet => match m.globals.get(imm) {
-                    Some(g) if g.array => {}
-                    _ => return Err(bad(pc, format!("bad array global {imm}"))),
-                },
-                Op::LocalArrayGet | Op::LocalArraySet => {
-                    if imm >= f.local_arrays.len() {
-                        return Err(bad(pc, format!("bad local array {imm}")));
-                    }
-                }
-                Op::CallScript => {
-                    if imm >= m.functions.len() {
-                        return Err(bad(pc, format!("call target {imm} out of range")));
-                    }
-                    if l + r > f.num_slots {
-                        return Err(bad(pc, "argument slots out of range".into()));
-                    }
+                Op::CallScript | Op::LoadFuncRef => {
+                    let Some(&fi) = sym_func.get(&ins.imm) else {
+                        return Err(bad(pc, format!("function symbol {} not found", ins.imm)));
+                    };
+                    ins.imm = fi;
                 }
                 Op::CallNative => {
-                    if imm >= m.natives.len() {
-                        return Err(bad(pc, format!("native {imm} out of range")));
+                    if ins.imm as usize >= m.natives.len() {
+                        return Err(bad(pc, format!("native {} out of range", ins.imm)));
                     }
-                    if l + r > f.num_slots {
-                        return Err(bad(pc, "argument slots out of range".into()));
-                    }
+                }
+                Op::LoadConst if ins.left == 6 && ins.imm as usize >= m.symbols.len() => {
+                    return Err(bad(pc, format!("string symbol {} out of range", ins.imm)));
                 }
                 _ => {}
             }
-            // For calls `right` is the argument count, and `left` is the first argument slot, which
-            // may sit at the end of the frame when there are no arguments (its range check is above).
-            let operands = match ins.op {
-                Op::CallScript | Op::CallNative if r == 0 => [ins.dest, NO_SLOT, NO_SLOT],
-                Op::CallScript | Op::CallNative => [ins.dest, ins.left, NO_SLOT],
-                _ => [ins.dest, ins.left, ins.right],
-            };
-            for s in operands {
-                if s != NO_SLOT && s as usize >= f.num_slots {
-                    return Err(bad(pc, format!("slot {s} out of range")));
-                }
-            }
         }
+        out.push(code);
     }
     if m.init as usize >= m.functions.len() {
         return Err(VmError::Invalid {
@@ -1142,7 +1206,7 @@ fn verify(m: &Module) -> Result<(), VmError> {
             reason: "init function out of range".into(),
         });
     }
-    Ok(())
+    Ok(out)
 }
 
 /// The virtual machine: a module instance, its globals and its thread list.
@@ -1175,7 +1239,13 @@ impl Vm {
             .into_iter()
             .map(|(k, v)| (ident_key(&k), v))
             .collect();
-        verify(&module)?;
+        let code = verify(&module)?;
+        let mut global_by_sym = vec![u32::MAX; module.symbols.len()];
+        for (i, g) in module.globals.iter().enumerate() {
+            if let Some(slot) = global_by_sym.get_mut(g.sym as usize) {
+                *slot = i as u32;
+            }
+        }
         let bindings: Vec<Option<usize>> = module
             .natives
             .iter()
@@ -1192,11 +1262,19 @@ impl Vm {
                 }
             })
             .collect();
-        let strings = StringTable::from_list(&module.strings);
+        let strings = StringTable::from_symbols(&module.symbols);
+        let sym_string: Vec<u32> = module
+            .symbols
+            .iter()
+            .map(|s| strings.exact_id(s).unwrap_or(0))
+            .collect();
         let init = module.init;
         let mut vm = Vm {
             m: Machine {
                 module,
+                code,
+                global_by_sym,
+                sym_string,
                 strings,
                 extensions: Vec::new(),
                 globals,

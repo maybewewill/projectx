@@ -1,210 +1,203 @@
-//! JASS bytecode: fixed 8-byte instructions.
+//! JASS bytecode in the layout and numbering of the original compiler (Game.dll 1.26a).
 //!
-//! Layout follows the field order of the original (docs/spec/jass-vm.md, section 1.1):
+//! Every instruction is 8 bytes: word 0 packs `b0 b1 b2 op` (b0 = byte 0, op = byte 3), word 1 is
+//! `imm` (little-endian `u32`). The field meaning depends on the opcode; the table below is the
+//! one used by `compile.rs` and `vm.rs`, and was confirmed by compiling test texts with the
+//! original compiler in emulation (`tools/emu/jasscomp`, `parity.py`).
 //!
-//! | byte | field                                   |
-//! |------|-----------------------------------------|
-//! | 0    | `right` slot (right operand)            |
-//! | 1    | `left` slot (left operand)              |
-//! | 2    | `dest` slot (result / destination)      |
-//! | 3    | opcode                                  |
-//! | 4-7  | `imm`, little-endian `u32`              |
+//! | op   | name              | operands (b0 / b1 / b2 / imm)                                    |
+//! |------|-------------------|--------------------------------------------------------------------|
+//! | 0x01 | End               | end of the whole script (last instruction of the stream)           |
+//! | 0x02 | DebugSkip         | `debug` prefix: imm = label to jump to (release build: skipped) UNVERIFIED semantics |
+//! | 0x03 | FuncHdr           | b2 = return type code (0 nothing), imm = function symbol           |
+//! | 0x04 | FuncEnd           | end of a function                                                  |
+//! | 0x05 | DeclLocal         | b2 = type code (array = base + 5), imm = local symbol              |
+//! | 0x06 | DeclGlobal        | b2 = type code, imm = global symbol                                |
+//! | 0x07 | DeclConstGlobal   | as DeclGlobal, for `constant` globals                              |
+//! | 0x08 | ParamBind         | b1 = depth from the value-stack top (1 = top, peek), b2 = type, imm = param symbol |
+//! | 0x09 | TypeParent        | type declaration: imm = parent type symbol (emitted before all code) |
+//! | 0x0A | TypeName          | type declaration: imm = declared type symbol                       |
+//! | 0x0B | PopArgs           | b2 = argument count: pops that many values after a call            |
+//! | 0x0C | LoadConst         | b1 = type code (0/2/7 null, 4 int, 5 real, 6 string, 8 bool), b2 = dest, imm = value (real: f32 bits, string: symbol) |
+//! | 0x0D | Move              | b1 = source, b2 = dest                                             |
+//! | 0x0E | LoadVar           | b1 = type code of the variable, b2 = dest, imm = symbol (local or global) |
+//! | 0x0F | LoadFuncRef       | b1 = 3 (code), b2 = dest, imm = function symbol                    |
+//! | 0x10 | ArrayLoad         | b0 = element type code, b1 = index slot, b2 = dest, imm = array symbol |
+//! | 0x11 | StoreVar          | b2 = source, imm = symbol (local or global)                        |
+//! | 0x12 | ArrayStore        | b1 = value slot, b2 = index slot, imm = array symbol               |
+//! | 0x13 | Push              | b2 = slot pushed onto the value stack                              |
+//! | 0x14 | Pop               | b2 = dest slot, popped from the value stack                        |
+//! | 0x15 | CallNative        | imm = index into `Module::natives` (UNVERIFIED encoding, see below) |
+//! | 0x16 | CallScript        | imm = function symbol; result in slot 0 of the caller              |
+//! | 0x17 | IntToReal         | in place on b2 (integer -> real)                                   |
+//! | 0x1A..0x1F | Eq, Ne, Le, Ge, Lt, Gt | b0 = right, b1 = left, b2 = dest                  |
+//! | 0x20..0x23 | Add, Sub, Mul, Div | b0 = right, b1 = left, b2 = dest (Add also concatenates strings) |
+//! | 0x25 | Neg               | in place on b2                                                     |
+//! | 0x26 | Not               | in place on b2                                                     |
+//! | 0x27 | Return            | returns slot 0 of the current frame                                |
+//! | 0x28 | Label             | imm = label id (numbered per script, from 1)                       |
+//! | 0x29 | JumpIfTrue        | b2 = condition slot, imm = label                                   |
+//! | 0x2A | JumpIfFalse       | b2 = condition slot, imm = label                                   |
+//! | 0x2B | Jump              | imm = label                                                        |
 //!
-//! The opcode numbers below are OUR OWN. The original's numbering is different and was not
-//! reproduced; only the behaviour of the operations is meant to match. Opcode numbers are not
-//! stable across crate versions and must not be persisted.
+//! Slots are 8-bit. Temporaries are allocated from a counter that runs over the whole script
+//! (1..=255, wrapping to 1, slot 0 is the return slot), so there is no per-statement reuse.
 //!
-//! Slot operands index the frame's slot array. `NO_SLOT` (0xFF) means "no slot": it is the
-//! discard destination of a call whose result is unused, and the "no value" return operand.
-//!
-//! `imm` meaning per opcode is documented on each variant.
+//! UNVERIFIED: the native call opcode (0x15) and its immediate. The original's `native` keyword is
+//! rejected by the entry the harness uses, so no native call was ever observed. The encoding here
+//! (imm = native index, arguments on the value stack, POP_ARGS afterwards like a script call) is
+//! the most plausible reading of the spec.
 
-/// Marker for an unused slot operand.
-pub const NO_SLOT: u8 = 0xFF;
+/// Type codes as the original writes them into `LoadConst`/`LoadVar`/declarations.
+pub mod ty {
+    /// Null / no value (default return and `null` in some contexts).
+    pub const NOTHING: u8 = 0;
+    /// `null` literal in an assignment or argument (observed).
+    pub const NULL: u8 = 2;
+    pub const CODE: u8 = 3;
+    pub const INTEGER: u8 = 4;
+    pub const REAL: u8 = 5;
+    pub const STRING: u8 = 6;
+    /// `handle` and every user type that extends it.
+    pub const HANDLE: u8 = 7;
+    pub const BOOLEAN: u8 = 8;
+    /// Array types are the base code plus this offset (integer array = 9).
+    pub const ARRAY_OFFSET: u8 = 5;
+}
 
-/// Opcodes. Operand conventions are documented per variant; "slot[x]" means the value in slot x.
+/// Opcodes, with the original's numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Op {
-    /// dest = Integer(imm as i32)
-    LoadInt = 0x01,
-    /// dest = Real(F32::from_bits(imm))
-    LoadReal = 0x02,
-    /// dest = Boolean(imm != 0)
-    LoadBool = 0x03,
-    /// dest = String(imm), imm is an index into the module string table
-    LoadString = 0x04,
-    /// dest = Null
-    LoadNull = 0x05,
-    /// dest = Code(imm), imm is a script function index
-    LoadCode = 0x06,
-    /// dest = slot[left]
-    Move = 0x07,
-    /// dest = global[imm] (scalar global)
-    GlobalGet = 0x08,
-    /// global[imm] = slot[right] (scalar global)
-    GlobalSet = 0x09,
-    /// dest = global_array[imm][slot[left]]
-    GlobalArrayGet = 0x0A,
-    /// global_array[imm][slot[left]] = slot[right]
-    GlobalArraySet = 0x0B,
-    /// dest = local_array[imm][slot[left]] (array local of the current frame)
-    LocalArrayGet = 0x0C,
-    /// local_array[imm][slot[left]] = slot[right]
-    LocalArraySet = 0x0D,
-
-    /// dest = slot[left] + slot[right] (wrapping)
-    AddI = 0x10,
-    /// dest = slot[left] - slot[right] (wrapping)
-    SubI = 0x11,
-    /// dest = slot[left] * slot[right] (wrapping)
-    MulI = 0x12,
-    /// dest = slot[left] / slot[right], truncating. Zero divisor aborts the thread.
-    DivI = 0x13,
-    /// dest = slot[left] % slot[right], C remainder (sign of dividend). Zero divisor gives 0.
-    ModI = 0x14,
-
-    /// dest = slot[left] + slot[right], soft-float add (`softfloat::arith::add`)
-    AddR = 0x18,
-    /// dest = slot[left] - slot[right], soft-float sub
-    SubR = 0x19,
-    /// dest = slot[left] * slot[right], soft-float mul
-    MulR = 0x1A,
-    /// dest = slot[left] / slot[right], soft-float div (needs the lookup tables). Zero divisor (either sign) aborts the thread.
-    DivR = 0x1B,
-
-    /// dest = String(concat(slot[left], slot[right]))
-    Concat = 0x1C,
-
-    /// dest = -slot[left] (wrapping)
-    NegI = 0x20,
-    /// dest = -slot[left] (sign flip)
-    NegR = 0x21,
-    /// dest = !slot[left] (boolean)
-    Not = 0x22,
-    /// dest = Real(I2R(slot[left])), soft-float int-to-real (truncates above 2^24)
-    IntToReal = 0x23,
-    /// dest = slot[left] && slot[right]. Both operands are already evaluated (no short circuit).
-    And = 0x24,
-    /// dest = slot[left] || slot[right]. Both operands are already evaluated (no short circuit).
-    Or = 0x25,
-
-    /// dest = (slot[left] == slot[right]) with JASS equality (see `vm::jass_equal`)
-    Eq = 0x30,
-    /// dest = (slot[left] != slot[right])
-    Ne = 0x31,
-    /// dest = (slot[left] < slot[right]), integer or real operands
-    Lt = 0x32,
-    /// dest = (slot[left] <= slot[right])
-    Le = 0x33,
-    /// dest = (slot[left] > slot[right])
-    Gt = 0x34,
-    /// dest = (slot[left] >= slot[right])
-    Ge = 0x35,
-
-    /// Unconditional jump; imm is an instruction index in the current function.
-    Jump = 0x40,
-    /// Jump to imm if slot[left] is false.
-    JumpIfFalse = 0x41,
-    /// Jump to imm if slot[left] is true.
-    JumpIfTrue = 0x42,
-
-    /// Call script function imm. Arguments are `right` consecutive slots starting at `left`
-    /// (`right` = argument count); the callee sees them in its slots 0..right.
-    /// The return value is written to `dest` (NO_SLOT to discard).
-    CallScript = 0x50,
-    /// Call native imm. Same argument convention as `CallScript`. Result to `dest`.
-    CallNative = 0x51,
-    /// Return slot[right] to the caller (NO_SLOT returns no value). Returning from the
-    /// outermost frame finishes the thread.
-    Return = 0x52,
+    End = 0x01,
+    DebugSkip = 0x02,
+    FuncHdr = 0x03,
+    FuncEnd = 0x04,
+    DeclLocal = 0x05,
+    DeclGlobal = 0x06,
+    DeclConstGlobal = 0x07,
+    ParamBind = 0x08,
+    TypeParent = 0x09,
+    TypeName = 0x0A,
+    PopArgs = 0x0B,
+    LoadConst = 0x0C,
+    Move = 0x0D,
+    LoadVar = 0x0E,
+    LoadFuncRef = 0x0F,
+    ArrayLoad = 0x10,
+    StoreVar = 0x11,
+    ArrayStore = 0x12,
+    Push = 0x13,
+    Pop = 0x14,
+    CallNative = 0x15,
+    CallScript = 0x16,
+    IntToReal = 0x17,
+    Eq = 0x1A,
+    Ne = 0x1B,
+    Le = 0x1C,
+    Ge = 0x1D,
+    Lt = 0x1E,
+    Gt = 0x1F,
+    Add = 0x20,
+    Sub = 0x21,
+    Mul = 0x22,
+    Div = 0x23,
+    Neg = 0x25,
+    Not = 0x26,
+    Return = 0x27,
+    Label = 0x28,
+    JumpIfTrue = 0x29,
+    JumpIfFalse = 0x2A,
+    Jump = 0x2B,
 }
 
 impl Op {
-    /// Decodes an opcode byte. Returns `None` for numbers that are not assigned.
+    /// Decodes an opcode byte. `None` for numbers the original does not use here.
     pub fn from_u8(b: u8) -> Option<Op> {
         use Op::*;
         Some(match b {
-            0x01 => LoadInt,
-            0x02 => LoadReal,
-            0x03 => LoadBool,
-            0x04 => LoadString,
-            0x05 => LoadNull,
-            0x06 => LoadCode,
-            0x07 => Move,
-            0x08 => GlobalGet,
-            0x09 => GlobalSet,
-            0x0A => GlobalArrayGet,
-            0x0B => GlobalArraySet,
-            0x0C => LocalArrayGet,
-            0x0D => LocalArraySet,
-            0x10 => AddI,
-            0x11 => SubI,
-            0x12 => MulI,
-            0x13 => DivI,
-            0x14 => ModI,
-            0x18 => AddR,
-            0x19 => SubR,
-            0x1A => MulR,
-            0x1B => DivR,
-            0x1C => Concat,
-            0x20 => NegI,
-            0x21 => NegR,
-            0x22 => Not,
-            0x23 => IntToReal,
-            0x24 => And,
-            0x25 => Or,
-            0x30 => Eq,
-            0x31 => Ne,
-            0x32 => Lt,
-            0x33 => Le,
-            0x34 => Gt,
-            0x35 => Ge,
-            0x40 => Jump,
-            0x41 => JumpIfFalse,
-            0x42 => JumpIfTrue,
-            0x50 => CallScript,
-            0x51 => CallNative,
-            0x52 => Return,
+            0x01 => End,
+            0x02 => DebugSkip,
+            0x03 => FuncHdr,
+            0x04 => FuncEnd,
+            0x05 => DeclLocal,
+            0x06 => DeclGlobal,
+            0x07 => DeclConstGlobal,
+            0x08 => ParamBind,
+            0x09 => TypeParent,
+            0x0A => TypeName,
+            0x0B => PopArgs,
+            0x0C => LoadConst,
+            0x0D => Move,
+            0x0E => LoadVar,
+            0x0F => LoadFuncRef,
+            0x10 => ArrayLoad,
+            0x11 => StoreVar,
+            0x12 => ArrayStore,
+            0x13 => Push,
+            0x14 => Pop,
+            0x15 => CallNative,
+            0x16 => CallScript,
+            0x17 => IntToReal,
+            0x1A => Eq,
+            0x1B => Ne,
+            0x1C => Le,
+            0x1D => Ge,
+            0x1E => Lt,
+            0x1F => Gt,
+            0x20 => Add,
+            0x21 => Sub,
+            0x22 => Mul,
+            0x23 => Div,
+            0x25 => Neg,
+            0x26 => Not,
+            0x27 => Return,
+            0x28 => Label,
+            0x29 => JumpIfTrue,
+            0x2A => JumpIfFalse,
+            0x2B => Jump,
             _ => return None,
         })
     }
 }
 
-/// One decoded instruction.
+/// One decoded instruction. Unused operand fields are 0, as in the original's output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Instr {
+    /// Byte 0 (right operand for binary ops, array element type for `ArrayLoad`).
     pub right: u8,
+    /// Byte 1 (left operand, or the type code for `LoadConst`/`LoadVar`).
     pub left: u8,
+    /// Byte 2 (destination, or the in-place operand, or the condition slot).
     pub dest: u8,
     pub op: Op,
     pub imm: u32,
 }
 
 impl Instr {
-    /// An instruction with all slots unused and `imm` 0.
+    /// An instruction with all operand fields 0 and `imm` 0.
     pub const fn new(op: Op) -> Instr {
         Instr {
-            right: NO_SLOT,
-            left: NO_SLOT,
-            dest: NO_SLOT,
+            right: 0,
+            left: 0,
+            dest: 0,
             op,
             imm: 0,
         }
     }
 
-    pub const fn right(mut self, slot: u8) -> Instr {
-        self.right = slot;
+    pub const fn right(mut self, v: u8) -> Instr {
+        self.right = v;
         self
     }
 
-    pub const fn left(mut self, slot: u8) -> Instr {
-        self.left = slot;
+    pub const fn left(mut self, v: u8) -> Instr {
+        self.left = v;
         self
     }
 
-    pub const fn dest(mut self, slot: u8) -> Instr {
-        self.dest = slot;
+    pub const fn dest(mut self, v: u8) -> Instr {
+        self.dest = v;
         self
     }
 
@@ -250,11 +243,11 @@ mod tests {
             right: 3,
             left: 2,
             dest: 1,
-            op: Op::SubI,
+            op: Op::Sub,
             imm: 0x0102_0304,
         };
         let b = i.to_bytes();
-        assert_eq!(b, [3, 2, 1, 0x11, 4, 3, 2, 1]);
+        assert_eq!(b, [3, 2, 1, 0x21, 4, 3, 2, 1]);
         assert_eq!(Instr::from_bytes(b), Some(i));
         assert_eq!(Instr::from_bytes([0, 0, 0, 0xEE, 0, 0, 0, 0]), None);
     }
