@@ -30,3 +30,6 @@ target/
 *.mdx
 decomp/
 ghidra_out/
+
+# Agent worktrees
+.claude/worktrees/
