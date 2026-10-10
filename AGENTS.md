@@ -141,7 +141,8 @@ tools/
 
 ### 4.3j Pathing (spec: docs/spec/pathing.md, pass 1, partial)
 - Cell = **32 world units**; index = row·width + col. Cell word: top byte = 8 pathing-type bits (1 = blocked; unwalkable 0x02, unflyable 0x04, unbuildable 0x08, blighted 0x20, unfloat 0x40, unamph 0x80), low 24 bits = head of the occupant list (0xFFFFFF = empty). World→cell: subtract origin, ×1/32 (exponent arithmetic), floor `0x6F6EF170`, f2i `0x6F6EEC20`.
-- Not found: the A* loop itself (neighbor order, heuristic, diagonals), per-step movement, collision radii, unit push-apart. Pass 2 needed (start from the NIpse classes in vtables.tsv).
+- **Pass 2 (docs/spec/pathing-2.md):** A* over **regions** (not cells): loop `0x6F49A170`, binary min-heap of 12-byte entries (1-based, unsigned key) `0x6F4985F0/0x6F498580`. Cost: step = floor(24·dist(region seed cells)), h = floor(24·dist to goal), both through an approximate integer Newton sqrt `0x6F4BABB0`. **Expansion order N, E, S, W, NE, SE, SW, NW**; a diagonal only if both orthogonal neighbors are passable; relax only on strictly better g. Cap: 400 pops per call; unreachable → path to the nearest node (min squared distance, first wins). No smoothing. Large units: footprint checks (`0x6F38ADA0` size class).
+- Movement chain (LIKELY): `0x6F490FC0` → `0x6F4907F0` → `0x6F495320` → `0x6F49E020/0x6F49DAC0`. Not found: region flood fill, per-tick turning/acceleration, unit push-apart (CPoSeparate/CProximityMap).
 
 ### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
 - Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
@@ -206,7 +207,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~14.5%** of the 1:1 rewrite.
+**Overall: ~15%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
