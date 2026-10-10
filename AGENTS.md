@@ -76,7 +76,14 @@ tools/
   → Transcendental functions and sqrt are **computed in software inside the DLL** (tables or polynomials), so they can be reproduced bit for bit.
 - `fldcw`: 648 sites (mostly switching rounding mode for float→int; `fistp` = 349).
 - Imports `_control87`, `_clearfp`, `rand`, `srand`, `floor` from MSVCR80.
-- TODO: find the precision mode set by `_control87` (24-bit single → maps onto `f32`; 53/64-bit → needs emulation).
+- **FPU mode found**: function `0x6F6CE230` = `_clearfp(); _control87(0x9001F, 0xFFFFF);`
+  → **`_PC_53` (53-bit double precision), `_RC_NEAR` (round to nearest), all exceptions masked including denormal.**
+  It's called from 8 sites (`0x6F526505` jmp, `0x6F526EF0`, `0x6F526F4E`, `0x6F52CFDB`, `0x6F52CFE7`, `0x6F52D041`, `0x6F52D0BE`, `0x6F78B53E`).
+  Most likely the engine resets the FPU mode before simulation steps on purpose (protection against D3D8, which sets `_PC_24` without `FPU_PRESERVE`). TODO: name these callers in Ghidra.
+- **Consequence for Rust/wasm**: `float` variables live in memory as `f32`, intermediate x87 values in registers are rounded to 53 bits.
+  So: compute in `f64` and round to `f32` **at exactly the points where the original stores the value to memory** (`fstp dword`).
+  Differences from pure f64 only at extreme exponents (x87 keeps the 15-bit exponent even with PC_53), which in practice means denormals/overflow. Store points have to be taken from the decompiled code; this is part of each function's spec.
+- `Direct3DCreate8`/`d3d8` are loaded dynamically (strings at file offsets `0x9575E4`/`0x9575F4`), not through imports.
 
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).
@@ -115,7 +122,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 - [x] PE analysis, Ghidra survey, FPU analysis
 - [ ] RTTI class recovery + export of the function list (running)
-- [ ] Find the `_control87` mode and the software sin/cos/sqrt
+- [x] `_control87` mode: PC_53 / RC_NEAR (see 4.3)
+- [ ] Find the software sin/cos/sqrt (NTempest math) and the float→int conversion functions (`fldcw` + `fistp`)
 - [x] `crates/w3g` v0.1: header v0/v1, zlib blocks, players, stat string, slots, **seed**, time slots, chat, leave, 0x22 checksum blocks. Synthetic test only.
 - [ ] `crates/w3g`: check on real 1.26a replays (`cargo run -p w3g --example dump -- file.w3g`), parse actions (0x10–0x1E ability/order, 0x16 selection, etc.)
 - [ ] `crates/mpq`
@@ -126,5 +134,6 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (3)**: Found the FPU mode: `_control87(0x9001F)` = PC_53 + RC_NEAR. Added `tools/analysis/fpu_control.py`, `find_callers.py`.
 - **2026-10-10 (2)**: Cargo workspace + `crates/w3g` (parser, 3 tests, clippy clean, `examples/dump.rs`). The stat-string layout (flags/width/height/crc/path/host) is best-effort and needs checking on real replays.
 - **2026-10-10**: PE analysis, Ghidra survey (70,526 functions, 100% decompiled in the sample), FPU analysis (no hardware transcendental instructions), research on AI decompilation. Created AGENTS.md, tools/. Started RTTI recovery.
