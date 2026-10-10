@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use jass::vm::{RunStatus, ThreadId, Value};
 use softfloat::F32;
 
+use super::presentation::{PresObj, PresentationState};
 use crate::handles::HandleTable;
 use crate::rng::{RngTable, Streams};
 use crate::timer::{TimerId, TimerQueue};
@@ -181,6 +182,19 @@ pub enum HandleKind {
     GameCache,
     Player,
     Force,
+    /// Presentation handle types (see `presentation.rs`): camera setups, sounds, effects, quests,
+    /// quest items, multiboards and their items, leaderboards, dialogs, buttons and timer dialogs.
+    CameraSetup,
+    Sound,
+    Effect,
+    Quest,
+    QuestItem,
+    Multiboard,
+    MultiboardItem,
+    Leaderboard,
+    Dialog,
+    Button,
+    TimerDialog,
 }
 
 /// A `location` handle: a point with raw coordinates (no clamping, no terrain height).
@@ -369,6 +383,8 @@ pub enum Object {
     Player(PlayerObj),
     /// A force.
     Force(ForceObj),
+    /// A presentation object with a handle (see `presentation.rs`).
+    Pres(PresObj),
 }
 
 impl Object {
@@ -387,6 +403,7 @@ impl Object {
             Object::GameCache(_) => HandleKind::GameCache,
             Object::Player(_) => HandleKind::Player,
             Object::Force(_) => HandleKind::Force,
+            Object::Pres(p) => p.handle_kind(),
         }
     }
 }
@@ -418,6 +435,8 @@ pub struct Game {
     /// The permutation table of the generator, from the user's `Game.dll`. `None` until a host sets it;
     /// the random natives then stop their thread with `MissingTables`.
     rng_table: Option<RngTable>,
+    /// Presentation state: the event log, the camera and the non-handle pools (see `presentation.rs`).
+    pres: PresentationState,
 }
 
 impl Default for Game {
@@ -445,7 +464,18 @@ impl Game {
             filter_players: Vec::new(),
             rng: Streams::default(),
             rng_table: None,
+            pres: PresentationState::default(),
         }
+    }
+
+    /// The presentation state: the event log that a renderer reads, the camera and the pools.
+    pub fn presentation(&self) -> &PresentationState {
+        &self.pres
+    }
+
+    /// Mutable access to the presentation state (for the host and the natives).
+    pub fn presentation_mut(&mut self) -> &mut PresentationState {
+        &mut self.pres
     }
 
     /// Sets (or clears) the RNG permutation table. Without it the random natives fail with

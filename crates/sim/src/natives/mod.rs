@@ -20,11 +20,13 @@ mod gamecache;
 mod hashtable;
 mod location;
 mod player;
+pub mod presentation;
 mod rng;
 mod timer;
 mod trigger;
 
 pub use game::{Ctx, Game, HandleKind, ObjKey, Payload, Playable, ScriptRuntime};
+pub use presentation::{PresentationEvent, PresentationLog, PresentationState};
 pub use timer::expire as expire_timer;
 pub use trigger::fire as fire_trigger;
 
@@ -50,4 +52,5 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     player::register(reg, game);
     force::register(reg, game);
     rng::register(reg, game);
+    presentation::register(reg, game);
 }
