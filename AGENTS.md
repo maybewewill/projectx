@@ -29,7 +29,8 @@ crates/
   jass/       JASS lexer/parser/VM                                      [v0.1: lexer + parser + AST; VM todo]
   sim/        deterministic simulation (units, abilities, pathing)      [todo]
   blp/        BLP1 textures → RGBA8 (paletted + JPEG), builds for wasm32   [v0.1, Haiku agent]
-  formats/    MDX, W3E/W3I/DOO/SLK                                      [todo]
+  gamedata/   SLK tables + profile .txt (INI), merging layers, deterministic BTreeMap [v0.1, Haiku agent]
+  formats/    MDX                                                       [todo]
   render/     wgpu renderer (native + WebGPU/WebGL)                     [todo]
   inject/     i686-pc-windows DLL: hooks Game.dll functions with Rust versions
               (incremental replacement inside the running original, OpenRCT2 approach) [todo]
@@ -145,6 +146,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/jass` v0.1: lexer (rawcodes, hex/$/octal, real, escapes), parser of the whole grammar (type/globals/native/function/locals/set/call/if-elseif-else/loop/exitwhen/return/debug), 5 tests.
 - [ ] `crates/jass`: check on common.j/blizzard.j from the user's MPQ; **verify operator precedence and literal overflow against the original parser in Game.dll** (`parser.cpp`, `scanner.cpp`); type checker; VM (bytecode like the original, handles, threads/TriggerSleepAction, op limit)
 - [x] `crates/blp` v0.1 (9 tests, wasm32 OK). **TODO on real files**: BLP1-JPEG is, as far as is known, 4-component BGRA without color conversion (alpha in the 4th channel); right now zune-jpeg converts it to RGB and drops alpha. This probably needs raw component output. Also check JPEG mip levels > 0 and the nibble order of 4-bit alpha.
+- [x] `crates/gamedata` v0.1 (21 tests). **TODO on real files**: a duplicate row key in an SLK is currently an error; it should probably be first-wins or last-wins like the game (find out in Game.dll). Case-sensitivity of profile keys is unknown.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
@@ -152,7 +154,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
-- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). In progress: mpq codecs, gamedata (SLK/TXT), w3map.
+- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`. In progress: mpq codecs, w3map.
 - **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
 - **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
 - **2026-10-10 (4)**: `crates/mpq` v0.1 (reader + tests + `examples/mpqls.rs`). Dependencies: flate2, bzip2 (pure-Rust backend libbz2-rs-sys, works in wasm), explode (DCL).
