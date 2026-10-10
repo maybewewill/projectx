@@ -145,8 +145,10 @@ tools/
 - **Pass 2 (docs/spec/pathing-2.md):** A* over **regions** (not cells): loop `0x6F49A170`, binary min-heap of 12-byte entries (1-based, unsigned key) `0x6F4985F0/0x6F498580`. Cost: step = floor(24·dist(region seed cells)), h = floor(24·dist to goal), both through an approximate integer Newton sqrt `0x6F4BABB0`. **Expansion order N, E, S, W, NE, SE, SW, NW**; a diagonal only if both orthogonal neighbors are passable; relax only on strictly better g. Cap: 400 pops per call; unreachable → path to the nearest node (min squared distance, first wins). No smoothing. Large units: footprint checks (`0x6F38ADA0` size class).
 - Movement chain (LIKELY): `0x6F490FC0` → `0x6F4907F0` → `0x6F495320` → `0x6F49E020/0x6F49DAC0`. Not found: region flood fill, per-tick turning/acceleration, unit push-apart (CPoSeparate/CProximityMap).
 
-### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
-- Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
+### 4.3c Handles (spec: docs/spec/handles-2.md) ✅ checked in Unicorn (21/21, `tools/emu/handle_alloc_emu.py`)
+- GetHandleId `0x6F3B2D00` = identity. **Base 0x100000**, new id = 0x100000 + table size (allocator `0x6F430C80`); freed ids go on a **LIFO stack** (push `0x6F3A3D20`) → the most recently freed one is reused.
+- Entry is 12 bytes: refcount, agent smart pointer, flag. Created with count 1; release `0x6F42DD40` → when it reaches 0 the id goes on the free stack. Hashtable saves AddRef the id (it stays reserved). Agent death (event 0x80267, `0x6F42DD80`) releases the creation reference (LIKELY).
+- JASS variables do **not** change refcounts (UNSURE: no such path found in the VM). Table reset `0x6F42D2E0` leaves dummy entry 0 → **the first real id is likely 0x100001**.
 
 ### 4.3f Game RNG (spec: docs/spec/rng.md) ✅ checked by emulating the original
 - Natives: `GetRandomInt 0x6F3B3560`, `GetRandomReal 0x6F3B35A0`, `SetRandomSeed 0x6F3B36D0`. **CRT rand() is not used in gameplay** (only UI/particles/editor; srand(GetTickCount) at startup). OpenRealm is wrong here.
@@ -208,7 +210,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~16.5%** of the 1:1 rewrite.
+**Overall: ~17%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
