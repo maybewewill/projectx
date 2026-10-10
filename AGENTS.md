@@ -115,7 +115,8 @@ tools/
 - ✅ **`crates/softfloat` (docs/spec/softfloat.md) is a bit-exact port of the whole library**, checked in Unicorn on **two independent vector sets of ~10,000 cases per function (≈540k cases total), 0 mismatches** (re-run by the lead with SOFTFLOAT_VECTORS + GAME_DLL):
   add `0x6F6EF000`, sub `0x6F6EEEF0`, mul `0x6F6EEE20`, div `0x6F6EFE10` (recip `0x6F6EF100`), i2r `0x6F6EF350`, f2i `0x6F6EEC20`, r2i `0x6F6EEC70`, compares lt/le/gt/eq (`0x6F00C110/0x6F01FD60/0x6F01FD40/0x6F009AE0`), approx_eq `0x6F00C3F0` (|a-b|<0.001), sqrt `0x6F6EF750`, sin/cos/tan `0x6F6EF820/0x6F6EF8D0/0x6F6F0140`, asin/acos `0x6F6EFC70/0x6F6EFB00`, atan/atan2 `0x6F6F0170/0x6F6F02D0`, exp `0x6F6F07B0`, ln `0x6F6F0060`, pow `0x6F6F0810`, floor/ceil/round/trunc.
   Tables (recip `0x6F9774C8`, sine `0x6F9784D0`, asin `0x6F9794D8`, 1025×u32 each) are read at runtime from Game.dll and **not committed**. The original's quirks are reproduced (ceil(±0)=1.0, floor(-0)=+0).
-  Open: R2S/R2SW `0x6F6F0360` and S2R `0x6F6F0520` (text) are not ported; pow with a negative integer count hangs in the original (the port diverges, UNVERIFIED); native argument wrappers (Asin/Acos range, Pow special cases) not ported; `0x6F6EFE50`, `0x6F6F08B0` not identified. `crates/sim/softfloat.rs` should be switched over to this crate.
+  ✅ R2S/R2SW `0x6F6F0360`, S2R `0x6F6F0520` and JASS real literals (`softfloat::text`) bit-exact: 12,000 cases per function in Unicorn, 0 mismatches. R2S = **3 decimals**; S2R and the lexer compute via soft DIV (`"1.5"` → 0x3FC00001; the literal `0.1` → **0x3DCCCCCE**, not 0x3DCCCCCD; the lexer does **not** use atof). Use `jass::parse_with(src, Some(&tables))` in production code.
+  Open: pow with a negative integer count hangs in the original (the port diverges, UNVERIFIED); native argument wrappers (Asin/Acos range, Pow special cases) not ported; `0x6F6EFE50`, `0x6F6F08B0` not identified. `crates/sim/softfloat.rs` should be switched over to this crate.
 - ⚠ docs/spec/math.md section 0 (the `_CI*` theory) is **wrong for gameplay math**: the natives and the VM use the software helpers above. `_CI*` from MSVCR80 is probably only used in rendering/UI (still to check).
 - The bodies of all 1,291 natives are restored (`ExportNatives.java` creates functions at the addresses from natives-1.26a.tsv; output `scratchpad/decomp/natives.c`, not in the repo).
 - Natives pass 2 (checked): **R2I** = truncation toward 0, saturation at |x|≥2^31 incl. NaN (21,626 cases in Unicorn, 0 mismatches). **StringHash** = MPQ string hash type 0 via Storm ord. 590 (Game.dll's own copy `0x6F68CC10` matches us on 33 cases; that Storm is the same is LIKELY). **S2I** = atoi (leading spaces and sign allowed). **Convert*** = just `return param_1`, no tables. **StringLength/StringCase** substitute `TRIGSTR_nnn` from war3map.wts (not done yet). Storm.dll + msvcr80.dll are needed for full checks.
@@ -207,7 +208,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~15%** of the 1:1 rewrite.
+**Overall: ~15.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -243,7 +244,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/jass` v0.3: compiler to bytecode + VM + deterministic scheduler (30 VM tests). **UNVERIFIED vs the original**: real arithmetic is IEEE f32 (the spec hints at software float), R2I truncates, opcode numbering and codegen are ours (so the op limit won't count the same as the original until the codegen matches), and/or without short-circuit, behavior on array index out of range, strings are never freed.
 - [x] `crates/jass` natives v1: math/strings/Convert* (`natives/pure.rs`, 17 tests), pass 2: R2I/StringHash/Convert* confirmed (Unicorn), S2I/I2S/SubString/StringCase from disassembly.
 - [x] `crates/sim` timer.rs + script.rs: AgileClock (softfloat add 0.1, drifts below n·0.1: 3DCCCCCD, 3E4CCCCD, 3E999999…), TimerQueue (1-based min-heap, expiry→seq), ScriptHost (JASS sleep → timer). 17 tests. ✅ fixed: `Vm::resume(thread)`, the sleep wake = softfloat add. Periodic re-arm = expiry+period (UNVERIFIED).
-- [x] **softfloat integrated**: JASS VM real = `softfloat::F32` (add/sub/mul/div/neg/i2r/compares; real `==` = approx_eq |a-b|<0.001), trig natives through softfloat + tables, no IEEE fallback (`RunStatus::MissingTables`). `crates/sim` uses `crates/softfloat` (own copy removed). Open: S2R/R2S/R2SW and real literals in the lexer go through Rust's f32 parsing (not the original's), Asin/Acos/Pow wrappers, int vs real comparison through I2R (UNVERIFIED).
+- [x] **softfloat integrated**: JASS VM real = `softfloat::F32` (add/sub/mul/div/neg/i2r/compares; real `==` = approx_eq |a-b|<0.001), trig natives through softfloat + tables, no IEEE fallback (`RunStatus::MissingTables`). `crates/sim` uses `crates/softfloat` (own copy removed). Open: Asin/Acos/Pow wrappers, int vs real comparison through I2R (UNVERIFIED).
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
