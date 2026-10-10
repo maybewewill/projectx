@@ -1,7 +1,6 @@
 import os, sys, struct
-sys.path.insert(0, '/home/user/projectx/tools/emu')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault('GAME_DLL', 'Game.dll')
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pylib'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pylib'))
 import emu
 from emu import mu, call, BASE
