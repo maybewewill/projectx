@@ -211,14 +211,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~17.5%** of the 1:1 rewrite.
+**Overall: ~18.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~11% | RNG, softfloat, text, isqrt, A* heap, handle table bit-exact; timers/clock; A* search (unverified) |
-| JASS VM + ~1000 natives | 12% | ~20% | parser (precedence = original), type checker, VM; natives ~65 of 1291, unconfirmed |
+| JASS VM + ~1000 natives | 12% | ~28% | parser (precedence = original), VM on softfloat; natives ~110 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
@@ -250,6 +250,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] **softfloat integrated**: JASS VM real = `softfloat::F32` (add/sub/mul/div/neg/i2r/compares; real `==` = approx_eq |a-b|<0.001), trig natives through softfloat + tables, no IEEE fallback (`RunStatus::MissingTables`). `crates/sim` uses `crates/softfloat` (own copy removed). Open: Asin/Acos/Pow wrappers, int vs real comparison through I2R (UNVERIFIED).
 - [x] `crates/sim/pathing`: **isqrt `0x6F4BABB0` bit-exact** (115,536 inputs, 0 mismatches), **heap push `0x6F498580` / pop `0x6F4985F0` bit-exact** (241k operations, the whole array state after every op, 0 mismatches). grid (32 units, world→cell through softfloat) has unit tests only. Region A* search is UNVERIFIED (region flood fill not found; the start node uses the region seed; a self-probe in the same region is skipped).
 - [x] `crates/sim/handles.rs`: HandleTable **bit-exact vs the original allocator** (2×800 operations in Unicorn incl. edge cases: every id, count, table length, free-stack length). The emulator found 2 quirks: releasing at count 0 doesn't go below 0 and pushes nothing; a freed id can be pushed twice → object→id links are validated against the entry. JASS: extension slot `Vm::insert_extension`, `GetHandleId` = identity. Open: object death (event 0x80267) is checked only against the model.
+- [x] `crates/sim/natives`: **timer and trigger natives** (~40: CreateTimer/TimerStart/Pause/Resume/Elapsed/Remaining, CreateTrigger/conditions/actions/Evaluate/Execute/RegisterTimerEvent, boolexpr And/Or/Not, ...). Found: TriggerExecute ignores conditions and the enable flag; the event path does eval++ → enable check → conditions (AND, no early exit) → exec++ → actions; TriggerEvaluate without counters. Not run against the original; UNSURE: order of handler vs listener on expiry, tie-break (global FIFO vs per-timer +0x50), And/Or without short-circuit. VM fix: the verifier rejected `GetHandleId(CreateTrigger())`. **Tests must use `parse_with(tables)`** for bit-exact literals.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
