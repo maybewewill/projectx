@@ -4,10 +4,13 @@
 //!   streams), with the permutation table read from the user's own `Game.dll`.
 //! * [`timer`]: the agile (game) clock and the timer queue.
 //! * [`script`]: the JASS host that runs a `jass::vm::Vm` on that clock.
+//! * [`pathing`]: the integer square root, the search heap, the pathing grid and the
+//!   region-level A* (the A* is unverified against the original).
 //!
 //! Real arithmetic uses the bit-exact helpers of the `softfloat` crate. Nothing here reads the
 //! system clock, uses hash maps with random seeds, or depends on the host floating point unit.
 
+pub mod pathing;
 pub mod rng;
 pub mod script;
 pub mod timer;
