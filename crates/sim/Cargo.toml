@@ -1,0 +1,8 @@
+[package]
+name = "sim"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Deterministic simulation primitives (RNG, single-precision soft float) for the 1.26a engine rewrite"
+
+[dependencies]
