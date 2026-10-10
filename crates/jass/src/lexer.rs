@@ -1,4 +1,5 @@
 use crate::Error;
+use softfloat::Tables;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {
@@ -32,9 +33,22 @@ pub struct Token {
     pub line: u32,
 }
 
-/// Converts JASS source into tokens. Keywords are returned as `Ident` and recognised by the parser.
-/// Line breaks are significant in JASS, so they are emitted as `Newline` (collapsed).
+/// Converts JASS source into tokens, without lookup tables. Keywords are returned as `Ident` and
+/// recognised by the parser. Line breaks are significant in JASS, so they are emitted as
+/// `Newline` (collapsed).
+///
+/// Integer literals are exact. Real literals are only correctly rounded (Rust's parser) here:
+/// the original converts them with its soft-float helpers, which need the reciprocal table.
+/// Use [`lex_with`] with the table for the original's bits.
 pub fn lex(src: &str) -> Result<Vec<Token>, Error> {
+    lex_with(src, None)
+}
+
+/// Like [`lex`], but real literals use the original's soft-float conversion
+/// (`softfloat::text::real_literal`, the scanner's real action `0x6F466690`): for example `0.1`
+/// is `0x3DCCCCCE`, one ulp above the correctly rounded value. Without the table (`None`) the
+/// real literals fall back to the correctly rounded parse, as [`lex`] does.
+pub fn lex_with(src: &str, tables: Option<&Tables>) -> Result<Vec<Token>, Error> {
     let b = src.as_bytes();
     let mut i = 0;
     let mut line = 1u32;
@@ -158,10 +172,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Error> {
                                 msg: "stray '.'".into(),
                             });
                         }
-                        Tok::Real(text.parse::<f32>().map_err(|e| Error::Lex {
-                            line,
-                            msg: e.to_string(),
-                        })?)
+                        let value = match softfloat::text::real_literal(tables, text.as_bytes()) {
+                            Some(v) => v.to_f32(),
+                            None => text.parse::<f32>().map_err(|e| Error::Lex {
+                                line,
+                                msg: e.to_string(),
+                            })?,
+                        };
+                        Tok::Real(value)
                     } else {
                         let text = &src[start..i];
                         if text.len() > 1 && text.starts_with('0') {

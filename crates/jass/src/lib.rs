@@ -19,6 +19,15 @@ pub enum Error {
 }
 
 /// Parses a complete JASS source file (e.g. common.j, blizzard.j or a map's war3map.j).
+///
+/// Real literals here are correctly rounded only; use [`parse_with`] with the lookup tables to
+/// get the original's bits (see [`lexer::lex_with`]).
 pub fn parse(src: &str) -> Result<ast::Program, Error> {
-    parser::Parser::new(lexer::lex(src)?).program()
+    parse_with(src, None)
+}
+
+/// Parses a JASS source file with the `softfloat` lookup tables of the user's `Game.dll`, so real
+/// literals get the original's soft-float value (e.g. `0.1` is `0x3DCCCCCE`).
+pub fn parse_with(src: &str, tables: Option<&softfloat::Tables>) -> Result<ast::Program, Error> {
+    parser::Parser::new(lexer::lex_with(src, tables)?).program()
 }
