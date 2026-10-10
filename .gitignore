@@ -33,3 +33,5 @@ ghidra_out/
 
 # Agent worktrees
 .claude/worktrees/
+tools/emu/pylib/
+__pycache__/

@@ -46,7 +46,7 @@ tools/
 - **Simulation**: units, abilities, damage, pathfinding, orders, JASS VM, RNG, timers. **Must match bit for bit.**
 - **Presentation**: rendering, UI, sound, network transport. Only needs to *behave the same*, so rewrite it freely.
 
-**Correctness strategy:**
+**Correctness strategy:** (the Unicorn harness `tools/emu/` already works: we call an original Game.dll function and compare it with the model)
 1. Replace functions one at a time inside the running original (Wine + DLL injection, same 32-bit ABI).
 2. Test oracle: `.w3g` replays (initial state + seed + all commands). Run them through the original and through ours, then compare state every tick.
 3. When the whole simulation is in Rust, drop Game.dll and build for wasm.
@@ -113,6 +113,14 @@ tools/
 ### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
 - Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
 
+### 4.3f Game RNG (spec: docs/spec/rng.md) ✅ checked by emulating the original
+- Natives: `GetRandomInt 0x6F3B3560`, `GetRandomReal 0x6F3B35A0`, `SetRandomSeed 0x6F3B36D0`. **CRT rand() is not used in gameplay** (only UI/particles/editor; srand(GetTickCount) at startup). OpenRealm is wrong here.
+- Generator: 8-byte state (A,B); B's bytes index a 256-byte permutation table at `0x6F953650`; mix = rotl(T,3)^rotl(T,2)^T^rotl(T,1); A += mix; output = A. Seeding: A=S, B = S mod 59/61/53 and (17*(S/47)+S) mod 64 in bit fields.
+- 45 separate streams (combat = stream 2: dice/evasion/crit/miss; 32/34/35 for ChooseRandom*; 42 for percentages, ...). SetRandomSeed reseeds the global generator and all streams.
+- GetRandomInt(lo,hi): lo==hi → lo without a draw; otherwise lo + floor(r*(|hi-lo|+1)/2^32) (lo>hi goes up from lo).
+- **Checked in Unicorn against the original** (`tools/emu/`): seed, step, GetRandomInt (300 cases), SetRandomSeed + 45 streams: **0 mismatches**. GetRandomReal: 125/300 differ by ≤1.2e-4 → the original's soft-float helpers still need porting.
+- The 256-byte table is **not committed**; the engine should read it from the user's Game.dll (or the original data). Game seed = rotl fold over slots (0x8000 → constant 0x77617233); the link to the seed field in .w3g isn't confirmed yet.
+
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).
 - Iteration order in containers keyed by pointer → the memory layout/allocator has to be emulated.
@@ -161,18 +169,18 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~6.5%** of the 1:1 rewrite.
+**Overall: ~8%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | 0% | |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~2% | RNG spec checked in emulation (Rust port still to do) |
 | JASS VM + ~1000 natives | 12% | ~15% | parser, type checker, VM; natives: 6 of ~1000 |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
-| Replay test harness against the original | 5% | ~5% | w3g parser |
+| Replay test harness against the original | 5% | ~15% | w3g parser + Unicorn harness for functions |
 
 ## 6. Status / next steps
 
@@ -201,6 +209,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (10)**: RNG spec (Haiku agent + Unicorn); I re-ran it: 0 mismatches for Int/seed/streams. `tools/emu/` committed.
 - **2026-10-10 (9)**: JASS VM merged (Haiku). Native table extracted (1,291). Launched the agent for pure natives (math/strings/Convert*).
 - **2026-10-10 (8)**: full decompile export (70,526 functions, 1.58M lines, 0 failures; scratchpad only). Analysis agents: specs `docs/spec/{jass-frontend,jass-vm,math,handles}.md`. **Correction**: math comes from MSVCR80 `_CI*`, not software inside Game.dll.
 - **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker, the viewer, the JASS VM. 175 tests in the workspace, clippy clean.
