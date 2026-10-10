@@ -154,6 +154,12 @@ tools/
 - **Pass 3 (docs/spec/movement-3.md):** world+0x3B0 = `CLinkedList<CPrCluster>` (clusters of 12 44-byte unit records), each new cluster goes to the **head** (LIFO, `0x6F4924D0` → `0x6F48E630`); `0x6F483300` walks clusters. Speed chain: SetUnitMoveSpeed → `0x6F26DE00` → `0x6F202F30` → `0x6F201D50` → vtable 0xB8/0x18 of an unidentified class. s = G+0x48 (G = world+0x14 or +0x68 by bit 31 of unit+0x14), value unconfirmed.
 - **Still open** (static analysis is running out of steam → better to confirm **dynamically** on the running original under Wine once the game files arrive): per-second→per-tick speed conversion, value of s, incrementing the waypoint index after arrival, the full turn formula `0x6F494200` (softfloat operands in EDX hidden by the decompiler). Note: 0x6FAAE4F4 is zero in the file and becomes 1.0 at startup via stub `0x6F84DE80` (see pathing request agent).
 
+### 4.3l Original JASS compiler in emulation ✅ (spec: docs/spec/jass-bytecode.md, harness `tools/emu/jasscomp/`)
+- Entry `0x6F458900` (ECX = list of {len,char*} segments, EDX = error reporter); the C++ static constructors (`_initterm` ranges) must run first. Output = flat 8-byte instructions; each function = HDR … RET END_F, the script ends with END (0x01).
+- Confirmed opcodes (51 texts): 03 hdr, 05/06/07 local/global/const decl, 08 param, 0b pop args, 0c const, 0d move, 0e load var, 0f funcref, 10/11/12 array-load/var-store/array-store, 13 push, 14 pop, 16 call (result in slot 0), 1a–1f comparisons, 20–23 arithmetic, 25/26 unary, 27 ret, 28 label, 29/2a/2b jnz/jz/jmp. No constant folding; and/or/if/loop = labels + jumps. Binary op on two leaves = 5 instructions; if = cond + body + 4; a loop iteration (tested form) = 14.
+- One case-insensitive name table shared with string literals (ids from 2, strings deduplicated); 8-bit temp slots wrap after 255. `%` is a syntax error (although the grammar has the node). **Calling an undeclared function is a compile error** (test 57).
+- → Next: make our compiler emit **the same bytecode** (opcode numbering and sequences) so that the op limit counts the same. Not checked: native call 0x15, opcodes 02/09/0a/17/18/19.
+
 ### 4.3c Handles (spec: docs/spec/handles-2.md) ✅ checked in Unicorn (21/21, `tools/emu/handle_alloc_emu.py`)
 - GetHandleId `0x6F3B2D00` = identity. **Base 0x100000**, new id = 0x100000 + table size (allocator `0x6F430C80`); freed ids go on a **LIFO stack** (push `0x6F3A3D20`) → the most recently freed one is reused.
 - Entry is 12 bytes: refcount, agent smart pointer, flag. Created with count 1; release `0x6F42DD40` → when it reaches 0 the id goes on the free stack. Hashtable saves AddRef the id (it stays reserved). Agent death (event 0x80267, `0x6F42DD80`) releases the creation reference (LIKELY).
@@ -219,12 +225,12 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~25%** of the 1:1 rewrite.
+**Overall: ~26%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
-| Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
+| Game.dll analysis (names, classes, specs) | 10% | ~45% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~16% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
 | JASS VM + ~1000 natives | 12% | ~38% | parser (precedence = original), VM on softfloat; natives ~280 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
