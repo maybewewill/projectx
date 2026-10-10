@@ -139,6 +139,10 @@ tools/
 - ✅ Dice sampler `0x6F26CAD0`: each die 0..sides-1 (300/300 in Unicorn). Where +1 per die is added is not found. >16 dice → Gaussian path.
 - Timing (cooldown/dmgpt/backSw in seconds) → step conversion not found (same issue as game-loop).
 
+### 4.3j Pathing (spec: docs/spec/pathing.md, pass 1, partial)
+- Cell = **32 world units**; index = row·width + col. Cell word: top byte = 8 pathing-type bits (1 = blocked; unwalkable 0x02, unflyable 0x04, unbuildable 0x08, blighted 0x20, unfloat 0x40, unamph 0x80), low 24 bits = head of the occupant list (0xFFFFFF = empty). World→cell: subtract origin, ×1/32 (exponent arithmetic), floor `0x6F6EF170`, f2i `0x6F6EEC20`.
+- Not found: the A* loop itself (neighbor order, heuristic, diagonals), per-step movement, collision radii, unit push-apart. Pass 2 needed (start from the NIpse classes in vtables.tsv).
+
 ### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
 - Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
 
@@ -202,7 +206,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~13.5%** of the 1:1 rewrite.
+**Overall: ~14%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
