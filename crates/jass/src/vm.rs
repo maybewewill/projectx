@@ -287,27 +287,12 @@ impl NativeRegistry {
         Self::default()
     }
 
-    /// A registry with the built-in natives used by the tests and by simple scripts:
-    /// `I2R`, `R2I`, `I2S`, `S2I`, `TriggerSleepAction`, `ExecuteFunc`.
+    /// A registry with the built-in natives used by the tests and by simple scripts: every pure
+    /// native (`natives::register_pure`, which includes `I2R`, `R2I`, `I2S`, `S2I`), plus
+    /// `TriggerSleepAction` and `ExecuteFunc`.
     pub fn with_builtins() -> Self {
         let mut r = Self::new();
-        r.register("I2R", |_, a| {
-            NativeResult::Return(Value::Real(a[0].as_integer().unwrap_or(0) as f32))
-        });
-        // UNVERIFIED vs retail: truncation toward zero (Rust `as`: NaN gives 0, out-of-range saturates).
-        r.register("R2I", |_, a| {
-            NativeResult::Return(Value::Integer(a[0].as_real().unwrap_or(0.0) as i32))
-        });
-        r.register("I2S", |ctx, a| {
-            let s = a[0].as_integer().unwrap_or(0).to_string();
-            NativeResult::Return(Value::String(ctx.intern(&s)))
-        });
-        // UNVERIFIED vs retail: plain decimal parse, 0 when the text is not a number.
-        r.register("S2I", |ctx, a| {
-            let id = a[0].as_string_id().unwrap_or(0);
-            let v = ctx.string(id).parse::<i32>().unwrap_or(0);
-            NativeResult::Return(Value::Integer(v))
-        });
+        crate::natives::register_pure(&mut r);
         r.register("TriggerSleepAction", |_, a| {
             NativeResult::Sleep(a[0].as_real().unwrap_or(0.0).max(0.0))
         });
