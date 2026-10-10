@@ -37,10 +37,12 @@
 //! * `FlushParentHashtable(t)` (0x6F3CB550 -> 0x6F3F4C90) erases the storage of the whole table,
 //!   releasing every owned handle, and the table stays usable. LIKELY. The original also makes a
 //!   virtual call on the table object afterwards whose effect was not traced (UNSURE).
-//! * Order of the releases during a flush follows the map order of this port (key order). The
-//!   original's order is the order of its hash map, which is not known (UNSURE). The order decides
-//!   which freed id is reused first, so a flush of several owned handles may hand out ids in a
-//!   different order than the original.
+//! * Order of the releases during a flush follows the original's hash maps, modelled in
+//!   `crate::hashmap`: parents in their map order, then each parent's handle children in its map order
+//!   (buckets ascending, newest first inside a bucket). The child-level order was checked in Unicorn
+//!   (`tools/emu/hashmap_vectors.py`) for tables that have not grown; the parent level uses the same
+//!   algorithm (LIKELY). After a table has grown (more than 13 chain points in one bucket) the release
+//!   order is not verified (see the module notes of `crate::hashmap`).
 //! * `InitHashtable` (0x6F3D2DF0): a new table with a handle of flag 0. CONFIRMED.
 
 use std::cell::RefCell;
@@ -50,6 +52,7 @@ use jass::vm::{NativeCtx, NativeRegistry, NativeResult, Value};
 use softfloat::F32;
 
 use super::game::{Game, HandleKind, ObjKey, Object, SavedHandle, Slots};
+use crate::hashmap::BucketMap;
 
 /// The handle kind of each typed `Save*Handle` / `Load*Handle` native. `None` for the handle types the
 /// simulation does not model (no object of that type can exist, so the typed check always fails).
@@ -101,7 +104,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("InitHashtable", move |_, _| {
         let (_, id) = g
             .borrow_mut()
-            .add_object(Object::Hashtable(Slots::new()), 0);
+            .add_object(Object::Hashtable(HashtableObj::default()), 0);
         NativeResult::Return(Value::Handle(id))
     });
 
@@ -109,6 +112,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SaveInteger", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = table_of(&gm, a) {
+            ensure_node(&mut gm, k, a);
             slots_mut(&mut gm, k).ints.insert(keys(a), int_at(a, 3));
         }
         NativeResult::Return(Value::Null)
@@ -118,6 +122,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SaveReal", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = table_of(&gm, a) {
+            ensure_node(&mut gm, k, a);
             slots_mut(&mut gm, k).reals.insert(keys(a), real_at(a, 3));
         }
         NativeResult::Return(Value::Null)
@@ -127,6 +132,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SaveBoolean", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = table_of(&gm, a) {
+            ensure_node(&mut gm, k, a);
             slots_mut(&mut gm, k).bools.insert(keys(a), bool_at(a, 3));
         }
         NativeResult::Return(Value::Null)
@@ -138,6 +144,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         let stored = match table_of(&gm, a) {
             Some(k) => {
+                ensure_node(&mut gm, k, a);
                 slots_mut(&mut gm, k).strings.insert(keys(a), text);
                 true
             }
@@ -273,6 +280,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         if let Some(k) = table_of(&gm, a) {
             if let Some(old) = slots_mut(&mut gm, k).handles.remove(&keys(a)) {
+                order_mut(&mut gm, k).remove_child(int_at(a, 1), int_at(a, 2));
                 if old.owned {
                     gm.release(old.id);
                 }
@@ -286,7 +294,9 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         if let Some(k) = table_of(&gm, a) {
             let parent = int_at(a, 1);
-            let released = slots_mut(&mut gm, k).remove_parent(&parent);
+            let children = order_mut(&mut gm, k).take_parent(parent);
+            let mut released = release_children(slots_mut(&mut gm, k), parent, &children);
+            released.extend(slots_mut(&mut gm, k).remove_parent(&parent));
             gm.release_all(&released);
         }
         NativeResult::Return(Value::Null)
@@ -296,11 +306,78 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("FlushParentHashtable", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = table_of(&gm, a) {
-            let released = slots_mut(&mut gm, k).clear();
+            let mut released = Vec::new();
+            for (parent, children) in order_mut(&mut gm, k).take_all() {
+                released.extend(release_children(slots_mut(&mut gm, k), parent, &children));
+            }
+            released.extend(slots_mut(&mut gm, k).clear());
             gm.release_all(&released);
         }
         NativeResult::Return(Value::Null)
     });
+}
+
+/// The saved handles of one table, plus the order in which a flush releases them.
+///
+/// The original keeps one node per parent key (created by the first save under that key) and, in each
+/// node, the handle values in a hash map keyed by child. A flush walks the parents and then the
+/// children in the map's bucket order (see `crate::hashmap`). Each parent is `(key, child keys)`.
+#[derive(Debug, Clone, Default)]
+pub struct FlushOrder {
+    nodes: BucketMap<(i32, BucketMap<i32>)>,
+}
+
+impl FlushOrder {
+    fn ensure_parent(&mut self, parent: i32) {
+        if self.nodes.get(parent as u32).is_none() {
+            let _ = self
+                .nodes
+                .insert_new(parent as u32, (parent, BucketMap::new()));
+        }
+    }
+
+    fn add_child(&mut self, parent: i32, child: i32) {
+        self.ensure_parent(parent);
+        if let Some((_, children)) = self.nodes.get_mut(parent as u32) {
+            if children.get(child as u32).is_none() {
+                let _ = children.insert_new(child as u32, child);
+            }
+        }
+    }
+
+    fn remove_child(&mut self, parent: i32, child: i32) {
+        if let Some((_, children)) = self.nodes.get_mut(parent as u32) {
+            children.remove(child as u32);
+        }
+    }
+
+    /// Takes the node of `parent` and returns its children in flush order.
+    fn take_parent(&mut self, parent: i32) -> Vec<i32> {
+        match self.nodes.remove(parent as u32) {
+            Some((_, children)) => children
+                .keys_in_destroy_order()
+                .into_iter()
+                .map(|k| k as i32)
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Takes every node in flush order, each with its children in flush order.
+    fn take_all(&mut self) -> Vec<(i32, Vec<i32>)> {
+        self.nodes
+            .destroy_order()
+            .into_iter()
+            .map(|(parent, mut children)| (parent, children.destroy_order()))
+            .collect()
+    }
+}
+
+/// The contents of a hashtable object: its values and the flush order of its handles.
+#[derive(Debug, Clone, Default)]
+pub struct HashtableObj {
+    pub slots: Slots<i32, i32>,
+    pub order: FlushOrder,
 }
 
 /// `Save*Handle`: stores handle argument 3 under (parent, child) when it passes the typed check of
@@ -324,6 +401,9 @@ fn save_handle(game: &RefCell<Game>, a: &[Value], kind: Option<HandleKind>) -> N
             owned: true,
         },
     );
+    if old.is_none() {
+        order_mut(&mut gm, table).add_child(int_at(a, 1), int_at(a, 2));
+    }
     if let Some(old) = old {
         if old.owned {
             gm.release(old.id);
@@ -350,17 +430,48 @@ fn table_of(gm: &Game, a: &[Value]) -> Option<ObjKey> {
 }
 
 fn slots(gm: &Game, k: ObjKey) -> &Slots<i32, i32> {
-    match gm.object(k) {
-        Object::Hashtable(s) => s,
-        _ => unreachable!("slots on a non-hashtable key"),
-    }
+    &table(gm, k).slots
 }
 
 fn slots_mut(gm: &mut Game, k: ObjKey) -> &mut Slots<i32, i32> {
-    match gm.object_mut(k) {
-        Object::Hashtable(s) => s,
-        _ => unreachable!("slots_mut on a non-hashtable key"),
+    &mut table_mut(gm, k).slots
+}
+
+fn order_mut(gm: &mut Game, k: ObjKey) -> &mut FlushOrder {
+    &mut table_mut(gm, k).order
+}
+
+fn table(gm: &Game, k: ObjKey) -> &HashtableObj {
+    match gm.object(k) {
+        Object::Hashtable(t) => t,
+        _ => unreachable!("table on a non-hashtable key"),
     }
+}
+
+fn table_mut(gm: &mut Game, k: ObjKey) -> &mut HashtableObj {
+    match gm.object_mut(k) {
+        Object::Hashtable(t) => t,
+        _ => unreachable!("table_mut on a non-hashtable key"),
+    }
+}
+
+/// A save under parent `a[1]` creates the parent's node in the flush order if it does not exist.
+fn ensure_node(gm: &mut Game, k: ObjKey, a: &[Value]) {
+    order_mut(gm, k).ensure_parent(int_at(a, 1));
+}
+
+/// Removes the saved handles of `children` (in the order given) from `slots`, returning the owned
+/// ids in that order. The handles are released by the caller.
+fn release_children(slots: &mut Slots<i32, i32>, parent: i32, children: &[i32]) -> Vec<u32> {
+    let mut released = Vec::new();
+    for &child in children {
+        if let Some(h) = slots.handles.remove(&(parent, child)) {
+            if h.owned {
+                released.push(h.id);
+            }
+        }
+    }
+    released
 }
 
 /// The (parent, child) pair of arguments 1 and 2.
