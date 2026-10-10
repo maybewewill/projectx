@@ -12,6 +12,8 @@
 
 ## 2. Hard rules
 
+- Code borrowed from MIT projects (OpenRealm) → note it in `THIRD_PARTY_NOTICES.md` and in the module header.
+
 - **Do not commit decompiled Blizzard code** (Ghidra pseudo-C, disassembly listings) or game assets (MPQ, BLP, MDX, maps, sounds, `Game.dll`) to the repo.
   Only our own code, our own scripts, and *descriptions* of behavior (specs) go in the repo.
 - Work flow is "Ghidra → spec in plain words → our own Rust code from the spec" (as close to clean-room as possible).
@@ -24,7 +26,7 @@
 ```
 crates/
   w3g/        replay parser .w3g (1.26a) — the test oracle            [v0.1: header, blocks, players, slots, seed, ticks; actions raw]
-  mpq/        MPQ archive reader                                        [v0.1: tables, encryption, zlib/bzip2/DCL; Huffman/ADPCM todo]
+  mpq/        MPQ archive reader                                        [v0.2: + Huffman (profile 7) and ADPCM mono/stereo, ported from OpenRealm]
   wc3-math/   bit-exact WC3 math (x87 rounding, software sin/cos/sqrt)  [todo — waiting on Ghidra]
   jass/       JASS lexer/parser/VM                                      [v0.1: lexer + parser + AST; VM todo]
   sim/        deterministic simulation (units, abilities, pathing)      [todo]
@@ -143,7 +145,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/w3g` v0.1: header v0/v1, zlib blocks, players, stat string, slots, **seed**, time slots, chat, leave, 0x22 checksum blocks. Synthetic test only.
 - [ ] `crates/w3g`: check on real 1.26a replays (`cargo run -p w3g --example dump -- file.w3g`), parse actions (0x10–0x1E ability/order, 0x16 selection, etc.)
 - [x] `crates/mpq` v0.1: header search (512-byte aligned, HM3W prefix, MPQ\x1B user data), hash/block tables, encryption + FIX_KEY, single-unit/sectored, zlib/bzip2/PKWARE DCL, `(listfile)`. Synthetic tests (5).
-- [ ] `crates/mpq`: Huffman + ADPCM (WAV), check on real War3.mpq/War3x.mpq (`cargo run -p mpq --example mpqls -- War3.mpq`), streaming instead of loading the whole file
+- [x] `crates/mpq` v0.2: Huffman + ADPCM (Haiku agent, port from OpenRealm, see THIRD_PARTY_NOTICES.md). Checked only by round-trips with a test encoder.
+- [ ] `crates/mpq`: check codecs on real WAVs (the Huffman model updates the tree only on escape, as in the reference; check first if decoding fails), check on real War3.mpq/War3x.mpq (`cargo run -p mpq --example mpqls -- War3.mpq`), streaming instead of loading the whole file
 - [x] `crates/jass` v0.1: lexer (rawcodes, hex/$/octal, real, escapes), parser of the whole grammar (type/globals/native/function/locals/set/call/if-elseif-else/loop/exitwhen/return/debug), 5 tests.
 - [ ] `crates/jass`: check on common.j/blizzard.j from the user's MPQ; **verify operator precedence and literal overflow against the original parser in Game.dll** (`parser.cpp`, `scanner.cpp`); type checker; VM (bytecode like the original, handles, threads/TriggerSleepAction, op limit)
 - [x] `crates/blp` v0.1 (9 tests, wasm32 OK). **TODO on real files**: BLP1-JPEG is, as far as is known, 4-component BGRA without color conversion (alpha in the 4th channel); right now zune-jpeg converts it to RGB and drops alpha. This probably needs raw component output. Also check JPEG mip levels > 0 and the nibble order of 4-bit alpha.
@@ -156,7 +159,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
-- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`. In progress: mpq codecs.
+- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. 77 tests in the workspace, clippy clean.
 - **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
 - **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
 - **2026-10-10 (4)**: `crates/mpq` v0.1 (reader + tests + `examples/mpqls.rs`). Dependencies: flate2, bzip2 (pure-Rust backend libbz2-rs-sys, works in wasm), explode (DCL).
