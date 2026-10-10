@@ -136,6 +136,21 @@ analyzeHeadless <projdir> war3 -process Game.dll -noanalysis \
 ```
 Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud container is temporary, so the Ghidra project is not saved.
 
+## 6.0 Progress (update after every agent/step)
+
+**Overall: ~3%** of the 1:1 rewrite.
+
+| Part | Weight | Done | Comment |
+|---|---|---|---|
+| File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
+| Game.dll analysis (names, classes, specs) | 10% | ~10% | FPU mode; full decompile export running |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | 0% | |
+| JASS VM + ~1000 natives | 12% | ~3% | parser only |
+| Rendering (MDX, terrain, effects) | 12% | 0% | |
+| UI (FDF, menus, HUD) | 8% | 0% | |
+| Network/lockstep, wasm, sound | 8% | 0% | |
+| Replay test harness against the original | 5% | ~5% | w3g parser |
+
 ## 6. Status / next steps
 
 - [x] PE analysis, Ghidra survey, FPU analysis
