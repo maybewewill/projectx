@@ -103,6 +103,11 @@ tools/
 - Simulation (~30–40% of the code) to replays running without desync: ~1.5–2 months with an agent swarm.
 - Whole DLL: ~3–4 months.
 
+### 4.7 OpenRealm (github.com/corepunch/open-realm): main open-source reference
+- MIT, C, ~365k lines, active (commit 2026-10-10). WC3 is the main target and already playable (Windows/Linux/macOS/iPad); also WoW and SC2.
+- Architecture is Quake 2-style (client/server, `game.dll` + universal client), **not WC3 lockstep**, so it gives no 1:1 replay compatibility, but it is a big reference for behavior (abilities, damage, JASS natives, FDF UI, formats) and has docs in `docs/games/warcraft-3/`.
+- MIT allows borrowing code with attribution (keep the copyright notice). Research reports are being written (parity/netcode, JASS, formats, gameplay); conclusions go here.
+
 ## 5. How to reproduce the analysis
 
 ```bash
