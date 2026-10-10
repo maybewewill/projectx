@@ -1,553 +1,746 @@
-//! Region-level A* search (pathing-2.md sections 4 and 5).
+//! Region search: the request setup, the A* loop and the path fallbacks of the 1.26a pathing
+//! (Game.dll: request setup `0x6F49A640`, start and loop `0x6F49A240` / `0x6F49A170`, dispatcher
+//! `0x6F49A800`, reset `0x6F49A3F0`, relax `0x6F498C70` / `0x6F498D90`, cell expander
+//! `0x6F499E90`, block expander `0x6F499FA0` and its scanners).
 //!
-//! STATUS: UNVERIFIED against the original. The loop, the heap, the cost, the expansion
-//! order and the corner rule follow the decompile reading in `docs/spec/pathing-2.md`, but
-//! the region labelling that produces the regions is NOT located in the original (the flood
-//! fill is open item 1 of that spec). The regions here come from the caller
-//! ([`RegionMap::from_labels`]) or from a plain 4-connected flood fill
-//! ([`RegionMap::label_connected`]), which is a stand-in and not the original's shapes.
-//! Only the search itself is ported; the level pyramid, the large-unit footprint checks and
-//! the second neighbour rule (flag byte at node +0x22) are not ported.
+//! Spec: `docs/spec/pathing-3.md` (regions are the pyramid records, see [`super::pyramid`]).
 //!
-//! Model (per the spec):
-//! * A node is a region. Its id is its node index, and its seed is one cell of the region
-//!   (the first cell in row-major order for the stand-in labelling).
-//! * Step cost from parent P to neighbour N is `isqrt(576 * D)`, with `D` the squared seed
-//!   distance; written as `(24 dx)^2 + (24 dy)^2` in 32-bit wrapping arithmetic. The
-//!   heuristic is the same expression for the seed of N and the goal cell.
-//! * Key `f = g + h` (unsigned, wrapping). Relax only on a strictly smaller `g`.
-//! * Expansion probes N, E, S, W, then NE, SE, SW, NW. A diagonal is probed only when both
-//!   orthogonal cells it cuts past are passable (N and E, E and S, S and W, W and N).
-//! * At most `budget` pops per call (400 by default). Stale entries count as pops.
-//! * If the goal is not reached, the path goes to the touched node with the smallest
-//!   squared cell distance to the goal (first found wins ties), or straight to the goal
-//!   when no touched node beats the start.
+//! Verified against the original by `tools/emu/search_vectors.py` (Unicorn): random pyramids
+//! with 1 to 3 requests each (400 embedded cases; 1,500 more fresh cases were run during
+//! development). Every request goes through the original setup and loop and the whole state is
+//! compared after it: return codes, every node entry, the heap entries, closed list, pops,
+//! start/goal/best ids, best distance, pyramid records and list counts. 0 mismatches. The
+//! coverage includes block-expander nodes (level 1 and up), edge splits, corner relaxations,
+//! flag links, budget exhaustion and goal pops.
 //!
-//! Open consequence: edges come only from the eight neighbours of each region's seed. When a
-//! region is bigger than one cell, most of its boundary is never probed, so the result
-//! depends strongly on the labelling. The original's flood fill decides that, and it is not
-//! located yet. [`RegionMap::label_connected`] therefore gives mostly straight results.
-//!
-//! Deviations kept on purpose, both UNVERIFIED:
-//! * A probe that finds the node's own region is not relaxed. The decompile would make a
-//!   node its own parent in that case, and the parent walk would never end.
-//! * The start node's seed is its region seed, not the start cell.
+//! What is checked and what is not:
+//! * Mode 1 only (size class 0). The two-cell footprint mode of the original (`S+0x90 == 2`) is
+//!   NOT ported: its extra probe tests are not modelled.
+//! * The cell expander (level-0 nodes) is confirmed: probe order N, E, S, W, then the diagonals
+//!   NE, SE, SW, NW, each gated by its two orthogonal neighbours, then the flag link.
+//! * The block expander (level >= 1 nodes) is a reading of the edge and corner scanners
+//!   (`0x6F4998F0`..`0x6F499BF0`, `0x6F499CF0`..`0x6F499E40`). It matched the original on the
+//!   generated cases, but those cases do not exhaust the scanners' branches, so it is UNVERIFIED
+//!   beyond them.
+//! * The request setup converts its float inputs by floor and truncation. Only integral inputs
+//!   (cells) were run through the original.
+//! * The path-building step (`0x6F49A470`, waypoint output) is not ported: [`Path::cells`] is
+//!   the chain of seed cells through the parent links, which is what the walk produces.
+//! * An out-of-bounds start (setup returns 0) is reported as [`Status::Failed`] without a
+//!   search. The original's dispatcher still calls the loop in that case; this is not ported
+//!   and not verified.
 
-use super::grid::Grid;
 use super::heap::Heap;
 use super::isqrt::isqrt;
-use softfloat::F32;
+use super::pyramid::{Labels, Node, Pyramid, BLOCKED, LIST_END, NO_NODE, OPEN, REFINE, UNTOUCHED};
+use softfloat::{conv, math, F32};
 
-/// Pops allowed per search call (the path's default expansion budget, pathing-2.md 5.2).
+/// Default pop budget of a request (the original takes it from the caller; pathing-2.md 5.2).
 pub const POP_BUDGET: u32 = 400;
 
-/// Region id of a blocked cell.
-pub const NO_REGION: u32 = u32::MAX;
-
-/// A partition of the grid into regions, with one seed cell per region.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RegionMap {
-    width: u32,
-    height: u32,
-    labels: Vec<u32>,
-    seeds: Vec<(i32, i32)>,
+/// One entry of the flag-link table (12 bytes in the original, at `S+0x3C`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FlagLink {
+    /// Bit 0 of the entry. When set, a node with this flag byte is linked to `(x, y)`.
+    pub enabled: bool,
+    /// Target cell x.
+    pub x: i32,
+    /// Target cell y.
+    pub y: i32,
 }
 
-impl RegionMap {
-    /// Builds a map from one label per cell (row-major). [`NO_REGION`] marks blocked cells.
-    /// The seed of each region is its first cell in row-major order.
-    ///
-    /// Panics if `labels.len() != width * height`.
-    pub fn from_labels(width: u32, height: u32, labels: Vec<u32>) -> Self {
-        assert_eq!(
-            labels.len(),
-            width as usize * height as usize,
-            "one label per cell"
-        );
-        let count = labels
-            .iter()
-            .filter(|&&l| l != NO_REGION)
-            .map(|&l| l as usize + 1)
-            .max()
-            .unwrap_or(0);
-        let mut seeds: Vec<Option<(i32, i32)>> = vec![None; count];
-        for (i, &l) in labels.iter().enumerate() {
-            if l == NO_REGION {
-                continue;
-            }
-            let slot = &mut seeds[l as usize];
-            if slot.is_none() {
-                let x = (i % width as usize) as i32;
-                let y = (i / width as usize) as i32;
-                *slot = Some((x, y));
-            }
-        }
-        RegionMap {
-            width,
-            height,
-            labels,
-            seeds: seeds.into_iter().map(|s| s.unwrap_or((0, 0))).collect(),
-        }
-    }
-
-    /// Stand-in labelling: 4-connected components of the cells that have no type bit in
-    /// `mask` set. Ids are handed out in row-major order of each component's first cell.
-    pub fn label_connected(grid: &Grid, mask: u8) -> Self {
-        let (w, h) = (grid.width() as i32, grid.height() as i32);
-        let mut labels = vec![NO_REGION; (w * h) as usize];
-        let mut next = 0u32;
-        let mut stack = Vec::new();
-        for y in 0..h {
-            for x in 0..w {
-                let start = (y * w + x) as usize;
-                if labels[start] != NO_REGION || grid.is_blocked(x, y, mask) != Some(false) {
-                    continue;
-                }
-                labels[start] = next;
-                stack.push((x, y));
-                while let Some((cx, cy)) = stack.pop() {
-                    for (nx, ny) in [(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)] {
-                        if nx < 0 || ny < 0 || nx >= w || ny >= h {
-                            continue;
-                        }
-                        let i = (ny * w + nx) as usize;
-                        if labels[i] == NO_REGION && grid.is_blocked(nx, ny, mask) == Some(false) {
-                            labels[i] = next;
-                            stack.push((nx, ny));
-                        }
-                    }
-                }
-                next += 1;
-            }
-        }
-        RegionMap::from_labels(w as u32, h as u32, labels)
-    }
-
-    /// Region id at a cell, or `None` when the cell is blocked or outside the map.
-    pub fn region_at(&self, x: i32, y: i32) -> Option<u32> {
-        if x < 0 || y < 0 || x as u32 >= self.width || y as u32 >= self.height {
-            return None;
-        }
-        let l = self.labels[y as usize * self.width as usize + x as usize];
-        (l != NO_REGION).then_some(l)
-    }
-
-    /// Number of region ids (one more than the largest id in use).
-    pub fn region_count(&self) -> usize {
-        self.seeds.len()
-    }
-
-    /// Seed cell of a region.
-    pub fn seed(&self, region: u32) -> (i32, i32) {
-        self.seeds[region as usize]
-    }
+/// One path request (the arguments of the request setup).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Request {
+    /// Path type `T` (even, 0 to 14 in practice).
+    pub path_type: u32,
+    /// Whether labelled nodes take the record's flag byte.
+    pub flag_on: bool,
+    /// Start point. The setup floors and truncates it to a cell (`0x6F6EF170`, `0x6F6EEC20`).
+    pub start: (F32, F32),
+    /// Goal point, converted the same way.
+    pub goal: (F32, F32),
+    /// Pop budget of the loop.
+    pub budget: u32,
 }
 
-/// How a search ended.
+/// How a request ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// Start and goal share a cell or a region: the caller draws the straight segment.
-    SameRegion,
-    /// The goal region was reached. `cells` lists seed cells from the goal back to the start.
+    /// Start and goal are the same cell, or one of them is blocked or the goal shares the start's
+    /// region: the caller moves in a straight line (the original's direct move, return 1).
+    Direct,
+    /// The goal region was popped. `cells` runs from the goal back to the start.
     Reached,
-    /// Not reached. `cells` leads from the closest touched node back to the start.
-    Partial,
-    /// Not reached and no touched node beats the start. The caller draws the straight segment.
+    /// Not reached and the start is the closest node. The caller moves in a straight line.
     Straight,
-    /// Start or goal is outside the map or blocked. The caller draws the straight segment.
+    /// Not reached. `cells` runs from the closest node reached back to the start.
+    Partial,
+    /// The start cell is outside the pyramid. Nothing was searched.
     Failed,
 }
 
-/// Result of [`find_path`].
+/// Result of [`Search::find_path`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Path {
-    /// How the search ended.
+    /// How the request ended.
     pub status: Status,
-    /// Seed cells (`(x, y)`), goal side first. Empty for the straight-segment statuses.
+    /// Seed cells of the nodes on the path, goal side first. Empty unless `Reached` or `Partial`.
     pub cells: Vec<(i32, i32)>,
 }
 
+/// Return code of the request setup (`0x6F49A640`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Link {
-    /// Never touched, or popped and being expanded (the original's `-1`).
-    Untouched,
-    /// In the open list (the original's `-2`).
-    Open,
-    /// Closed (the original keeps a linked closed list; only its existence matters here).
-    Closed,
+enum Setup {
+    Outside,
+    Direct,
+    Search,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Node {
-    seed: (i32, i32),
-    stamp: u32,
-    link: Link,
-    g: u32,
-    h: u32,
-    parent: Option<u32>,
-}
-
-/// `576 * D` in 32-bit wrapping arithmetic, as `(24 dx)^2 + (24 dy)^2`.
+/// Squared distance of `(24 dx, 24 dy)` in 32-bit wrapping arithmetic: the argument of the
+/// step cost and the heuristic (`isqrt(576 * d^2)`, read from `0x6F498C70`).
 fn scaled_d2(a: (i32, i32), b: (i32, i32)) -> u32 {
-    let dx = (a.0.wrapping_sub(b.0).wrapping_mul(24)) as u32;
-    let dy = (a.1.wrapping_sub(b.1).wrapping_mul(24)) as u32;
+    let dx = a.0.wrapping_sub(b.0).unsigned_abs().wrapping_mul(24);
+    let dy = a.1.wrapping_sub(b.1).unsigned_abs().wrapping_mul(24);
     dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
 }
 
-/// Plain squared cell distance (no scale), 32-bit wrapping.
-fn d2(a: (i32, i32), b: (i32, i32)) -> u32 {
+/// Plain squared cell distance in 32-bit wrapping arithmetic (closest-node tracking).
+fn plain_d2(a: (i32, i32), b: (i32, i32)) -> u32 {
     let dx = a.0.wrapping_sub(b.0) as u32;
     let dy = a.1.wrapping_sub(b.1) as u32;
     dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
 }
 
-struct Search<'a> {
-    regions: &'a RegionMap,
-    nodes: Vec<Node>,
-    heap: Heap,
-    goal_cell: (i32, i32),
-    goal_region: u32,
-    best_d2: u32,
-    best_node: u32,
-    pops: u32,
+/// The cell of a point: floor, then truncation to an integer (the setup's conversion).
+fn cell_of(v: F32) -> i32 {
+    conv::f2i(math::floor(v))
 }
 
-impl Search<'_> {
-    fn push_node(&mut self, node: u32) {
-        let n = &mut self.nodes[node as usize];
-        n.stamp = n.stamp.wrapping_add(1);
-        n.link = Link::Open;
-        let (key, stamp) = (n.g.wrapping_add(n.h), n.stamp);
+/// Axis of an edge scan: `X` samples along x at a fixed row, `Y` along y at a fixed column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
+}
+
+/// Region search state: the pyramid, the labelling state, the open and closed lists and the
+/// request fields of the original's search object.
+#[derive(Clone, Debug)]
+pub struct Search {
+    pyramid: Pyramid,
+    labels: Labels,
+    links: Vec<FlagLink>,
+    heap: Heap,
+    closed_head: u32,
+    pops: u32,
+    budget: u32,
+    start: (i32, i32),
+    goal: (i32, i32),
+    start_id: i32,
+    goal_id: i32,
+    best_d2: u32,
+    best_id: i32,
+    setup_code: i32,
+    search_code: i32,
+}
+
+impl Search {
+    /// A search over `pyramid`. `links` is the flag-link table (256 entries, indexed by the flag
+    /// byte). `list_grow` and `list_capacity` are the node list's growth step and initial
+    /// capacity (the list is erased, not freed, between requests).
+    ///
+    /// The request fields start at zero, as the original's zeroed search object has them.
+    ///
+    /// Panics if `links.len() != 256`.
+    pub fn new(
+        pyramid: Pyramid,
+        links: Vec<FlagLink>,
+        list_grow: usize,
+        list_capacity: usize,
+    ) -> Self {
+        assert_eq!(links.len(), 256, "one link entry per flag byte");
+        Search {
+            pyramid,
+            labels: Labels::new(0, false, list_grow, list_capacity),
+            links,
+            heap: Heap::new(),
+            closed_head: LIST_END,
+            pops: 0,
+            budget: POP_BUDGET,
+            start: (0, 0),
+            goal: (0, 0),
+            start_id: 0,
+            goal_id: 0,
+            best_d2: 0,
+            best_id: 0,
+            setup_code: 0,
+            search_code: -1,
+        }
+    }
+
+    /// The node list of the last request (region ids are its indices).
+    pub fn nodes(&self) -> &[Node] {
+        &self.labels.nodes
+    }
+
+    /// Return codes of the last request: the setup (0, 1 or 2) and the loop (goal id or -1).
+    pub fn last_codes(&self) -> (i32, i32) {
+        (self.setup_code, self.search_code)
+    }
+
+    /// Runs one request and returns how it ended. Each request resets the node list, the open
+    /// list and the closed list, and bumps the generation when it labels.
+    pub fn find_path(&mut self, req: &Request) -> Path {
+        let setup = self.setup(req);
+        self.setup_code = match setup {
+            Setup::Outside => 0,
+            Setup::Direct => 1,
+            Setup::Search => 2,
+        };
+        self.search_code = -1;
+        match setup {
+            Setup::Outside => Path {
+                status: Status::Failed,
+                cells: Vec::new(),
+            },
+            Setup::Direct => Path {
+                status: Status::Direct,
+                cells: Vec::new(),
+            },
+            Setup::Search => {
+                let found = self.start_search();
+                self.search_code = found;
+                if found >= 0 {
+                    return Path {
+                        status: Status::Reached,
+                        cells: self.chain(found as u32),
+                    };
+                }
+                if self.start_id == self.best_id {
+                    return Path {
+                        status: Status::Straight,
+                        cells: Vec::new(),
+                    };
+                }
+                Path {
+                    status: Status::Partial,
+                    cells: self.chain(self.best_id as u32),
+                }
+            }
+        }
+    }
+
+    /// Reset (`0x6F49A3F0`) and request setup (`0x6F49A640`).
+    fn setup(&mut self, req: &Request) -> Setup {
+        self.pops = 0;
+        self.closed_head = LIST_END;
+        self.labels.nodes.clear();
+        self.heap.clear();
+        self.labels.path_type = req.path_type;
+        self.labels.flag_on = req.flag_on;
+        let start = (cell_of(req.start.0), cell_of(req.start.1));
+        let goal = (cell_of(req.goal.0), cell_of(req.goal.1));
+        self.start = start;
+        self.goal = goal;
+        if self.pyramid.record_index(0, start.0, start.1).is_none() {
+            return Setup::Outside;
+        }
+        if start == goal {
+            return Setup::Direct;
+        }
+        self.labels.gen = self.labels.gen.wrapping_add(1);
+        let sid = self.pyramid.lookup(&mut self.labels, 0, start.0, start.1);
+        self.start_id = sid;
+        if sid == BLOCKED {
+            self.goal_id = BLOCKED;
+            return Setup::Direct;
+        }
+        let gid = self.pyramid.lookup(&mut self.labels, 0, goal.0, goal.1);
+        self.goal_id = gid;
+        if sid == gid {
+            return Setup::Direct;
+        }
+        self.budget = req.budget;
+        self.best_id = sid;
+        self.best_d2 = plain_d2(start, goal);
+        Setup::Search
+    }
+
+    /// Start node and loop (`0x6F49A240`).
+    fn start_search(&mut self) -> i32 {
+        let h = isqrt(scaled_d2(self.start, self.goal));
+        let id = self.start_id as u32;
+        self.labels.nodes[id as usize].h = h;
+        self.push(id);
+        self.run()
+    }
+
+    /// Adds `node` to the open list (`0x6F498B80`): visit +1, link open, key g + h.
+    fn push(&mut self, node: u32) {
+        let n = &mut self.labels.nodes[node as usize];
+        n.visit = n.visit.wrapping_add(1);
+        n.link = OPEN;
+        n.prev = UNTOUCHED;
+        let key = n.g.wrapping_add(n.h);
+        let stamp = n.visit;
         self.heap.push(key, node, stamp);
     }
 
-    fn relax(&mut self, node: u32, parent: u32) {
-        let p = self.nodes[parent as usize];
-        let n = self.nodes[node as usize];
-        let g_new = p.g.wrapping_add(isqrt(scaled_d2(p.seed, n.seed)));
-        let h_new = isqrt(scaled_d2(n.seed, self.goal_cell));
-
-        if n.link == Link::Untouched {
-            // First touch: track the node closest to the goal (strict, so the first wins).
-            let dist = d2(n.seed, self.goal_cell);
-            if dist < self.best_d2 {
-                self.best_d2 = dist;
-                self.best_node = node;
-            }
-        } else if n.g <= g_new {
-            return;
+    /// Takes `node` out of the closed list (`0x6F498C20`).
+    fn unlink(&mut self, node: u32) {
+        let n = &mut self.labels.nodes[node as usize];
+        n.visit = n.visit.wrapping_add(1);
+        let (next, prev) = (n.link, n.prev);
+        n.link = UNTOUCHED;
+        n.prev = UNTOUCHED;
+        if prev == UNTOUCHED {
+            self.closed_head = next;
         } else {
-            // Re-open an open or closed node: the stamp change invalidates its old entry.
-            let nm = &mut self.nodes[node as usize];
-            nm.stamp = nm.stamp.wrapping_add(1);
-            nm.link = Link::Untouched;
+            self.labels.nodes[prev as usize].link = next;
         }
-
-        let nm = &mut self.nodes[node as usize];
-        nm.parent = Some(parent);
-        nm.g = g_new;
-        nm.h = h_new;
-        self.push_node(node);
+        if next != LIST_END {
+            self.labels.nodes[next as usize].prev = prev;
+        }
     }
 
-    /// Probes one neighbour cell from `from`. Returns whether the cell is passable.
-    fn probe(&mut self, cell: (i32, i32), from: u32) -> bool {
-        match self.regions.region_at(cell.0, cell.1) {
-            None => false,
-            Some(region) => {
-                if region != from {
-                    self.relax(region, from);
-                }
+    /// Puts `node` at the head of the closed list (`0x6F498BD0`).
+    fn close(&mut self, node: u32) {
+        if self.closed_head != LIST_END {
+            self.labels.nodes[self.closed_head as usize].prev = node;
+        }
+        let old_head = self.closed_head;
+        let n = &mut self.labels.nodes[node as usize];
+        n.visit = n.visit.wrapping_add(1);
+        n.link = old_head;
+        n.prev = UNTOUCHED;
+        self.closed_head = node;
+    }
+
+    /// Relaxes `node` from `from` (`0x6F498C70`, and `0x6F498D90` when `flag_edge`).
+    ///
+    /// An untouched node is only tracked as the closest node to the goal. A touched node is
+    /// re-labelled only when the new cost is strictly lower. A flag edge costs 1 instead of the
+    /// distance step and records the parent's flag byte.
+    fn relax(&mut self, node: u32, from: u32, flag_edge: bool) {
+        let parent = self.labels.nodes[from as usize];
+        let seed = self.labels.nodes[node as usize].seed;
+        let step = if flag_edge {
+            1
+        } else {
+            isqrt(scaled_d2(parent.seed, seed))
+        };
+        let g_new = parent.g.wrapping_add(step);
+        let h_new = isqrt(scaled_d2(seed, self.goal));
+        let n = self.labels.nodes[node as usize];
+        if n.link == UNTOUCHED {
+            let d = plain_d2(seed, self.goal);
+            if d < self.best_d2 {
+                self.best_d2 = d;
+                self.best_id = node as i32;
+            }
+        } else {
+            if g_new >= n.g {
+                return;
+            }
+            if n.link < OPEN {
+                self.unlink(node);
+            } else {
+                let m = &mut self.labels.nodes[node as usize];
+                m.visit = m.visit.wrapping_add(1);
+                m.link = UNTOUCHED;
+                m.prev = UNTOUCHED;
+            }
+        }
+        let m = &mut self.labels.nodes[node as usize];
+        m.parent = from;
+        m.via_flag = if flag_edge { parent.flag } else { 0 };
+        m.g = g_new;
+        m.h = h_new;
+        self.push(node);
+    }
+
+    /// Lookup at level 0 of cell `(x, y)`, or `None` when it is blocked.
+    fn walkable_region(&mut self, x: i32, y: i32) -> Option<u32> {
+        let id = self.pyramid.lookup(&mut self.labels, 0, x, y);
+        (id != BLOCKED).then_some(id as u32)
+    }
+
+    /// Probe of an orthogonal neighbour: relaxes its region when it is walkable.
+    fn probe(&mut self, from: u32, x: i32, y: i32) -> bool {
+        match self.walkable_region(x, y) {
+            Some(id) => {
+                self.relax(id, from, false);
                 true
             }
+            None => false,
         }
     }
 
-    fn expand(&mut self, node: u32) {
-        let (x, y) = self.nodes[node as usize].seed;
-        let n = self.probe((x, y - 1), node);
-        let e = self.probe((x + 1, y), node);
-        let s = self.probe((x, y + 1), node);
-        let w = self.probe((x - 1, y), node);
-        if n && e {
-            self.probe((x + 1, y - 1), node);
-        }
-        if e && s {
-            self.probe((x + 1, y + 1), node);
-        }
-        if s && w {
-            self.probe((x - 1, y + 1), node);
-        }
-        if w && n {
-            self.probe((x - 1, y - 1), node);
+    /// Probe of a diagonal neighbour (the gating is the caller's).
+    fn diagonal(&mut self, from: u32, x: i32, y: i32) {
+        if let Some(id) = self.walkable_region(x, y) {
+            self.relax(id, from, false);
         }
     }
 
-    /// Main loop (original `0x6F49A170`). Returns true when the goal region is popped.
-    fn run(&mut self, budget: u32) -> bool {
-        while !self.heap.is_empty() {
-            let count = self.pops;
-            self.pops = count.wrapping_add(1);
-            if count >= budget {
-                break;
+    /// Flag link of a node whose flag byte has an enabled table entry (`0x6F4998C0`).
+    fn flag_link(&mut self, from: u32, flag: u8, x: i32, y: i32) {
+        let link = self.links[flag as usize];
+        if !link.enabled || (x == link.x && y == link.y) {
+            return;
+        }
+        if let Some(id) = self.walkable_region(link.x, link.y) {
+            self.relax(id, from, true);
+        }
+    }
+
+    /// Cell expander (`0x6F499E90`): N, E, S, W, then NE, SE, SW, NW (each only when its two
+    /// orthogonal neighbours were walkable), then the flag link.
+    fn expand_cell(&mut self, node: u32) {
+        let n = self.labels.nodes[node as usize];
+        let (x, y) = n.seed;
+        let north = self.probe(node, x, y - 1);
+        let east = self.probe(node, x + 1, y);
+        let south = self.probe(node, x, y + 1);
+        let west = self.probe(node, x - 1, y);
+        if north && east {
+            self.diagonal(node, x + 1, y - 1);
+        }
+        if east && south {
+            self.diagonal(node, x + 1, y + 1);
+        }
+        if south && west {
+            self.diagonal(node, x - 1, y + 1);
+        }
+        if west && north {
+            self.diagonal(node, x - 1, y - 1);
+        }
+        if n.flag != 0 {
+            self.flag_link(node, n.flag, x, y);
+        }
+    }
+
+    /// Lookup at `level` (the block scanners look up at their own level).
+    fn lookup_at(&mut self, level: usize, x: i32, y: i32) -> i32 {
+        self.pyramid.lookup(&mut self.labels, level, x, y)
+    }
+
+    /// Scans one edge of a level-`level` block (`0x6F4998F0` for [`Axis::X`], `0x6F4999F0` for
+    /// [`Axis::Y`]). `split` is the coordinate along the edge that is halved when the sample is
+    /// a [`REFINE`]; `fixed` is the coordinate across the edge.
+    ///
+    /// Returns the two flags the original writes to its out pointers: the first flag (the half
+    /// with the smaller coordinate) and the second. A flag is set when the region found is at
+    /// a level above 0 (the recursion's own first half writes the first flag).
+    fn edge_scan(
+        &mut self,
+        node: u32,
+        level: usize,
+        axis: Axis,
+        split: i32,
+        fixed: i32,
+    ) -> (bool, bool) {
+        let at = |s: i32| match axis {
+            Axis::X => (s, fixed),
+            Axis::Y => (fixed, s),
+        };
+        let (mut out_first, mut out_second) = (false, false);
+        let mut first_half_open = true;
+        let mut lvl = level;
+        let mut split = split;
+        let (x, y) = at(split);
+        let mut id = self.lookup_at(lvl, x, y);
+        while id == BLOCKED || id == REFINE {
+            if id != REFINE {
+                return (out_first, out_second);
             }
-            let Some(entry) = self.heap.pop() else { break };
+            let block_level = lvl;
+            lvl -= 1;
+            let half = 1i32 << lvl;
+            let mid = ((split >> block_level) << block_level) + half;
+            let (first, second) = if mid <= split {
+                (mid - 1, split)
+            } else {
+                (split, mid)
+            };
+            let (sub_first, _) = self.edge_scan(node, lvl, axis, first, fixed);
+            if first_half_open && sub_first {
+                out_first = true;
+            }
+            first_half_open = false;
+            split = second;
+            let (x, y) = at(split);
+            id = self.lookup_at(lvl, x, y);
+        }
+        self.relax(id as u32, node, false);
+        if lvl != 0 {
+            out_second = true;
+            if first_half_open {
+                out_first = true;
+            }
+        }
+        (out_first, out_second)
+    }
+
+    /// Corner probe (`0x6F499CF0` and its three siblings): the region at `(x, y)` seen at
+    /// `level`, descending while it is a [`REFINE`].
+    fn corner(&mut self, node: u32, level: usize, x: i32, y: i32) {
+        let mut lvl = level;
+        loop {
+            let id = self.lookup_at(lvl, x, y);
+            if id >= 0 {
+                self.relax(id as u32, node, false);
+                return;
+            }
+            if id != REFINE {
+                return;
+            }
+            lvl -= 1;
+        }
+    }
+
+    /// Block expander (`0x6F499FA0`, reading of the scanners): the four edges of the block (top,
+    /// right, bottom, left) and then the corners that sit between two edges that both found
+    /// a region (NE, SE, SW, NW).
+    fn expand_block(&mut self, node: u32) {
+        let n = self.labels.nodes[node as usize];
+        let level = n.level as usize;
+        let (x, y) = n.seed;
+        let size = 1i32 << level;
+        let ox = (x >> level) << level;
+        let oy = (y >> level) << level;
+        let top = self.edge_scan(node, level, Axis::X, x, oy - 1);
+        let right = self.edge_scan(node, level, Axis::Y, y, ox + size);
+        let bottom = self.edge_scan(node, level, Axis::X, x, oy + size);
+        let left = self.edge_scan(node, level, Axis::Y, y, ox - 1);
+        if top.1 && right.0 {
+            self.corner(node, level, ox + size, oy - 1);
+        }
+        if right.1 && bottom.1 {
+            self.corner(node, level, ox + size, oy + size);
+        }
+        if bottom.0 && left.1 {
+            self.corner(node, level, ox - 1, oy + size);
+        }
+        if left.0 && top.0 {
+            self.corner(node, level, ox - 1, oy - 1);
+        }
+    }
+
+    /// Pop loop (`0x6F49A170`). Returns the goal id when the goal is popped, else -1.
+    fn run(&mut self) -> i32 {
+        loop {
+            if self.heap.is_empty() {
+                return -1;
+            }
+            let pops = self.pops;
+            self.pops = pops.wrapping_add(1);
+            if pops >= self.budget {
+                return -1;
+            }
+            let Some(entry) = self.heap.pop() else {
+                return -1;
+            };
             let node = entry.node;
-            let n = &mut self.nodes[node as usize];
-            if n.stamp != entry.stamp {
+            let n = &mut self.labels.nodes[node as usize];
+            if n.visit != entry.stamp {
                 continue;
             }
-            n.stamp = n.stamp.wrapping_add(1);
-            n.link = Link::Untouched;
-            if node == self.goal_region {
-                return true;
+            n.link = UNTOUCHED;
+            n.prev = UNTOUCHED;
+            n.visit = entry.stamp.wrapping_add(1);
+            if node as i32 == self.goal_id {
+                return node as i32;
             }
-            self.expand(node);
-            let n = &mut self.nodes[node as usize];
-            n.stamp = n.stamp.wrapping_add(1);
-            n.link = Link::Closed;
+            if n.level == 0 {
+                self.expand_cell(node);
+            } else {
+                self.expand_block(node);
+            }
+            self.close(node);
         }
-        false
     }
 
-    /// Seed cells from `node` back to the start (the parent chain), bounded by the node count.
+    /// Seed cells from `node` back to the start through the parent links.
     fn chain(&self, node: u32) -> Vec<(i32, i32)> {
         let mut out = Vec::new();
-        let mut cur = Some(node);
-        let mut steps = 0usize;
-        while let Some(c) = cur {
-            out.push(self.nodes[c as usize].seed);
-            cur = self.nodes[c as usize].parent;
-            steps += 1;
-            if steps > self.nodes.len() {
+        let mut cur = node;
+        for _ in 0..=self.labels.nodes.len() {
+            let n = &self.labels.nodes[cur as usize];
+            out.push(n.seed);
+            if n.parent == NO_NODE {
                 break;
             }
+            cur = n.parent;
         }
         out
     }
-}
 
-/// Finds a region path from `start` to `goal` (world points) with the default budget.
-pub fn find_path(grid: &Grid, regions: &RegionMap, start: (F32, F32), goal: (F32, F32)) -> Path {
-    find_path_with_budget(grid, regions, start, goal, POP_BUDGET)
-}
-
-/// [`find_path`] with an explicit pop budget.
-pub fn find_path_with_budget(
-    grid: &Grid,
-    regions: &RegionMap,
-    start: (F32, F32),
-    goal: (F32, F32),
-    budget: u32,
-) -> Path {
-    let start_cell = grid.to_cell(start.0, start.1);
-    let goal_cell = grid.to_cell(goal.0, goal.1);
-    let (Some(start_region), Some(goal_region)) = (
-        regions.region_at(start_cell.0, start_cell.1),
-        regions.region_at(goal_cell.0, goal_cell.1),
-    ) else {
-        return Path {
-            status: Status::Failed,
-            cells: Vec::new(),
-        };
-    };
-    if start_cell == goal_cell || start_region == goal_region {
-        return Path {
-            status: Status::SameRegion,
-            cells: Vec::new(),
-        };
-    }
-
-    let nodes: Vec<Node> = (0..regions.region_count() as u32)
-        .map(|r| Node {
-            seed: regions.seed(r),
-            stamp: 0,
-            link: Link::Untouched,
-            g: 0,
-            h: 0,
-            parent: None,
-        })
-        .collect();
-    let mut s = Search {
-        regions,
-        nodes,
-        heap: Heap::new(),
-        goal_cell,
-        goal_region,
-        best_d2: d2(start_cell, goal_cell),
-        best_node: start_region,
-        pops: 0,
-    };
-    let seed = s.nodes[start_region as usize].seed;
-    s.nodes[start_region as usize].h = isqrt(scaled_d2(seed, goal_cell));
-    s.push_node(start_region);
-
-    if s.run(budget) {
-        return Path {
-            status: Status::Reached,
-            cells: s.chain(goal_region),
-        };
-    }
-    if s.best_node != start_region {
-        return Path {
-            status: Status::Partial,
-            cells: s.chain(s.best_node),
-        };
-    }
-    Path {
-        status: Status::Straight,
-        cells: Vec::new(),
+    /// The observable state as words, in the order the differential test digests it
+    /// (`tools/emu/search_vectors.py`, `state_words`): the two return codes, the generation,
+    /// the list count, pops, closed head, start, goal and best ids, best distance, the pyramid
+    /// records (stamp, word), every node (seed, visit, link, prev, g, h, parent, flag, level,
+    /// via-flag), then the heap size (with the sentinel) and every live heap entry.
+    pub fn observable_words(&self) -> Vec<u32> {
+        let mut w = vec![
+            self.setup_code as u32,
+            self.search_code as u32,
+            self.labels.gen,
+            self.labels.nodes.len() as u32,
+            self.pops,
+            self.closed_head,
+            self.start_id as u32,
+            self.goal_id as u32,
+            self.best_id as u32,
+            self.best_d2,
+        ];
+        for k in 0..4 {
+            for r in self.pyramid.level(k).records() {
+                w.push(r.stamp);
+                w.push(r.word1);
+            }
+        }
+        for n in &self.labels.nodes {
+            w.extend([
+                n.seed.0 as u32,
+                n.seed.1 as u32,
+                n.visit,
+                n.link,
+                n.prev,
+                n.g,
+                n.h,
+                n.parent,
+                u32::from(n.flag),
+                u32::from(n.level),
+                u32::from(n.via_flag),
+            ]);
+        }
+        let slots = self.heap.slots();
+        w.push(slots.len() as u32);
+        for e in &slots[1..] {
+            w.extend([e.key, e.node, e.stamp]);
+        }
+        w
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pathing::pyramid::Level;
 
-    fn f(v: f32) -> F32 {
-        F32::from_bits(v.to_bits())
+    /// A level-0 record word with state `s` for path type 0.
+    fn cell_word(s: u32) -> u32 {
+        s << 30
     }
 
-    /// World point of cell `(x, y)` (its corner, origin at zero).
+    /// An 8 by 8 pyramid: `cells[i]` gives the state of cell i (row-major); coarser levels are
+    /// state 11, so every cell is its own region.
+    fn pyramid(cells: &[u32]) -> Pyramid {
+        let base: Vec<u32> = cells.iter().map(|&s| cell_word(s)).collect();
+        let coarse = |n: usize| vec![cell_word(3); n];
+        Pyramid::new([
+            Level::new(8, 8, &base),
+            Level::new(4, 4, &coarse(16)),
+            Level::new(2, 2, &coarse(4)),
+            Level::new(1, 1, &coarse(1)),
+        ])
+    }
+
+    fn search(cells: &[u32]) -> Search {
+        Search::new(pyramid(cells), vec![FlagLink::default(); 256], 8, 0)
+    }
+
     fn at(x: i32, y: i32) -> (F32, F32) {
-        (f(x as f32 * 32.0 + 1.0), f(y as f32 * 32.0 + 1.0))
+        (
+            F32::from_bits((x as f32).to_bits()),
+            F32::from_bits((y as f32).to_bits()),
+        )
     }
 
-    /// A `w` by `h` grid whose labels come from `label(x, y)`.
-    fn map(w: u32, h: u32, label: impl Fn(i32, i32) -> u32) -> (Grid, RegionMap) {
-        let grid = Grid::new(w, h, F32::ZERO, F32::ZERO);
-        let mut labels = Vec::new();
-        for y in 0..h as i32 {
-            for x in 0..w as i32 {
-                labels.push(label(x, y));
-            }
+    fn request(start: (i32, i32), goal: (i32, i32), budget: u32) -> Request {
+        Request {
+            path_type: 0,
+            flag_on: false,
+            start: at(start.0, start.1),
+            goal: at(goal.0, goal.1),
+            budget,
         }
-        (grid, RegionMap::from_labels(w, h, labels))
     }
 
     #[test]
-    fn same_cell_and_same_region_are_straight() {
-        let (g, r) = map(4, 1, |_, _| 0);
+    fn same_cell_and_blocked_start_move_directly() {
+        let mut s = search(&[0; 64]);
         assert_eq!(
-            find_path(&g, &r, at(0, 0), at(0, 0)).status,
-            Status::SameRegion
+            s.find_path(&request((2, 2), (2, 2), POP_BUDGET)).status,
+            Status::Direct
         );
+        let mut cells = [0u32; 64];
+        cells[0] = 1;
+        let mut s = search(&cells);
         assert_eq!(
-            find_path(&g, &r, at(0, 0), at(3, 0)).status,
-            Status::SameRegion
+            s.find_path(&request((0, 0), (5, 5), POP_BUDGET)).status,
+            Status::Direct
         );
+        assert_eq!(s.last_codes(), (1, -1));
     }
 
     #[test]
-    fn out_of_map_and_blocked_endpoints_fail() {
-        let (g, r) = map(3, 1, |x, _| if x == 1 { NO_REGION } else { x as u32 });
-        assert_eq!(find_path(&g, &r, at(0, 0), at(1, 0)).status, Status::Failed);
-        assert_eq!(find_path(&g, &r, at(0, 0), at(9, 0)).status, Status::Failed);
+    fn start_outside_the_pyramid_fails() {
+        let mut s = search(&[0; 64]);
         assert_eq!(
-            find_path(&g, &r, at(-1, 0), at(2, 0)).status,
+            s.find_path(&request((-1, 0), (5, 5), POP_BUDGET)).status,
             Status::Failed
         );
+        assert_eq!(s.last_codes().0, 0);
     }
 
     #[test]
-    fn corridor_is_walked_in_order() {
-        let (g, r) = map(6, 1, |x, _| x as u32);
-        let p = find_path(&g, &r, at(0, 0), at(5, 0));
+    fn open_grid_reaches_the_goal_with_adjacent_steps() {
+        let mut s = search(&[0; 64]);
+        let p = s.find_path(&request((0, 0), (7, 7), POP_BUDGET));
         assert_eq!(p.status, Status::Reached);
-        assert_eq!(
-            p.cells,
-            vec![(5, 0), (4, 0), (3, 0), (2, 0), (1, 0), (0, 0)]
-        );
-    }
-
-    #[test]
-    fn search_is_deterministic() {
-        // One region per cell in an 8 by 8 map, with a wall column at x = 4 that has one gap
-        // at y = 5. Every probe then lands on a different region, so the search is a cell
-        // level 8-direction search with the corner rule.
-        let label = |x: i32, y: i32| {
-            if x == 4 && y != 5 {
-                NO_REGION
-            } else {
-                (y * 8 + x) as u32
-            }
-        };
-        let (g, r) = map(8, 8, label);
-        let first = find_path(&g, &r, at(0, 0), at(7, 7));
-        for _ in 0..5 {
-            assert_eq!(find_path(&g, &r, at(0, 0), at(7, 7)), first);
+        assert_eq!(p.cells.first(), Some(&(7, 7)));
+        assert_eq!(p.cells.last(), Some(&(0, 0)));
+        for pair in p.cells.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(
+                (a.0 - b.0).abs() <= 1 && (a.1 - b.1).abs() <= 1,
+                "{a:?} -> {b:?}"
+            );
         }
-        assert_eq!(first.status, Status::Reached);
-        assert_eq!(first.cells.first(), Some(&(7, 7)));
-        assert_eq!(first.cells.last(), Some(&(0, 0)));
-        // The path must pass the gap.
-        assert!(first.cells.contains(&(4, 5)));
     }
 
     #[test]
-    fn multi_cell_region_probes_only_from_its_seed() {
-        // Model rule (pathing-2 5.4, UNVERIFIED): edges come from the eight neighbours of a
-        // region's seed cell only. Region 0 spans (0, 0) and (1, 0); its seed (0, 0) sees
-        // only its own cell to the east, so region 1 at (2, 0) is never reached.
-        let (g, r) = map(3, 1, |x, _| if x < 2 { 0 } else { 1 });
-        assert_eq!(
-            find_path(&g, &r, at(0, 0), at(2, 0)).status,
-            Status::Straight
-        );
-    }
-
-    #[test]
-    fn pop_cap_limits_the_search() {
-        // A one-cell corridor of 600 regions: reaching the far end needs about 600 pops.
-        let (g, r) = map(600, 1, |x, _| x as u32);
-        let capped = find_path(&g, &r, at(0, 0), at(599, 0));
-        assert_eq!(capped.status, Status::Partial);
-        assert!(capped.cells.len() <= POP_BUDGET as usize + 1);
-        let full = find_path_with_budget(&g, &r, at(0, 0), at(599, 0), 1000);
-        assert_eq!(full.status, Status::Reached);
-        assert_eq!(full.cells.len(), 600);
-    }
-
-    #[test]
-    fn unreachable_goal_falls_back_to_the_closest_node() {
-        // Regions 0, 1, 2 form a corridor, a wall cell at x = 3 cuts it, and region 3 holds
-        // the goal. Touched nodes are 1 and 2; node 2 (seed (2, 0)) is the closest to the goal.
-        let label = |x: i32, _y: i32| match x {
-            0..=2 => x as u32,
-            3 => NO_REGION,
-            _ => 3,
-        };
-        let (g, r) = map(6, 1, label);
-        let p = find_path(&g, &r, at(0, 0), at(5, 0));
+    fn walled_off_goal_returns_the_closest_reached_cell() {
+        // Column 4 is blocked (state 01) in every row: the goal (7, 0) is unreachable.
+        let mut cells = [0u32; 64];
+        for y in 0..8 {
+            cells[y * 8 + 4] = 1;
+        }
+        let mut s = search(&cells);
+        let p = s.find_path(&request((0, 0), (7, 0), POP_BUDGET));
         assert_eq!(p.status, Status::Partial);
-        assert_eq!(p.cells, vec![(2, 0), (1, 0), (0, 0)]);
+        assert_eq!(p.cells.first(), Some(&(3, 0)));
+        assert_eq!(p.cells.last(), Some(&(0, 0)));
     }
 
     #[test]
-    fn fallback_is_straight_when_nothing_beats_the_start() {
-        // The start is the closest touched node (its neighbours are farther from the goal),
-        // so the search reports a straight segment.
-        let label = |x: i32, y: i32| match (x, y) {
-            (0, 0) => 0,
-            (0, 1) | (1, 0) => NO_REGION,
-            _ => 1,
-        };
-        let (g, r) = map(4, 2, label);
-        let p = find_path(&g, &r, at(0, 0), at(3, 1));
-        assert_eq!(p.status, Status::Straight);
-        assert!(p.cells.is_empty());
+    fn budget_of_one_pop_stops_the_loop() {
+        let mut s = search(&[0; 64]);
+        let p = s.find_path(&request((0, 0), (7, 7), 1));
+        assert_ne!(p.status, Status::Reached);
+        assert_eq!(s.last_codes().1, -1);
     }
 
     #[test]
-    fn connected_labelling_separates_walls() {
-        let mut g = Grid::new(3, 3, F32::ZERO, F32::ZERO);
-        g.set_type_bits(1, 0, 0x02);
-        g.set_type_bits(1, 1, 0x02);
-        g.set_type_bits(1, 2, 0x02);
-        let r = RegionMap::label_connected(&g, 0x02);
-        assert_eq!(r.region_at(0, 0), Some(0));
-        assert_eq!(r.region_at(1, 0), None);
-        assert_ne!(r.region_at(2, 0), r.region_at(0, 0));
-        assert_eq!(r.seed(0), (0, 0));
+    fn requests_reset_the_node_list() {
+        let mut s = search(&[0; 64]);
+        s.find_path(&request((0, 0), (7, 7), POP_BUDGET));
+        let first = s.nodes().len();
+        s.find_path(&request((0, 0), (7, 7), POP_BUDGET));
+        assert_eq!(s.nodes().len(), first);
+        assert_eq!(s.nodes()[0].seed, (0, 0));
     }
 }

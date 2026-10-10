@@ -35,3 +35,31 @@ GAME_DLL=/path/to/Game.dll PYTHONPATH=<dir with unicorn, pefile> \
 
 Two sequences are written: `EMU_OPS` (mostly live ids) and `EMU_EDGE_OPS` (any issued id, so freed
 ids are touched too; this produces duplicate free-stack entries). Object death is not in the sequence.
+
+`pyramid_vectors.py` (2026-10-10): the pathing pyramid lookup `0x6F498A60` with its labeller `0x6F498A00`,
+list append `0x6F4984E0` and copy `0x6F498010`. Random pyramids (`make_case`) with requests that bump the
+generation or not, and random lookups at all four levels. After every lookup the return value, the
+generation, the list count and capacity, every record (stamp, word) and every list entry are compared with
+the Python model. The allocator `0x6F4B39C0` (Storm.dll, not in the upload) is replaced by a hook that
+returns 1 and moves the list base. Writes the (seed, digest) pairs into
+`crates/sim/tests/pathing/pyramid_data.rs`:
+
+```bash
+GAME_DLL=/path/to/Game.dll PYTHONPATH=<dir with unicorn, pefile> \
+  python3 tools/emu/pyramid_vectors.py --cases 2000 --rs crates/sim/tests/pathing/pyramid_data.rs
+```
+
+`search_vectors.py` (2026-10-10): the region search. Each case is a random pyramid with a flag table and one
+to three requests, driven through the request setup `0x6F49A640` (world points are passed as cell floats,
+which the setup floors and truncates) and, when it returns 2, the start node and the pop loop
+`0x6F49A240` / `0x6F49A170`. After every request the emulated node list, heap, closed list, pops, ids,
+best distance and pyramid are compared with the model. The path spot values are recorded from the parent
+links. Writes `crates/sim/tests/pathing/search_data.rs` (the emulator calls are not capped at 200,000
+instructions, since a 400-pop search needs more):
+
+```bash
+GAME_DLL=/path/to/Game.dll PYTHONPATH=<dir with unicorn, pefile> \
+  python3 tools/emu/search_vectors.py --cases 400 --rs crates/sim/tests/pathing/search_data.rs
+```
+
+Both scripts exit with status 1 on any mismatch and print the coverage counters of the run.
