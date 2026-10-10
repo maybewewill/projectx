@@ -107,7 +107,7 @@ tools/
 - Types: 4 integer, 5 real (f32 bits; arithmetic is **claimed** to be software-float with a truncating multiply, UNSURE, important to check), 6 string (16 bytes, ref-counted, interned), 8 boolean, 3 code.
 - Integer +,-,* wrap. **Integer division by 0 and real division by 0.0 abort the thread** (status 7). Modulo by 0 gives 0.
 - Execution budget: the executor runs at most N instructions; at the call sites N = **300000**. The agent guessed a timer, but **this matches the well-known JASS "op limit" ≈ 300k** → most likely an instruction limit per run (LIKELY). What happens on overflow (thread ends vs continues next tick) needs checking: the spec says status 2 and the thread stays runnable.
-- Statuses: 1 done, 2 budget, 3 sleep, 4 yield, 5 function not found, 6 null, 7 divide by zero. Threads are in a circular list and run in list order every tick (`0x6F44B400`, LIKELY). No call-depth limit found.
+- Statuses: 1 done, 2 budget, 3 sleep, 4 yield, 5 function not found, 6 null, 7 divide by zero. Threads are in a circular list. (⚠ `0x6F44B400` is **not** the scheduler, most likely a thread-state serializer, per game-loop.md; the real scheduler is not found yet.) No call-depth limit found.
 
 ### 4.3g Software float (important!)
 - From the natives analysis: real arithmetic in the JASS VM and in natives goes through **Blizzard's own software float helpers** (multiply `0x6F6EEE20`, Sin/Cos/Tan wrappers `0x6F3B2A10/2A30/2A50` call software helpers `0x6F6EF820/0x6F6EF8D0/0x6F6F0140`, not `_CI*`). `I2R` truncates the mantissa to 24 bits (`I2R(16777219) = 16777218`), not round-to-nearest. S2R parser `0x6F6F0520`. GetRandomReal uses the same helpers.
@@ -117,6 +117,11 @@ tools/
 
 ### 4.3e Native table
 - `docs/spec/natives-1.26a.tsv`: **1,291 natives** (1,167 `common`, registered in `0x6F3D4020`; plus 124 AI natives in `0x6F71D9E0`) with signatures and implementation addresses. Extracted by `tools/analysis/extract_natives.py` (parses push name/signature/function before the register call).
+
+### 4.3h Game loop (spec: docs/spec/game-loop.md, partial)
+- Replay pump `0x6F54EB00` (block ids from a ring buffer; 0x1E/0x1F share a handler; exits after 0x1F) → enqueue `0x6F54CAD0`. Step framing `0x6F65C7D0`/`0x6F65C840` (on exit from the outermost level, queued net events are applied in list order). Feeder `0x6F6637C0`.
+- CRC-32 (reflected, 0xEDB88320; builder `0x6F649360`, update `0x6F649410`, finalize = NOT) is used to check the file footer. What goes into the per-turn sync checksum (CSyncData vtable+4, CNetData+0x2278) is not found.
+- Not found: the per-frame driver, steps per turn, the unit of game time, conversion of TriggerSleepAction seconds. → second pass needed.
 
 ### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
 - Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
