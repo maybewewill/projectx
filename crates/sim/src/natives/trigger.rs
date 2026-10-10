@@ -405,7 +405,12 @@ fn execute(game: &RefCell<Game>, t: ObjKey, event: Option<ObjKey>, rt: &mut dyn 
 
 /// Evaluates one boolexpr. A leaf calls its code. `And` and `Or` evaluate both sides (no early exit,
 /// like the condition list; UNSURE for the original's and/or). A failed call counts as false.
-fn eval_boolexpr(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, b: ObjKey, key: u32) -> bool {
+pub(super) fn eval_boolexpr(
+    game: &RefCell<Game>,
+    rt: &mut dyn ScriptRuntime,
+    b: ObjKey,
+    key: u32,
+) -> bool {
     let kind = match game.borrow().object(b) {
         Object::BoolExpr(k) => *k,
         _ => return false,

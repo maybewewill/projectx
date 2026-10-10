@@ -178,6 +178,8 @@ pub enum HandleKind {
     Rect,
     Hashtable,
     GameCache,
+    Player,
+    Force,
 }
 
 /// A `location` handle: a point with raw coordinates (no clamping, no terrain height).
@@ -278,6 +280,75 @@ pub struct Playable {
     pub max_y: F32,
 }
 
+/// Number of player slots: `Player(0)` to `Player(15)`.
+pub const PLAYER_SLOTS: usize = 16;
+/// Number of alliance types, `ALLIANCE_PASSIVE` (0) to `ALLIANCE_SHARED_VISION_FORCED` (9).
+pub const ALLIANCE_TYPES: usize = 10;
+/// Number of player state slots, `PLAYER_STATE_*` 0 to 25. Other values are not valid states.
+pub const PLAYER_STATES: usize = 26;
+
+/// A player slot (`player` in JASS). The 16 slots exist from [`Game::new`] on; their handles are
+/// created when a script first asks for one (see [`Game::player_handle`]).
+///
+/// The raw values (race, color, controller, slot state) are the integers behind the JASS handle
+/// types, because `Convert*` returns them raw. Their defaults are placeholders until a host sets
+/// them from the map (UNSURE, see `natives/player.rs`).
+#[derive(Debug, Clone)]
+pub struct PlayerObj {
+    /// The slot index, 0 to 15. Fixed at creation.
+    pub index: u32,
+    /// `GetPlayerName` / `SetPlayerName`.
+    pub name: String,
+    /// The race value (`+0x260`). Read as `RACE_HUMAN` (1) when the player is null.
+    pub race: u32,
+    /// The color value (`+0x264`).
+    pub color: u32,
+    /// The controller value (`+0x268`).
+    pub controller: u32,
+    /// The slot state (`+0x270`): 0 empty, 1 playing, 2 left. Empty slots are skipped by the force
+    /// enumerations that test it (see `natives/force.rs`).
+    pub slot_state: u32,
+    /// The start location index (`+0x274`).
+    pub start_location: i32,
+    /// The team (`+0x278`).
+    pub team: i32,
+    /// `IsPlayerObserver`. The original keeps it as a word at `+0xf0`; a host sets it.
+    pub observer: bool,
+    /// Per alliance type, the set of target players as a bit mask (bit `q` = this player has the
+    /// type with player `q`). Only the row of this player is stored: alliances are one-directional.
+    pub alliances: [u32; ALLIANCE_TYPES],
+    /// The stored state words (see `natives/player.rs` for the scaling of gold and lumber).
+    pub states: [i32; PLAYER_STATES],
+}
+
+impl PlayerObj {
+    /// A slot with the placeholder defaults. Only the index is meaningful before a host fills the slot.
+    pub fn new(index: u32) -> Self {
+        let mut alliances = [0; ALLIANCE_TYPES];
+        // A player is passively allied with itself (UNSURE, see `natives/player.rs`).
+        alliances[0] = 1 << index;
+        PlayerObj {
+            index,
+            name: String::new(),
+            race: 1,
+            color: index,
+            controller: 0,
+            slot_state: 0,
+            start_location: 0,
+            team: 0,
+            observer: false,
+            alliances,
+            states: [0; PLAYER_STATES],
+        }
+    }
+}
+
+/// A force (`force` in JASS): a set of player slots, one bit per slot (bit `i` = `Player(i)`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ForceObj {
+    pub members: u32,
+}
+
 /// One game object of the arena.
 #[derive(Debug, Clone)]
 pub enum Object {
@@ -293,6 +364,10 @@ pub enum Object {
     Hashtable(super::hashtable::HashtableObj),
     /// A game cache: saved values keyed by (mission, key) strings.
     GameCache(Slots<String, String>),
+    /// A player slot. Its arena key is its slot index.
+    Player(PlayerObj),
+    /// A force.
+    Force(ForceObj),
 }
 
 impl Object {
@@ -309,6 +384,8 @@ impl Object {
             Object::Rect(_) => HandleKind::Rect,
             Object::Hashtable(_) => HandleKind::Hashtable,
             Object::GameCache(_) => HandleKind::GameCache,
+            Object::Player(_) => HandleKind::Player,
+            Object::Force(_) => HandleKind::Force,
         }
     }
 }
@@ -329,6 +406,12 @@ pub struct Game {
     caches: BTreeMap<String, ObjKey>,
     /// The playable area that rect coordinates are clamped to, or `None` (no clamp) until a host sets it.
     playable: Option<Playable>,
+    /// The player index of `GetLocalPlayer`. Set by the host (see [`Game::set_local_player`]).
+    local_player: u32,
+    /// Player handles of the running `GetEnumPlayer` scopes, innermost last. Empty outside a scope.
+    enum_players: Vec<u32>,
+    /// Player handles of the running `GetFilterPlayer` scopes, innermost last.
+    filter_players: Vec<u32>,
 }
 
 impl Default for Game {
@@ -339,15 +422,122 @@ impl Default for Game {
 
 impl Game {
     pub fn new() -> Self {
+        // The player slots are the first objects of the arena: `Player(i)` has key `i`.
+        let objects = (0..PLAYER_SLOTS as u32)
+            .map(|i| Object::Player(PlayerObj::new(i)))
+            .collect();
         Game {
-            objects: Vec::new(),
+            objects,
             handles: HandleTable::new(),
             timers: TimerQueue::new(),
             contexts: Vec::new(),
             context_keys: BTreeMap::new(),
             caches: BTreeMap::new(),
             playable: None,
+            local_player: 0,
+            enum_players: Vec::new(),
+            filter_players: Vec::new(),
         }
+    }
+
+    /// Sets the player index that `GetLocalPlayer` returns. The host provides it (UNSURE: the original
+    /// takes it from the game state, see `natives/player.rs`).
+    pub fn set_local_player(&mut self, index: u32) {
+        self.local_player = index;
+    }
+
+    /// The index of the local player.
+    pub fn local_player(&self) -> u32 {
+        self.local_player
+    }
+
+    /// The slot `index` (0 to 15). Panics for an index outside the table.
+    pub fn player(&self, index: u32) -> &PlayerObj {
+        match self.object(ObjKey(index)) {
+            Object::Player(p) => p,
+            _ => unreachable!("player slots are the first objects of the arena"),
+        }
+    }
+
+    /// Mutable access to slot `index`, for the host (map setup). `None` for an index outside 0 to 15.
+    pub fn player_mut(&mut self, index: u32) -> Option<&mut PlayerObj> {
+        if index as usize >= PLAYER_SLOTS {
+            return None;
+        }
+        match self.object_mut(ObjKey(index)) {
+            Object::Player(p) => Some(p),
+            _ => unreachable!("player slots are the first objects of the arena"),
+        }
+    }
+
+    /// The handle of slot `index`. The handle is created on the first request (flag 0) and the same
+    /// id is returned afterwards. Returns 0 for an index outside 0 to 15. LIKELY: the original creates
+    /// it lazily, see `natives/player.rs`.
+    pub fn player_handle(&mut self, index: u32) -> u32 {
+        if index as usize >= PLAYER_SLOTS {
+            return 0;
+        }
+        let key = ObjKey(index);
+        match self.handles.id_of(&key) {
+            Some(id) => id,
+            None => self.handles.create(key, 0),
+        }
+    }
+
+    /// The slot index of a live player handle, or `None` for any other id.
+    pub fn player_index_of_handle(&self, id: u32) -> Option<u32> {
+        self.handle_of_kind(id, HandleKind::Player).map(|k| k.0)
+    }
+
+    /// The force behind a live force handle, or `None` for any other id.
+    pub fn force_of_handle(&self, id: u32) -> Option<ObjKey> {
+        self.handle_of_kind(id, HandleKind::Force)
+    }
+
+    /// The force object behind `key`. Panics if `key` is not a force.
+    pub fn force(&self, key: ObjKey) -> &ForceObj {
+        match self.object(key) {
+            Object::Force(f) => f,
+            _ => panic!("not a force"),
+        }
+    }
+
+    /// Mutable access to the force object behind `key`. Panics if `key` is not a force.
+    pub fn force_mut(&mut self, key: ObjKey) -> &mut ForceObj {
+        match self.object_mut(key) {
+            Object::Force(f) => f,
+            _ => panic!("not a force"),
+        }
+    }
+
+    /// The player handle that `GetEnumPlayer` returns: the innermost running enumeration, or 0.
+    pub fn enum_player(&self) -> u32 {
+        self.enum_players.last().copied().unwrap_or(0)
+    }
+
+    /// The player handle that `GetFilterPlayer` returns: the innermost running filter call, or 0.
+    pub fn filter_player(&self) -> u32 {
+        self.filter_players.last().copied().unwrap_or(0)
+    }
+
+    /// Opens a `GetEnumPlayer` scope with player handle `id`. Pair with [`Game::pop_enum_player`].
+    pub fn push_enum_player(&mut self, id: u32) {
+        self.enum_players.push(id);
+    }
+
+    /// Closes the innermost `GetEnumPlayer` scope.
+    pub fn pop_enum_player(&mut self) {
+        self.enum_players.pop();
+    }
+
+    /// Opens a `GetFilterPlayer` scope with player handle `id`. Pair with [`Game::pop_filter_player`].
+    pub fn push_filter_player(&mut self, id: u32) {
+        self.filter_players.push(id);
+    }
+
+    /// Closes the innermost `GetFilterPlayer` scope.
+    pub fn pop_filter_player(&mut self) {
+        self.filter_players.pop();
     }
 
     /// Sets the playable area (`None` disables the rect clamp). See [`Playable`].

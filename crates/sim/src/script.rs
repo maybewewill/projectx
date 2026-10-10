@@ -21,7 +21,7 @@
 //! of the same host step. This follows from the order above, and it is deterministic. It is
 //! UNVERIFIED against the original, whose exact resume order is not in the spec (game-loop-2 4.5).
 
-use std::cell::{Ref, RefCell};
+use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use jass::compile::Module;
@@ -83,6 +83,12 @@ impl ScriptHost {
     /// The shared game state (timer and trigger objects and handles), for inspection.
     pub fn game(&self) -> Ref<'_, Game> {
         self.game.borrow()
+    }
+
+    /// Mutable access to the shared game state, for the host's map setup (player slots, the local
+    /// player). Do not hold it while a script runs.
+    pub fn game_mut(&self) -> RefMut<'_, Game> {
+        self.game.borrow_mut()
     }
 
     /// Sets the playable area that rect coordinates are clamped to (`None` disables the clamp).

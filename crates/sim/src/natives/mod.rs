@@ -14,10 +14,12 @@ use std::rc::Rc;
 use jass::vm::{clamp_sleep, NativeRegistry, NativeResult};
 use softfloat::F32;
 
+mod force;
 pub mod game;
 mod gamecache;
 mod hashtable;
 mod location;
+mod player;
 mod timer;
 mod trigger;
 
@@ -44,4 +46,6 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     hashtable::register(reg, game);
     gamecache::register(reg, game);
     location::register(reg, game);
+    player::register(reg, game);
+    force::register(reg, game);
 }
