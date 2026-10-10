@@ -1,0 +1,365 @@
+//! Tests for the agile clock, the timer heap and the JASS sleep bridge (`docs/spec/game-loop-2.md`).
+
+use jass::compile::compile;
+use jass::vm::{NativeRegistry, Value};
+use sim::softfloat;
+use sim::{AgileClock, ScriptHost, TimerQueue, STEP, STEP_BITS};
+
+/// Pump with a closure that records `(payload, expiry bits, now during callback bits)`.
+fn fire_all(q: &mut TimerQueue<u32>, target: f32) -> Vec<(u32, u32, u32)> {
+    let mut out = Vec::new();
+    q.pump(target, |q, ev| {
+        out.push((ev.payload, ev.expiry.to_bits(), q.now().to_bits()));
+    });
+    out
+}
+
+#[test]
+fn clock_accumulation_is_pinned() {
+    // Values from the truncating soft-float add (UNVERIFIED against the original clock, which is
+    // only known to be 0.1 s per step).
+    let mut c = AgileClock::new();
+    let expected = [
+        0x3DCC_CCCD,
+        0x3E4C_CCCD,
+        0x3E99_9999,
+        0x3ECC_CCCC,
+        0x3EFF_FFFF,
+        0x3F19_9999,
+    ];
+    for bits in expected {
+        c.advance_step();
+        assert_eq!(c.bits(), bits);
+    }
+    // Drift is downward: after 10 steps the clock is slightly under 1.0.
+    for _ in 0..4 {
+        c.advance_step();
+    }
+    assert!(c.now() < 1.0 && c.now() > 0.999);
+}
+
+#[test]
+fn step_constant_is_f32_point_one() {
+    assert_eq!(STEP_BITS, 0x3DCC_CCCD);
+    assert_eq!(STEP, 0.1f32);
+}
+
+#[test]
+fn ordering_is_by_expiry_then_fifo() {
+    let mut q = TimerQueue::new();
+    q.start(0.5, false, 1u32); // A
+    q.start(0.2, false, 2); // B
+    q.start(0.5, false, 3); // C, same expiry as A, started later
+    q.start(0.2, false, 4); // D, same expiry as B, started later
+    q.start(0.0, false, 5); // E
+    let order: Vec<u32> = fire_all(&mut q, 1.0).iter().map(|e| e.0).collect();
+    assert_eq!(order, vec![5, 2, 4, 1, 3]);
+    assert!(q.is_empty());
+}
+
+#[test]
+fn fifo_holds_for_many_equal_expiries() {
+    let mut q = TimerQueue::new();
+    for i in 0..200u32 {
+        q.start(0.3, false, i);
+    }
+    let order: Vec<u32> = fire_all(&mut q, 0.3).iter().map(|e| e.0).collect();
+    assert_eq!(order, (0..200).collect::<Vec<_>>());
+}
+
+#[test]
+fn negative_timeout_is_clamped_to_zero() {
+    let mut q = TimerQueue::new();
+    q.start(-2.5, false, 7u32);
+    q.start(f32::NAN, false, 8);
+    assert_eq!(q.next_expiry(), Some(0.0));
+    let fired = fire_all(&mut q, 0.0);
+    assert_eq!(fired.len(), 2);
+    assert_eq!(fired[0].1, 0.0f32.to_bits());
+    assert_eq!(fired[1].1, 0.0f32.to_bits());
+}
+
+#[test]
+fn now_is_the_expiry_during_the_callback_and_target_after() {
+    let mut q = TimerQueue::new();
+    q.start(0.3, false, 1u32);
+    q.start(0.7, false, 2);
+    let fired = fire_all(&mut q, 1.0);
+    assert_eq!(fired[0].2, 0.3f32.to_bits());
+    assert_eq!(fired[1].2, 0.7f32.to_bits());
+    assert_eq!(q.now(), 1.0);
+}
+
+#[test]
+fn timers_started_in_a_callback_are_relative_to_its_expiry() {
+    let mut q: TimerQueue<u32> = TimerQueue::new();
+    q.start(0.3, false, 1);
+    let mut seen = Vec::new();
+    q.pump(1.0, |q, ev| {
+        seen.push((ev.payload, q.now().to_bits()));
+        if ev.payload == 1 {
+            // Relative to the callback time 0.3, not to the pump target 1.0.
+            q.start(0.1, false, 2);
+        }
+    });
+    // Callback of 2 runs at expiry 0.3 + 0.1 in soft-float, which is about 0.4.
+    let expected = softfloat::add(0.3f32.to_bits(), 0.1f32.to_bits());
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[1], (2, expected));
+    assert!((f32::from_bits(expected) - 0.4).abs() < 1e-6);
+}
+
+#[test]
+fn pump_before_now_is_a_no_op() {
+    let mut q = TimerQueue::new();
+    q.start(0.5, false, 1u32);
+    fire_all(&mut q, 0.5);
+    assert_eq!(q.now(), 0.5);
+    q.start(0.5, false, 2);
+    assert!(fire_all(&mut q, 0.2).is_empty());
+    assert_eq!(q.now(), 0.5);
+    assert_eq!(q.len(), 1);
+}
+
+#[test]
+fn periodic_timer_rearms_at_expiry_plus_period() {
+    let mut q = TimerQueue::new();
+    q.start(0.25, true, 9u32);
+    let fired = fire_all(&mut q, 1.0);
+    let expiries: Vec<f32> = fired.iter().map(|e| f32::from_bits(e.1)).collect();
+    assert_eq!(expiries, vec![0.25, 0.5, 0.75, 1.0]);
+    assert_eq!(q.len(), 1, "still armed for 1.25");
+    assert_eq!(q.next_expiry(), Some(1.25));
+}
+
+#[test]
+fn periodic_timer_can_be_cancelled_from_its_callback() {
+    let mut q: TimerQueue<u32> = TimerQueue::new();
+    let id = q.start(0.1, true, 3);
+    let mut count = 0;
+    q.pump(1.0, |q, _| {
+        count += 1;
+        if count == 2 {
+            assert!(q.cancel(id));
+        }
+    });
+    assert_eq!(count, 2);
+    assert!(q.is_empty());
+}
+
+#[test]
+fn zero_period_periodic_timer_terminates_each_pump_once() {
+    // UNVERIFIED behaviour: a zero period fires once per pump call.
+    let mut q: TimerQueue<u32> = TimerQueue::new();
+    q.start(0.0, true, 4);
+    let mut count = 0;
+    q.pump(0.5, |_, _| count += 1);
+    assert_eq!(count, 1);
+    q.pump(0.5, |_, _| count += 1);
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn cancel_removes_only_the_named_timer() {
+    let mut q: TimerQueue<u32> = TimerQueue::new();
+    let a = q.start(0.2, false, 1);
+    let _b = q.start(0.1, false, 2);
+    let c = q.start(0.3, false, 3);
+    assert!(q.cancel(a));
+    assert!(!q.cancel(a), "second cancel finds nothing");
+    assert!(q.cancel(c));
+    let order: Vec<u32> = fire_all(&mut q, 1.0).iter().map(|e| e.0).collect();
+    assert_eq!(order, vec![2]);
+}
+
+/// Pseudo-random sequence (xorshift32) for building inputs. Deterministic.
+fn xorshift(state: &mut u32) -> u32 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    x
+}
+
+fn run_many(seed: u32) -> Vec<(u32, u32)> {
+    let mut rng = seed;
+    let mut q: TimerQueue<u32> = TimerQueue::new();
+    for i in 0..3000u32 {
+        // Quantised timeouts (multiples of 0.1 up to 5 s) give many equal expiries.
+        let t = (xorshift(&mut rng) % 50) as f32 * 0.1;
+        let periodic = xorshift(&mut rng).is_multiple_of(7);
+        if periodic {
+            q.start(t.max(0.05), true, i);
+        } else {
+            q.start(t, false, i);
+        }
+    }
+    let mut out = Vec::new();
+    for target in [0.5f32, 1.3, 2.0, 3.7, 6.0] {
+        q.pump(target, |_, ev| out.push((ev.payload, ev.expiry.to_bits())));
+    }
+    out
+}
+
+#[test]
+fn many_timers_fire_in_the_same_order_every_run() {
+    let a = run_many(0x1234_5678);
+    let b = run_many(0x1234_5678);
+    assert_eq!(a, b);
+    assert!(a.len() > 1000);
+    // Expiries never go backwards across the whole run (each pump is ordered and targets increase).
+    for w in a.windows(2) {
+        assert!(f32::from_bits(w[0].1) <= f32::from_bits(w[1].1));
+    }
+}
+
+#[test]
+fn many_one_shot_timers_fire_sorted_by_expiry_then_insertion() {
+    let mut rng = 0xDEAD_BEEFu32;
+    let mut q: TimerQueue<u32> = TimerQueue::new();
+    let mut expect = Vec::new();
+    for i in 0..2000u32 {
+        let t = (xorshift(&mut rng) % 40) as f32 * 0.1;
+        q.start(t, false, i);
+        expect.push((t.to_bits(), i));
+    }
+    expect.sort_by(|x, y| {
+        f32::from_bits(x.0)
+            .partial_cmp(&f32::from_bits(y.0))
+            .unwrap()
+            .then(x.1.cmp(&y.1))
+    });
+    let got: Vec<(u32, u32)> = fire_all(&mut q, 10.0).iter().map(|e| (e.1, e.0)).collect();
+    assert_eq!(got, expect);
+}
+
+// ---------------------------------------------------------------------------------------------
+// JASS: TriggerSleepAction through ScriptHost
+// ---------------------------------------------------------------------------------------------
+
+const SLEEP_SCRIPT: &str = r#"
+globals
+    integer gDone = 0
+endglobals
+
+native TriggerSleepAction takes real t returns nothing
+
+function Main takes nothing returns nothing
+    call TriggerSleepAction(0.25)
+    set gDone = 1
+endfunction
+"#;
+
+fn host_for(src: &str) -> ScriptHost {
+    let prog = jass::parse(src).expect("parse");
+    let module = compile(&[prog]).expect("compile");
+    ScriptHost::new(module, NativeRegistry::with_builtins()).expect("vm")
+}
+
+#[test]
+fn trigger_sleep_resumes_at_the_expected_step() {
+    let mut host = host_for(SLEEP_SCRIPT);
+    host.start("Main", &[]).expect("start");
+
+    // Step 1 runs Main at clock = STEP. Main sleeps for 0.25 s, so its wake time is the VM's f32
+    // `now + seconds`. That is the same value the host schedules as the timer expiry.
+    let mut clock = AgileClock::new();
+    clock.advance_step();
+    let until = clock.now() + 0.25f32;
+
+    // The first clock value at or after `until` decides the resume step. Soft-float accumulation
+    // truncates, so the clock reads 0.1 (3DCCCCCD), 0.2 (3E4CCCCD), 0.29999998 (3E999999),
+    // 0.39999998 (3ECCCCCC). `until` is 0.349999994 (3EB33333), so the resume step is 4.
+    let mut expected_step = None;
+    let mut probe = clock;
+    for k in 2..=20u32 {
+        probe.advance_step();
+        if probe.now() >= until {
+            expected_step = Some(k);
+            break;
+        }
+    }
+    let expected_step = expected_step.expect("resume within 20 steps");
+
+    let mut resumed_at = None;
+    for k in 1..=20u32 {
+        let fired = host.step();
+        let done = host.vm().global("gDone").expect("gDone");
+        if k == 1 {
+            assert_eq!(fired, 0, "no timer before the first sleep");
+        }
+        if done == Value::Integer(1) {
+            resumed_at = Some((k, fired));
+            break;
+        }
+    }
+    let (step, fired) = resumed_at.expect("thread resumed");
+    assert_eq!(step, expected_step);
+    assert_eq!(fired, 1, "one sleep timer fires on the resume step");
+    // Resumed inside the pump with the VM at the timer's expiry.
+    assert_eq!(host.vm().now().to_bits(), until.to_bits());
+    // Three steps after the sleep began (step 1), as the spec scenario requires.
+    assert_eq!(step, 4);
+}
+
+#[test]
+fn sleeping_threads_resume_in_expiry_order() {
+    let src = r#"
+globals
+    integer gN = 0
+    integer array gOrder
+endglobals
+
+native TriggerSleepAction takes real t returns nothing
+
+function Waiter takes integer id, real t returns nothing
+    call TriggerSleepAction(t)
+    set gOrder[gN] = id
+    set gN = gN + 1
+endfunction
+"#;
+    let mut host = host_for(src);
+    host.start("Waiter", &[Value::Integer(1), Value::Real(0.5)])
+        .unwrap();
+    host.start("Waiter", &[Value::Integer(2), Value::Real(0.2)])
+        .unwrap();
+    host.start("Waiter", &[Value::Integer(3), Value::Real(0.2)])
+        .unwrap();
+    for _ in 0..10 {
+        host.step();
+    }
+    let n = host.vm().global("gN").unwrap().as_integer().unwrap();
+    assert_eq!(n, 3);
+    let order: Vec<i32> = (0..3)
+        .map(|i| {
+            host.vm()
+                .global_element("gOrder", i)
+                .unwrap()
+                .as_integer()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(order, vec![2, 3, 1]);
+}
+
+#[test]
+fn negative_sleep_is_not_clamped_by_the_host() {
+    // The native clamps a negative sleep to 0 (builtin behaviour). With the host the wake time is
+    // now + 0, so the thread resumes at the next step after it sleeps.
+    let src = r#"
+globals
+    integer gDone = 0
+endglobals
+native TriggerSleepAction takes real t returns nothing
+function Main takes nothing returns nothing
+    call TriggerSleepAction(-1.0)
+    set gDone = 1
+endfunction
+"#;
+    let mut host = host_for(src);
+    host.start("Main", &[]).unwrap();
+    host.step();
+    host.step();
+    assert_eq!(host.vm().global("gDone"), Some(Value::Integer(1)));
+}

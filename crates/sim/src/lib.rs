@@ -9,8 +9,12 @@
 //! depends on the host floating point unit.
 
 pub mod rng;
+pub mod script;
 pub mod softfloat;
+pub mod timer;
 
 mod pe;
 
 pub use rng::{Rng, RngError, RngTable, Streams, FIXED_GAME_SEED, STREAM_COUNT};
+pub use script::ScriptHost;
+pub use timer::{AgileClock, Fired, TimerId, TimerQueue, STEP, STEP_BITS};
