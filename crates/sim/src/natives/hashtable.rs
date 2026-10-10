@@ -58,10 +58,11 @@ use crate::hashmap::BucketMap;
 /// simulation does not model (no object of that type can exist, so the typed check always fails).
 const HANDLE_NATIVES: &[(&str, Option<HandleKind>)] = &[
     ("PlayerHandle", Some(HandleKind::Player)),
+    // TODO: a unit is also a widget; the widget type check is not modelled yet.
     ("WidgetHandle", None),
     ("DestructableHandle", None),
     ("ItemHandle", None),
-    ("UnitHandle", None),
+    ("UnitHandle", Some(HandleKind::Unit)),
     ("AbilityHandle", None),
     ("TimerHandle", Some(HandleKind::Timer)),
     ("RegionHandle", None),

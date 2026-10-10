@@ -182,6 +182,8 @@ pub enum HandleKind {
     GameCache,
     Player,
     Force,
+    /// A unit (see [`UnitObj`]).
+    Unit,
     /// Presentation handle types (see `presentation.rs`): camera setups, sounds, effects, quests,
     /// quest items, multiboards and their items, leaderboards, dialogs, buttons and timer dialogs.
     CameraSetup,
@@ -212,6 +214,114 @@ pub struct RectObj {
     pub min_y: F32,
     pub max_x: F32,
     pub max_y: F32,
+}
+
+/// A unit type as the simulation needs it: the template values that a new unit starts with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnitType {
+    /// The name that `CreateUnitByName` looks up.
+    pub name: String,
+    /// Maximum life. A new unit starts at this value (LIKELY: the original takes it from the template).
+    pub max_life: F32,
+    /// Maximum mana.
+    pub max_mana: F32,
+    /// Mana of a new unit (UNSURE: the original copies the template's starting mana).
+    pub start_mana: F32,
+}
+
+/// The unit type registry, keyed by the raw type id (the four-character code as an integer).
+///
+/// The host fills it. TODO(gamedata): the engine should load it from the unit rows of the SLK data
+/// (`crates/gamedata`) at map load. That parsing is not implemented here; tests insert synthetic types.
+#[derive(Debug, Clone, Default)]
+pub struct UnitTypes {
+    by_id: BTreeMap<u32, UnitType>,
+    by_name: BTreeMap<String, u32>,
+}
+
+impl UnitTypes {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds or replaces the type `id`. Returns the type it replaced. The name index follows the new name.
+    pub fn insert(&mut self, id: u32, ty: UnitType) -> Option<UnitType> {
+        if let Some(old) = self.by_id.get(&id) {
+            if self.by_name.get(&old.name) == Some(&id) {
+                self.by_name.remove(&old.name);
+            }
+        }
+        self.by_name.insert(ty.name.clone(), id);
+        self.by_id.insert(id, ty)
+    }
+
+    /// The type with raw id `id`.
+    pub fn get(&self, id: u32) -> Option<&UnitType> {
+        self.by_id.get(&id)
+    }
+
+    /// The raw id of the type named `name` (exact, case-sensitive match: UNSURE, see
+    /// `natives/unit.rs`).
+    pub fn id_by_name(&self, name: &str) -> Option<u32> {
+        self.by_name.get(name).copied()
+    }
+
+    /// Number of registered types.
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// Whether no type is registered.
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
+/// A unit (`unit` in JASS), an agent with a handle.
+///
+/// Position, facing and the stat values are stored as the natives see them. The original keeps them in
+/// sub-objects (movement and stats, see `docs/spec/unit-core.md` section 4); this model does not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnitObj {
+    /// The raw type id (`GetUnitTypeId`).
+    pub type_id: u32,
+    /// The owning player's slot index, 0 to 15 (the original's owner index at `+0x58`).
+    pub owner: u32,
+    pub x: F32,
+    pub y: F32,
+    /// Facing in radians, as the mover stores it. The natives convert to and from degrees.
+    pub facing: F32,
+    /// Current life. Never negative: a life at or below zero is stored as `+0.0`.
+    pub life: F32,
+    pub max_life: F32,
+    /// Current mana. Stored as given (no clamp in the original's mana path).
+    pub mana: F32,
+    pub max_mana: F32,
+    /// Set when life reaches zero (through `KillUnit` or a life change to zero). The unit stays in the
+    /// game and keeps its handle; nothing here revives it.
+    pub dead: bool,
+    /// Set by `ShowUnit(false)`.
+    pub hidden: bool,
+    /// Set by `PauseUnit`. The effect of the pause is not modelled yet (UNSURE, see the spec).
+    pub paused: bool,
+    /// Set by `RemoveUnit`. A removed unit has no live handle, so every native treats it as invalid.
+    pub removed: bool,
+}
+
+/// A unit event, in the order the natives produced it. Drained by the host with
+/// [`Game::take_unit_events`]. The queue is plain data, so its order is deterministic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitEvent {
+    /// The unit was removed (its removed flag was set). Comes first in the removal sequence.
+    Removed(ObjKey),
+    /// The unit's life reached zero. Recorded by `KillUnit` and by any life change to zero of a unit that
+    /// was alive. The original fires the life-changed event (`Notify`) for the same change; whether its
+    /// handler is what detects the death is UNSURE (see the spec, section 11).
+    Death(ObjKey),
+    /// The owner changed from `from` to `to` (player slot indices). Not recorded when they are equal.
+    OwnerChanged { unit: ObjKey, from: u32, to: u32 },
+    /// A CEvent with id `id` is fired on the unit (`0xD01E6` for a life change, or a removal-sequence id).
+    Notify { unit: ObjKey, id: u32 },
 }
 
 /// A reference held by a saved handle value. `owned` is the original's entry flag: when it is set the
@@ -383,6 +493,8 @@ pub enum Object {
     Player(PlayerObj),
     /// A force.
     Force(ForceObj),
+    /// A unit.
+    Unit(UnitObj),
     /// A presentation object with a handle (see `presentation.rs`).
     Pres(PresObj),
 }
@@ -403,6 +515,7 @@ impl Object {
             Object::GameCache(_) => HandleKind::GameCache,
             Object::Player(_) => HandleKind::Player,
             Object::Force(_) => HandleKind::Force,
+            Object::Unit(_) => HandleKind::Unit,
             Object::Pres(p) => p.handle_kind(),
         }
     }
@@ -437,6 +550,10 @@ pub struct Game {
     rng_table: Option<RngTable>,
     /// Presentation state: the event log, the camera and the non-handle pools (see `presentation.rs`).
     pres: PresentationState,
+    /// The unit type registry the host fills (see [`UnitTypes`]).
+    unit_types: UnitTypes,
+    /// Unit events in the order they were produced, until the host takes them (see [`UnitEvent`]).
+    unit_events: Vec<UnitEvent>,
 }
 
 impl Default for Game {
@@ -465,7 +582,57 @@ impl Game {
             rng: Streams::default(),
             rng_table: None,
             pres: PresentationState::default(),
+            unit_types: UnitTypes::new(),
+            unit_events: Vec::new(),
         }
+    }
+
+    /// The unit type registry (read only). TODO(gamedata): filled by the engine from SLK data.
+    pub fn unit_types(&self) -> &UnitTypes {
+        &self.unit_types
+    }
+
+    /// Mutable access to the unit type registry, for the host and the tests.
+    pub fn unit_types_mut(&mut self) -> &mut UnitTypes {
+        &mut self.unit_types
+    }
+
+    /// The unit behind `key`. Panics if `key` is not a unit.
+    pub fn unit(&self, key: ObjKey) -> &UnitObj {
+        match self.object(key) {
+            Object::Unit(u) => u,
+            _ => panic!("not a unit"),
+        }
+    }
+
+    /// Mutable access to the unit behind `key`. Panics if `key` is not a unit.
+    pub fn unit_mut(&mut self, key: ObjKey) -> &mut UnitObj {
+        match self.object_mut(key) {
+            Object::Unit(u) => u,
+            _ => panic!("not a unit"),
+        }
+    }
+
+    /// The unit behind handle `id`, or `None` for a null, freed, destroyed, wrong-type or removed handle.
+    /// Every unit native resolves its unit argument through this.
+    pub fn unit_of_handle(&self, id: u32) -> Option<ObjKey> {
+        let k = self.handle_of_kind(id, HandleKind::Unit)?;
+        (!self.unit(k).removed).then_some(k)
+    }
+
+    /// The unit events recorded so far, oldest first.
+    pub fn unit_events(&self) -> &[UnitEvent] {
+        &self.unit_events
+    }
+
+    /// Takes the recorded unit events (oldest first) and empties the queue.
+    pub fn take_unit_events(&mut self) -> Vec<UnitEvent> {
+        std::mem::take(&mut self.unit_events)
+    }
+
+    /// Appends a unit event to the queue.
+    pub(crate) fn push_unit_event(&mut self, event: UnitEvent) {
+        self.unit_events.push(event);
     }
 
     /// The presentation state: the event log that a renderer reads, the camera and the pools.
