@@ -6,6 +6,7 @@ pub mod bytecode;
 pub mod check;
 pub mod compile;
 pub mod lexer;
+pub mod natives;
 pub mod parser;
 pub mod vm;
 
