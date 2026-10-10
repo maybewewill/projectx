@@ -206,7 +206,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~14%** of the 1:1 rewrite.
+**Overall: ~14.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -241,7 +241,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/viewer` v0.1 (17 tests on pure logic, builds for wasm32). **Not checked**: never drawn (no GPU), no wasm-bindgen/JS glue, bind pose only (no animation/skinning), one texture for all geosets.
 - [x] `crates/jass` v0.3: compiler to bytecode + VM + deterministic scheduler (30 VM tests). **UNVERIFIED vs the original**: real arithmetic is IEEE f32 (the spec hints at software float), R2I truncates, opcode numbering and codegen are ours (so the op limit won't count the same as the original until the codegen matches), and/or without short-circuit, behavior on array index out of range, strings are never freed.
 - [x] `crates/jass` natives v1: math/strings/Convert* (`natives/pure.rs`, 17 tests), pass 2: R2I/StringHash/Convert* confirmed (Unicorn), S2I/I2S/SubString/StringCase from disassembly.
-- [x] `crates/sim` timer.rs + script.rs: AgileClock (softfloat add 0.1, drifts below n·0.1: 3DCCCCCD, 3E4CCCCD, 3E999999…), TimerQueue (1-based min-heap, expiry→seq), ScriptHost (JASS sleep → timer). 17 tests. **Needs fixing**: the VM has no `resume(thread)`, so k fired sleep timers run all runnable threads k times; the sleep wake uses IEEE f32 instead of softfloat (switch to softfloat). Periodic re-arm = expiry+period (UNVERIFIED).
+- [x] `crates/sim` timer.rs + script.rs: AgileClock (softfloat add 0.1, drifts below n·0.1: 3DCCCCCD, 3E4CCCCD, 3E999999…), TimerQueue (1-based min-heap, expiry→seq), ScriptHost (JASS sleep → timer). 17 tests. ✅ fixed: `Vm::resume(thread)`, the sleep wake = softfloat add. Periodic re-arm = expiry+period (UNVERIFIED).
+- [x] **softfloat integrated**: JASS VM real = `softfloat::F32` (add/sub/mul/div/neg/i2r/compares; real `==` = approx_eq |a-b|<0.001), trig natives through softfloat + tables, no IEEE fallback (`RunStatus::MissingTables`). `crates/sim` uses `crates/softfloat` (own copy removed). Open: S2R/R2S/R2SW and real literals in the lexer go through Rust's f32 parsing (not the original's), Asin/Acos/Pow wrappers, int vs real comparison through I2R (UNVERIFIED).
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
