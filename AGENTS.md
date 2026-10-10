@@ -121,7 +121,11 @@ tools/
 ### 4.3h Game loop (spec: docs/spec/game-loop.md, partial)
 - Replay pump `0x6F54EB00` (block ids from a ring buffer; 0x1E/0x1F share a handler; exits after 0x1F) → enqueue `0x6F54CAD0`. Step framing `0x6F65C7D0`/`0x6F65C840` (on exit from the outermost level, queued net events are applied in list order). Feeder `0x6F6637C0`.
 - CRC-32 (reflected, 0xEDB88320; builder `0x6F649360`, update `0x6F649410`, finalize = NOT) is used to check the file footer. What goes into the per-turn sync checksum (CSyncData vtable+4, CNetData+0x2278) is not found.
-- Not found: the per-frame driver, steps per turn, the unit of game time, conversion of TriggerSleepAction seconds. → second pass needed.
+- **Pass 2 (docs/spec/game-loop-2.md):**
+  - The JASS interpreter is called from only 4 places (wrappers `0x6F45F8B0/0x6F45FA30/0x6F45FD00`, reached from `0x6F44B640/0x6F44B6A0`). **There is no polling of sleeping threads**: TriggerSleepAction (`0x6F3B2DB0` → `0x6F44B2F0`) stores status 3 and the **raw f32 bits of the seconds** (no conversion/minimum), then the frame resume posts message 0xD01BF → a CAgentTimer starts → on expiry the handler `0x6F2E3320` resumes the thread (LIKELY).
+  - **Timers**: TimerStart → `0x6F3F6890` → message 0x80204 → `CAgentTimer::vf2 0x6F477FF0`; timeout in **f32 seconds**, negative → 0. Queue = **1-based binary min-heap** `CPriorityQ<CSiRequest<CAgentTimer,ulong>>` (push `0x6F46A030`), order: **expiry ↑, then sequence number ↑ (FIFO)**. Two queues (manager+0x40 / +0x44 "(l)").
+  - Pump `0x6F46E370`: pops while expiry ≤ target, **now := expiry of the popped timer** for the duration of the callback. Driver `0x6F46E520`; per-frame `0x6F3A2EC0` → `0x6F470C70`, `0x6F46FFE0` with target at `0x6FAAE4A0`.
+  - Game ("agile") clock = float seconds, separate from the net step counter (CNetData+0x628). **Open**: who writes `0x6FAAE4A0` (the turn → seconds link), how often the frame runs.
 
 ### 4.3i Attack/damage (spec: docs/spec/attack-damage.md)
 - `CAbilityAttack::GetDamageAmount 0x6F0C6940` → dice on **stream 2**, clamp ≥ 0 (**min 1 not seen**, unlike OpenRealm). Target side `0x6F2A40D0`: invulnerability → evasion `0x6F08BD20` → handlers of categories 1, 2..8 → armor (physical only, class bit 0x10) → damage-type table → ethereal table → HP.
@@ -192,7 +196,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~11%** of the 1:1 rewrite.
+**Overall: ~11.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -234,6 +238,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (13)**: specs game-loop (2 passes) and attack-damage (dice confirmed in Unicorn). RTTI→vtable map. Two agent launches were interrupted by the safety classifier → those tasks were dropped.
 - **2026-10-10 (12)**: `crates/sim` (RNG + softfloat add/sub/mul) bit-exact vs the original (re-ran it myself with GAME_DLL). Natives pass 2. Running: softfloat (full library), game-loop spec, attack/damage spec.
 - **2026-10-10 (11)**: precedence decoded and checked in emulation → parser fixed. Natives v1 merged. Found the software float.
 - **2026-10-10 (10)**: RNG spec (Haiku agent + Unicorn); I re-ran it: 0 mismatches for Int/seed/streams. `tools/emu/` committed.
