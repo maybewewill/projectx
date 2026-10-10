@@ -112,7 +112,8 @@ tools/
 ### 4.3g Software float (important!)
 - From the natives analysis: real arithmetic in the JASS VM and in natives goes through **Blizzard's own software float helpers** (multiply `0x6F6EEE20`, Sin/Cos/Tan wrappers `0x6F3B2A10/2A30/2A50` call software helpers `0x6F6EF820/0x6F6EF8D0/0x6F6F0140`, not `_CI*`). `I2R` truncates the mantissa to 24 bits (`I2R(16777219) = 16777218`), not round-to-nearest. S2R parser `0x6F6F0520`. GetRandomReal uses the same helpers.
 - → Exact port of the softfloat library is **TOP PRIORITY for determinism**, checked through `tools/emu/`. Where `_CI*` from MSVCR80 is actually used (other code paths) needs a separate look.
-- The decompile export is **missing the bodies of many natives** (Ghidra didn't create functions at those addresses: Deg2Rad, Atan2, SquareRoot, Pow, R2I, S2I, StringHash, I2S, R2S, R2SW, StringLength, StringCase, Convert*). Fix: create functions at the addresses from natives-1.26a.tsv and re-export, or test them black-box in Unicorn.
+- The bodies of all 1,291 natives are restored (`ExportNatives.java` creates functions at the addresses from natives-1.26a.tsv; output `scratchpad/decomp/natives.c`, not in the repo).
+- Natives pass 2 (checked): **R2I** = truncation toward 0, saturation at |x|≥2^31 incl. NaN (21,626 cases in Unicorn, 0 mismatches). **StringHash** = MPQ string hash type 0 via Storm ord. 590 (Game.dll's own copy `0x6F68CC10` matches us on 33 cases; that Storm is the same is LIKELY). **S2I** = atoi (leading spaces and sign allowed). **Convert*** = just `return param_1`, no tables. **StringLength/StringCase** substitute `TRIGSTR_nnn` from war3map.wts (not done yet). Storm.dll + msvcr80.dll are needed for full checks.
 
 ### 4.3e Native table
 - `docs/spec/natives-1.26a.tsv`: **1,291 natives** (1,167 `common`, registered in `0x6F3D4020`; plus 124 AI natives in `0x6F71D9E0`) with signatures and implementation addresses. Extracted by `tools/analysis/extract_natives.py` (parses push name/signature/function before the register call).
@@ -176,7 +177,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~9%** of the 1:1 rewrite.
+**Overall: ~9.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -210,7 +211,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/jass` v0.2: type checker (39 tests). Statements in the AST now have `line`. **Known mismatch to fix**: it currently allows calling a function before it is declared; in retail JASS, as far as is known, a function has to be declared above the call site (this is why vJass has `.evaluate`). Check in Game.dll and switch to the strict rule.
 - [x] `crates/viewer` v0.1 (17 tests on pure logic, builds for wasm32). **Not checked**: never drawn (no GPU), no wasm-bindgen/JS glue, bind pose only (no animation/skinning), one texture for all geosets.
 - [x] `crates/jass` v0.3: compiler to bytecode + VM + deterministic scheduler (30 VM tests). **UNVERIFIED vs the original**: real arithmetic is IEEE f32 (the spec hints at software float), R2I truncates, opcode numbering and codegen are ours (so the op limit won't count the same as the original until the codegen matches), and/or without short-circuit, behavior on array index out of range, strings are never freed.
-- [x] `crates/jass` natives v1: math/strings/Convert* (`natives/pure.rs`, 17 tests), mostly UNSURE (bodies missing from the export); StringHash not implemented.
+- [x] `crates/jass` natives v1: math/strings/Convert* (`natives/pure.rs`, 17 tests), pass 2: R2I/StringHash/Convert* confirmed (Unicorn), S2I/I2S/SubString/StringCase from disassembly.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
