@@ -23,7 +23,7 @@
 
 ```
 crates/
-  w3g/        replay parser .w3g (1.26a) — the test oracle            [in progress]
+  w3g/        replay parser .w3g (1.26a) — the test oracle            [v0.1: header, blocks, players, slots, seed, ticks; actions raw]
   mpq/        MPQ archive reader                                        [todo]
   wc3-math/   bit-exact WC3 math (x87 rounding, software sin/cos/sqrt)  [todo — waiting on Ghidra]
   jass/       JASS lexer/parser/VM                                      [todo]
@@ -116,7 +116,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] PE analysis, Ghidra survey, FPU analysis
 - [ ] RTTI class recovery + export of the function list (running)
 - [ ] Find the `_control87` mode and the software sin/cos/sqrt
-- [ ] `crates/w3g`: 1.26a replay parser (header, blocks, players, slots, seed, actions, checksum blocks)
+- [x] `crates/w3g` v0.1: header v0/v1, zlib blocks, players, stat string, slots, **seed**, time slots, chat, leave, 0x22 checksum blocks. Synthetic test only.
+- [ ] `crates/w3g`: check on real 1.26a replays (`cargo run -p w3g --example dump -- file.w3g`), parse actions (0x10–0x1E ability/order, 0x16 selection, etc.)
 - [ ] `crates/mpq`
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
@@ -125,4 +126,5 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (2)**: Cargo workspace + `crates/w3g` (parser, 3 tests, clippy clean, `examples/dump.rs`). The stat-string layout (flags/width/height/crc/path/host) is best-effort and needs checking on real replays.
 - **2026-10-10**: PE analysis, Ghidra survey (70,526 functions, 100% decompiled in the sample), FPU analysis (no hardware transcendental instructions), research on AI decompilation. Created AGENTS.md, tools/. Started RTTI recovery.
