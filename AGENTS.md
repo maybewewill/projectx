@@ -158,7 +158,7 @@ tools/
 - Entry `0x6F458900` (ECX = list of {len,char*} segments, EDX = error reporter); the C++ static constructors (`_initterm` ranges) must run first. Output = flat 8-byte instructions; each function = HDR … RET END_F, the script ends with END (0x01).
 - Confirmed opcodes (51 texts): 03 hdr, 05/06/07 local/global/const decl, 08 param, 0b pop args, 0c const, 0d move, 0e load var, 0f funcref, 10/11/12 array-load/var-store/array-store, 13 push, 14 pop, 16 call (result in slot 0), 1a–1f comparisons, 20–23 arithmetic, 25/26 unary, 27 ret, 28 label, 29/2a/2b jnz/jz/jmp. No constant folding; and/or/if/loop = labels + jumps. Binary op on two leaves = 5 instructions; if = cond + body + 4; a loop iteration (tested form) = 14.
 - One case-insensitive name table shared with string literals (ids from 2, strings deduplicated); 8-bit temp slots wrap after 255. `%` is a syntax error (although the grammar has the node). **Calling an undeclared function is a compile error** (test 57).
-- → Next: make our compiler emit **the same bytecode** (opcode numbering and sequences) so that the op limit counts the same. Not checked: native call 0x15, opcodes 02/09/0a/17/18/19.
+- ✅ **Our compiler emits the same bytecode**: `tools/emu/jasscomp/parity.py` — **150/151 snippets identical** (3,821 instructions; the only difference is that this entry point rejects `native`, not a codegen issue). 40 vectors from the original in `crates/jass/tests/bytecode_parity.rs`. The VM executes this bytecode, budget = 1 per executed instruction (incl. HDR/DL/LBL/BIND/PUSH/POP) → **the op limit counts like the original**. UNVERIFIED: native call encoding 0x15 (imm = native index), DebugSkip semantics, ArrayLoad element code for handle/code arrays, an int returned from a real function isn't converted on return.
 
 ### 4.3c Handles (spec: docs/spec/handles-2.md) ✅ checked in Unicorn (21/21, `tools/emu/handle_alloc_emu.py`)
 - GetHandleId `0x6F3B2D00` = identity. **Base 0x100000**, new id = 0x100000 + table size (allocator `0x6F430C80`); freed ids go on a **LIFO stack** (push `0x6F3A3D20`) → the most recently freed one is reused.
@@ -225,14 +225,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~26.5%** of the 1:1 rewrite.
+**Overall: ~27.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~45% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~16% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
-| JASS VM + ~1000 natives | 12% | ~38% | parser (precedence = original), VM on softfloat; natives ~280 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
+| JASS VM + ~1000 natives | 12% | ~45% | parser/declarations/bytecode = original, VM on softfloat; natives ~280 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
@@ -258,7 +258,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/mdx` v0.1 (12 tests, corruption sweep). **TODO on real models**: TEXS/MODL unknown u32 fields, GEOS tail order (UVAS/UVBS), SEQS flags, KMTF tangents; after an unknown track tag the rest of the node is skipped. Interpolation 0/1/2/3 = none/linear/hermite/bezier (believed correct).
 - [x] `crates/jass` v0.2: type checker (39 tests). Statements in the AST now have `line`. ✅ **Declaration rules = the original** (checked empirically through the original compiler in Unicorn, ~40 probes): only call/reference functions declared earlier (recursion OK, mutual forward calls are an error); globals only after their declaration; globals/type blocks after functions = error; local may shadow a global but not an earlier function; redeclaring a function/global = error, duplicate locals/parameters are OK; **identifiers are case-insensitive**.
 - [x] `crates/viewer` v0.1 (17 tests on pure logic, builds for wasm32). **Not checked**: never drawn (no GPU), no wasm-bindgen/JS glue, bind pose only (no animation/skinning), one texture for all geosets.
-- [x] `crates/jass` v0.3: compiler to bytecode + VM + deterministic scheduler (30 VM tests). **UNVERIFIED vs the original**: real arithmetic is IEEE f32 (the spec hints at software float), R2I truncates, opcode numbering and codegen are ours (so the op limit won't count the same as the original until the codegen matches), and/or without short-circuit, behavior on array index out of range, strings are never freed.
+- [x] `crates/jass` v0.4: bytecode = the original (150/151 parity), VM on softfloat, deterministic scheduler. Open: and/or without short-circuit (the original compiles them to jumps — check how), array index out of range, strings are never freed.
 - [x] `crates/jass` natives v1: math/strings/Convert* (`natives/pure.rs`, 17 tests), pass 2: R2I/StringHash/Convert* confirmed (Unicorn), S2I/I2S/SubString/StringCase from disassembly.
 - [x] `crates/sim` timer.rs + script.rs: AgileClock (softfloat add 0.1, drifts below n·0.1: 3DCCCCCD, 3E4CCCCD, 3E999999…), TimerQueue (1-based min-heap, expiry→seq), ScriptHost (JASS sleep → timer). 17 tests. ✅ fixed: `Vm::resume(thread)`, the sleep wake = softfloat add. Periodic re-arm = expiry+period (UNVERIFIED).
 - [x] **softfloat integrated**: JASS VM real = `softfloat::F32` (add/sub/mul/div/neg/i2r/compares; real `==` = approx_eq |a-b|<0.001), trig natives through softfloat + tables, no IEEE fallback (`RunStatus::MissingTables`). `crates/sim` uses `crates/softfloat` (own copy removed). Open: Asin/Acos/Pow wrappers, int vs real comparison through I2R (UNVERIFIED).
