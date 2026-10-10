@@ -123,6 +123,12 @@ tools/
 - CRC-32 (reflected, 0xEDB88320; builder `0x6F649360`, update `0x6F649410`, finalize = NOT) is used to check the file footer. What goes into the per-turn sync checksum (CSyncData vtable+4, CNetData+0x2278) is not found.
 - Not found: the per-frame driver, steps per turn, the unit of game time, conversion of TriggerSleepAction seconds. → second pass needed.
 
+### 4.3i Attack/damage (spec: docs/spec/attack-damage.md)
+- `CAbilityAttack::GetDamageAmount 0x6F0C6940` → dice on **stream 2**, clamp ≥ 0 (**min 1 not seen**, unlike OpenRealm). Target side `0x6F2A40D0`: invulnerability → evasion `0x6F08BD20` → handlers of categories 1, 2..8 → armor (physical only, class bit 0x10) → damage-type table → ethereal table → HP.
+- Armor ≥ 0: M = 1/(1+K·A), K = Misc `DefenseArmor`. Armor < 0: a 21-entry table at `0x6FAB4300` indexed by min(trunc(-A),20) (values filled at runtime). DamageBonus 7×8 table at `0x6FAB4358` (row order differs from OpenRealm), EtherealDamageBonus from Misc.
+- ✅ Dice sampler `0x6F26CAD0`: each die 0..sides-1 (300/300 in Unicorn). Where +1 per die is added is not found. >16 dice → Gaussian path.
+- Timing (cooldown/dmgpt/backSw in seconds) → step conversion not found (same issue as game-loop).
+
 ### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
 - Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
 
@@ -186,7 +192,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~10.5%** of the 1:1 rewrite.
+**Overall: ~11%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
