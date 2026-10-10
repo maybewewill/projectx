@@ -13,3 +13,20 @@ export_credentials.cfg
 .mono/
 data_*/
 mono_crash.*.json
+
+# Rust
+target/
+
+# Never commit game files or decompiled output
+*.mpq
+*.MPQ
+*.dll
+*.DLL
+*.exe
+*.w3g
+*.w3m
+*.w3x
+*.blp
+*.mdx
+decomp/
+ghidra_out/
