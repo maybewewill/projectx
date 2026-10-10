@@ -149,7 +149,8 @@ tools/
 ### 4.3k Unit movement (spec: docs/spec/movement.md, pass 1)
 - Entry: message 0x8026A → `0x6F42FC80` → `0x6F426C30` → `0x6F4675C0` (world `0x6FAB73D8`) → `0x6F483300`: walks the mover list (world+0x3B8, LIFO insertion LIKELY) and fully updates each mover (`0x6F493410` → `0x6F490FC0` → `0x6F4907F0` per 44-byte record) before moving to the next.
 - Step length is clamped to unit+0x88; "moving" if > 0.01. **No ×0.1 inside the mover** (corrects pathing-2). Facing = heading of the step vector (`0x6F4B2DE0`: acos(vx/r) + sign from vy, 2π wrap), set **before** the step (instant turn); turn rate limited only by the clamp at unit+0xB8 (LIKELY). Arrival: |residual| ≤ 0.2. Priority class (unit+0xD8>>12)&0xF: lower-class units near a higher one get skip 0x200000 for that tick; **no push-apart found**. Re-plan no more often than every 10 ticks (LIKELY).
-- Open: waypoint rule (`0x6F49C990/0x6F49C3B0`), cell→world (`0x6F483E70`), where unit+0x88/+0xB8 come from (speed/turn rate), sorting in `0x6F48F2D0`. Note: 0x6FAAE4F4 is zero in the file and becomes 1.0 at startup via stub `0x6F84DE80` (see pathing request agent).
+- **Pass 2 (docs/spec/movement-2.md):** ✅ cell→world `0x6F483E70` = snap1e-4(a-b) + s·(i-j) via softfloat (400 Unicorn cases, 0 mismatches; s = object+0x48, value unconfirmed). ✅ sort `0x6F48F2D0` = selection sort over (key1,key2,payload), ties → the highest index (300 cases, 0 mismatches). Setters: `0x6F4937C0` → +0xB8 (turn cap), `0x6F4937E0` → +0xBC (prop window), `0x6F4937D0` → +0xB0 (0.49 margin). 0.49 is a squared radius (0.2401) for path validity; arrival = 0.2. Units are added to the list world+0x438 LIFO, walked by `0x6F494200`. Per-tick turning in `0x6F494200` (per-class table `0x6FAB7440`, pow/DIV) is partly read.
+- Open (pass 3): who fills the list world+0x3B8; who writes object+0x88 (per-tick step from speed/sec); the value of s (32?); the next-waypoint rule `0x6F49C990/0x6F49C2E0`; the full turn formula. Note: 0x6FAAE4F4 is zero in the file and becomes 1.0 at startup via stub `0x6F84DE80` (see pathing request agent).
 
 ### 4.3c Handles (spec: docs/spec/handles-2.md) ✅ checked in Unicorn (21/21, `tools/emu/handle_alloc_emu.py`)
 - GetHandleId `0x6F3B2D00` = identity. **Base 0x100000**, new id = 0x100000 + table size (allocator `0x6F430C80`); freed ids go on a **LIFO stack** (push `0x6F3A3D20`) → the most recently freed one is reused.
@@ -216,7 +217,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~23%** of the 1:1 rewrite.
+**Overall: ~23.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
