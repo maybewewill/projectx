@@ -9,6 +9,7 @@
 mod cases;
 mod data;
 mod pyramid_data;
+mod request_data;
 mod search_data;
 
 use sim::pathing::heap::{Entry, Heap};
@@ -164,5 +165,35 @@ fn search_paths_match_original() {
             cells,
             "case {seed}, request {request}"
         );
+    }
+}
+
+#[test]
+fn requests_match_original_over_random_cases() {
+    for &(seed, expected) in request_data::REQUEST_CASES {
+        let (got, _) = cases::run_request_case(cases::request_case(seed));
+        assert_eq!(
+            got, expected,
+            "request case {seed} diverges from the original"
+        );
+    }
+}
+
+#[test]
+fn waypoints_match_original() {
+    for &(seed, request, ret, points) in request_data::REQUEST_SPOTS {
+        let (_, outs) = cases::run_request_case(cases::request_case(seed));
+        let out = &outs[request];
+        assert_eq!(
+            u64::from(out.code),
+            u64::from(ret),
+            "case {seed}, request {request}"
+        );
+        let got: Vec<(u32, u32)> = out
+            .points
+            .iter()
+            .map(|&(x, y)| (x.to_bits(), y.to_bits()))
+            .collect();
+        assert_eq!(got.as_slice(), points, "case {seed}, request {request}");
     }
 }

@@ -62,4 +62,20 @@ GAME_DLL=/path/to/Game.dll PYTHONPATH=<dir with unicorn, pefile> \
   python3 tools/emu/search_vectors.py --cases 400 --rs crates/sim/tests/pathing/search_data.rs
 ```
 
-Both scripts exit with status 1 on any mismatch and print the coverage counters of the run.
+`request_vectors.py` (2026-10-10): whole path requests through the dispatcher `0x6F49A800` (direct move
+`0x6F49A5E0`, region search, waypoint output `0x6F49A470`, cell centre `0x6F497D30`). It extends the
+region search model of `search_vectors.py` with the two-cell footprint (mode 2, size class 1): the footprint
+probes, the mode-2 branches of the edge scanners and corners, and the block clamp. Starts are inside the
+pyramid, fractional (eighths); goals may be outside. After every request the return code, the path object
+(count and points, bit for bit), `S+0x90`, `S+0xA0` and the region search state are compared. The start-up
+constants are set by running the image's own stubs (`0x6F84DD90`, `0x6F84DDF0`, `0x6F84DE00`,
+`0x6F84DE80`) and by writing the marker value `0x6FAB7748` (S2R of the text "-128000.0", see the script).
+The path object's allocator `0x6F4B39C0` is the same hook as in `pyramid_vectors.py`. Writes
+`crates/sim/tests/pathing/request_data.rs`:
+
+```bash
+GAME_DLL=/path/to/Game.dll PYTHONPATH=<dir with unicorn, pefile> \
+  python3 tools/emu/request_vectors.py --cases 600 --rs crates/sim/tests/pathing/request_data.rs
+```
+
+All scripts exit with status 1 on any mismatch and print the coverage counters of the run.

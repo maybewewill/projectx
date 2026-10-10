@@ -1,38 +1,33 @@
-//! Region search: the request setup, the A* loop and the path fallbacks of the 1.26a pathing
-//! (Game.dll: request setup `0x6F49A640`, start and loop `0x6F49A240` / `0x6F49A170`, dispatcher
-//! `0x6F49A800`, reset `0x6F49A3F0`, relax `0x6F498C70` / `0x6F498D90`, cell expander
-//! `0x6F499E90`, block expander `0x6F499FA0` and its scanners).
+//! Region search: the request setup, the A* loop, the request dispatcher and the path fallbacks of
+//! the 1.26a pathing (Game.dll: request setup `0x6F49A640`, start and loop `0x6F49A240` /
+//! `0x6F49A170`, dispatcher `0x6F49A800`, reset `0x6F49A3F0`, relax `0x6F498C70` / `0x6F498D90`,
+//! cell expander `0x6F499E90`, block expander `0x6F499FA0` and its scanners and corners; the
+//! waypoint output `0x6F49A470` is in [`super::request`]).
 //!
 //! Spec: `docs/spec/pathing-3.md` (regions are the pyramid records, see [`super::pyramid`]).
 //!
-//! Verified against the original by `tools/emu/search_vectors.py` (Unicorn): random pyramids
-//! with 1 to 3 requests each (400 embedded cases; 1,500 more fresh cases were run during
-//! development). Every request goes through the original setup and loop and the whole state is
-//! compared after it: return codes, every node entry, the heap entries, closed list, pops,
-//! start/goal/best ids, best distance, pyramid records and list counts. 0 mismatches. The
-//! coverage includes block-expander nodes (level 1 and up), edge splits, corner relaxations,
-//! flag links, budget exhaustion and goal pops.
+//! Verified against the original by `tools/emu/search_vectors.py` (region search, mode 1) and
+//! `tools/emu/request_vectors.py` (whole requests through the dispatcher, modes 1 and 2), both in
+//! Unicorn. The whole state is compared after every request: return codes, every node entry, the
+//! heap entries, the closed list, pops, start/goal/best ids, best distance, the pyramid records,
+//! the path points and the flag-marker count. See the test data in `crates/sim/tests/pathing`.
 //!
-//! What is checked and what is not:
-//! * Mode 1 only (size class 0). The two-cell footprint mode of the original (`S+0x90 == 2`) is
-//!   NOT ported: its extra probe tests are not modelled.
-//! * The cell expander (level-0 nodes) is confirmed: probe order N, E, S, W, then the diagonals
-//!   NE, SE, SW, NW, each gated by its two orthogonal neighbours, then the flag link.
-//! * The block expander (level >= 1 nodes) is a reading of the edge and corner scanners
-//!   (`0x6F4998F0`..`0x6F499BF0`, `0x6F499CF0`..`0x6F499E40`). It matched the original on the
-//!   generated cases, but those cases do not exhaust the scanners' branches, so it is UNVERIFIED
-//!   beyond them.
-//! * The request setup converts its float inputs by floor and truncation. Only integral inputs
-//!   (cells) were run through the original.
-//! * The path-building step (`0x6F49A470`, waypoint output) is not ported: [`Path::cells`] is
-//!   the chain of seed cells through the parent links, which is what the walk produces.
-//! * An out-of-bounds start (setup returns 0) is reported as [`Status::Failed`] without a
-//!   search. The original's dispatcher still calls the loop in that case; this is not ported
-//!   and not verified.
+//! Size classes: `size_class` 0 is mode 1 (one cell). Size class 1 is mode 2, the two-cell
+//! footprint of larger units: every probe and scanner also requires the cells of the footprint to
+//! be free (state 00 at level 0), the block edges have their last-cell variants, and a block's
+//! seed is clamped to the block's last-but-one cell. Size classes 2 and up (`mode` 4 and more) are
+//! not verified: the code keeps `mode = 1 << size_class` and uses it where the original does (the
+//! edge sub-split), but no vector covers them.
+//!
+//! What is not reproduced:
+//! * A start cell outside the pyramid. The original's dispatcher still runs the search on the
+//!   stale state of the previous request (the list is erased, not cleared); [`Search::dispatch`]
+//!   returns `None` for this case instead.
 
 use super::heap::Heap;
 use super::isqrt::isqrt;
 use super::pyramid::{Labels, Node, Pyramid, BLOCKED, LIST_END, NO_NODE, OPEN, REFINE, UNTOUCHED};
+use super::request;
 use softfloat::{conv, math, F32};
 
 /// Default pop budget of a request (the original takes it from the caller; pathing-2.md 5.2).
@@ -49,7 +44,7 @@ pub struct FlagLink {
     pub y: i32,
 }
 
-/// One path request (the arguments of the request setup).
+/// One path request (the arguments of the dispatcher and of the request setup).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Request {
     /// Path type `T` (even, 0 to 14 in practice).
@@ -62,6 +57,8 @@ pub struct Request {
     pub goal: (F32, F32),
     /// Pop budget of the loop.
     pub budget: u32,
+    /// Size class of the unit's footprint: 0 for one cell (mode 1), 1 for two cells (mode 2).
+    pub size_class: u32,
 }
 
 /// How a request ended.
@@ -89,12 +86,74 @@ pub struct Path {
     pub cells: Vec<(i32, i32)>,
 }
 
+/// Result of [`Search::dispatch`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dispatch {
+    /// The dispatcher's return code: 1 when the path ends on the goal (direct move, or the goal
+    /// region was reached), 0 when it ends on the closest node (straight or partial).
+    pub code: u32,
+    /// The waypoints in the order the caller reads them: goal side first, the first entry is the
+    /// goal (or the closest node's centre) and the last entry is the start.
+    pub points: Vec<(F32, F32)>,
+}
+
 /// Return code of the request setup (`0x6F49A640`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Setup {
     Outside,
     Direct,
     Search,
+}
+
+/// Edge of a block for the edge scanners: `Top`/`Bottom` scan along x, `Right`/`Left` along y.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+/// The footprint tests of mode 2. Each variant is one of the original's footprint functions; the
+/// coordinates passed in are the coordinates the caller gives the probe (its target cell).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Foot {
+    /// North probe `0x6F498E80`: `(x+1, y)` free.
+    N,
+    /// East probe `0x6F498ED0`: `(x+1, y)` and `(x+1, y+1)` free.
+    E,
+    /// South probe `0x6F498F30`: `(x, y+1)` and `(x+1, y+1)` free.
+    S,
+    /// West probe `0x6F498F90`: `(x, y+1)` free.
+    W,
+    /// Odd-column check of the north probe `0x6F498FE0`: `(x+1, y-2)` or `(x-1, y)` free.
+    OddN,
+    /// Odd-row check of the west probe `0x6F499050`: `(x-2, y+1)` or `(x, y-1)` free.
+    OddW,
+    /// NE diagonal `0x6F4990C0`: `(x+1, y)` free.
+    Ne,
+    /// SE diagonal `0x6F499110`: `(x+1, y+1)` free.
+    Se,
+    /// SW diagonal `0x6F499170`: `(x, y+1)` free.
+    Sw,
+    /// Three cells `0x6F499210`: `(x+1, y)`, `(x, y+1)` and `(x+1, y+1)` free.
+    Three,
+    /// NE corner `0x6F499530`: `(x+1, y)` free.
+    CornerNe,
+    /// SW corner `0x6F499590`: `(x, y+1)` free.
+    CornerSw,
+    /// Top edge, not last cell `0x6F4991C0`: `(x+1, y)` free.
+    TopInner,
+    /// Top edge, last cell `0x6F4992F0`.
+    TopLast,
+    /// Left edge, not last cell `0x6F4992A0`: `(x, y+1)` free.
+    LeftInner,
+    /// Left edge, last cell `0x6F4994A0`.
+    LeftLast,
+    /// Bottom edge, last cell `0x6F499410`.
+    BottomLast,
+    /// Right edge, last cell `0x6F499380`.
+    RightLast,
 }
 
 /// Squared distance of `(24 dx, 24 dy)` in 32-bit wrapping arithmetic: the argument of the
@@ -117,13 +176,6 @@ fn cell_of(v: F32) -> i32 {
     conv::f2i(math::floor(v))
 }
 
-/// Axis of an edge scan: `X` samples along x at a fixed row, `Y` along y at a fixed column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Axis {
-    X,
-    Y,
-}
-
 /// Region search state: the pyramid, the labelling state, the open and closed lists and the
 /// request fields of the original's search object.
 #[derive(Clone, Debug)]
@@ -143,6 +195,10 @@ pub struct Search {
     best_id: i32,
     setup_code: i32,
     search_code: i32,
+    /// `S+0x90`: `1 << size_class`. Mode 2 is `2`.
+    mode: u32,
+    /// `S+0xA0`: how many flag-marker points the waypoint output has written.
+    flag_points: u32,
 }
 
 impl Search {
@@ -176,12 +232,19 @@ impl Search {
             best_id: 0,
             setup_code: 0,
             search_code: -1,
+            mode: 0,
+            flag_points: 0,
         }
     }
 
     /// The node list of the last request (region ids are its indices).
     pub fn nodes(&self) -> &[Node] {
         &self.labels.nodes
+    }
+
+    /// `S+0xA0` after the last request: the number of flag-marker points written.
+    pub fn flag_points(&self) -> u32 {
+        self.flag_points
     }
 
     /// Return codes of the last request: the setup (0, 1 or 2) and the loop (goal id or -1).
@@ -193,11 +256,7 @@ impl Search {
     /// list and the closed list, and bumps the generation when it labels.
     pub fn find_path(&mut self, req: &Request) -> Path {
         let setup = self.setup(req);
-        self.setup_code = match setup {
-            Setup::Outside => 0,
-            Setup::Direct => 1,
-            Setup::Search => 2,
-        };
+        self.setup_code = setup_code(setup);
         self.search_code = -1;
         match setup {
             Setup::Outside => Path {
@@ -231,12 +290,66 @@ impl Search {
         }
     }
 
+    /// The request dispatcher (`0x6F49A800`): direct move, search, and the waypoint output.
+    ///
+    /// Returns `None` when the start cell is outside the pyramid (not reproduced, see the module
+    /// docs). The output is the waypoint list the original writes into the caller's path object.
+    pub fn dispatch(&mut self, req: &Request) -> Option<Dispatch> {
+        let setup = self.setup(req);
+        self.setup_code = setup_code(setup);
+        self.search_code = -1;
+        let mut points = Vec::new();
+        match setup {
+            Setup::Outside => None,
+            Setup::Direct => {
+                // direct move (0x6F49A5E0) to the goal point
+                points.push(req.goal);
+                Some(Dispatch { code: 1, points })
+            }
+            Setup::Search => {
+                let found = self.start_search();
+                self.search_code = found;
+                if found >= 0 {
+                    let flags = request::waypoints(
+                        &self.labels.nodes,
+                        self.mode,
+                        found as u32,
+                        req.start,
+                        req.goal,
+                        &mut points,
+                    );
+                    self.flag_points += flags;
+                    return Some(Dispatch { code: 1, points });
+                }
+                if self.start_id == self.best_id {
+                    // straight move (0x6F49A5E0) to the start point
+                    points.push(req.start);
+                    return Some(Dispatch { code: 0, points });
+                }
+                let best = self.best_id as u32;
+                let centre = request::centre(&self.labels.nodes[best as usize]);
+                let flags = request::waypoints(
+                    &self.labels.nodes,
+                    self.mode,
+                    best,
+                    req.start,
+                    centre,
+                    &mut points,
+                );
+                self.flag_points += flags;
+                Some(Dispatch { code: 0, points })
+            }
+        }
+    }
+
     /// Reset (`0x6F49A3F0`) and request setup (`0x6F49A640`).
     fn setup(&mut self, req: &Request) -> Setup {
         self.pops = 0;
         self.closed_head = LIST_END;
         self.labels.nodes.clear();
         self.heap.clear();
+        self.flag_points = 0;
+        self.mode = 1u32 << (req.size_class & 31);
         self.labels.path_type = req.path_type;
         self.labels.flag_on = req.flag_on;
         let start = (cell_of(req.start.0), cell_of(req.start.1));
@@ -360,28 +473,98 @@ impl Search {
         self.push(node);
     }
 
+    /// Lookup at level `level` of cell `(x, y)`.
+    fn lookup_at(&mut self, level: usize, x: i32, y: i32) -> i32 {
+        self.pyramid.lookup(&mut self.labels, level, x, y)
+    }
+
     /// Lookup at level 0 of cell `(x, y)`, or `None` when it is blocked.
     fn walkable_region(&mut self, x: i32, y: i32) -> Option<u32> {
-        let id = self.pyramid.lookup(&mut self.labels, 0, x, y);
+        let id = self.lookup_at(0, x, y);
         (id != BLOCKED).then_some(id as u32)
     }
 
-    /// Probe of an orthogonal neighbour: relaxes its region when it is walkable.
-    fn probe(&mut self, from: u32, x: i32, y: i32) -> bool {
-        match self.walkable_region(x, y) {
-            Some(id) => {
-                self.relax(id, from, false);
-                true
-            }
+    /// Whether level-0 cell `(x, y)` lies in the level and has state 00 for the path type (the
+    /// footprint test of mode 2, `0x6F498890`).
+    fn free(&self, x: i32, y: i32) -> bool {
+        let shift = self.labels.path_type & 0x1F;
+        match self.pyramid.record_index(0, x, y) {
+            Some(i) => (self.pyramid.level(0).records()[i].word1 << shift) & 0xC000_0000 == 0,
             None => false,
         }
     }
 
-    /// Probe of a diagonal neighbour (the gating is the caller's).
-    fn diagonal(&mut self, from: u32, x: i32, y: i32) {
-        if let Some(id) = self.walkable_region(x, y) {
-            self.relax(id, from, false);
+    /// The footprint test `which` at the caller's target cell `(x, y)`.
+    fn foot(&self, which: Foot, x: i32, y: i32) -> bool {
+        match which {
+            Foot::N | Foot::Ne | Foot::CornerNe | Foot::TopInner => self.free(x + 1, y),
+            Foot::E => self.free(x + 1, y) && self.free(x + 1, y + 1),
+            Foot::S => self.free(x, y + 1) && self.free(x + 1, y + 1),
+            Foot::W | Foot::Sw | Foot::CornerSw | Foot::LeftInner => self.free(x, y + 1),
+            Foot::Se => self.free(x + 1, y + 1),
+            Foot::OddN => self.free(x + 1, y - 2) || self.free(x - 1, y),
+            Foot::OddW => self.free(x - 2, y + 1) || self.free(x, y - 1),
+            Foot::Three => self.foot(Foot::Se, x, y) && self.free(x + 1, y) && self.free(x, y + 1),
+            Foot::TopLast => {
+                self.free(x + 1, y)
+                    && self.free(x + 1, y + 1)
+                    && (self.free(x + 1, y + 2) || self.free(x - 1, y))
+            }
+            Foot::LeftLast => {
+                self.free(x, y + 1)
+                    && self.free(x + 1, y + 1)
+                    && (self.free(x + 2, y + 1) || self.free(x, y - 1))
+            }
+            Foot::BottomLast => {
+                self.foot(Foot::Three, x, y)
+                    && ((self.free(x - 1, y) && self.free(x - 1, y + 1))
+                        || (self.free(x + 1, y - 2) && self.free(x + 1, y - 1))
+                        || (self.free(x + 1, y - 1) && self.free(x - 1, y)))
+            }
+            Foot::RightLast => {
+                self.foot(Foot::Three, x, y)
+                    && ((self.free(x, y - 1) && self.free(x + 1, y - 1))
+                        || (self.free(x - 2, y + 1) && self.free(x - 1, y + 1))
+                        || (self.free(x - 1, y + 1) && self.free(x, y - 1)))
+            }
         }
+    }
+
+    /// Probe of an orthogonal neighbour at `(x, y)` (`0x6F499E90` calls one per side). Relaxes its
+    /// region when it is walkable. In mode 2 the footprint test `foot` must hold, and when `odd`
+    /// is given (`(extra, odd)`: the north and west probes) the extra test `extra` must hold too
+    /// for a block-level region whose coordinate `odd` is odd.
+    fn probe(&mut self, from: u32, x: i32, y: i32, foot: Foot, odd: Option<(Foot, bool)>) -> bool {
+        let Some(id) = self.walkable_region(x, y) else {
+            return false;
+        };
+        if self.mode == 2 {
+            if !self.foot(foot, x, y) {
+                return false;
+            }
+            if let Some((extra, odd_coord)) = odd {
+                if odd_coord && self.labels.nodes[id as usize].level != 0 && !self.foot(extra, x, y)
+                {
+                    return false;
+                }
+            }
+        }
+        self.relax(id, from, false);
+        true
+    }
+
+    /// Probe of a diagonal neighbour (the gating by the orthogonal probes is the caller's). In
+    /// mode 2 the footprint test (if any) must hold too.
+    fn diagonal(&mut self, from: u32, x: i32, y: i32, foot: Option<Foot>) {
+        let Some(id) = self.walkable_region(x, y) else {
+            return;
+        };
+        if let (2, Some(f)) = (self.mode, foot) {
+            if !self.foot(f, x, y) {
+                return;
+            }
+        }
+        self.relax(id, from, false);
     }
 
     /// Flag link of a node whose flag byte has an enabled table entry (`0x6F4998C0`).
@@ -400,53 +583,47 @@ impl Search {
     fn expand_cell(&mut self, node: u32) {
         let n = self.labels.nodes[node as usize];
         let (x, y) = n.seed;
-        let north = self.probe(node, x, y - 1);
-        let east = self.probe(node, x + 1, y);
-        let south = self.probe(node, x, y + 1);
-        let west = self.probe(node, x - 1, y);
+        let north = self.probe(node, x, y - 1, Foot::N, Some((Foot::OddN, (x & 1) != 0)));
+        let east = self.probe(node, x + 1, y, Foot::E, None);
+        let south = self.probe(node, x, y + 1, Foot::S, None);
+        let west = self.probe(node, x - 1, y, Foot::W, Some((Foot::OddW, (y & 1) != 0)));
         if north && east {
-            self.diagonal(node, x + 1, y - 1);
+            self.diagonal(node, x + 1, y - 1, Some(Foot::Ne));
         }
         if east && south {
-            self.diagonal(node, x + 1, y + 1);
+            self.diagonal(node, x + 1, y + 1, Some(Foot::Se));
         }
         if south && west {
-            self.diagonal(node, x - 1, y + 1);
+            self.diagonal(node, x - 1, y + 1, Some(Foot::Sw));
         }
         if west && north {
-            self.diagonal(node, x - 1, y - 1);
+            self.diagonal(node, x - 1, y - 1, None);
         }
         if n.flag != 0 {
             self.flag_link(node, n.flag, x, y);
         }
     }
 
-    /// Lookup at `level` (the block scanners look up at their own level).
-    fn lookup_at(&mut self, level: usize, x: i32, y: i32) -> i32 {
-        self.pyramid.lookup(&mut self.labels, level, x, y)
-    }
-
-    /// Scans one edge of a level-`level` block (`0x6F4998F0` for [`Axis::X`], `0x6F4999F0` for
-    /// [`Axis::Y`]). `split` is the coordinate along the edge that is halved when the sample is
-    /// a [`REFINE`]; `fixed` is the coordinate across the edge.
+    /// Scans one edge of a block (`0x6F4998F0` top, `0x6F499AF0` bottom, `0x6F4999F0` right,
+    /// `0x6F499BF0` left). `split` runs along the edge and `fixed` is the coordinate across it.
     ///
-    /// Returns the two flags the original writes to its out pointers: the first flag (the half
-    /// with the smaller coordinate) and the second. A flag is set when the region found is at
-    /// a level above 0 (the recursion's own first half writes the first flag).
+    /// Returns the two flags the original writes to its out pointers. The first flag is set by a
+    /// sub-scan (its first half) or by this scan at a level above 0 when it is the first half; the
+    /// second flag is set when the region found is at a level above 0.
     fn edge_scan(
         &mut self,
         node: u32,
         level: usize,
-        axis: Axis,
+        edge: Edge,
         split: i32,
         fixed: i32,
     ) -> (bool, bool) {
-        let at = |s: i32| match axis {
-            Axis::X => (s, fixed),
-            Axis::Y => (fixed, s),
+        let at = |s: i32| match edge {
+            Edge::Top | Edge::Bottom => (s, fixed),
+            Edge::Right | Edge::Left => (fixed, s),
         };
         let (mut out_first, mut out_second) = (false, false);
-        let mut first_half_open = true;
+        let mut first_open = true;
         let mut lvl = level;
         let mut split = split;
         let (x, y) = at(split);
@@ -460,36 +637,64 @@ impl Search {
             let half = 1i32 << lvl;
             let mid = ((split >> block_level) << block_level) + half;
             let (first, second) = if mid <= split {
-                (mid - 1, split)
+                let sub = if lvl == 0 { 1 } else { self.mode as i32 };
+                (mid - sub, split)
             } else {
                 (split, mid)
             };
-            let (sub_first, _) = self.edge_scan(node, lvl, axis, first, fixed);
-            if first_half_open && sub_first {
+            let (sub_first, _) = self.edge_scan(node, lvl, edge, first, fixed);
+            if first_open && sub_first {
                 out_first = true;
             }
-            first_half_open = false;
+            first_open = false;
             split = second;
             let (x, y) = at(split);
             id = self.lookup_at(lvl, x, y);
         }
+        if self.mode == 2 {
+            let base = (split >> lvl) << lvl;
+            let not_last = split < base + (1 << lvl) - 1;
+            let foot = match (edge, not_last) {
+                (Edge::Top, true) => Foot::TopInner,
+                (Edge::Top, false) => Foot::TopLast,
+                (Edge::Bottom, true) => Foot::Three,
+                (Edge::Bottom, false) => Foot::BottomLast,
+                (Edge::Right, true) => Foot::Three,
+                (Edge::Right, false) => Foot::RightLast,
+                (Edge::Left, true) => Foot::LeftInner,
+                (Edge::Left, false) => Foot::LeftLast,
+            };
+            let (fx, fy) = match edge {
+                Edge::Top | Edge::Bottom => (split, fixed),
+                Edge::Right | Edge::Left => (fixed, split),
+            };
+            if !self.foot(foot, fx, fy) {
+                return (out_first, out_second);
+            }
+        }
         self.relax(id as u32, node, false);
         if lvl != 0 {
             out_second = true;
-            if first_half_open {
+            if first_open {
                 out_first = true;
             }
         }
         (out_first, out_second)
     }
 
-    /// Corner probe (`0x6F499CF0` and its three siblings): the region at `(x, y)` seen at
-    /// `level`, descending while it is a [`REFINE`].
-    fn corner(&mut self, node: u32, level: usize, x: i32, y: i32) {
+    /// Corner probe (`0x6F499CF0` and its siblings): the region at `(x, y)` seen at `level`,
+    /// descending while it is a [`REFINE`]. In mode 2 the footprint test of the corner must hold
+    /// when there is one.
+    fn corner(&mut self, node: u32, level: usize, x: i32, y: i32, foot: Option<Foot>) {
         let mut lvl = level;
         loop {
             let id = self.lookup_at(lvl, x, y);
             if id >= 0 {
+                if let (2, Some(f)) = (self.mode, foot) {
+                    if !self.foot(f, x, y) {
+                        return;
+                    }
+                }
                 self.relax(id as u32, node, false);
                 return;
             }
@@ -500,31 +705,35 @@ impl Search {
         }
     }
 
-    /// Block expander (`0x6F499FA0`, reading of the scanners): the four edges of the block (top,
-    /// right, bottom, left) and then the corners that sit between two edges that both found
-    /// a region (NE, SE, SW, NW).
+    /// Block expander (`0x6F499FA0`): the four edges of the block (top, right, bottom, left) and
+    /// then the corners that sit between two edges that both found a region (NE, SE, SW, NW). In
+    /// mode 2 the seed is first clamped to the block's last-but-one cell on both axes.
     fn expand_block(&mut self, node: u32) {
         let n = self.labels.nodes[node as usize];
         let level = n.level as usize;
-        let (x, y) = n.seed;
+        let (mut x, mut y) = n.seed;
         let size = 1i32 << level;
         let ox = (x >> level) << level;
         let oy = (y >> level) << level;
-        let top = self.edge_scan(node, level, Axis::X, x, oy - 1);
-        let right = self.edge_scan(node, level, Axis::Y, y, ox + size);
-        let bottom = self.edge_scan(node, level, Axis::X, x, oy + size);
-        let left = self.edge_scan(node, level, Axis::Y, y, ox - 1);
+        if self.mode == 2 {
+            x = x.min(ox + size - 2);
+            y = y.min(oy + size - 2);
+        }
+        let top = self.edge_scan(node, level, Edge::Top, x, oy - 1);
+        let right = self.edge_scan(node, level, Edge::Right, y, ox + size);
+        let bottom = self.edge_scan(node, level, Edge::Bottom, x, oy + size);
+        let left = self.edge_scan(node, level, Edge::Left, y, ox - 1);
         if top.1 && right.0 {
-            self.corner(node, level, ox + size, oy - 1);
+            self.corner(node, level, ox + size, oy - 1, Some(Foot::CornerNe));
         }
         if right.1 && bottom.1 {
-            self.corner(node, level, ox + size, oy + size);
+            self.corner(node, level, ox + size, oy + size, Some(Foot::Three));
         }
         if bottom.0 && left.1 {
-            self.corner(node, level, ox - 1, oy + size);
+            self.corner(node, level, ox - 1, oy + size, Some(Foot::CornerSw));
         }
         if left.0 && top.0 {
-            self.corner(node, level, ox - 1, oy - 1);
+            self.corner(node, level, ox - 1, oy - 1, None);
         }
     }
 
@@ -625,6 +834,15 @@ impl Search {
     }
 }
 
+/// The setup's return code as the original reports it (0 outside, 1 direct, 2 search).
+fn setup_code(setup: Setup) -> i32 {
+    match setup {
+        Setup::Outside => 0,
+        Setup::Direct => 1,
+        Setup::Search => 2,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,6 +884,7 @@ mod tests {
             start: at(start.0, start.1),
             goal: at(goal.0, goal.1),
             budget,
+            size_class: 0,
         }
     }
 
@@ -742,5 +961,46 @@ mod tests {
         s.find_path(&request((0, 0), (7, 7), POP_BUDGET));
         assert_eq!(s.nodes().len(), first);
         assert_eq!(s.nodes()[0].seed, (0, 0));
+    }
+
+    #[test]
+    fn dispatch_direct_move_returns_the_goal_point() {
+        // The goal point lies in the start's cell (2, 2): the setup is a direct move, and the
+        // output is the exact goal point, not the cell.
+        let mut s = search(&[0; 64]);
+        let req = Request {
+            start: at(2, 2),
+            goal: (
+                F32::from_bits(2.9f32.to_bits()),
+                F32::from_bits(2.25f32.to_bits()),
+            ),
+            ..request((2, 2), (2, 2), POP_BUDGET)
+        };
+        let d = s.dispatch(&req).expect("inside the pyramid");
+        assert_eq!(d.code, 1);
+        assert_eq!(d.points, vec![req.goal]);
+    }
+
+    #[test]
+    fn dispatch_found_path_writes_centres_and_exact_ends() {
+        // Open grid, start (0, 0), goal (2, 0): the path is three nodes in a row, so the output
+        // is goal, middle, start with the two ends replaced by the exact points.
+        let mut s = search(&[0; 64]);
+        let req = Request {
+            start: (
+                F32::from_bits(0.5f32.to_bits()),
+                F32::from_bits(0.5f32.to_bits()),
+            ),
+            goal: at(2, 0),
+            ..request((0, 0), (2, 0), POP_BUDGET)
+        };
+        let d = s.dispatch(&req).expect("inside the pyramid");
+        assert_eq!(d.code, 1);
+        assert_eq!(d.points.len(), 3);
+        assert_eq!(d.points[0], req.goal);
+        assert_eq!(d.points[2], req.start);
+        let mid = d.points[1];
+        assert_eq!(mid.0.to_f32(), 1.75);
+        assert_eq!(mid.1.to_f32(), 0.75);
     }
 }
