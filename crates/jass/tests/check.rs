@@ -97,17 +97,19 @@ fn subtype_relation() {
 }
 
 #[test]
-fn type_cycles_are_reported_and_terminate() {
-    // a -> b -> a is one cycle (reported once); c -> c is a self cycle.
+fn type_parent_must_be_declared_above() {
+    // Harness t08: `type Child extends Parent` before `type Parent` is an error in the original.
+    // Both forward references and self references are unknown at the point they are used.
     let d = run("type a extends b\ntype b extends a\ntype c extends c\n");
     assert_eq!(d.len(), 2, "{d:#?}");
-    expect_err(&d, "cyclic type declaration 'a'");
-    expect_err(&d, "cyclic type declaration 'c'");
+    expect_err(&d, "type 'a' extends unknown type 'b'");
+    expect_err(&d, "type 'c' extends unknown type 'c'");
 }
 
 #[test]
-fn cycle_repair_does_not_cascade() {
-    // After the repair `b` derives from handle, so `a` and `b` are usable and only one error is reported.
+fn repaired_type_does_not_cascade() {
+    // After the repair `a` derives from handle, so `b` (declared below `a`) is usable and only one
+    // error is reported.
     let (env, d) = TypeEnv::build(&[parse("type a extends b\ntype b extends a\n")]);
     assert_eq!(d.len(), 1, "{d:#?}");
     assert!(env.is_handle_derived("a"));
@@ -132,19 +134,19 @@ fn user_type_must_derive_from_handle() {
 
 #[test]
 fn duplicate_type_is_reported() {
-    let src = format!("{PRELUDE}\ntype unit extends item\n");
-    let d = run(&src);
+    let src = "type agent extends handle\ntype Agent extends handle\n";
+    let d = run(src);
     assert_eq!(d.len(), 1, "{d:#?}");
-    expect_err(&d, "duplicate type 'unit'");
-    assert_eq!(d[0].line, line_of(&src, "type unit extends item"));
+    // Type names are case-insensitive (harness t01).
+    expect_err(&d, "duplicate type 'Agent'");
+    assert_eq!(d[0].line, 2);
 }
 
 #[test]
-fn forward_type_reference_is_allowed() {
-    // UNVERIFIED vs retail: a type may extend a type declared later in the file.
-    let src = format!("{PRELUDE}\ntype leaf extends mid\ntype mid extends unit\n");
-    let d = run(&src);
-    assert!(d.is_empty(), "{d:#?}");
+fn type_used_before_its_declaration_is_an_error() {
+    // Harness t05: a type name is known only from its declaration on.
+    let d = run("globals\nGizmo g = null\nendglobals\ntype Gizmo extends handle\n");
+    expect_err(&d, "unknown type 'Gizmo'");
 }
 
 // ---- assignability ----
@@ -476,11 +478,11 @@ fn return_type_must_match_signature() {
 
 #[test]
 fn duplicate_declarations_are_reported() {
-    let d = run(&format!(
-        "{PRELUDE}\nglobals\ninteger gInt = 1\nendglobals\n"
-    ));
-    expect_err(&d, "duplicate global 'gInt'");
+    // Harness o18: a global is declared once.
+    let src = PRELUDE.replace("integer gInt = 0", "integer gInt = 0\n    integer gInt = 1");
+    expect_err(&run(&src), "duplicate global 'gInt'");
 
+    // Harness o17: a function is declared once.
     let d = run(&format!(
         "{PRELUDE}\nfunction Cb takes nothing returns nothing\nendfunction\n"
     ));
@@ -492,11 +494,36 @@ fn duplicate_declarations_are_reported() {
     ));
     expect_err(&d, "duplicate function or native 'Noop'");
 
-    fn_err("local integer x\nlocal real x", "", "duplicate local 'x'");
+    // Harness q05, q07: names are case-insensitive.
+    let d = run("function Abc takes nothing returns nothing\nendfunction\nfunction ABC takes nothing returns nothing\nendfunction\n");
+    expect_err(&d, "duplicate function or native 'ABC'");
+}
+
+#[test]
+fn repeated_locals_and_parameters_are_allowed() {
+    // Harness p01, p02, p06, o19: a parameter or local may be repeated. The last declaration sets the
+    // type (r01, r02, r05: `local integer x` then `local real x` makes x real).
     let d = run("function P takes integer a, integer a returns nothing\nendfunction\n");
-    expect_err(&d, "duplicate parameter 'a'");
-    let d = run("function P takes integer n returns nothing\nlocal integer n\nendfunction\n");
-    expect_err(&d, "duplicate local 'n'");
+    assert!(d.is_empty(), "{d:#?}");
+    fn_ok("local integer n", "");
+    fn_ok("local integer x\nlocal real x", "set x = 1.5");
+    fn_err(
+        "local real x\nlocal integer x",
+        "set x = 1.5",
+        "cannot convert real to integer",
+    );
+}
+
+#[test]
+fn local_may_not_take_the_name_of_an_earlier_function() {
+    // Harness q03, q12, r03: a local is an error when its name is an already-declared function
+    // (the function being checked included). Harness q01: a later function name is fine.
+    let d = run("function Yy takes nothing returns nothing\nendfunction\nfunction f takes nothing returns nothing\nlocal integer Yy\nendfunction\n");
+    expect_err(&d, "'Yy' is already the name of a function");
+    let d = run("function f takes nothing returns nothing\nlocal integer f\nendfunction\n");
+    expect_err(&d, "'f' is already the name of a function");
+    let d = run("function f takes nothing returns nothing\nlocal integer Zz\nendfunction\nfunction Zz takes nothing returns nothing\nendfunction\n");
+    assert!(d.is_empty(), "{d:#?}");
 }
 
 #[test]
@@ -509,17 +536,27 @@ fn locals_and_params_may_shadow_globals() {
 }
 
 #[test]
-fn functions_may_call_functions_declared_later() {
-    // UNVERIFIED vs retail: no forward declaration is required.
+fn functions_see_only_functions_declared_above_them() {
+    // Harness o01 (call to a later function), o03 (`function g` reference to a later function),
+    // o09 (mutual recursion: the first call is to a later function), q09 (case-insensitive).
     let src = format!(
         "{PRELUDE}\nfunction Test takes nothing returns nothing\ncall Later()\nendfunction\nfunction Later takes nothing returns nothing\nendfunction\n"
+    );
+    expect_err(&run(&src), "undefined function 'Later'");
+    let src = format!(
+        "{PRELUDE}\nfunction Test takes nothing returns nothing\nlocal code c = function Later\nendfunction\nfunction Later takes nothing returns nothing\nendfunction\n"
+    );
+    expect_err(&run(&src), "undefined function 'Later'");
+    // Harness o02, o04, o05: a function above its use, and a function calling itself, are fine.
+    let src = format!(
+        "{PRELUDE}\nfunction Later takes nothing returns nothing\nendfunction\nfunction Test takes nothing returns nothing\ncall Later()\nendfunction\nfunction Rec takes nothing returns nothing\ncall Rec()\nendfunction\n"
     );
     assert!(run(&src).is_empty());
 }
 
 #[test]
 fn global_initializers_see_only_earlier_globals() {
-    // UNVERIFIED vs retail: a global initializer may refer only to earlier globals.
+    // Harness o12, o13: a global initializer may refer only to globals declared above it.
     let d = run("globals\ninteger a = b\ninteger b = 1\nendglobals\n");
     expect_err(&d, "undefined variable 'b'");
     assert!(run("globals\ninteger a = 1\ninteger b = a + 1\nendglobals\n").is_empty());
@@ -569,9 +606,11 @@ fn unknown_type_does_not_cascade() {
 // ---- several programs in load order ----
 
 const COMMON: &str = "type agent extends handle\ntype unit extends agent\nnative Print takes string s returns nothing\nnative GetUnit takes nothing returns unit\n";
-const BLIZZARD: &str = "globals\nunit gHero = null\nendglobals\nfunction Init takes nothing returns nothing\nset gHero = GetUnit()\ncall Helper()\nendfunction\n";
+// BLIZZARD defines Helper above Init, and WAR3MAP (loaded later) calls Init: a later program sees
+// the earlier ones, never the reverse (names must be declared above their use in the stream).
+const BLIZZARD: &str = "globals\nunit gHero = null\nendglobals\nfunction Helper takes nothing returns nothing\nendfunction\nfunction Init takes nothing returns nothing\nset gHero = GetUnit()\ncall Helper()\nendfunction\n";
 const WAR3MAP: &str =
-    "function Helper takes nothing returns nothing\ncall Print(\"hi\")\nendfunction\n";
+    "function Main takes nothing returns nothing\ncall Init()\ncall Print(\"hi\")\nendfunction\n";
 
 #[test]
 fn programs_share_one_namespace_in_load_order() {
@@ -581,12 +620,36 @@ fn programs_share_one_namespace_in_load_order() {
 }
 
 #[test]
-fn duplicate_across_programs_names_the_program() {
-    let dup = "globals\nunit gHero = null\nendglobals\n";
-    let progs = [parse(COMMON), parse(BLIZZARD), parse(WAR3MAP), parse(dup)];
+fn earlier_program_cannot_call_a_later_one() {
+    // The stream is one sequence: WAR3MAP's Main is not visible to BLIZZARD.
+    let blizzard = "function Init takes nothing returns nothing\ncall Main()\nendfunction\n";
+    let progs = [parse(COMMON), parse(blizzard), parse(WAR3MAP)];
     let d = check(&progs);
     assert_eq!(d.len(), 1, "{d:#?}");
-    assert_eq!(d[0].message, "program 4: duplicate global 'gHero'");
+    assert_eq!(d[0].message, "program 2: undefined function 'Main'");
+}
+
+#[test]
+fn duplicate_across_programs_names_the_program() {
+    // The duplicate comes before BLIZZARD's gHero, so this is only the duplicate (no order error).
+    let dup = "globals\nunit gHero = null\nendglobals\n";
+    let progs = [parse(COMMON), parse(dup), parse(BLIZZARD), parse(WAR3MAP)];
+    let d = check(&progs);
+    assert_eq!(d.len(), 1, "{d:#?}");
+    assert_eq!(d[0].message, "program 3: duplicate global 'gHero'");
+}
+
+#[test]
+fn later_program_may_declare_globals_after_an_earlier_programs_functions() {
+    // The real layout: war3map.j declares its globals after blizzard.j's functions. The rule that
+    // globals and types precede functions is per script file (the parser checks it), not across files.
+    let progs = [
+        parse(COMMON),
+        parse(BLIZZARD),
+        parse("globals\nunit gLate = null\nendglobals\n"),
+    ];
+    let d = check(&progs);
+    assert!(d.is_empty(), "{d:#?}");
 }
 
 #[test]
@@ -622,4 +685,26 @@ fn output_is_deterministic() {
     let b = run(&src);
     assert_eq!(a, b);
     assert_eq!(a.len(), 3, "{a:#?}");
+}
+
+// ---- identifiers and declaration placement (harness: tools/emu/jasscomp, order probes) ----
+
+#[test]
+fn identifiers_are_case_insensitive() {
+    // Harness q04, q06, q08, t01: functions, globals, locals and types ignore case.
+    let src = format!(
+        "{PRELUDE}\nfunction Test takes nothing returns nothing\nlocal Unit u = null\ncall NOOP()\nset GINT = 3\nendfunction\n"
+    );
+    assert!(run(&src).is_empty(), "{:#?}", run(&src));
+}
+
+#[test]
+fn globals_and_types_must_precede_functions() {
+    // Harness o22, o27, o28, t04: the original rejects a globals or type block after a function.
+    let src =
+        "function f takes nothing returns nothing\nendfunction\nglobals\ninteger a\nendglobals\n";
+    assert!(jass::parse(src).is_err());
+    let src = "function f takes nothing returns nothing\nendfunction\ntype Gizmo extends handle\n";
+    assert!(jass::parse(src).is_err());
+    // Natives are not covered by the harness (the original rejects `native` in user text).
 }

@@ -100,6 +100,9 @@ impl Parser {
             natives: vec![],
             functions: vec![],
         };
+        // Types and globals must come before the first function (harness o22, o27, o28, t04 in
+        // `tools/emu/jasscomp`: the original rejects a `globals` or `type` block after a function).
+        let mut seen_function = false;
         loop {
             self.skip_newlines();
             if *self.peek() == Tok::Eof {
@@ -107,6 +110,9 @@ impl Parser {
             }
             let line = self.line();
             let constant = self.eat_kw("constant");
+            if (self.is_kw("type") || self.is_kw("globals")) && seen_function {
+                return self.err("type or globals block after a function");
+            }
             if self.eat_kw("type") {
                 let name = self.ident()?;
                 self.expect_kw("extends")?;
@@ -136,6 +142,7 @@ impl Parser {
                 let mut f = self.function_body(constant)?;
                 f.line = line;
                 p.functions.push(f);
+                seen_function = true;
             } else {
                 return self.err("expected declaration");
             }

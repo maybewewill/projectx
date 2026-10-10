@@ -14,6 +14,8 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, VecDeque};
+
+use crate::ast::ident_key;
 use std::rc::Rc;
 
 use softfloat::{arith, conv, Tables, F32};
@@ -198,7 +200,7 @@ impl StringTable {
 
     /// The id of `s` if it has been interned.
     pub fn find(&self, s: &str) -> Option<u32> {
-        self.index.get(s).copied()
+        self.index.get(&ident_key(s)).copied()
     }
 
     pub fn get(&self, id: u32) -> &str {
@@ -296,7 +298,7 @@ impl NativeCtx<'_> {
 
     /// Script function id by name.
     pub fn function_id(&self, name: &str) -> Option<u32> {
-        self.m.module.function_index.get(name).copied()
+        self.m.module.function_index.get(&ident_key(name)).copied()
     }
 
     /// Runs script function `func` synchronously in a new thread and returns its value. The new
@@ -379,6 +381,7 @@ impl NativeRegistry {
         F: Fn(&mut NativeCtx<'_>, &[Value]) -> NativeResult + 'static,
     {
         let boxed: NativeFn = Rc::new(f);
+        let name = &ident_key(name);
         match self.index.get(name) {
             Some(&i) => self.entries[i].1 = boxed,
             None => {
@@ -389,7 +392,7 @@ impl NativeRegistry {
     }
 
     fn find(&self, name: &str) -> Option<usize> {
-        self.index.get(name).copied()
+        self.index.get(&ident_key(name)).copied()
     }
 }
 
@@ -1156,10 +1159,22 @@ impl Vm {
     /// they are not available: real division and the table-based natives then stop their thread with
     /// `RunStatus::MissingTables` (and a global initializer that needs them fails `Vm::new`).
     pub fn new(
-        module: Module,
+        mut module: Module,
         natives: NativeRegistry,
         tables: Option<Tables>,
     ) -> Result<Vm, VmError> {
+        // Names are case-insensitive, so the module's name maps are keyed by folded names even when
+        // the module was built by hand.
+        module.function_index = module
+            .function_index
+            .into_iter()
+            .map(|(k, v)| (ident_key(&k), v))
+            .collect();
+        module.global_index = module
+            .global_index
+            .into_iter()
+            .map(|(k, v)| (ident_key(&k), v))
+            .collect();
         verify(&module)?;
         let bindings: Vec<Option<usize>> = module
             .natives
@@ -1291,7 +1306,7 @@ impl Vm {
 
     /// Value of a scalar global.
     pub fn global(&self, name: &str) -> Option<Value> {
-        let id = *self.m.module.global_index.get(name)? as usize;
+        let id = *self.m.module.global_index.get(&ident_key(name))? as usize;
         match self.m.globals.get(id)? {
             GlobalCell::Scalar(v) => Some(*v),
             GlobalCell::Array(_) => None,
@@ -1300,7 +1315,7 @@ impl Vm {
 
     /// Element of an array global.
     pub fn global_element(&self, name: &str, index: usize) -> Option<Value> {
-        let id = *self.m.module.global_index.get(name)? as usize;
+        let id = *self.m.module.global_index.get(&ident_key(name))? as usize;
         match self.m.globals.get(id)? {
             GlobalCell::Array(a) => a.get(index).copied(),
             GlobalCell::Scalar(_) => None,
@@ -1314,7 +1329,7 @@ impl Vm {
             .m
             .module
             .function_index
-            .get(name)
+            .get(&ident_key(name))
             .ok_or(RunStatus::FunctionNotFound)?;
         self.check_args(func, args)?;
         let id = self.m.alloc_id();
@@ -1423,7 +1438,7 @@ impl Vm {
             .m
             .module
             .function_index
-            .get(name)
+            .get(&ident_key(name))
             .ok_or(RunStatus::FunctionNotFound)?;
         self.check_args(func, args)?;
         self.call_id(func, args)

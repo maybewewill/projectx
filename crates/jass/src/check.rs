@@ -9,7 +9,7 @@
 //! Where a rule is the common-sense choice rather than a verified one, the code says so with an
 //! `// UNVERIFIED vs retail:` comment.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::ast::*;
 
@@ -31,12 +31,20 @@ fn message(multi: bool, prog: usize, msg: String) -> String {
 /// Builtin type names (`handle` is the root of all handle types and is handled separately).
 const VALUE_TYPES: [&str; 6] = ["integer", "real", "boolean", "string", "code", "nothing"];
 
+/// A position in the declaration stream: (program index, line). Positions order declarations.
+type Pos = (usize, u32);
+
+/// The position after every declaration (used for function bodies, where all types are visible).
+const END: Pos = (usize::MAX, u32::MAX);
+
 /// The set of known type names and the `extends` relation between them.
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
     /// Every known type. Builtins map to `None`; user types map to their declared parent.
     /// After `build` every user type's parent chain ends at `handle`.
     parents: BTreeMap<String, Option<String>>,
+    /// Where each user type is declared. Builtins have no entry.
+    positions: BTreeMap<String, Pos>,
 }
 
 impl Default for TypeEnv {
@@ -52,107 +60,86 @@ impl TypeEnv {
         for name in VALUE_TYPES.iter().chain(std::iter::once(&"handle")) {
             parents.insert((*name).to_string(), None);
         }
-        Self { parents }
+        Self {
+            parents,
+            positions: BTreeMap::new(),
+        }
     }
 
-    /// Declares the types of all `programs` (in order) and repairs bad declarations so that later
-    /// checks see a consistent hierarchy. The returned diagnostics describe each repair.
+    /// Declares the types of all `programs` in stream order. A type may name only the builtins and
+    /// types declared above it (harness t02, t05, t08 in `tools/emu/jasscomp`); a bad declaration is
+    /// repaired so that later checks see a consistent hierarchy, and each repair is reported.
     ///
-    /// Repairs: a duplicate name is ignored (the first declaration wins); an unknown parent, a cyclic
-    /// parent, or a builtin parent other than `handle` is replaced with `handle`.
+    /// Repairs: a duplicate name is ignored (the first declaration wins); an unknown parent, or a
+    /// builtin parent other than `handle`, is replaced with `handle`.
     pub fn build(programs: &[Program]) -> (TypeEnv, Vec<Diagnostic>) {
         let multi = programs.len() > 1;
         let mut env = TypeEnv::new();
         let mut diags = Vec::new();
-        // User types in declaration order, with the program index and line they were declared at.
-        let mut decls: Vec<(String, usize, u32)> = Vec::new();
-
-        // Pass 1: names. Declaration order does not matter, so `type a extends b` may precede `b`.
         for (pi, p) in programs.iter().enumerate() {
             for t in &p.types {
-                if env.parents.contains_key(&t.name) {
+                let key = ident_key(&t.name);
+                let mut parent = ident_key(&t.parent);
+                if env.parents.contains_key(&key) {
                     let msg = format!("duplicate type '{}'", t.name);
                     diags.push(Diagnostic {
                         line: t.line,
                         message: message(multi, pi, msg),
                     });
-                } else {
-                    env.parents.insert(t.name.clone(), Some(t.parent.clone()));
-                    decls.push((t.name.clone(), pi, t.line));
+                    continue;
                 }
-            }
-        }
-
-        // Pass 2: every parent must be a known type.
-        for (name, pi, line) in &decls {
-            let parent = env.parents[name].clone().unwrap_or_default();
-            if !env.parents.contains_key(&parent) {
-                let msg = format!("type '{name}' extends unknown type '{parent}'");
-                diags.push(Diagnostic {
-                    line: *line,
-                    message: message(multi, *pi, msg),
-                });
-                env.parents.insert(name.clone(), Some("handle".to_string()));
-            }
-        }
-
-        // Pass 3: no cycles. Walk up from each type; a walk that returns to its start is a cycle.
-        // The `seen` set stops walks that run into a cycle not containing the start.
-        for (name, pi, line) in &decls {
-            let mut seen = BTreeSet::new();
-            let mut cur = name.as_str();
-            let mut cyclic = false;
-            while let Some(Some(parent)) = env.parents.get(cur) {
-                if parent == name {
-                    cyclic = true;
-                    break;
+                if !env.parents.contains_key(&parent) {
+                    let msg = format!("type '{}' extends unknown type '{}'", t.name, t.parent);
+                    diags.push(Diagnostic {
+                        line: t.line,
+                        message: message(multi, pi, msg),
+                    });
+                    parent = "handle".to_string();
+                } else if parent != "handle" && VALUE_TYPES.contains(&parent.as_str()) {
+                    // UNVERIFIED vs retail: user types may only extend handle-derived types
+                    // (e.g. `extends integer` is rejected).
+                    let msg = format!(
+                        "type '{}' must extend a handle type, not '{}'",
+                        t.name, t.parent
+                    );
+                    diags.push(Diagnostic {
+                        line: t.line,
+                        message: message(multi, pi, msg),
+                    });
+                    parent = "handle".to_string();
                 }
-                if !seen.insert(parent.as_str()) {
-                    break;
-                }
-                cur = parent.as_str();
-            }
-            if cyclic {
-                let msg = format!("cyclic type declaration '{name}'");
-                diags.push(Diagnostic {
-                    line: *line,
-                    message: message(multi, *pi, msg),
-                });
-                env.parents.insert(name.clone(), Some("handle".to_string()));
-            }
-        }
-
-        // Pass 4: a user type must derive from `handle`.
-        // UNVERIFIED vs retail: that user types may only extend handle-derived types (e.g. `extends integer` is rejected).
-        for (name, pi, line) in &decls {
-            let parent = env.parents[name].clone().unwrap_or_default();
-            if parent != "handle" && VALUE_TYPES.contains(&parent.as_str()) {
-                let msg = format!("type '{name}' must extend a handle type, not '{parent}'");
-                diags.push(Diagnostic {
-                    line: *line,
-                    message: message(multi, *pi, msg),
-                });
-                env.parents.insert(name.clone(), Some("handle".to_string()));
+                env.parents.insert(key.clone(), Some(parent));
+                env.positions.insert(key, (pi, t.line));
             }
         }
         (env, diags)
     }
 
+    /// Whether the type `name` is known at position `at`: a builtin, or a user type declared above it.
+    fn declared_before(&self, name: &str, at: Pos) -> bool {
+        let key = ident_key(name);
+        match self.positions.get(&key) {
+            Some(&declared) => declared < at,
+            None => self.parents.contains_key(&key),
+        }
+    }
+
     /// Whether the type `name` is known (builtin or user-declared).
     pub fn is_known(&self, name: &str) -> bool {
-        self.parents.contains_key(name)
+        self.parents.contains_key(&ident_key(name))
     }
 
     /// `a` is `b`, or `a` reaches `b` by following `extends`. `integer` is not a subtype of `real`;
     /// that widening is handled by assignability.
     pub fn is_subtype(&self, a: &str, b: &str) -> bool {
-        let mut cur = a;
+        let b = ident_key(b);
+        let mut cur = ident_key(a);
         for _ in 0..=self.parents.len() {
             if cur == b {
                 return true;
             }
-            match self.parents.get(cur) {
-                Some(Some(parent)) => cur = parent.as_str(),
+            match self.parents.get(&cur) {
+                Some(Some(parent)) => cur = parent.clone(),
                 _ => return false,
             }
         }
@@ -212,15 +199,16 @@ impl Ty {
     }
 }
 
-fn resolve_type(env: &TypeEnv, name: &str) -> Option<Ty> {
-    match name {
+fn resolve_type(env: &TypeEnv, name: &str, at: Pos) -> Option<Ty> {
+    let key = ident_key(name);
+    match key.as_str() {
         "integer" => Some(Ty::Integer),
         "real" => Some(Ty::Real),
         "boolean" => Some(Ty::Boolean),
         "string" => Some(Ty::String),
         "code" => Some(Ty::Code),
         "nothing" => Some(Ty::Nothing),
-        _ if env.is_known(name) => Some(Ty::Named(name.to_string())),
+        _ if env.declared_before(&key, at) => Some(Ty::Named(key)),
         _ => None,
     }
 }
@@ -236,6 +224,8 @@ struct VarInfo {
 
 #[derive(Debug, Clone)]
 struct FuncInfo {
+    /// Position in the declaration order (shared with globals).
+    order: usize,
     params: Vec<Option<Ty>>,
     /// `Some(Ty::Nothing)` for `returns nothing`; `None` if the return type was unknown.
     ret: Option<Ty>,
@@ -244,9 +234,10 @@ struct FuncInfo {
 /// Per-function context for expressions and statements.
 struct Ctx {
     locals: BTreeMap<String, VarInfo>,
-    /// Globals with `order >= global_limit` are not visible. Used for global initializers.
-    // UNVERIFIED vs retail: a global initializer may refer only to globals declared before it.
-    global_limit: usize,
+    /// Declarations (globals, natives, functions) with `order >= limit` are not visible yet. A global
+    /// initializer sees what is declared above it; a function body sees itself and what is above it
+    /// (harness o01, o03, o09, o11, o12, q09: a name used before its declaration is an error).
+    limit: usize,
     ret: Option<Ty>,
 }
 
@@ -277,9 +268,8 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
         loop_depth: 0,
     };
 
-    // Phase 1: declare every global, native and function signature, in program order.
-    // UNVERIFIED vs retail: functions and natives are visible everywhere, including before their
-    // declaration and from other programs (no forward declarations required).
+    // Phase 1: declare every global, native and function signature, in program order. Each one takes
+    // the next position, and a name is visible only from its position on (see `Ctx::limit`).
     let mut globals = Vec::new();
     let mut functions = Vec::new();
     let mut order = 0usize;
@@ -288,7 +278,7 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
         for g in &p.globals {
             c.line = g.line;
             let info = VarInfo {
-                ty: c.var_type(&g.ty),
+                ty: c.var_type(&g.ty, (pi, g.line)),
                 array: g.array,
                 constant: g.constant,
                 order,
@@ -296,24 +286,33 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
             if g.constant && g.init.is_none() {
                 c.err(format!("constant '{}' needs an initializer", g.name));
             }
-            if c.globals.contains_key(&g.name) {
+            let key = ident_key(&g.name);
+            if c.globals.contains_key(&key) || c.funcs.contains_key(&key) {
                 c.err(format!("duplicate global '{}'", g.name));
             } else {
-                c.globals.insert(g.name.clone(), info.clone());
+                c.globals.insert(key, info.clone());
             }
             globals.push((pi, g, info));
             order += 1;
         }
         for n in &p.natives {
             c.line = n.line;
-            let info = c.func_info(&n.sig);
+            let info = FuncInfo {
+                order,
+                ..c.func_info(&n.sig, (pi, n.line))
+            };
             c.declare_func(&n.sig.name, info);
+            order += 1;
         }
         for f in &p.functions {
             c.line = f.line;
-            let info = c.func_info(&f.sig);
+            let info = FuncInfo {
+                order,
+                ..c.func_info(&f.sig, (pi, f.line))
+            };
             c.declare_func(&f.sig.name, info.clone());
             functions.push((pi, f, info));
+            order += 1;
         }
     }
 
@@ -327,7 +326,7 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
         }
         let ctx = Ctx {
             locals: BTreeMap::new(),
-            global_limit: info.order,
+            limit: info.order,
             ret: None,
         };
         let t = c.expr(&ctx, init);
@@ -341,7 +340,7 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
         c.loop_depth = 0;
         let mut ctx = Ctx {
             locals: BTreeMap::new(),
-            global_limit: usize::MAX,
+            limit: info.order + 1,
             ret: info.ret.clone(),
         };
         for (p, ty) in f.sig.params.iter().zip(&info.params) {
@@ -351,11 +350,11 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
                 constant: false,
                 order: 0,
             };
-            c.add_local(&mut ctx, &p.name, v, "parameter");
+            c.add_local(&mut ctx, &p.name, v);
         }
         for l in &f.locals {
             c.line = l.line;
-            let ty = c.var_type(&l.ty);
+            let ty = c.var_type(&l.ty, END);
             if l.array && l.init.is_some() {
                 c.err(format!("array '{}' cannot have an initializer", l.name));
             }
@@ -369,7 +368,7 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
                 constant: false,
                 order: 0,
             };
-            c.add_local(&mut ctx, &l.name, v, "local");
+            c.add_local(&mut ctx, &l.name, v);
         }
         c.stmts(&ctx, &f.body);
     }
@@ -386,8 +385,8 @@ impl Checker {
     }
 
     /// Resolves a type used for a variable (global, local or parameter).
-    fn var_type(&mut self, name: &str) -> Option<Ty> {
-        match resolve_type(&self.env, name) {
+    fn var_type(&mut self, name: &str, at: Pos) -> Option<Ty> {
+        match resolve_type(&self.env, name, at) {
             Some(Ty::Nothing) => {
                 self.err("'nothing' is not a variable type");
                 None
@@ -400,38 +399,61 @@ impl Checker {
         }
     }
 
-    fn func_info(&mut self, sig: &Signature) -> FuncInfo {
-        let params: Vec<Option<Ty>> = sig.params.iter().map(|p| self.var_type(&p.ty)).collect();
+    fn func_info(&mut self, sig: &Signature, at: Pos) -> FuncInfo {
+        let params: Vec<Option<Ty>> = sig
+            .params
+            .iter()
+            .map(|p| self.var_type(&p.ty, at))
+            .collect();
         let ret = match &sig.returns {
             None => Some(Ty::Nothing),
-            Some(n) => self.var_type(n),
+            Some(n) => self.var_type(n, at),
         };
-        FuncInfo { params, ret }
+        FuncInfo {
+            order: 0,
+            params,
+            ret,
+        }
     }
 
     fn declare_func(&mut self, name: &str, info: FuncInfo) {
-        // Functions and natives share one namespace.
-        if self.funcs.contains_key(name) {
+        // Functions, natives and globals share one namespace (harness o17, o20, q05).
+        let key = ident_key(name);
+        if self.funcs.contains_key(&key) || self.globals.contains_key(&key) {
             self.err(format!("duplicate function or native '{name}'"));
         } else {
-            self.funcs.insert(name.to_string(), info);
+            self.funcs.insert(key, info);
         }
     }
 
-    fn add_local(&mut self, ctx: &mut Ctx, name: &str, v: VarInfo, what: &str) {
-        // UNVERIFIED vs retail: a local or parameter may shadow a global of the same name.
-        if ctx.locals.contains_key(name) {
-            self.err(format!("duplicate {what} '{name}'"));
-        } else {
-            ctx.locals.insert(name.to_string(), v);
+    /// The function `name` if it is visible from `ctx` (declared above the context, or the function
+    /// itself).
+    fn visible_func(&self, ctx: &Ctx, name: &str) -> Option<FuncInfo> {
+        self.funcs
+            .get(&ident_key(name))
+            .filter(|f| f.order < ctx.limit)
+            .cloned()
+    }
+
+    fn add_local(&mut self, ctx: &mut Ctx, name: &str, v: VarInfo) {
+        let key = ident_key(name);
+        // A local or parameter may shadow a global (harness q08, r04). It may not take the name of a
+        // function that is already declared, the function being checked included (harness q02, q03,
+        // q12, r03). It may take the name of a later function (harness q01).
+        if self.funcs.get(&key).is_some_and(|f| f.order < ctx.limit) {
+            self.err(format!("'{name}' is already the name of a function"));
         }
+        // A repeated local or parameter replaces the earlier one, so the last declaration sets the
+        // type (harness p01, p06, p03, r01, r02).
+        ctx.locals.insert(key, v);
     }
 
     fn var(&mut self, ctx: &Ctx, name: &str) -> Option<VarInfo> {
-        let found = ctx.locals.get(name).cloned().or_else(|| {
+        let key = ident_key(name);
+        let found = ctx.locals.get(&key).cloned().or_else(|| {
             self.globals
-                .get(name)
-                .filter(|v| v.order < ctx.global_limit)
+                .get(&key)
+                .filter(|v| v.order < ctx.limit)
                 .cloned()
         });
         if found.is_none() {
@@ -499,7 +521,7 @@ impl Checker {
                 }
                 t => t,
             },
-            Expr::FuncRef(name) => match self.funcs.get(name).map(|f| f.params.len()) {
+            Expr::FuncRef(name) => match self.visible_func(ctx, name).map(|f| f.params.len()) {
                 None => {
                     self.err(format!("undefined function '{name}'"));
                     None
@@ -615,7 +637,7 @@ impl Checker {
     /// so the caller decides whether a value is required.
     fn call(&mut self, ctx: &Ctx, name: &str, args: &[Expr]) -> Option<Ty> {
         let arg_tys: Vec<Option<Ty>> = args.iter().map(|a| self.expr(ctx, a)).collect();
-        let Some(f) = self.funcs.get(name).cloned() else {
+        let Some(f) = self.visible_func(ctx, name) else {
             self.err(format!("undefined function '{name}'"));
             return None;
         };

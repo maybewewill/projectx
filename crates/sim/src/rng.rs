@@ -164,8 +164,12 @@ impl Rng {
     /// `|b - a|` (computed with `softfloat::arith`), the draw `U` is in `[0, 1)`, and
     /// the result is `a + range * U`, all in the engine's soft-float arithmetic.
     pub fn random_real(&mut self, table: &RngTable, a: f32, b: f32) -> f32 {
-        self.random_real_soft(table, F32::from_bits(a.to_bits()), F32::from_bits(b.to_bits()))
-            .to_f32()
+        self.random_real_soft(
+            table,
+            F32::from_bits(a.to_bits()),
+            F32::from_bits(b.to_bits()),
+        )
+        .to_f32()
     }
 
     /// [`Rng::random_real`] on soft-float values (the form the natives use).

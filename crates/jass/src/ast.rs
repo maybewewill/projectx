@@ -1,3 +1,10 @@
+/// The lookup key of an identifier. JASS identifiers are case-insensitive: functions, globals,
+/// locals and types all fold case (harness q04, q05, q06, q07, q10, t01 in `tools/emu/jasscomp`).
+/// Diagnostics and the AST keep the spelling that was written.
+pub fn ident_key(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub types: Vec<TypeDef>,

@@ -494,19 +494,19 @@ globals
     boolean gAfterClear = false
 endglobals
 
-function T takes nothing returns boolean
+function CondTrue takes nothing returns boolean
     return true
 endfunction
 
-function F takes nothing returns boolean
+function CondFalse takes nothing returns boolean
     return false
 endfunction
 
 function Main takes nothing returns nothing
     local trigger t = CreateTrigger()
-    local boolexpr e1 = And(Condition(function T), Not(Condition(function F)))
-    local boolexpr e2 = Or(Condition(function F), Condition(function T))
-    local boolexpr e3 = Not(Condition(function T))
+    local boolexpr e1 = And(Condition(function CondTrue), Not(Condition(function CondFalse)))
+    local boolexpr e2 = Or(Condition(function CondFalse), Condition(function CondTrue))
+    local boolexpr e3 = Not(Condition(function CondTrue))
     local triggercondition c
     call TriggerAddCondition(t, e1)
     set gAndNot = TriggerEvaluate(t)

@@ -59,11 +59,35 @@ native TriggerSleepAction takes real t returns nothing
 native ExecuteFunc takes string name returns nothing
 native MakeAgent takes integer id returns agent
 
-function Log takes integer id returns nothing
+"#;
+
+/// A script function of the prelude. It comes after the declarations (types, globals, natives):
+/// a global block may not follow a function (harness o22, o27), so test globals go above it.
+const PRELUDE_LOG: &str = r#"function Log takes integer id returns nothing
     set gLog[gN] = id
     set gN = gN + 1
 endfunction
 "#;
+
+/// Splits a test source into its `globals ... endglobals` blocks and the rest. The blocks go above
+/// `PRELUDE_LOG`, the rest below it.
+fn split_globals(src: &str) -> (String, String) {
+    let (mut globals, mut rest) = (String::new(), String::new());
+    let mut in_block = false;
+    for line in src.lines() {
+        let t = line.trim();
+        if !in_block && t == "globals" {
+            in_block = true;
+        }
+        let target = if in_block { &mut globals } else { &mut rest };
+        target.push_str(line);
+        target.push('\n');
+        if in_block && t == "endglobals" {
+            in_block = false;
+        }
+    }
+    (globals, rest)
+}
 
 fn registry() -> NativeRegistry {
     let mut r = NativeRegistry::with_builtins();
@@ -75,7 +99,8 @@ fn registry() -> NativeRegistry {
 }
 
 fn build_opt(src: &str, reg: NativeRegistry, tables: Option<Tables>) -> Vm {
-    let full = format!("{PRELUDE}\n{src}");
+    let (globals, rest) = split_globals(src);
+    let full = format!("{PRELUDE}\n{globals}\n{PRELUDE_LOG}\n{rest}");
     let prog = jass::parse(&full).unwrap_or_else(|e| panic!("parse failed: {e}\n{full}"));
     let module = compile(&[prog]).unwrap_or_else(|e| panic!("compile failed: {e}"));
     Vm::new(module, reg, tables).unwrap_or_else(|e| panic!("vm creation failed: {e}"))
@@ -854,7 +879,7 @@ fn invalid_bytecode_is_rejected_at_creation() {
 
 #[test]
 fn global_initializer_failure_is_reported() {
-    let src = format!("{PRELUDE}\nglobals\n    integer gX = 1 / 0\nendglobals\n");
+    let src = format!("{PRELUDE}\nglobals\n    integer gX = 1 / 0\nendglobals\n{PRELUDE_LOG}\n");
     let prog = jass::parse(&src).unwrap();
     let module = compile(&[prog]).unwrap();
     assert!(matches!(
@@ -920,7 +945,8 @@ endfunction
 "#,
         reg,
     );
-    let target = vm.module().function_index["Target"];
+    // Function names are case-insensitive: the module keys are folded.
+    let target = vm.module().function_index["target"];
     assert_eq!(vm.call("Give", &[]), Ok(Value::Null));
     assert_eq!(seen.get(), Some(Value::Code(target)));
 }
@@ -981,4 +1007,24 @@ endfunction
     );
     assert_eq!(vm.resume(t, wake), Ok(()));
     assert_eq!(log(&vm), vec![1]);
+}
+
+#[test]
+fn names_are_case_insensitive_at_run_time() {
+    // Harness q04, q06: `call ABC()` calls `Abc`, and `GG` is the global `Gg`.
+    let mut vm = build(
+        r#"
+globals
+    integer Gg = 1
+endglobals
+function Abc takes nothing returns nothing
+    set Gg = 7
+endfunction
+function Run takes nothing returns nothing
+    call ABC()
+endfunction
+"#,
+    );
+    assert_eq!(vm.call("RUN", &[]), Ok(Value::Null));
+    assert_eq!(vm.global("gg"), Some(Value::Integer(7)));
 }

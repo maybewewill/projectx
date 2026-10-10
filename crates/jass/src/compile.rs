@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{self, BinOp, Expr, Program, Stmt};
+use crate::ast::{self, ident_key, BinOp, Expr, Program, Stmt};
 use crate::bytecode::{Instr, Op, NO_SLOT};
 use crate::check::{self, Diagnostic};
 
@@ -43,7 +43,7 @@ pub enum Ty {
 
 impl Ty {
     fn from_name(name: &str) -> Ty {
-        match name {
+        match ident_key(name).as_str() {
             "integer" => Ty::Integer,
             "real" => Ty::Real,
             "boolean" => Ty::Boolean,
@@ -157,9 +157,9 @@ pub fn compile(programs: &[Program]) -> Result<Module, CompileError> {
                 ty,
                 array: g.array,
             });
-            module.global_index.insert(g.name.clone(), id);
+            module.global_index.insert(ident_key(&g.name), id);
             syms.globals.insert(
-                g.name.clone(),
+                ident_key(&g.name),
                 GlobalInfo {
                     id,
                     ty,
@@ -179,9 +179,9 @@ pub fn compile(programs: &[Program]) -> Result<Module, CompileError> {
                 params: params.clone(),
                 ret,
             });
-            module.native_index.insert(n.sig.name.clone(), id);
+            module.native_index.insert(ident_key(&n.sig.name), id);
             syms.funcs.insert(
-                n.sig.name.clone(),
+                ident_key(&n.sig.name),
                 Callee {
                     script: false,
                     id,
@@ -195,7 +195,7 @@ pub fn compile(programs: &[Program]) -> Result<Module, CompileError> {
             let params: Vec<Ty> = f.sig.params.iter().map(|p| Ty::from_name(&p.ty)).collect();
             let ret = f.sig.returns.as_deref().map(Ty::from_name);
             syms.funcs.insert(
-                f.sig.name.clone(),
+                ident_key(&f.sig.name),
                 Callee {
                     script: true,
                     id,
@@ -211,7 +211,7 @@ pub fn compile(programs: &[Program]) -> Result<Module, CompileError> {
         let def = compile_function(&mut syms, f)?;
         module
             .function_index
-            .insert(f.sig.name.clone(), module.functions.len() as u32);
+            .insert(ident_key(&f.sig.name), module.functions.len() as u32);
         module.functions.push(def);
     }
 
@@ -243,7 +243,7 @@ fn compile_function(syms: &mut Symbols, f: &ast::Function) -> CResult<FuncDef> {
     fc.line = f.line;
     for (i, (p, ty)) in f.sig.params.iter().zip(&params).enumerate() {
         fc.locals
-            .insert(p.name.clone(), LocalVar::Slot(i as u8, *ty));
+            .insert(ident_key(&p.name), LocalVar::Slot(i as u8, *ty));
     }
 
     for l in &f.locals {
@@ -252,10 +252,12 @@ fn compile_function(syms: &mut Symbols, f: &ast::Function) -> CResult<FuncDef> {
         if l.array {
             let idx = fc.local_arrays.len() as u32;
             fc.local_arrays.push(ty);
-            fc.locals.insert(l.name.clone(), LocalVar::Array(idx, ty));
+            fc.locals
+                .insert(ident_key(&l.name), LocalVar::Array(idx, ty));
         } else {
             let slot = fc.alloc()?;
-            fc.locals.insert(l.name.clone(), LocalVar::Slot(slot, ty));
+            fc.locals
+                .insert(ident_key(&l.name), LocalVar::Slot(slot, ty));
             fc.local_defaults.push((slot, ty));
             if let Some(init) = &l.init {
                 let mark = fc.next;
@@ -448,7 +450,7 @@ impl<'a> FnCompiler<'a> {
                     None => None,
                 };
                 let (vs, vt) = self.expr(value)?;
-                if let Some(local) = self.locals.get(name).copied() {
+                if let Some(local) = self.locals.get(&ident_key(name)).copied() {
                     match local {
                         LocalVar::Slot(d, ty) => {
                             let v = self.coerce(vs, vt, ty)?;
@@ -553,7 +555,7 @@ impl<'a> FnCompiler<'a> {
     }
 
     fn global(&self, name: &str) -> CResult<GlobalInfo> {
-        match self.syms.globals.get(name) {
+        match self.syms.globals.get(&ident_key(name)) {
             Some(g) => Ok(*g),
             None => self.unsupported(format!("unknown variable '{name}'")),
         }
@@ -561,7 +563,7 @@ impl<'a> FnCompiler<'a> {
 
     /// Compiles a call. Returns the result slot (or `NO_SLOT` when `want` is false) and the type.
     fn call(&mut self, name: &str, args: &[Expr], want: bool) -> CResult<(u8, Ty)> {
-        let Some(callee) = self.syms.funcs.get(name).cloned() else {
+        let Some(callee) = self.syms.funcs.get(&ident_key(name)).cloned() else {
             return self.unsupported(format!("unknown function '{name}'"));
         };
         let saved = self.next;
@@ -634,7 +636,7 @@ impl<'a> FnCompiler<'a> {
                 Ok((d, Ty::Null))
             }
             Expr::Var(name) => {
-                if let Some(local) = self.locals.get(name).copied() {
+                if let Some(local) = self.locals.get(&ident_key(name)).copied() {
                     return match local {
                         LocalVar::Slot(s, ty) => Ok((s, ty)),
                         LocalVar::Array(..) => self.unsupported("array used without an index"),
@@ -650,7 +652,7 @@ impl<'a> FnCompiler<'a> {
             }
             Expr::Index(name, idx) => {
                 let (i, _) = self.expr(idx)?;
-                if let Some(local) = self.locals.get(name).copied() {
+                if let Some(local) = self.locals.get(&ident_key(name)).copied() {
                     let LocalVar::Array(ai, ty) = local else {
                         return self.unsupported(format!("'{name}' is not an array"));
                     };
@@ -668,7 +670,7 @@ impl<'a> FnCompiler<'a> {
             }
             Expr::Call(name, args) => self.call(name, args, true),
             Expr::FuncRef(name) => {
-                let Some(callee) = self.syms.funcs.get(name).cloned() else {
+                let Some(callee) = self.syms.funcs.get(&ident_key(name)).cloned() else {
                     return self.unsupported(format!("unknown function '{name}'"));
                 };
                 if !callee.script {
@@ -751,7 +753,7 @@ mod tests {
         )
         .unwrap();
         let m = compile(&[p]).unwrap();
-        let f = &m.functions[m.function_index["Add"] as usize];
+        let f = &m.functions[m.function_index["add"] as usize];
         assert_eq!(f.params, vec![Ty::Integer, Ty::Integer]);
         assert_eq!(f.ret, Some(Ty::Integer));
         assert_eq!(f.code[0].op, Op::AddI);

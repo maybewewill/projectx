@@ -105,7 +105,11 @@ fn script_draws_match_direct(t: RngTable) {
     let (ints, reals) = direct_draws(&t, &mut direct);
 
     assert_eq!(read_draws(&host), (ints, reals));
-    assert_eq!(*host.rng(), direct, "generator and stream state after the draws");
+    assert_eq!(
+        *host.rng(),
+        direct,
+        "generator and stream state after the draws"
+    );
 }
 
 fn set_random_seed_reseeds_everything(t: RngTable) {
@@ -118,7 +122,11 @@ fn set_random_seed_reseeds_everything(t: RngTable) {
     let mut direct = Streams::default();
     direct.start_game(&t, 99);
     direct.set_random_seed(&t, 42);
-    assert_eq!(*host.rng(), direct, "SetRandomSeed reseeds global and streams");
+    assert_eq!(
+        *host.rng(),
+        direct,
+        "SetRandomSeed reseeds global and streams"
+    );
 
     host.vm_mut().call("Draw", &[]).expect("Draw runs");
     let (ints, reals) = direct_draws(&t, &mut direct);
@@ -155,12 +163,19 @@ fn reseeding_to_the_same_value_repeats_the_sequence() {
 #[test]
 fn random_natives_stop_the_thread_without_table() {
     let mut host = host_with(None);
-    assert_eq!(host.vm_mut().call("Draw", &[]), Err(RunStatus::MissingTables));
+    assert_eq!(
+        host.vm_mut().call("Draw", &[]),
+        Err(RunStatus::MissingTables)
+    );
     assert_eq!(
         host.vm_mut().call("Reseed", &[Value::Integer(5)]),
         Err(RunStatus::MissingTables)
     );
-    assert_eq!(*host.rng(), Streams::default(), "no draw and no reseed happened");
+    assert_eq!(
+        *host.rng(),
+        Streams::default(),
+        "no draw and no reseed happened"
+    );
     assert!(!host.start_game_rng(5), "game start needs the table");
 }
 
