@@ -107,6 +107,9 @@ tools/
 - Execution budget: the executor runs at most N instructions; at the call sites N = **300000**. The agent guessed a timer, but **this matches the well-known JASS "op limit" ≈ 300k** → most likely an instruction limit per run (LIKELY). What happens on overflow (thread ends vs continues next tick) needs checking: the spec says status 2 and the thread stays runnable.
 - Statuses: 1 done, 2 budget, 3 sleep, 4 yield, 5 function not found, 6 null, 7 divide by zero. Threads are in a circular list and run in list order every tick (`0x6F44B400`, LIKELY). No call-depth limit found.
 
+### 4.3e Native table
+- `docs/spec/natives-1.26a.tsv`: **1,291 natives** (1,167 `common`, registered in `0x6F3D4020`; plus 124 AI natives in `0x6F71D9E0`) with signatures and implementation addresses. Extracted by `tools/analysis/extract_natives.py` (parses push name/signature/function before the register call).
+
 ### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
 - Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
 
@@ -198,6 +201,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (9)**: JASS VM merged (Haiku). Native table extracted (1,291). Launched the agent for pure natives (math/strings/Convert*).
 - **2026-10-10 (8)**: full decompile export (70,526 functions, 1.58M lines, 0 failures; scratchpad only). Analysis agents: specs `docs/spec/{jass-frontend,jass-vm,math,handles}.md`. **Correction**: math comes from MSVCR80 `_CI*`, not software inside Game.dll.
 - **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker, the viewer, the JASS VM. 175 tests in the workspace, clippy clean.
 - **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
