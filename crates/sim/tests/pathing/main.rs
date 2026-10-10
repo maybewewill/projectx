@@ -6,7 +6,10 @@
 //! `isqrt` over 115,536 inputs, and the heap state after every operation of 3000 random
 //! sequences (about 241k operations, many with duplicate keys).
 
+mod cases;
 mod data;
+mod pyramid_data;
+mod search_data;
 
 use sim::pathing::heap::{Entry, Heap};
 use sim::pathing::isqrt::isqrt;
@@ -124,6 +127,42 @@ fn heap_matches_original_after_every_operation() {
         assert_eq!(
             digest, expected,
             "heap sequence {s} diverges from the original"
+        );
+    }
+}
+
+#[test]
+fn pyramid_lookups_match_original_over_random_cases() {
+    for &(seed, expected) in pyramid_data::PYRAMID_CASES {
+        let got = cases::run_pyramid_case(cases::pyramid_case(seed));
+        assert_eq!(
+            got, expected,
+            "pyramid case {seed} diverges from the original"
+        );
+    }
+}
+
+#[test]
+fn search_matches_original_over_random_cases() {
+    for &(seed, expected) in search_data::SEARCH_CASES {
+        let (got, _) = cases::run_search_case(cases::search_case(seed));
+        assert_eq!(
+            got, expected,
+            "search case {seed} diverges from the original"
+        );
+    }
+}
+
+#[test]
+fn search_paths_match_original() {
+    for &(seed, request, status, cells) in search_data::SEARCH_SPOTS {
+        let (_, paths) = cases::run_search_case(cases::search_case(seed));
+        let (got_status, got_cells) = &paths[request];
+        assert_eq!(got_status, status, "case {seed}, request {request}");
+        assert_eq!(
+            got_cells.as_slice(),
+            cells,
+            "case {seed}, request {request}"
         );
     }
 }
