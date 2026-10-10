@@ -3,7 +3,7 @@
 //! the scripts (`make_case`, `make_search_case`), so the digests recorded from the original apply.
 
 use sim::pathing::pyramid::{Labels, Level, Pyramid};
-use sim::pathing::search::{FlagLink, Request, Search};
+use sim::pathing::search::{Dispatch, FlagLink, Request, Search};
 use softfloat::F32;
 
 /// One pyramid lookup: `(level, x, y)`.
@@ -240,6 +240,7 @@ pub fn run_search_case(case: SearchCase) -> (u64, Vec<PathReport>) {
             start: point(start),
             goal: point(goal),
             budget,
+            size_class: 0,
         };
         let path = search.find_path(&req);
         dig = fnv(dig, &search.observable_words());
@@ -247,4 +248,122 @@ pub fn run_search_case(case: SearchCase) -> (u64, Vec<PathReport>) {
         paths.push((name, path.cells));
     }
     (dig, paths)
+}
+
+/// One request case (`make_request_case` in `tools/emu/request_vectors.py`).
+pub struct RequestCase {
+    pub grow: usize,
+    pub cap0: usize,
+    pub pyramid: Pyramid,
+    pub links: Vec<FlagLink>,
+    /// The requests of the case, as the dispatcher takes them.
+    pub requests: Vec<Request>,
+}
+
+/// A float that is exactly `k / 8`, the generator's fractional coordinates.
+fn eighths(k: u32) -> F32 {
+    F32::from_bits((k as f32 / 8.0).to_bits())
+}
+
+pub fn request_case(seed: u64) -> RequestCase {
+    let mut g = Lcg::new(seed.wrapping_add(0x300_0000));
+    let w0 = 8 * (1 + g.below(3));
+    let h0 = 8 * (1 + g.below(3));
+    let cell_only = g.below(3) == 0;
+    let grow = [1usize, 2, 4, 8][g.below(4) as usize];
+    let cap0 = [0usize, 3][g.below(2) as usize];
+    let _hgrow = [1u32, 4, 16][g.below(3) as usize];
+    let mut levels = Vec::new();
+    for k in 0..4 {
+        let (w, h) = (w0 >> k, h0 >> k);
+        let mut words = Vec::new();
+        for _ in 0..w * h {
+            let r = g.below(100);
+            let state = if k > 0 && cell_only {
+                3
+            } else if r < 78 {
+                0
+            } else if r < 86 {
+                1
+            } else if r < 95 {
+                2
+            } else {
+                3
+            };
+            let hi16 = g.u32() & 0xFFFF;
+            words.push(word_with_state(hi16, state, 0));
+        }
+        levels.push(Level::new(w, h, &words));
+    }
+    let mut links = Vec::new();
+    for k in 0..256 {
+        let bit0 = k != 0 && g.below(3) == 0;
+        let tx = g.below(w0) as i32;
+        let ty = g.below(h0) as i32;
+        links.push(FlagLink {
+            enabled: bit0,
+            x: tx,
+            y: ty,
+        });
+    }
+    let mut requests = Vec::new();
+    for _ in 0..1 + g.below(3) {
+        let t = 2 * g.below(8);
+        let flag = g.below(2) == 1;
+        let size_class = g.below(2);
+        let start = (eighths(g.below(8 * w0)), eighths(g.below(8 * h0)));
+        let goal = if g.below(4) != 0 {
+            (eighths(g.below(8 * w0)), eighths(g.below(8 * h0)))
+        } else {
+            // the goal may lie outside the pyramid: (k - 8) / 8 for k in 0 .. 8 * (size + 2)
+            let gx = g.below(8 * (w0 + 2)) as i32 - 8;
+            let gy = g.below(8 * (h0 + 2)) as i32 - 8;
+            (
+                F32::from_bits(((gx as f32) / 8.0).to_bits()),
+                F32::from_bits(((gy as f32) / 8.0).to_bits()),
+            )
+        };
+        let budget = [5u32, 40, 400][g.below(3) as usize];
+        requests.push(Request {
+            path_type: t,
+            flag_on: flag,
+            start,
+            goal,
+            budget,
+            size_class,
+        });
+    }
+    let [l0, l1, l2, l3]: [Level; 4] = levels.try_into().expect("four levels");
+    RequestCase {
+        grow,
+        cap0,
+        pyramid: Pyramid::new([l0, l1, l2, l3]),
+        links,
+        requests,
+    }
+}
+
+/// Runs a request case through the dispatcher. The digest per request is the region search
+/// state, then the return code, the waypoint count and points, and the flag-marker count, as the
+/// script hashes them. Returns the digest and the dispatcher's output of each request.
+pub fn run_request_case(case: RequestCase) -> (u64, Vec<Dispatch>) {
+    let mut search = Search::new(case.pyramid, case.links, case.grow, case.cap0);
+    let mut dig = DIGEST_INIT;
+    let mut outs = Vec::new();
+    for req in case.requests {
+        let out = search
+            .dispatch(&req)
+            .expect("generated starts are inside the pyramid");
+        let mut words = search.observable_words();
+        words.push(out.code);
+        words.push(out.points.len() as u32);
+        for (x, y) in &out.points {
+            words.push(x.to_bits());
+            words.push(y.to_bits());
+        }
+        words.push(search.flag_points());
+        dig = fnv(dig, &words);
+        outs.push(out);
+    }
+    (dig, outs)
 }
