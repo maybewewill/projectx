@@ -100,6 +100,13 @@ tools/
 - **Precedence/associativity live in the yacc tables** (`DAT_6FA822A8…` in .rdata) and haven't been decoded yet. TODO: extract the tables from the binary and decode them (yacc yyact/yypact/yyr1/yyr2), or run the original compiler under Unicorn on test expressions.
 - Symbol table: 1024-bucket hash. The declaration-order rule is not found yet.
 
+### 4.3d JASS VM (spec: docs/spec/jass-vm.md, Haiku, partly UNSURE)
+- Interpreter `0x6F45E9D0`. Bytecode: **8-byte instructions** (byte0 = right slot, byte1 = left slot, byte2 = dest/cond, byte3 = opcode, bytes4-7 = imm32), ~40 opcodes.
+- Types: 4 integer, 5 real (f32 bits; arithmetic is **claimed** to be software-float with a truncating multiply, UNSURE, important to check), 6 string (16 bytes, ref-counted, interned), 8 boolean, 3 code.
+- Integer +,-,* wrap. **Integer division by 0 and real division by 0.0 abort the thread** (status 7). Modulo by 0 gives 0.
+- Execution budget: the executor runs at most N instructions; at the call sites N = **300000**. The agent guessed a timer, but **this matches the well-known JASS "op limit" ≈ 300k** → most likely an instruction limit per run (LIKELY). What happens on overflow (thread ends vs continues next tick) needs checking: the spec says status 2 and the thread stays runnable.
+- Statuses: 1 done, 2 budget, 3 sleep, 4 yield, 5 function not found, 6 null, 7 divide by zero. Threads are in a circular list and run in list order every tick (`0x6F44B400`, LIKELY). No call-depth limit found.
+
 ### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
 - Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
 
@@ -151,12 +158,12 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~5%** of the 1:1 rewrite.
+**Overall: ~5.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
-| Game.dll analysis (names, classes, specs) | 10% | ~20% | full decompile export; specs: JASS front end, math, handles |
+| Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | 0% | |
 | JASS VM + ~1000 natives | 12% | ~6% | parser + type checker |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
@@ -190,7 +197,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
-- **2026-10-10 (8)**: full decompile export (70,526 functions, 1.58M lines, 0 failures; scratchpad only). Analysis agents: specs `docs/spec/{jass-frontend,math,handles}.md`. **Correction**: math comes from MSVCR80 `_CI*`, not software inside Game.dll.
+- **2026-10-10 (8)**: full decompile export (70,526 functions, 1.58M lines, 0 failures; scratchpad only). Analysis agents: specs `docs/spec/{jass-frontend,jass-vm,math,handles}.md`. **Correction**: math comes from MSVCR80 `_CI*`, not software inside Game.dll.
 - **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker, the viewer. 145 tests in the workspace, clippy clean.
 - **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
 - **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
