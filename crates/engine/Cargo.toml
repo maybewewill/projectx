@@ -1,0 +1,18 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Boots a Warcraft III 1.26a map the way the game does: map info, players, scripts (common.j, blizzard.j, war3map.j) and the script host"
+
+[[bin]]
+name = "w3boot"
+path = "src/bin/w3boot.rs"
+
+[dependencies]
+jass = { path = "../jass" }
+mpq = { path = "../mpq" }
+sim = { path = "../sim" }
+softfloat = { path = "../softfloat" }
+thiserror = "2.0.21"
+w3map = { path = "../w3map" }

@@ -1,0 +1,386 @@
+//! Boots a Warcraft III 1.26a map the way the game does, on top of the existing crates.
+//!
+//! Inputs: the map (`.w3m` / `.w3x`, an MPQ with the 512-byte header), the user's `Game.dll`
+//! (optional: it provides the soft-float lookup tables and the RNG permutation table), and the
+//! `common.j` and `blizzard.j` sources (paths, or extracted from `War3.mpq` / `War3x.mpq`).
+//!
+//! Boot order ([`Engine::boot`]):
+//!
+//! 1. Read `war3map.w3i` (player slots, playable area, names) and `war3map.j`.
+//! 2. Parse `common.j`, `blizzard.j`, `war3map.j` in that order with `jass::parse_with` (the
+//!    tables give the original's bits for real literals), check and compile them as one program.
+//! 3. Create the [`sim::ScriptHost`]. Map setup (playable area, player slots, local player) is applied
+//!    before any script code runs.
+//! 4. Run `config` synchronously, then queue `main` as a thread that starts on the first
+//!    [`Engine::step`]. UNSURE: in the real game `config` runs when the map is loaded (lobby to
+//!    game start), and `main` runs at game start, where it calls `InitBlizzard`, `InitGlobals`,
+//!    `InitCustomTriggers` and `RunInitializationTriggers`. Both are also callable separately
+//!    ([`Engine::run_config`], [`Engine::start_main`]).
+//!
+//! [`Engine::step`] advances the game clock by 0.1 s (see `sim::ScriptHost::step`).
+//!
+//! Missing natives: a native that is declared but has no implementation is reported, and a
+//! script call to it aborts the calling thread (`RunStatus::FunctionNotFound`). The report lists
+//! the natives that compiled code calls and that are not implemented, sorted by name.
+//!
+//! Nothing from the game is committed: the tests build synthetic archives in memory.
+
+use std::collections::BTreeSet;
+use std::fmt;
+
+use jass::bytecode::Op;
+use jass::compile::{compile, CompileError};
+use jass::vm::{NativeRegistry, RunStatus, ThreadId, VmError};
+use mpq::Archive;
+use sim::{RngTable, ScriptHost};
+use softfloat::Tables;
+use w3map::MapInfo;
+
+pub mod map;
+pub mod scripts;
+
+pub use map::{apply_players, controller_of, playable_area};
+pub use scripts::{scripts_from_archives, BLIZZARD_J, COMMON_J};
+
+/// Errors while booting a map.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("archive {index}: {source}")]
+    Archive { index: usize, source: mpq::Error },
+    #[error("{what}: {name} not found in the archives")]
+    MissingFile { what: &'static str, name: String },
+    #[error("war3map.w3i: {0}")]
+    Info(#[from] w3map::Error),
+    #[error("{file}: {source}")]
+    Parse {
+        file: &'static str,
+        source: jass::Error,
+    },
+    #[error("script compile: {0}")]
+    Compile(CompileError),
+    #[error("script VM: {0}")]
+    Vm(#[from] VmError),
+    #[error("Game.dll tables: {0:?}")]
+    Tables(softfloat::TablesError),
+    #[error("Game.dll RNG table: {0:?}")]
+    Rng(sim::RngError),
+}
+
+/// The inputs of [`Engine::boot`].
+#[derive(Debug, Clone, Default)]
+pub struct Inputs {
+    /// The map file bytes.
+    pub map: Vec<u8>,
+    /// The user's `Game.dll`. Without it the soft-float tables are missing: real division and the
+    /// table-based natives stop their thread, and real literals are only correctly rounded.
+    pub game_dll: Option<Vec<u8>>,
+    /// The `common.j` source.
+    pub common_j: String,
+    /// The `blizzard.j` source.
+    pub blizzard_j: String,
+}
+
+/// A booted map: the script host, the map info and the boot results.
+pub struct Engine {
+    host: ScriptHost,
+    info: MapInfo,
+    rng: Option<RngTable>,
+    functions: usize,
+    globals: usize,
+    natives_declared: usize,
+    natives_referenced: usize,
+    missing_natives: Vec<String>,
+    config_status: String,
+    main_status: String,
+    steps: u64,
+    timers_fired: u64,
+    notes: Vec<String>,
+}
+
+/// What the report shows for one player slot (from `w3i`, with the state the host set).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerLine {
+    pub slot: u32,
+    pub name: String,
+    pub race: u32,
+    pub controller: u32,
+    pub slot_state: u32,
+    pub team: i32,
+    pub start: (f32, f32),
+}
+
+/// A summary of a booted engine (see the `Display` impl for the printed form).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Report {
+    pub map_name: String,
+    pub author: String,
+    pub playable_width: u32,
+    pub playable_height: u32,
+    pub players: Vec<PlayerLine>,
+    pub functions: usize,
+    pub globals: usize,
+    pub natives_declared: usize,
+    pub natives_referenced: usize,
+    pub natives_missing: Vec<String>,
+    pub config: String,
+    pub main: String,
+    pub steps: u64,
+    pub timers_fired: u64,
+    pub game_time: f32,
+    pub notes: Vec<String>,
+}
+
+impl Engine {
+    /// Boots the map from `inputs` (see the module documentation for the order).
+    ///
+    /// `config` runs at boot. A failure there (for example a missing native) does not fail the
+    /// boot: it is recorded in [`Report::config`] and the rest still runs.
+    pub fn boot(inputs: Inputs) -> Result<Engine, Error> {
+        let mut notes = Vec::new();
+        let (tables, rng) = match &inputs.game_dll {
+            Some(dll) => (
+                Some(Tables::from_game_dll(dll).map_err(Error::Tables)?),
+                Some(RngTable::from_game_dll(dll).map_err(Error::Rng)?),
+            ),
+            None => {
+                notes.push("no Game.dll: soft-float tables and RNG table are missing".to_string());
+                (None, None)
+            }
+        };
+
+        let archive =
+            Archive::open(&inputs.map).map_err(|source| Error::Archive { index: 0, source })?;
+        let info_bytes = read_map_file(&archive, &["war3map.w3i"], "war3map.w3i")?;
+        let info = MapInfo::parse(&info_bytes)?;
+        let war3map = read_map_file(&archive, &["war3map.j", "scripts\\war3map.j"], "war3map.j")?;
+        let war3map = String::from_utf8_lossy(&war3map).into_owned();
+
+        let programs = [
+            ("common.j", inputs.common_j.as_str()),
+            ("blizzard.j", inputs.blizzard_j.as_str()),
+            ("war3map.j", war3map.as_str()),
+        ]
+        .iter()
+        .map(|&(file, src)| {
+            jass::parse_with(src, tables.as_ref()).map_err(|source| Error::Parse { file, source })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        let module = compile(&programs).map_err(Error::Compile)?;
+
+        let functions = module.functions.len();
+        let globals = module.globals.len();
+        let natives_declared = module.natives.len();
+
+        let host = ScriptHost::new(module, NativeRegistry::with_builtins(), tables)?;
+        host.set_playable(Some(playable_area(&info)));
+        apply_players(&mut host.game_mut(), &info, &mut notes);
+
+        let (natives_referenced, natives_missing) = native_usage(host.vm().module(), &host);
+
+        let mut engine = Engine {
+            host,
+            info,
+            rng,
+            functions,
+            globals,
+            natives_declared,
+            natives_referenced,
+            missing_natives: natives_missing,
+            config_status: String::new(),
+            main_status: String::new(),
+            steps: 0,
+            timers_fired: 0,
+            notes,
+        };
+        // Failures are kept in the status lines of the report, so the boot itself succeeds.
+        let _ = engine.run_config();
+        let _ = engine.start_main();
+        Ok(engine)
+    }
+
+    /// Runs `config` now, synchronously (UNSURE: the real game runs it at map load). A `config` that
+    /// sleeps is discarded by the synchronous call and reported as an error.
+    pub fn run_config(&mut self) -> Result<(), RunStatus> {
+        let result = self.host.vm_mut().call("config", &[]).map(|_| ());
+        self.config_status = describe(&result);
+        result
+    }
+
+    /// Queues `main` as a thread. It first runs on the next [`Engine::step`] (UNSURE: the real game
+    /// starts `main` at game start). Calling it twice runs `main` twice.
+    pub fn start_main(&mut self) -> Result<ThreadId, RunStatus> {
+        let result = self.host.start("main", &[]);
+        self.main_status = match &result {
+            Ok(id) => format!("queued as thread {}", id.0),
+            Err(e) => format!("not started: {e:?}"),
+        };
+        result
+    }
+
+    /// Advances the game by one 0.1 s step. Returns the number of queue entries that fired.
+    pub fn step(&mut self) -> usize {
+        let fired = self.host.step();
+        self.steps += 1;
+        self.timers_fired += fired as u64;
+        fired
+    }
+
+    /// The script host (VM, clock, timers and game state).
+    pub fn host(&self) -> &ScriptHost {
+        &self.host
+    }
+
+    /// Mutable access to the script host.
+    pub fn host_mut(&mut self) -> &mut ScriptHost {
+        &mut self.host
+    }
+
+    /// The map info read from `war3map.w3i`.
+    pub fn map_info(&self) -> &MapInfo {
+        &self.info
+    }
+
+    /// The RNG permutation table, if a `Game.dll` was given. The RNG natives do not use it yet.
+    pub fn rng_table(&self) -> Option<&RngTable> {
+        self.rng.as_ref()
+    }
+
+    /// Notes from the boot (things that were skipped or are not known).
+    pub fn notes(&self) -> &[String] {
+        &self.notes
+    }
+
+    /// The summary of the boot and of the steps run so far.
+    pub fn report(&self) -> Report {
+        let game = self.host.game();
+        let players = self
+            .info
+            .players
+            .iter()
+            .filter(|p| (p.number as usize) < sim::natives::game::PLAYER_SLOTS)
+            .map(|p| {
+                let s = game.player(p.number);
+                PlayerLine {
+                    slot: p.number,
+                    name: s.name.clone(),
+                    race: s.race,
+                    controller: s.controller,
+                    slot_state: s.slot_state,
+                    team: s.team,
+                    start: (p.start_x, p.start_y),
+                }
+            })
+            .collect();
+        Report {
+            map_name: self.info.name.clone(),
+            author: self.info.author.clone(),
+            playable_width: self.info.playable_width,
+            playable_height: self.info.playable_height,
+            players,
+            functions: self.functions,
+            globals: self.globals,
+            natives_declared: self.natives_declared,
+            natives_referenced: self.natives_referenced,
+            natives_missing: self.missing_natives.clone(),
+            config: self.config_status.clone(),
+            main: self.main_status.clone(),
+            steps: self.steps,
+            timers_fired: self.timers_fired,
+            game_time: self.host.clock().now(),
+            notes: self.notes.clone(),
+        }
+    }
+}
+
+fn describe(result: &Result<(), RunStatus>) -> String {
+    match result {
+        Ok(()) => "ok".to_string(),
+        Err(e) => format!("failed: {e:?}"),
+    }
+}
+
+/// Reads the first of `names` that the map has.
+fn read_map_file(
+    archive: &Archive<'_>,
+    names: &[&str],
+    what: &'static str,
+) -> Result<Vec<u8>, Error> {
+    for name in names {
+        match archive.read(name) {
+            Ok(data) => return Ok(data),
+            Err(mpq::Error::NotFound(_)) => {}
+            Err(source) => return Err(Error::Archive { index: 0, source }),
+        }
+    }
+    Err(Error::MissingFile {
+        what,
+        name: names.join(" or "),
+    })
+}
+
+/// The number of natives that compiled code calls, and the sorted names of those with no
+/// implementation. A native is "referenced" when any compiled function has a `CallNative` to it.
+fn native_usage(module: &jass::compile::Module, host: &ScriptHost) -> (usize, Vec<String>) {
+    let mut referenced = BTreeSet::new();
+    for f in &module.functions {
+        for ins in &f.code {
+            if ins.op == Op::CallNative {
+                referenced.insert(ins.imm as usize);
+            }
+        }
+    }
+    let unbound: BTreeSet<&str> = host.vm().unbound_natives().into_iter().collect();
+    let missing = referenced
+        .iter()
+        .filter_map(|&i| module.natives.get(i))
+        .map(|def| def.name.as_str())
+        .filter(|name| unbound.contains(name))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    (referenced.len(), missing)
+}
+
+impl fmt::Display for Report {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "map: {:?} by {:?}", self.map_name, self.author)?;
+        writeln!(
+            f,
+            "playable size (w3i): {} x {}",
+            self.playable_width, self.playable_height
+        )?;
+        writeln!(f, "players ({}):", self.players.len())?;
+        for p in &self.players {
+            writeln!(
+                f,
+                "  slot {:2}: {:?} race={} controller={} state={} team={} start=({:.1}, {:.1})",
+                p.slot, p.name, p.race, p.controller, p.slot_state, p.team, p.start.0, p.start.1
+            )?;
+        }
+        writeln!(
+            f,
+            "scripts: {} functions, {} globals, {} natives declared, {} referenced",
+            self.functions, self.globals, self.natives_declared, self.natives_referenced
+        )?;
+        writeln!(
+            f,
+            "natives referenced but not implemented ({}):",
+            self.natives_missing.len()
+        )?;
+        for name in &self.natives_missing {
+            writeln!(f, "  {name}")?;
+        }
+        writeln!(f, "config: {}", self.config)?;
+        writeln!(f, "main: {}", self.main)?;
+        writeln!(
+            f,
+            "steps: {} (game time {:.1} s), timer and sleep entries fired: {}",
+            self.steps, self.game_time, self.timers_fired
+        )?;
+        for note in &self.notes {
+            writeln!(f, "note: {note}")?;
+        }
+        Ok(())
+    }
+}

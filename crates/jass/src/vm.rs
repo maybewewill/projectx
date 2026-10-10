@@ -1258,6 +1258,19 @@ impl Vm {
         &self.m.module
     }
 
+    /// Names of the module's declared natives that no registry entry is bound to, in declaration
+    /// order. A call to one of them aborts the calling thread with `RunStatus::FunctionNotFound`.
+    pub fn unbound_natives(&self) -> Vec<&str> {
+        self.m
+            .module
+            .natives
+            .iter()
+            .zip(self.m.bindings.iter())
+            .filter(|(_, bound)| bound.is_none())
+            .map(|(def, _)| def.name.as_str())
+            .collect()
+    }
+
     pub fn strings(&self) -> &StringTable {
         &self.m.strings
     }
