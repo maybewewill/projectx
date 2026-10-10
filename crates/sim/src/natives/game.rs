@@ -290,7 +290,7 @@ pub enum Object {
     Location(LocationObj),
     Rect(RectObj),
     /// A hashtable: saved values keyed by (parent, child) integers.
-    Hashtable(Slots<i32, i32>),
+    Hashtable(super::hashtable::HashtableObj),
     /// A game cache: saved values keyed by (mission, key) strings.
     GameCache(Slots<String, String>),
 }

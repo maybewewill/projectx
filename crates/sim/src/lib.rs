@@ -14,6 +14,7 @@
 //! system clock, uses hash maps with random seeds, or depends on the host floating point unit.
 
 pub mod handles;
+pub mod hashmap;
 pub mod natives;
 pub mod pathing;
 pub mod rng;
