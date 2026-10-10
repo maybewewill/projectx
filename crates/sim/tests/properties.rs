@@ -3,7 +3,22 @@
 //! Where a generator is needed, a stand-in permutation is used. The properties
 //! checked here hold for any valid table, so the stand-in is enough.
 
-use sim::softfloat;
+use softfloat::{arith, F32};
+
+/// Soft-float add on raw bit patterns (the `softfloat` crate's `arith::add`).
+fn sfadd(x: u32, y: u32) -> u32 {
+    arith::add(F32::from_bits(x), F32::from_bits(y)).to_bits()
+}
+
+/// Soft-float subtract on raw bit patterns.
+fn sfsub(x: u32, y: u32) -> u32 {
+    arith::sub(F32::from_bits(x), F32::from_bits(y)).to_bits()
+}
+
+/// Soft-float multiply on raw bit patterns.
+fn sfmul(x: u32, y: u32) -> u32 {
+    arith::mul(F32::from_bits(x), F32::from_bits(y)).to_bits()
+}
 use sim::{Rng, RngError, RngTable, Streams, STREAM_COUNT};
 
 /// Identity permutation: a valid table that is not the game's data.
@@ -239,16 +254,8 @@ fn soft_add_and_mul_are_commutative_for_normal_values() {
     let mut s = Sampler(31);
     for _ in 0..5000 {
         let (x, y) = (s.normal_bits(), s.normal_bits());
-        assert_eq!(
-            softfloat::add(x, y),
-            softfloat::add(y, x),
-            "add({x:#010x}, {y:#010x})"
-        );
-        assert_eq!(
-            softfloat::mul(x, y),
-            softfloat::mul(y, x),
-            "mul({x:#010x}, {y:#010x})"
-        );
+        assert_eq!(sfadd(x, y), sfadd(y, x), "add({x:#010x}, {y:#010x})");
+        assert_eq!(sfmul(x, y), sfmul(y, x), "mul({x:#010x}, {y:#010x})");
     }
 }
 
@@ -258,17 +265,17 @@ fn soft_identities_for_normal_values() {
     for _ in 0..5000 {
         let x = s.normal_bits();
         let y = s.normal_bits();
-        assert_eq!(softfloat::add(x, 0), x, "x + 0 == x");
-        assert_eq!(softfloat::sub(x, x), 0, "x - x == +0");
-        assert_eq!(softfloat::mul(x, 0x3F80_0000), x, "x * 1.0 == x");
+        assert_eq!(sfadd(x, 0), x, "x + 0 == x");
+        assert_eq!(sfsub(x, x), 0, "x - x == +0");
+        assert_eq!(sfmul(x, 0x3F80_0000), x, "x * 1.0 == x");
         assert_eq!(
-            softfloat::mul(x, 0x4000_0000),
+            sfmul(x, 0x4000_0000),
             x + (1 << 23),
             "x * 2.0 doubles the exponent"
         );
         assert_eq!(
-            softfloat::sub(x, y),
-            softfloat::add(x, y ^ 0x8000_0000),
+            sfsub(x, y),
+            sfadd(x, y ^ 0x8000_0000),
             "sub is add of the negation"
         );
     }
@@ -285,9 +292,9 @@ fn soft_ops_match_ieee_for_exact_results() {
     ];
     for &(x, y) in cases {
         let (xb, yb) = (x.to_bits(), y.to_bits());
-        assert_eq!(softfloat::mul(xb, yb), (x * y).to_bits(), "mul {x} * {y}");
-        assert_eq!(softfloat::add(xb, yb), (x + y).to_bits(), "add {x} + {y}");
-        assert_eq!(softfloat::sub(xb, yb), (x - y).to_bits(), "sub {x} - {y}");
+        assert_eq!(sfmul(xb, yb), (x * y).to_bits(), "mul {x} * {y}");
+        assert_eq!(sfadd(xb, yb), (x + y).to_bits(), "add {x} + {y}");
+        assert_eq!(sfsub(xb, yb), (x - y).to_bits(), "sub {x} - {y}");
     }
 }
 

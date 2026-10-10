@@ -2,7 +2,13 @@
 
 use jass::compile::compile;
 use jass::vm::{NativeRegistry, Value};
-use sim::softfloat;
+use softfloat::{arith, Tables, F32};
+
+/// Soft-float add on raw bit patterns (the `softfloat` crate's `arith::add`).
+fn sfadd(x: u32, y: u32) -> u32 {
+    arith::add(F32::from_bits(x), F32::from_bits(y)).to_bits()
+}
+
 use sim::{AgileClock, ScriptHost, TimerQueue, STEP, STEP_BITS};
 
 /// Pump with a closure that records `(payload, expiry bits, now during callback bits)`.
@@ -103,7 +109,7 @@ fn timers_started_in_a_callback_are_relative_to_its_expiry() {
         }
     });
     // Callback of 2 runs at expiry 0.3 + 0.1 in soft-float, which is about 0.4.
-    let expected = softfloat::add(0.3f32.to_bits(), 0.1f32.to_bits());
+    let expected = sfadd(0.3f32.to_bits(), 0.1f32.to_bits());
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[1], (2, expected));
     assert!((f32::from_bits(expected) - 0.4).abs() < 1e-6);
@@ -251,10 +257,22 @@ function Main takes nothing returns nothing
 endfunction
 "#;
 
+/// The soft-float lookup tables of the user's `Game.dll` (`GAME_DLL`), or `None` when it is unset.
+fn tables() -> Option<Tables> {
+    let path = std::env::var("GAME_DLL").ok()?;
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("reading GAME_DLL={path}: {e}"));
+    Some(Tables::from_game_dll(&bytes).expect("lookup tables in GAME_DLL"))
+}
+
+/// A real value from an `f32` literal (its bit pattern, as the VM stores it).
+fn real_val(x: f32) -> Value {
+    Value::Real(F32::from_bits(x.to_bits()))
+}
+
 fn host_for(src: &str) -> ScriptHost {
     let prog = jass::parse(src).expect("parse");
     let module = compile(&[prog]).expect("compile");
-    ScriptHost::new(module, NativeRegistry::with_builtins()).expect("vm")
+    ScriptHost::new(module, NativeRegistry::with_builtins(), tables()).expect("vm")
 }
 
 #[test]
@@ -262,11 +280,12 @@ fn trigger_sleep_resumes_at_the_expected_step() {
     let mut host = host_for(SLEEP_SCRIPT);
     host.start("Main", &[]).expect("start");
 
-    // Step 1 runs Main at clock = STEP. Main sleeps for 0.25 s, so its wake time is the VM's f32
-    // `now + seconds`. That is the same value the host schedules as the timer expiry.
+    // Step 1 runs Main at clock = STEP. Main sleeps for 0.25 s, so its wake time is the VM's
+    // soft-float `now + seconds`. That is the same value the host schedules as the timer expiry.
     let mut clock = AgileClock::new();
     clock.advance_step();
-    let until = clock.now() + 0.25f32;
+    // The VM's wake time is the soft-float sum, so the host's timer expiry is that same value.
+    let until = f32::from_bits(sfadd(clock.now().to_bits(), 0.25f32.to_bits()));
 
     // The first clock value at or after `until` decides the resume step. Soft-float accumulation
     // truncates, so the clock reads 0.1 (3DCCCCCD), 0.2 (3E4CCCCD), 0.29999998 (3E999999),
@@ -297,8 +316,14 @@ fn trigger_sleep_resumes_at_the_expected_step() {
     let (step, fired) = resumed_at.expect("thread resumed");
     assert_eq!(step, expected_step);
     assert_eq!(fired, 1, "one sleep timer fires on the resume step");
-    // Resumed inside the pump with the VM at the timer's expiry.
-    assert_eq!(host.vm().now().to_bits(), until.to_bits());
+    // The host ends each step with a scheduler pass at the clock value, so the VM reads that value.
+    let mut at_step = AgileClock::new();
+    for _ in 0..step {
+        at_step.advance_step();
+    }
+    assert_eq!(host.vm().now().to_bits(), at_step.now().to_bits());
+    // The thread itself ran at the timer's expiry (`until`), which the pump passed to `Vm::resume`.
+    assert!(until <= at_step.now());
     // Three steps after the sleep began (step 1), as the spec scenario requires.
     assert_eq!(step, 4);
 }
@@ -320,11 +345,11 @@ function Waiter takes integer id, real t returns nothing
 endfunction
 "#;
     let mut host = host_for(src);
-    host.start("Waiter", &[Value::Integer(1), Value::Real(0.5)])
+    host.start("Waiter", &[Value::Integer(1), real_val(0.5)])
         .unwrap();
-    host.start("Waiter", &[Value::Integer(2), Value::Real(0.2)])
+    host.start("Waiter", &[Value::Integer(2), real_val(0.2)])
         .unwrap();
-    host.start("Waiter", &[Value::Integer(3), Value::Real(0.2)])
+    host.start("Waiter", &[Value::Integer(3), real_val(0.2)])
         .unwrap();
     for _ in 0..10 {
         host.step();
@@ -362,4 +387,60 @@ endfunction
     host.step();
     host.step();
     assert_eq!(host.vm().global("gDone"), Some(Value::Integer(1)));
+}
+
+/// Runs `steps` host steps with a spinning thread (budget 50) and three sleepers that sleep
+/// `sleep` seconds. Returns, per step, the number of timers that fired and the spinner's counter.
+fn spin_trace(sleep: f32, steps: usize) -> Vec<(usize, i32)> {
+    let src = r#"
+globals
+    integer gSpin = 0
+endglobals
+
+native TriggerSleepAction takes real t returns nothing
+
+function Spinner takes nothing returns nothing
+    loop
+        set gSpin = gSpin + 1
+    endloop
+endfunction
+
+function Sleeper takes real t returns nothing
+    call TriggerSleepAction(t)
+endfunction
+"#;
+    let mut host = host_for(src);
+    host.vm_mut().set_budget(50);
+    host.start("Spinner", &[]).expect("spinner");
+    for _ in 0..3 {
+        host.start("Sleeper", &[real_val(sleep)]).expect("sleeper");
+    }
+    (0..steps)
+        .map(|_| {
+            let fired = host.step();
+            let spin = host
+                .vm()
+                .global("gSpin")
+                .and_then(|v| v.as_integer())
+                .unwrap_or(-1);
+            (fired, spin)
+        })
+        .collect()
+}
+
+#[test]
+fn fired_timers_do_not_give_runnable_threads_extra_slices() {
+    // Same spinner in both runs. With three sleepers that wake inside the window, three timers fire
+    // in one host step; with sleepers that do not wake, none does. The spinner's counter must follow
+    // the same trace either way: each host step gives it exactly one budget slice.
+    let waking = spin_trace(0.1, 8);
+    let sleeping = spin_trace(1000.0, 8);
+    assert!(
+        waking.iter().any(|&(fired, _)| fired == 3),
+        "three timers fire in one step: {waking:?}"
+    );
+    assert!(sleeping.iter().all(|&(fired, _)| fired == 0));
+    let spin_waking: Vec<i32> = waking.iter().map(|&(_, spin)| spin).collect();
+    let spin_sleeping: Vec<i32> = sleeping.iter().map(|&(_, spin)| spin).collect();
+    assert_eq!(spin_waking, spin_sleeping);
 }

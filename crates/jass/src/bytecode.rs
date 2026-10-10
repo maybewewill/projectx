@@ -28,7 +28,7 @@ pub const NO_SLOT: u8 = 0xFF;
 pub enum Op {
     /// dest = Integer(imm as i32)
     LoadInt = 0x01,
-    /// dest = Real(f32::from_bits(imm))
+    /// dest = Real(F32::from_bits(imm))
     LoadReal = 0x02,
     /// dest = Boolean(imm != 0)
     LoadBool = 0x03,
@@ -64,13 +64,13 @@ pub enum Op {
     /// dest = slot[left] % slot[right], C remainder (sign of dividend). Zero divisor gives 0.
     ModI = 0x14,
 
-    /// dest = slot[left] + slot[right] in f32 (see `vm::real`)
+    /// dest = slot[left] + slot[right], soft-float add (`softfloat::arith::add`)
     AddR = 0x18,
-    /// dest = slot[left] - slot[right] in f32
+    /// dest = slot[left] - slot[right], soft-float sub
     SubR = 0x19,
-    /// dest = slot[left] * slot[right] in f32
+    /// dest = slot[left] * slot[right], soft-float mul
     MulR = 0x1A,
-    /// dest = slot[left] / slot[right] in f32. Zero divisor (either sign) aborts the thread.
+    /// dest = slot[left] / slot[right], soft-float div (needs the lookup tables). Zero divisor (either sign) aborts the thread.
     DivR = 0x1B,
 
     /// dest = String(concat(slot[left], slot[right]))
@@ -82,7 +82,7 @@ pub enum Op {
     NegR = 0x21,
     /// dest = !slot[left] (boolean)
     Not = 0x22,
-    /// dest = Real(slot[left] as f32), exact for |x| < 2^24, rounded otherwise
+    /// dest = Real(I2R(slot[left])), soft-float int-to-real (truncates above 2^24)
     IntToReal = 0x23,
     /// dest = slot[left] && slot[right]. Both operands are already evaluated (no short circuit).
     And = 0x24,

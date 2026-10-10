@@ -653,6 +653,7 @@ dependencies = [
 name = "jass"
 version = "0.1.0"
 dependencies = [
+ "softfloat",
  "thiserror 2.0.21",
 ]
 
@@ -1637,6 +1638,7 @@ name = "sim"
 version = "0.1.0"
 dependencies = [
  "jass",
+ "softfloat",
 ]
 
 [[package]]
