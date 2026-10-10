@@ -85,6 +85,11 @@ impl ScriptHost {
         self.game.borrow()
     }
 
+    /// Sets the playable area that rect coordinates are clamped to (`None` disables the clamp).
+    pub fn set_playable(&self, playable: Option<natives::Playable>) {
+        self.game.borrow_mut().set_playable(playable);
+    }
+
     /// Resumes the host refused. Always empty unless the host and the VM disagree about a wake time,
     /// which the shared soft-float expression prevents.
     pub fn misfires(&self) -> &[(ThreadId, ResumeError)] {
