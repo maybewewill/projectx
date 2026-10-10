@@ -34,7 +34,7 @@ crates/
   gamedata/   SLK tables + profile .txt (INI), merging layers, deterministic BTreeMap [v0.1, Haiku agent]
   w3map/      map files: w3e terrain, w3i info (v25), doo doodads (v8/11), shd, wpm [v0.1, Haiku agent]
   mdx/        MDX v800 models: SEQS/GLBS/TEXS/MTLS/GEOS/BONE/HELP/PIVT + tracks; other chunks raw [v0.1, Haiku agent]
-  render/     wgpu renderer (native + WebGPU/WebGL)                     [todo]
+  viewer/     MDX/BLP viewer on wgpu 30 + winit 0.30, native + wasm32 (WebGPU/WebGL2) [v0.1, Haiku agent; never actually drawn]
   inject/     i686-pc-windows DLL: hooks Game.dll functions with Rust versions
               (incremental replacement inside the running original, OpenRCT2 approach) [todo]
 tools/
@@ -138,7 +138,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~3.5%** of the 1:1 rewrite.
+**Overall: ~4%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -146,7 +146,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 | Game.dll analysis (names, classes, specs) | 10% | ~10% | FPU mode; full decompile export running |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | 0% | |
 | JASS VM + ~1000 natives | 12% | ~6% | parser + type checker |
-| Rendering (MDX, terrain, effects) | 12% | 0% | |
+| Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
 | Replay test harness against the original | 5% | ~5% | w3g parser |
@@ -169,6 +169,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/w3map` v0.1 (15 tests incl. truncation/corruption sweeps). **TODO on a real map**: the special-doodads section layout (currently assumed version 0 with strict checking, so the whole DOO parse may fail), SHD (maybe bit-packed), WPM header, the tail of w3i (upgrades/tech/random tables) is kept raw.
 - [x] `crates/mdx` v0.1 (12 tests, corruption sweep). **TODO on real models**: TEXS/MODL unknown u32 fields, GEOS tail order (UVAS/UVBS), SEQS flags, KMTF tangents; after an unknown track tag the rest of the node is skipped. Interpolation 0/1/2/3 = none/linear/hermite/bezier (believed correct).
 - [x] `crates/jass` v0.2: type checker (39 tests). Statements in the AST now have `line`. **Known mismatch to fix**: it currently allows calling a function before it is declared; in retail JASS, as far as is known, a function has to be declared above the call site (this is why vJass has `.evaluate`). Check in Game.dll and switch to the strict rule.
+- [x] `crates/viewer` v0.1 (17 tests on pure logic, builds for wasm32). **Not checked**: never drawn (no GPU), no wasm-bindgen/JS glue, bind pose only (no animation/skinning), one texture for all geosets.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
@@ -176,7 +177,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
-- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker. 128 tests in the workspace, clippy clean.
+- **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker, the viewer. 145 tests in the workspace, clippy clean.
 - **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
 - **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
 - **2026-10-10 (4)**: `crates/mpq` v0.1 (reader + tests + `examples/mpqls.rs`). Dependencies: flate2, bzip2 (pure-Rust backend libbz2-rs-sys, works in wasm), explode (DCL).
