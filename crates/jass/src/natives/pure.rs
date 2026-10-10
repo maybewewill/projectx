@@ -130,18 +130,19 @@ pub fn register(reg: &mut NativeRegistry) {
     // toward zero and does not round to nearest. Exact for |i| <= 2^24.
     reg.register("I2R", |_, a| ret(Value::Real(i2r(int_arg(a, 0)))));
 
-    // R2I (0x6f3b2ce0). Behaviour: real to integer, truncating toward zero (3.9 gives 3, -3.9 gives
-    // -3). Out-of-range values saturate and NaN gives 0 (Rust `as`), the original's out-of-range
-    // result is not known. The body is not in the decompile export. The generic float-to-int
-    // helper FUN_6f7e11e0 rounds to nearest under the game's FPU mode (CONFIRMED in math.md), so if
-    // R2I used it the result would be rounded; that is not what R2I is believed to do. UNSURE.
+    // R2I (0x6f3b2ce0). CONFIRMED: the wrapper's whole body is a call to the float-to-int helper
+    // FUN_6f6eec70, which works on the bits of the f32. It truncates toward zero, gives 0 for
+    // |x| < 1, and saturates to INT_MAX/INT_MIN by sign for |x| >= 2^31, NaN included (see `r2i`).
+    // Checked against the original in Unicorn (tests/natives_pure.rs, tools/emu/verify_strings.py).
     reg.register("R2I", |_, a| ret(Value::Integer(r2i(real_arg(a, 0)))));
 
-    // S2I (0x6f3b2d10). Behaviour: integer value of a string, parsed with the same rules as S2R and
-    // then truncated (see `parse_real`). Body not in the decompile export. UNSURE.
+    // S2I (0x6f3b2d10). CONFIRMED: the wrapper returns 0 for a null or empty string, otherwise the
+    // C library `atoi` of the text (import MSVCR80 `atoi`). So leading white space and a sign are
+    // accepted and parsing stops at the first non-digit ("  12x" gives 12, "1.9" gives 1). The
+    // overflow result is UNSURE (see `atoi`). The text is not localised, so no TRIGSTR lookup.
     reg.register("S2I", |ctx, a| {
         let s = str_arg(ctx, a, 0);
-        ret(Value::Integer(parse_real(&s) as i32))
+        ret(Value::Integer(atoi(&s)))
     });
 
     // S2R (0x6f3b2d50). Behaviour: real value of a string using `parse_real` (CONFIRMED parser
@@ -152,8 +153,9 @@ pub fn register(reg: &mut NativeRegistry) {
         ret(Value::Real(parse_real(&s)))
     });
 
-    // I2S (0x6f3baaa0). Behaviour: decimal text of the integer, "-" for negative values. Body not in
-    // the decompile export. UNSURE.
+    // I2S (0x6f3baaa0). CONFIRMED: the format string at 0x6f915d68 is "%d", written by the Storm
+    // ordinal 578 (printf-style, 256-byte buffer, which cannot overflow for an i32). So: signed
+    // decimal text, "-" for negative values, no padding.
     reg.register("I2S", |ctx, a| {
         let s = int_arg(a, 0).to_string();
         ret(Value::String(ctx.intern(&s)))
@@ -176,49 +178,62 @@ pub fn register(reg: &mut NativeRegistry) {
 
     // --- strings --------------------------------------------------------------------------------
 
-    // SubString (0x6f3baba0, helper 0x6f4c60b0). CONFIRMED structure: start and end are passed as
-    // 16-bit values (see `substring`). The end index is clamped to the length; an end before the
-    // start copies the tail from the start; the error path (empty source or start past the end)
-    // raises an error object in the original, whose result is UNSURE and is modelled as "".
-    // Negative indices are UNSURE (the original would read before the buffer) and are clamped to 0.
+    // SubString (0x6f3baba0, helper 0x6f4c60b0). CONFIRMED structure from the disassembly: start and
+    // end are 16-bit values (see `substring`). The end is clamped to the length. An end before the
+    // start gives the tail from the start. Empty source or start past the end takes an error path
+    // whose result is UNSURE and is modelled as "". Negative indices are UNSURE (the original would
+    // read before the buffer) and are clamped to 0.
     reg.register("SubString", |ctx, a| {
         let s = str_arg(ctx, a, 0);
         let out = substring(&s, int_arg(a, 1), int_arg(a, 2));
         ret(Value::String(ctx.intern(&out)))
     });
 
-    // StringLength (0x6f3bac20). Behaviour: length of the string in bytes (the original stores
-    // ANSI bytes; this VM stores UTF-8, so non-ASCII text differs). Body not in the decompile
-    // export. UNSURE.
+    // StringLength (0x6f3bac20). CONFIRMED structure: null or empty gives 0, otherwise the byte
+    // length (strlen, import ordinal 506) of the string as the string fetch helper returns it. The
+    // fetch helper 0x6f3baa40 also resolves "TRIGSTR_nnn" to the map's localised text, which this
+    // VM does not have (see `OPEN` below), so a TRIGSTR argument differs. Byte count of UTF-8 text
+    // differs from the original's ANSI bytes. LIKELY.
     reg.register("StringLength", |ctx, a| {
         let s = str_arg(ctx, a, 0);
         ret(Value::Integer(s.len() as i32))
     });
 
-    // StringCase (0x6f3bac40). Behaviour: ASCII upper-case when the boolean is true, lower-case
-    // when false; bytes above 0x7f are kept. Body not in the decompile export. UNSURE.
+    // StringCase (0x6f3bac40). CONFIRMED from the disassembly: the source is copied with the Storm
+    // ordinal 501 into a 1024-byte buffer (so at most 1023 bytes survive), then case-converted in
+    // place by ordinal 510 when the boolean is true and ordinal 579 when false. ordinal 510 is taken
+    // to be the upper-case routine (LIKELY, Storm names are not in the export). Only ASCII letters
+    // change. A null or empty source returns the null string in the original (UNSURE, modelled as
+    // ""). The TRIGSTR resolution of StringLength applies here too. Confidence of the case mapping
+    // is LIKELY.
     reg.register("StringCase", |ctx, a| {
         let s = str_arg(ctx, a, 0);
         let upper = a.get(1).and_then(|v| v.as_boolean()).unwrap_or(false);
-        let out = if upper {
-            s.to_ascii_uppercase()
-        } else {
-            s.to_ascii_lowercase()
-        };
+        let out = string_case(&s, upper);
         ret(Value::String(ctx.intern(&out)))
     });
 
-    // StringHash (0x6f3b2d30) is NOT registered. Its body is missing from the decompile export and
-    // no hash constants were found in the chunks, so the algorithm is unknown. Calls to it fail as
-    // FunctionNotFound until the body is recovered.
+    // StringHash (0x6f3b2d30). CONFIRMED wrapper: null or empty gives 0 (no hash of ""). Otherwise
+    // the Storm ordinal 590 is applied to the text. The Storm code is not in the upload. Game.dll
+    // carries its own copy of the MPQ string hash (0x6f68cc10, with the crypt table built at
+    // 0x6f68cb00), and that copy was checked in Unicorn against `string_hash` on observed pairs
+    // (tests/natives_pure.rs). Taking the Game.dll hash with type 0 as Storm's SStrHash is LIKELY,
+    // not verified. See `mpq_hash`.
+    reg.register("StringHash", |ctx, a| {
+        let s = str_arg(ctx, a, 0);
+        ret(Value::Integer(string_hash(&s)))
+    });
+
+    // OPEN: the TRIGSTR_nnn lookup (both StringLength and StringCase) needs the map's string table
+    // (war3map.wts), which is game state. Not implemented here.
 
     // --- Convert* -------------------------------------------------------------------------------
 
-    // Each Convert*(i) native (0x6f3b2600..=0x6f3b28b0, 16-byte stubs). Behaviour: the integer is
-    // tagged as a handle of the named type, with no table lookup visible in the stubs. The result is
-    // Handle(i); Handle(0) is the null handle, so index 0 compares equal to null. The stub bodies are
-    // not in the decompile export, so this is UNSURE. ConvertUnits (0x6f71d9d0, signature (II)B,
-    // table `ai`) is a different kind of native and is not part of this set.
+    // Each Convert*(i) native (0x6f3b2600..=0x6f3b28b0). CONFIRMED: all 44 bodies are the same
+    // `return param_1`, i.e. the integer is the handle value unchanged. There is no preallocated
+    // handle table (no index into an array, no range check, no lookup), so the handle value is the
+    // integer itself, and 0 is the null handle. ConvertUnits (0x6f71d9d0, signature (II)B, table
+    // `ai`) is a different kind of native and is not part of this set.
     for name in CONVERT_NATIVES {
         reg.register(name, |_, a| ret(Value::Handle(int_arg(a, 0) as u32)));
     }
@@ -271,9 +286,142 @@ pub fn i2r(i: i32) -> f32 {
     }
 }
 
-/// Real to integer, truncating toward zero (see the R2I note).
+/// Real to integer, as the original's helper 0x6f6eec70 does it, from the bits of the f32:
+/// - |x| < 1 (biased exponent below 0x7f, including zeros and denormals) gives 0;
+/// - the magnitude is the 24-bit mantissa shifted right (truncation toward zero) or left, so the
+///   fraction is dropped, never rounded;
+/// - exponent above 0x9d (|x| >= 2^31, infinities and NaN) saturates to INT_MIN for a set sign bit
+///   and INT_MAX otherwise. (Rust's `as` would give 0 for NaN, which is not what the original does.)
 pub fn r2i(r: f32) -> i32 {
-    r as i32
+    let bits = r.to_bits();
+    let neg = bits >> 31 != 0;
+    let e = (bits >> 23) & 0xff;
+    if e < 0x7f {
+        return 0;
+    }
+    if e > 0x9d {
+        return if neg { i32::MIN } else { i32::MAX };
+    }
+    let m = (bits & 0x7f_ffff) | 0x80_0000;
+    let mag = if e <= 0x96 {
+        m >> (0x96 - e)
+    } else {
+        m << (e - 0x96)
+    };
+    let v = mag as i32;
+    if neg {
+        v.wrapping_neg()
+    } else {
+        v
+    }
+}
+
+/// C library `atoi` (MSVCR80 import used by S2I). Skips leading white space (space, \t, \n, \v,
+/// \f, \r), takes one optional sign, then decimal digits up to the first other character. The
+/// digits are accumulated at 64-bit precision with saturation (strtoll-style) and the result is
+/// truncated to 32 bits. Overflow behaviour of MSVCR80 is UNSURE: this takes the 64-bit saturation
+/// and truncation reading, which only differs from a 32-bit saturating reading past 2^31.
+pub fn atoi(s: &str) -> i32 {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    let mut acc: u128 = 0;
+    while i < b.len() && b[i].is_ascii_digit() {
+        acc = (acc * 10 + u128::from(b[i] - b'0')).min(u128::from(u64::MAX));
+        i += 1;
+    }
+    let v: i64 = if neg {
+        if acc > 1u128 << 63 {
+            i64::MIN
+        } else {
+            (acc as i64).wrapping_neg()
+        }
+    } else if acc > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        acc as i64
+    };
+    v as i32
+}
+
+/// StringHash of a JASS string: 0 for the empty string, otherwise the MPQ-style hash with hash
+/// type 0 (see `mpq_hash`).
+pub fn string_hash(s: &str) -> i32 {
+    if s.is_empty() {
+        return 0;
+    }
+    mpq_hash(s.as_bytes(), 0) as i32
+}
+
+/// The MPQ-style string hash as Game.dll implements it at 0x6f68cc10: seeds 0x7fed7fed and
+/// 0xeeeeeeee; each byte is folded to upper case if it is `a`..`z` (ASCII only), `/` becomes `\`,
+/// then `seed1 = table[type*0x100 + c] ^ (seed1 + seed2)` and
+/// `seed2 = c + seed1 + seed2 + (seed2 << 5) + 3` (wrapping). The result is `seed1`. Bytes above
+/// 0x7f are used as they are. Checked on observed pairs from the original (CONFIRMED for Game.dll).
+pub fn mpq_hash(name: &[u8], hash_type: u32) -> u32 {
+    let table = crypt_table();
+    let base = (hash_type as usize) * 0x100;
+    let mut seed1: u32 = 0x7fed_7fed;
+    let mut seed2: u32 = 0xeeee_eeee;
+    for &byte in name {
+        let mut c = byte;
+        if c.is_ascii_lowercase() {
+            c -= 0x20;
+        }
+        if c == b'/' {
+            c = b'\\';
+        }
+        seed1 = table[base + c as usize] ^ seed1.wrapping_add(seed2);
+        seed2 = u32::from(c)
+            .wrapping_add(seed1)
+            .wrapping_add(seed2)
+            .wrapping_add(seed2 << 5)
+            .wrapping_add(3);
+    }
+    seed1
+}
+
+/// The 0x500-entry crypt table of the MPQ hash, built once at run time with the public generator
+/// (seed 0x00100001, `seed = seed * 125 + 3 mod 0x2aaaab`, two 16-bit halves per entry). It is
+/// computed by code, not read from the binary. Game.dll builds the same table at 0x6f68cb00, and
+/// the two were compared in Unicorn.
+fn crypt_table() -> &'static [u32; 0x500] {
+    static TABLE: std::sync::OnceLock<[u32; 0x500]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = [0u32; 0x500];
+        let mut seed: u32 = 0x0010_0001;
+        for i in 0..0x100 {
+            let mut idx = i;
+            for _ in 0..5 {
+                seed = (seed * 125 + 3) % 0x2a_aaab;
+                let hi = (seed & 0xffff) << 16;
+                seed = (seed * 125 + 3) % 0x2a_aaab;
+                t[idx] = hi | (seed & 0xffff);
+                idx += 0x100;
+            }
+        }
+        t
+    })
+}
+
+/// StringCase on the bytes of `s`: copied into a 1024-byte buffer (at most 1023 bytes are kept),
+/// then ASCII letters are converted to upper or lower case. See the native's note.
+pub fn string_case(s: &str, upper: bool) -> String {
+    let bytes = &s.as_bytes()[..s.len().min(1023)];
+    let mut out = bytes.to_vec();
+    if upper {
+        out.make_ascii_uppercase();
+    } else {
+        out.make_ascii_lowercase();
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Text of a real in C `%*.*f` style: `width` (negative means left-justified with its absolute

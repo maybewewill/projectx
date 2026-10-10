@@ -11,3 +11,8 @@ GAME_DLL=/path/to/Game.dll python3 tools/emu/test_natives.py
 
 Status (2026-10-10): RNG seeding, step, GetRandomInt, SetRandomSeed + 45 streams: 0 mismatches.
 GetRandomReal: off by up to 1.2e-4 (the original's soft-float helpers are not modelled yet).
+
+`verify_strings.py` (2026-10-10): R2I (`0x6f6eec70`, 21,626 cases) and the Game.dll MPQ-style
+string hash (`0x6f68cc10` with the crypt table from `0x6f68cb00`, 33 cases) match the Python
+transcriptions with 0 mismatches. The pairs it prints are embedded in `crates/jass/tests/natives_pure.rs`.
+Storm.dll (StringHash's import) and msvcr80.dll (atoi) are not in the upload, so those were not run.

@@ -29,6 +29,7 @@ native S2R takes string s returns real
 native SubString takes string s, integer start, integer end returns string
 native StringLength takes string s returns integer
 native StringCase takes string s, boolean upper returns string
+native StringHash takes string s returns integer
 "#;
 
 fn registry() -> NativeRegistry {
@@ -151,9 +152,12 @@ fn i2s_and_s2i() {
     assert_eq!(string("I2S(-42)"), "-42");
     assert_eq!(string("I2S(0)"), "0");
     assert_eq!(int("S2I(\"12abc\")"), 12);
-    // Leading space gives 0 (the parser stops at the first character it does not accept).
-    assert_eq!(int("S2I(\" 12\")"), 0);
+    // atoi skips leading white space (CONFIRMED that the native calls atoi; LIKELY for the rule).
+    assert_eq!(int("S2I(\" 12\")"), 12);
     assert_eq!(int("S2I(\"\")"), 0);
+    assert_eq!(int("S2I(\"+7\")"), 7);
+    assert_eq!(int("S2I(\"-7x\")"), -7);
+    assert_eq!(int("S2I(\"1.9\")"), 1);
 }
 
 #[test]
@@ -311,4 +315,141 @@ fn convert_natives_tag_the_integer_as_a_handle() {
             "{name} of 0 is null"
         );
     }
+}
+
+// ------------------------------------------------------------------------------------------
+// Checked against Game.dll 1.26a in Unicorn (tools/emu/verify_strings.py)
+// ------------------------------------------------------------------------------------------
+
+/// (f32 bits, R2I result) observed from the original's float-to-int helper 0x6f6eec70.
+const R2I_PAIRS: [(u32, i32); 33] = [
+    (0x3f800000, 1),
+    (0xbf800000, -1),
+    (0x3f7fffff, 0),
+    (0x3fc00000, 1),
+    (0xbfc00000, -1),
+    (0x3f000000, 0),
+    (0x40000000, 2),
+    (0x41200000, 10),
+    (0xc2c80000, -100),
+    (0x42c80000, 100),
+    (0x4affffff, 8388607),
+    (0x4b000000, 8388608),
+    (0x4effffff, 2147483520),
+    (0x4f000000, 2147483647),
+    (0xceffffff, -2147483520),
+    (0xcf000000, -2147483648),
+    (0x7f800000, 2147483647),
+    (0xff800000, -2147483648),
+    (0x7fc00000, 2147483647),
+    (0xffc00000, -2147483648),
+    (0x00000001, 0),
+    (0x80000000, 0),
+    (0x007fffff, 0),
+    (0x7f7fffff, 2147483647),
+    (0xff7fffff, -2147483648),
+    (0x46fffe00, 32767),
+    (0x4e7fffff, 1073741760),
+    (0xc6fffe00, -32767),
+    (0x3effffff, 0),
+    (0xbeffffff, 0),
+    (0x4000b333, 2),
+    (0xc0490fdb, -3),
+    (0x5d5e0b6b, 2147483647),
+];
+
+#[test]
+fn r2i_matches_original_pairs() {
+    for (bits, expected) in R2I_PAIRS {
+        let got = jass::natives::pure::r2i(f32::from_bits(bits));
+        assert_eq!(got, expected, "R2I of {bits:#010x}");
+    }
+}
+
+#[test]
+fn r2i_truncates_and_saturates() {
+    assert_eq!(jass::natives::pure::r2i(-0.5), 0);
+    assert_eq!(jass::natives::pure::r2i(1.999), 1);
+    // Above 2^31 saturates by sign, and NaN follows its sign bit (not 0 as with Rust's `as`).
+    assert_eq!(jass::natives::pure::r2i(3.0e9), i32::MAX);
+    assert_eq!(jass::natives::pure::r2i(-3.0e9), i32::MIN);
+    assert_eq!(jass::natives::pure::r2i(f32::NAN), i32::MAX);
+    assert_eq!(jass::natives::pure::r2i(-f32::NAN), i32::MIN);
+}
+
+/// (name, hash type, hash) observed from Game.dll's MPQ-style hash at 0x6f68cc10 (crypt table
+/// from 0x6f68cb00). Names are ASCII; the native applies it with type 0.
+const HASH_PAIRS: [(&str, u32, u32); 30] = [
+    ("a", 0, 0x224408eb),
+    ("A", 0, 0x224408eb),
+    ("abc", 0, 0xf434f751),
+    ("abc", 1, 0xaab2c1a5),
+    ("abc", 2, 0x34300855),
+    ("abc", 3, 0x4e203978),
+    ("Abc", 0, 0xf434f751),
+    ("ABC", 0, 0xf434f751),
+    ("units\\human", 0, 0x175717f6),
+    ("units\\human", 1, 0x536846a8),
+    ("units\\human", 2, 0x7d70ac67),
+    ("units\\human", 3, 0x5abbeefe),
+    ("units/human", 0, 0x175717f6),
+    ("Units\\Human", 0, 0x175717f6),
+    ("Hello World", 0, 0xfeb41edd),
+    ("Hello World", 1, 0xef7b1bdb),
+    ("Hello World", 2, 0x4ba6f4b8),
+    ("Hello World", 3, 0x59c90699),
+    ("TRIGSTR_001", 0, 0x1fa3f8c7),
+    ("CAbilityBlizzard", 0, 0xc7bedb16),
+    ("war3map.j", 0, 0x0cca3be6),
+    ("ab/cd", 0, 0x77e9543e),
+    ("ab\\cd", 0, 0x77e9543e),
+    ("0123456789", 0, 0x78408e49),
+    ("!@#$%^&*()", 0, 0xd42a0799),
+    ("_", 0, 0xe225441e),
+    ("z", 0, 0x6d747097),
+    ("Z", 0, 0x6d747097),
+    ("{}[]", 0, 0xf9d8fb15),
+    ("AbAbAbAbAbAbAbAbAbAbAbAbAbAbAbAbAb", 0, 0xfd8009fe),
+];
+
+#[test]
+fn mpq_hash_matches_game_dll_pairs() {
+    for (name, ty, expected) in HASH_PAIRS {
+        assert_eq!(
+            jass::natives::pure::mpq_hash(name.as_bytes(), ty),
+            expected,
+            "hash of {name:?} type {ty}"
+        );
+    }
+}
+
+#[test]
+fn string_hash_native_rules() {
+    // Empty string is 0 by the wrapper, not the hash of "".
+    assert_eq!(int("StringHash(\"\")"), 0);
+    // Case-insensitive, and the hash is the signed 32-bit value of seed1 (0xf434f751 is negative).
+    assert_eq!(int("StringHash(\"abc\")"), 0xf434_f751_u32 as i32);
+    assert_eq!(int("StringHash(\"ABC\")"), int("StringHash(\"abc\")"));
+}
+
+#[test]
+fn string_case_keeps_at_most_1023_bytes() {
+    let long = "a".repeat(2000);
+    let out = jass::natives::pure::string_case(&long, true);
+    assert_eq!(out.len(), 1023);
+    assert!(out.bytes().all(|b| b == b'A'));
+    assert_eq!(
+        jass::natives::pure::string_case("ab\u{e9}", true),
+        "AB\u{e9}"
+    );
+}
+
+#[test]
+fn atoi_rules() {
+    use jass::natives::pure::atoi;
+    assert_eq!(atoi("  \t-42x"), -42);
+    assert_eq!(atoi("+"), 0);
+    assert_eq!(atoi("2147483647"), i32::MAX);
+    assert_eq!(atoi("-2147483648"), i32::MIN);
+    assert_eq!(atoi("0x1F"), 0);
 }
