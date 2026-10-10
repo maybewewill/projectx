@@ -146,6 +146,11 @@ tools/
 - **Pass 3 (docs/spec/pathing-3.md):** there is **no flood fill**. "Regions" are aligned squares of 1/2/4/8 cells (pyramid levels 0–3, loaded from the map by `0x6F481340`, not rebuilt during the game). An id is assigned **lazily** on the first touch of a record in `0x6F498A60` = the current length of the search's node list; the seed = the query cell. Ids restart from 0 on every request (`0x6F49A3F0`). Lookup returns the id of the record one level below the first non-mixed one; state 01 → -1, state 10 → -1 (level 0) / -2 (higher). Regions are **not** connected components (one id can span a wall). Cell expansion `0x6F499E90` N,E,S,W,NE,SE,SW,NW confirmed; the block expander `0x6F499FA0` (level ≥ 1) is not fully worked out. ✅ **Reworked and checked in Unicorn (0 mismatches)**: lookup/labeller `0x6F498A60/0x6F498A00` (8,000 cases, ~110k lookups, full state after every lookup), reset/setup `0x6F49A3F0/0x6F49A640`, start node `0x6F49A240`, loop `0x6F49A170`, relax/push/unlink/close, cell expander, block expander (~14.5k expansions; beyond the generated cases UNVERIFIED). Corrections: step = isqrt(576·d²), h the same to the goal, nearest-node fallback by plain d²; setup takes float cells (floor+f2i) without origin/scale; node template from .data; heap at S+0x70 (count includes the sentinel). ✅ **The whole request pipeline is checked**: dispatcher `0x6F49A800` (1,178 requests: direct 531 / straight 269 / partial 304 / reached 74), direct move `0x6F49A5E0`, waypoints `0x6F49A470` (cell units; node → (x+0.75, y+0.75), mode 2 → (x+1.25, y+1.25); flag node adds (-128000.0, flag); the first point = goal/center, the last = start; no smoothing), cell center `0x6F497D30`, **mode 2 (2-cell footprint)**, fractional inputs. 0 mismatches. Open: start outside the pyramid (the original works on stale state), size classes ≥2, the world↔cell (×32) layer around the dispatcher, path-object growth failure.
 - Movement chain (LIKELY): `0x6F490FC0` → `0x6F4907F0` → `0x6F495320` → `0x6F49E020/0x6F49DAC0`. Not found: region flood fill, per-tick turning/acceleration, unit push-apart (CPoSeparate/CProximityMap).
 
+### 4.3k Unit movement (spec: docs/spec/movement.md, pass 1)
+- Entry: message 0x8026A → `0x6F42FC80` → `0x6F426C30` → `0x6F4675C0` (world `0x6FAB73D8`) → `0x6F483300`: walks the mover list (world+0x3B8, LIFO insertion LIKELY) and fully updates each mover (`0x6F493410` → `0x6F490FC0` → `0x6F4907F0` per 44-byte record) before moving to the next.
+- Step length is clamped to unit+0x88; "moving" if > 0.01. **No ×0.1 inside the mover** (corrects pathing-2). Facing = heading of the step vector (`0x6F4B2DE0`: acos(vx/r) + sign from vy, 2π wrap), set **before** the step (instant turn); turn rate limited only by the clamp at unit+0xB8 (LIKELY). Arrival: |residual| ≤ 0.2. Priority class (unit+0xD8>>12)&0xF: lower-class units near a higher one get skip 0x200000 for that tick; **no push-apart found**. Re-plan no more often than every 10 ticks (LIKELY).
+- Open: waypoint rule (`0x6F49C990/0x6F49C3B0`), cell→world (`0x6F483E70`), where unit+0x88/+0xB8 come from (speed/turn rate), sorting in `0x6F48F2D0`. Note: 0x6FAAE4F4 is zero in the file and becomes 1.0 at startup via stub `0x6F84DE80` (see pathing request agent).
+
 ### 4.3c Handles (spec: docs/spec/handles-2.md) ✅ checked in Unicorn (21/21, `tools/emu/handle_alloc_emu.py`)
 - GetHandleId `0x6F3B2D00` = identity. **Base 0x100000**, new id = 0x100000 + table size (allocator `0x6F430C80`); freed ids go on a **LIFO stack** (push `0x6F3A3D20`) → the most recently freed one is reused.
 - Entry is 12 bytes: refcount, agent smart pointer, flag. Created with count 1; release `0x6F42DD40` → when it reaches 0 the id goes on the free stack. Hashtable saves AddRef the id (it stays reserved). Agent death (event 0x80267, `0x6F42DD80`) releases the creation reference (LIKELY).
@@ -211,7 +216,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~22%** of the 1:1 rewrite.
+**Overall: ~22.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
