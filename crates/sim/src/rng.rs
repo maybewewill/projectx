@@ -45,6 +45,13 @@ impl std::error::Error for RngError {}
 #[derive(Clone, PartialEq, Eq)]
 pub struct RngTable([u8; 256]);
 
+impl std::fmt::Debug for RngTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The table is data from the user's Game.dll; print its size only.
+        f.write_str("RngTable(256 bytes)")
+    }
+}
+
 impl RngTable {
     /// Wraps table bytes, checking that they form a permutation of `0..=255`.
     pub fn from_bytes(bytes: [u8; 256]) -> Result<Self, RngError> {
@@ -157,11 +164,16 @@ impl Rng {
     /// `|b - a|` (computed with `softfloat::arith`), the draw `U` is in `[0, 1)`, and
     /// the result is `a + range * U`, all in the engine's soft-float arithmetic.
     pub fn random_real(&mut self, table: &RngTable, a: f32, b: f32) -> f32 {
-        let (ab, bb) = (F32::from_bits(a.to_bits()), F32::from_bits(b.to_bits()));
-        let range = if b < a {
-            arith::sub(ab, bb)
+        self.random_real_soft(table, F32::from_bits(a.to_bits()), F32::from_bits(b.to_bits()))
+            .to_f32()
+    }
+
+    /// [`Rng::random_real`] on soft-float values (the form the natives use).
+    pub fn random_real_soft(&mut self, table: &RngTable, a: F32, b: F32) -> F32 {
+        let range = if b.to_f32() < a.to_f32() {
+            arith::sub(a, b)
         } else {
-            arith::sub(bb, ab)
+            arith::sub(b, a)
         };
         let r = self.next_u32(table);
         let u = arith::add(
@@ -169,7 +181,7 @@ impl Rng {
             F32::from_bits(0xBF80_0000),
         );
         let t = arith::mul(range, u);
-        arith::add(ab, t).to_f32()
+        arith::add(a, t)
     }
 }
 

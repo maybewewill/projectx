@@ -20,6 +20,7 @@ mod gamecache;
 mod hashtable;
 mod location;
 mod player;
+mod rng;
 mod timer;
 mod trigger;
 
@@ -48,4 +49,5 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     location::register(reg, game);
     player::register(reg, game);
     force::register(reg, game);
+    rng::register(reg, game);
 }

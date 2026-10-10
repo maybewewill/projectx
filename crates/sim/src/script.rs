@@ -29,6 +29,7 @@ use jass::vm::{NativeRegistry, ResumeError, RunStatus, ThreadId, Value, Vm, VmEr
 use softfloat::{Tables, F32};
 
 use crate::natives::{self, Game, Payload};
+use crate::rng::{RngTable, Streams};
 use crate::timer::{AgileClock, TimerQueue};
 
 /// A JASS VM driven by the agile clock, the timer queue and the trigger state.
@@ -94,6 +95,31 @@ impl ScriptHost {
     /// Sets the playable area that rect coordinates are clamped to (`None` disables the clamp).
     pub fn set_playable(&self, playable: Option<natives::Playable>) {
         self.game.borrow_mut().set_playable(playable);
+    }
+
+    /// Gives the host's random generator its permutation table (from the user's `Game.dll`). Until
+    /// this is called the random natives stop their thread with `MissingTables`.
+    pub fn set_rng_table(&self, table: RngTable) {
+        self.game.borrow_mut().set_rng_table(Some(table));
+    }
+
+    /// Game-start seeding with the seed `s` (see [`Streams::start_game`]). Returns `false`, and does
+    /// nothing, when no RNG table was set. The seed itself is an input: the fold over the player slots
+    /// that the original computes is not implemented (`docs/spec/rng.md` section 4.1).
+    pub fn start_game_rng(&self, s: u32) -> bool {
+        let mut g = self.game.borrow_mut();
+        match g.rng_parts() {
+            Some((table, streams)) => {
+                streams.start_game(table, s);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The random generator state (global generator and streams), for inspection.
+    pub fn rng(&self) -> Ref<'_, Streams> {
+        Ref::map(self.game.borrow(), |g| g.rng())
     }
 
     /// Resumes the host refused. Always empty unless the host and the VM disagree about a wake time,

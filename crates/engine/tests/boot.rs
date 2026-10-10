@@ -54,6 +54,7 @@ fn inputs(map: Vec<u8>) -> Inputs {
         game_dll: None,
         common_j: COMMON_J.to_string(),
         blizzard_j: BLIZZARD_J.to_string(),
+        rng_seed: 0,
     }
 }
 
@@ -248,6 +249,33 @@ fn game_dll_tables_give_the_original_literal_bits() {
         other => panic!("gR is {other:?}"),
     }
     assert!(engine.rng_table().is_some());
+}
+
+#[test]
+fn boot_seeds_the_generator_from_the_raw_game_seed() {
+    let Some(dll) = game_dll() else {
+        eprintln!("GAME_DLL not set: skipping the boot RNG seeding test");
+        return;
+    };
+    let seed = 0x1234_5678;
+    let engine = Engine::boot(Inputs {
+        game_dll: Some(dll.clone()),
+        rng_seed: seed,
+        ..inputs(synthetic_map(WAR3MAP_J))
+    })
+    .unwrap_or_else(|e| panic!("boot with Game.dll failed: {e}"));
+    // The synthetic script draws no random numbers, so the state is the game-start state.
+    let table = sim::RngTable::from_game_dll(&dll).expect("RNG table");
+    let mut direct = sim::Streams::default();
+    direct.start_game(&table, seed);
+    assert_eq!(*engine.host().rng(), direct);
+}
+
+#[test]
+fn boot_without_game_dll_does_not_seed_the_generator() {
+    let engine = boot(synthetic_map(WAR3MAP_J));
+    assert_eq!(*engine.host().rng(), sim::Streams::default());
+    assert!(engine.notes().iter().any(|n| n.contains("RNG table")));
 }
 
 #[test]

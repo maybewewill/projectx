@@ -17,6 +17,7 @@ use jass::vm::{RunStatus, ThreadId, Value};
 use softfloat::F32;
 
 use crate::handles::HandleTable;
+use crate::rng::{RngTable, Streams};
 use crate::timer::{TimerId, TimerQueue};
 
 /// Index of a game object in the arena. The handle table keys objects by it.
@@ -412,6 +413,11 @@ pub struct Game {
     enum_players: Vec<u32>,
     /// Player handles of the running `GetFilterPlayer` scopes, innermost last.
     filter_players: Vec<u32>,
+    /// The global generator and the 45 streams (`GetRandomInt`, `SetRandomSeed`, ...).
+    rng: Streams,
+    /// The permutation table of the generator, from the user's `Game.dll`. `None` until a host sets it;
+    /// the random natives then stop their thread with `MissingTables`.
+    rng_table: Option<RngTable>,
 }
 
 impl Default for Game {
@@ -437,7 +443,25 @@ impl Game {
             local_player: 0,
             enum_players: Vec::new(),
             filter_players: Vec::new(),
+            rng: Streams::default(),
+            rng_table: None,
         }
+    }
+
+    /// Sets (or clears) the RNG permutation table. Without it the random natives fail with
+    /// `MissingTables`. See [`crate::rng`].
+    pub fn set_rng_table(&mut self, table: Option<RngTable>) {
+        self.rng_table = table;
+    }
+
+    /// The generator state: the global generator and the streams.
+    pub fn rng(&self) -> &Streams {
+        &self.rng
+    }
+
+    /// The RNG table and the mutable generator state together, for a draw. `None` without a table.
+    pub fn rng_parts(&mut self) -> Option<(&RngTable, &mut Streams)> {
+        self.rng_table.as_ref().map(|table| (table, &mut self.rng))
     }
 
     /// Sets the player index that `GetLocalPlayer` returns. The host provides it (UNSURE: the original

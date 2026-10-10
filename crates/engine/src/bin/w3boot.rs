@@ -2,17 +2,18 @@
 //!
 //! ```text
 //! w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | --mpq War3.mpq [--mpq War3x.mpq])
-//!        [--steps N] map.w3x
+//!        [--seed S] [--steps N] map.w3x
 //! ```
 //!
 //! `--mpq` reads `Scripts\common.j` and `Scripts\Blizzard.j` from the archives (later ones override).
+//! `--seed` is the raw game-start seed (decimal or `0x` hex, default 0); see `engine::Inputs::rng_seed`.
 
 use std::process::ExitCode;
 
 use engine::{Engine, Inputs};
 
 const USAGE: &str = "usage: w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | \
---mpq War3.mpq [--mpq War3x.mpq]) [--steps N] map.w3x";
+--mpq War3.mpq [--mpq War3x.mpq]) [--seed S] [--steps N] map.w3x";
 
 #[derive(Debug, Default)]
 struct Args {
@@ -20,8 +21,18 @@ struct Args {
     common: Option<String>,
     blizzard: Option<String>,
     mpqs: Vec<String>,
+    seed: u32,
     steps: u64,
     map: Option<String>,
+}
+
+/// A 32-bit seed in decimal or `0x` hex.
+fn parse_seed(text: &str) -> Result<u32, String> {
+    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => text.parse::<u32>(),
+    };
+    parsed.map_err(|_| format!("--seed: not a 32-bit number: {text}"))
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -38,6 +49,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--common" => args.common = Some(value("--common")?),
             "--blizzard" => args.blizzard = Some(value("--blizzard")?),
             "--mpq" => args.mpqs.push(value("--mpq")?),
+            "--seed" => args.seed = parse_seed(&value("--seed")?)?,
             "--steps" => {
                 let v = value("--steps")?;
                 args.steps = v
@@ -93,6 +105,7 @@ fn inputs(args: &Args) -> Result<Inputs, String> {
         game_dll,
         common_j,
         blizzard_j,
+        rng_seed: args.seed,
     })
 }
 

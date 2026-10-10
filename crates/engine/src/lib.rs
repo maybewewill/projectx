@@ -10,7 +10,8 @@
 //! 2. Parse `common.j`, `blizzard.j`, `war3map.j` in that order with `jass::parse_with` (the
 //!    tables give the original's bits for real literals), check and compile them as one program.
 //! 3. Create the [`sim::ScriptHost`]. Map setup (playable area, player slots, local player) is applied
-//!    before any script code runs.
+//!    before any script code runs. With a `Game.dll`, the RNG table is handed to the host and the
+//!    generator is seeded with [`Inputs::rng_seed`] (game start, `sim::Streams::start_game`).
 //! 4. Run `config` synchronously, then queue `main` as a thread that starts on the first
 //!    [`Engine::step`]. UNSURE: in the real game `config` runs when the map is loaded (lobby to
 //!    game start), and `main` runs at game start, where it calls `InitBlizzard`, `InitGlobals`,
@@ -78,6 +79,12 @@ pub struct Inputs {
     pub common_j: String,
     /// The `blizzard.j` source.
     pub blizzard_j: String,
+    /// The raw game-start seed `S` for the random generator (`GetRandomInt` and the streams are
+    /// seeded from it, see `sim::Streams::start_game`). The replay's random seed field is the
+    /// intended source. UNSURE: the original computes `S` as a rotate-and-xor fold over the player
+    /// slots (`docs/spec/rng.md` section 4.1), which is not implemented, so the caller supplies `S`.
+    /// Only used when `game_dll` is given (the generator needs its table).
+    pub rng_seed: u32,
 }
 
 /// A booted map: the script host, the map info and the boot results.
@@ -174,6 +181,15 @@ impl Engine {
         let host = ScriptHost::new(module, NativeRegistry::with_builtins(), tables)?;
         host.set_playable(Some(playable_area(&info)));
         apply_players(&mut host.game_mut(), &info, &mut notes);
+        if let Some(table) = &rng {
+            host.set_rng_table(table.clone());
+            // Game start: the global generator and the streams are seeded from the game seed.
+            host.start_game_rng(inputs.rng_seed);
+            notes.push(format!(
+                "RNG seeded with the raw game seed {:#010x} (slot fold not implemented)",
+                inputs.rng_seed
+            ));
+        }
 
         let (natives_referenced, natives_missing) = native_usage(host.vm().module(), &host);
 
@@ -240,7 +256,8 @@ impl Engine {
         &self.info
     }
 
-    /// The RNG permutation table, if a `Game.dll` was given. The RNG natives do not use it yet.
+    /// The RNG permutation table, if a `Game.dll` was given. The host has its own copy for the
+    /// random natives.
     pub fn rng_table(&self) -> Option<&RngTable> {
         self.rng.as_ref()
     }
