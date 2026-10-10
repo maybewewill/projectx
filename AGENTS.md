@@ -202,13 +202,13 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~13%** of the 1:1 rewrite.
+**Overall: ~13.5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~25% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~7% | RNG + full softfloat library bit-exact vs original; timer queue in progress |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~8% | RNG + softfloat bit-exact; timer queue + game clock + JASS sleep |
 | JASS VM + ~1000 natives | 12% | ~20% | parser (precedence = original), type checker, VM; natives ~65 of 1291, unconfirmed |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
@@ -237,6 +237,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/viewer` v0.1 (17 tests on pure logic, builds for wasm32). **Not checked**: never drawn (no GPU), no wasm-bindgen/JS glue, bind pose only (no animation/skinning), one texture for all geosets.
 - [x] `crates/jass` v0.3: compiler to bytecode + VM + deterministic scheduler (30 VM tests). **UNVERIFIED vs the original**: real arithmetic is IEEE f32 (the spec hints at software float), R2I truncates, opcode numbering and codegen are ours (so the op limit won't count the same as the original until the codegen matches), and/or without short-circuit, behavior on array index out of range, strings are never freed.
 - [x] `crates/jass` natives v1: math/strings/Convert* (`natives/pure.rs`, 17 tests), pass 2: R2I/StringHash/Convert* confirmed (Unicorn), S2I/I2S/SubString/StringCase from disassembly.
+- [x] `crates/sim` timer.rs + script.rs: AgileClock (softfloat add 0.1, drifts below n·0.1: 3DCCCCCD, 3E4CCCCD, 3E999999…), TimerQueue (1-based min-heap, expiry→seq), ScriptHost (JASS sleep → timer). 17 tests. **Needs fixing**: the VM has no `resume(thread)`, so k fired sleep timers run all runnable threads k times; the sleep wake uses IEEE f32 instead of softfloat (switch to softfloat). Periodic re-arm = expiry+period (UNVERIFIED).
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
