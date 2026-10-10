@@ -36,6 +36,7 @@ crates/
   w3map/      map files: w3e terrain, w3i info (v25), doo doodads (v8/11), shd, wpm [v0.1, Haiku agent]
   mdx/        MDX v800 models: SEQS/GLBS/TEXS/MTLS/GEOS/BONE/HELP/PIVT + tracks; other chunks raw [v0.1, Haiku agent]
   viewer/     MDX/BLP viewer on wgpu 30 + winit 0.30, native + wasm32 (WebGPU/WebGL2) [v0.1, Haiku agent; never actually drawn]
+  engine/     map boot: MPQ → w3i → players/playable area → common.j+blizzard.j+war3map.j → config/main → step(); CLI `w3boot` (report incl. missing natives) [v0.1]
   inject/     i686-pc-windows DLL: hooks Game.dll functions with Rust versions
               (incremental replacement inside the running original, OpenRCT2 approach) [todo]
 tools/
@@ -218,7 +219,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~24%** of the 1:1 rewrite.
+**Overall: ~25%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -260,6 +261,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/sim/natives`: **timer and trigger natives** (~40: CreateTimer/TimerStart/Pause/Resume/Elapsed/Remaining, CreateTrigger/conditions/actions/Evaluate/Execute/RegisterTimerEvent, boolexpr And/Or/Not, ...). Found: TriggerExecute ignores conditions and the enable flag; the event path does eval++ → enable check → conditions (AND, no early exit) → exec++ → actions; TriggerEvaluate without counters. Not run against the original; UNSURE: order of handler vs listener on expiry, tie-break (global FIFO vs per-timer +0x50), And/Or without short-circuit. VM fix: the verifier rejected `GetHandleId(CreateTrigger())`. **Tests must use `parse_with(tables)`** for bit-exact literals.
 - [x] `crates/sim/natives`: **hashtable** (all types incl. 39 handle types; one handle slot per key across types; a save releases the old reference and AddRefs the new one → a saved handle keeps its id after Destroy; LoadXHandle → null if the type no longer matches), **gamecache** (no disk), **location/rect** (rect clamped to the playable area, center = (max+min)·0.5 via softfloat). **Known divergence**: flushing a hashtable releases references in key order (BTreeMap), the original in its hash-map order → with several handles flushed at once, the LIFO order of freed ids can differ (needs that hash order implemented). Found so far: TSHashTable, 12-byte buckets (index = key & mask, 4 initially), **append at the chain tail, destroy walks buckets 0..mask, tail-first (newest first) within each** (checked without growth); growth when score > 13 (mask < 0x1FFF). ✅ `crates/sim/src/hashmap.rs` (BucketMap): destroy order and the growth moment checked in Unicorn (4,000 sequences, 0 mismatches); hashtable Flush* now releases in BucketMap order. Order after a rehash: **LIKELY** — the lead read `0x6F3FE240`: old buckets ascending, elements from the E+8 end into a temporary list, then each into the opposite end of its new bucket = exactly the current model (`insert(0)`); the harness broke because realloc moved the self-referencing sentinels. Still to confirm by emulation (needs a correct array resize `0x6F3F9EA0`). The parent-level map and the end-to-end flush path are LIKELY. The playable area isn't loaded from the map yet. Gamecache keys are exact strings (the original uses STRIPACKED hashing).
 - [x] `crates/sim/natives`: **player and force natives** (~30). ForForce = slots 0..15 ascending (membership re-read every time); ForceEnum* = candidates **0..11 only**, inactive ones skipped without calling the filter, filter before the relation check; alliances are a one-sided 32-bit mask per type; gold/lumber are stored ×10 and clamped to [0, 1e7]. The player handle is created on first access (LIKELY; pre-creation at map start is UNSURE → affects the handle ids of the whole map!). Player defaults have to come from the map (w3i) — not loaded yet.
+- [x] `crates/engine` + `w3boot`: map boot (12 tests on a synthetic map). UNSURE: playable area = camera bounds from w3i; order config (at load) → main (first step); w3i→controller/race mapping; w3i alliances not applied. **First thing to do once you have files**: `w3boot --dll Game.dll --mpq War3.mpq --mpq War3x.mpq map.w3x` → list of missing natives = the work queue.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
