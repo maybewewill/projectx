@@ -23,3 +23,15 @@ S2R (`0x6f6f0520`) and the lexer's real literal (`0x6f466690`). The helpers call
 implementations (the loader does not bind imports). The Rust side is `crates/softfloat/src/text.rs`
 and `crates/softfloat/tests/text.rs` (`SOFTFLOAT_TEXT_VECTORS=<json>`, `GAME_DLL`). The
 `--embed-rs` output is `crates/softfloat/tests/text_embedded.rs`.
+
+`handle_vectors.py` (2026-10-10): random create / add_ref / release sequences run through the
+handle allocator harness (`handle_alloc_emu.py`). It records the returned ids, counts, table and
+free-stack lengths and writes them into the generated block of `crates/sim/tests/handles.rs`:
+
+```bash
+GAME_DLL=/path/to/Game.dll PYTHONPATH=<dir with unicorn, pefile> \
+  python3 tools/emu/handle_vectors.py --seed 1 --ops 800 --rs crates/sim/tests/handles.rs
+```
+
+Two sequences are written: `EMU_OPS` (mostly live ids) and `EMU_EDGE_OPS` (any issued id, so freed
+ids are touched too; this produces duplicate free-stack entries). Object death is not in the sequence.

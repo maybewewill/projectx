@@ -264,6 +264,13 @@ pub fn register(reg: &mut NativeRegistry) {
     for name in CONVERT_NATIVES {
         reg.register(name, |_, a| ret(Value::Handle(int_arg(a, 0) as u32)));
     }
+
+    // GetHandleId (0x6f3b2d00, CONFIRMED): the body returns its argument unchanged. The script sees
+    // the same value the engine uses internally, so the id is the handle value (null is 0).
+    reg.register("GetHandleId", |_, a| {
+        let id = a.first().and_then(|v| v.as_handle()).unwrap_or(0);
+        ret(Value::Integer(id as i32))
+    });
 }
 
 // ---------------------------------------------------------------------------------------------

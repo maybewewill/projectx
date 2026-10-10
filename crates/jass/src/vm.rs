@@ -12,6 +12,7 @@
 //! read from the user's own `Game.dll`. Without tables those operations stop the thread with
 //! `RunStatus::MissingTables`; they never fall back to IEEE math.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 
 use softfloat::{arith, conv, Tables, F32};
@@ -235,12 +236,22 @@ pub struct NativeCtx<'a> {
     strings: &'a mut StringTable,
     functions: &'a BTreeMap<String, u32>,
     tables: Option<&'a Tables>,
+    extensions: &'a mut Vec<Box<dyn Any>>,
     now: F32,
     thread: ThreadId,
     spawns: Vec<u32>,
 }
 
 impl NativeCtx<'_> {
+    /// The VM extension of type `T` (see [`Vm::insert_extension`]), or `None` if none was inserted.
+    /// This is how game-state crates give natives access to their own state (e.g. the handle table)
+    /// without the VM depending on them.
+    pub fn extension<T: Any>(&mut self) -> Option<&mut T> {
+        self.extensions
+            .iter_mut()
+            .find_map(|e| (**e).downcast_mut::<T>())
+    }
+
     /// Current game time in seconds.
     pub fn now(&self) -> F32 {
         self.now
@@ -469,6 +480,8 @@ enum GlobalCell {
 struct Machine {
     module: Module,
     strings: StringTable,
+    /// Host state shared with natives, one value per type (see [`Vm::insert_extension`]).
+    extensions: Vec<Box<dyn Any>>,
     globals: Vec<GlobalCell>,
     registry: NativeRegistry,
     /// Per module native: the index of its implementation in `registry`, if bound.
@@ -805,6 +818,7 @@ impl Machine {
                         strings: &mut self.strings,
                         functions: &self.module.function_index,
                         tables: self.tables.as_ref(),
+                        extensions: &mut self.extensions,
                         now: self.now,
                         thread: th.id,
                         spawns: Vec::new(),
@@ -1078,6 +1092,7 @@ impl Vm {
             m: Machine {
                 module,
                 strings,
+                extensions: Vec::new(),
                 globals,
                 registry: natives,
                 bindings,
@@ -1093,6 +1108,34 @@ impl Vm {
         };
         vm.call_id(init, &[]).map_err(VmError::InitFailed)?;
         Ok(vm)
+    }
+
+    /// Stores host state for natives to reach through [`NativeCtx::extension`]. One value per type:
+    /// inserting a second value of the same type replaces the first. The state is not visible to
+    /// natives that run inside `Vm::new` (global initializers), because the VM does not exist yet
+    /// when it is created; insert it right after `Vm::new`.
+    pub fn insert_extension<T: Any>(&mut self, value: T) {
+        let slot = self.m.extensions.iter().position(|e| e.is::<T>());
+        match slot {
+            Some(i) => self.m.extensions[i] = Box::new(value),
+            None => self.m.extensions.push(Box::new(value)),
+        }
+    }
+
+    /// The host state of type `T`, if inserted.
+    pub fn extension<T: Any>(&self) -> Option<&T> {
+        self.m
+            .extensions
+            .iter()
+            .find_map(|e| (**e).downcast_ref::<T>())
+    }
+
+    /// Mutable access to the host state of type `T`, if inserted.
+    pub fn extension_mut<T: Any>(&mut self) -> Option<&mut T> {
+        self.m
+            .extensions
+            .iter_mut()
+            .find_map(|e| (**e).downcast_mut::<T>())
     }
 
     /// Instructions per thread per scheduler pass.

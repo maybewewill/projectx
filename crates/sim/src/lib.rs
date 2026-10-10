@@ -6,10 +6,12 @@
 //! * [`script`]: the JASS host that runs a `jass::vm::Vm` on that clock.
 //! * [`pathing`]: the integer square root, the search heap, the pathing grid and the
 //!   region-level A* (the A* is unverified against the original).
+//! * [`handles`]: JASS handle ids (allocation order, LIFO reuse, reference counts).
 //!
 //! Real arithmetic uses the bit-exact helpers of the `softfloat` crate. Nothing here reads the
 //! system clock, uses hash maps with random seeds, or depends on the host floating point unit.
 
+pub mod handles;
 pub mod pathing;
 pub mod rng;
 pub mod script;
@@ -17,6 +19,7 @@ pub mod timer;
 
 mod pe;
 
+pub use handles::{HandleTable, HANDLE_BASE};
 pub use rng::{Rng, RngError, RngTable, Streams, FIXED_GAME_SEED, STREAM_COUNT};
 pub use script::ScriptHost;
 pub use timer::{AgileClock, Fired, TimerId, TimerQueue, STEP, STEP_BITS};
