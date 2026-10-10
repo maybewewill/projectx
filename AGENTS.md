@@ -77,8 +77,12 @@ tools/
 
 ### 4.3 Floating point (critical for determinism)
 - x87: **77,147** instructions; SSE: only 103.
-- `fsin/fcos/fsincos/fpatan/fptan/fsqrt/f2xm1/fyl2x/fprem/frndint` = **0**.
-  → Transcendental functions and sqrt are **computed in software inside the DLL** (tables or polynomials), so they can be reproduced bit for bit.
+- `fsin/fcos/fsincos/fpatan/fptan/fsqrt/f2xm1/fyl2x/fprem/frndint` = **0 inside Game.dll** — **but that is because math is imported from the CRT**:
+  Game.dll imports `_CIsin, _CIcos, _CItan, _CIasin, _CIacos, _CIatan, _CIatan2, _CIsqrt, _CIpow, _CIexp, _CIlog10, _CIfmod, floor, ceil` **from MSVCR80.dll**.
+  (⚠ The earlier conclusion "math is software inside the DLL" was **wrong**, corrected 2026-10-10.)
+  → For bit-exactness you have to reproduce **MSVCR80's** implementation. As far as is known, MSVCR80 chooses between an x87 path (fsin/fcos/fpatan; results depend on the CPU microcode) and SSE2 software implementations depending on the CPU and `_set_SSE2_enable`. **TODO**: get `msvcr80.dll` (the exact version from the game install/WinSxS), analyze `_CIsin` etc., find out which path is used on modern CPUs. `fsqrt` at PC_53 is IEEE-exact (= f64 sqrt), so sqrt is not a problem.
+  → Vector helpers (3D length `0x6F301BE0`, distance `0x6F521DD0`, normalize `0x6F011550`, 2D normalize `0x6F0114F0`/`0x6F522230`) use the CRT sqrt, with no zero check.
+- Main float→int helper `0x6F7E11E0` (~180 calls): FISTP in the **current** rounding mode (i.e. round-to-nearest, not truncation); the alternative branch depends on the flag `0x6FAE759C`. Which of the 648 `fldcw` sites truncate is unknown.
 - `fldcw`: 648 sites (mostly switching rounding mode for float→int; `fistp` = 349).
 - Imports `_control87`, `_clearfp`, `rand`, `srand`, `floor` from MSVCR80.
 - **FPU mode found**: function `0x6F6CE230` = `_clearfp(); _control87(0x9001F, 0xFFFFF);`
@@ -89,6 +93,15 @@ tools/
   So: compute in `f64` and round to `f32` **at exactly the points where the original stores the value to memory** (`fstp dword`).
   Differences from pure f64 only at extreme exponents (x87 keeps the 15-bit exponent even with PC_53), which in practice means denormals/overflow. Store points have to be taken from the decompiled code; this is part of each function's spec.
 - `Direct3DCreate8`/`d3d8` are loaded dynamically (strings at file offsets `0x9575E4`/`0x9575F4`), not through imports.
+
+### 4.3b JASS front end (spec: docs/spec/jass-frontend.md, Haiku, partly UNSURE)
+- Lexer is **flex** (`0x6F45FF30`), parser is **yacc** (stack 600). Integers: decimal/octal (leading 0)/hex (`0x`, `$`), 32-bit wrap with no checks (matches our lexer). Rawcode 1 or 4 characters, with escapes. **String literals are not unescaped in the lexer** (our lexer does it; check where the original does it).
+- There is an AST node for `%` (NodeMod) — check whether the grammar accepts it.
+- **Precedence/associativity live in the yacc tables** (`DAT_6FA822A8…` in .rdata) and haven't been decoded yet. TODO: extract the tables from the binary and decode them (yacc yyact/yypact/yyr1/yyr2), or run the original compiler under Unicorn on test expressions.
+- Symbol table: 1024-bucket hash. The declaration-order rule is not found yet.
+
+### 4.3c Handles (spec: docs/spec/handles.md, mostly UNSURE)
+- Containers `Agent2HandleReg` (hash) and `Handle2AgentReg` (array of 12-byte entries with a ref-counted pointer). Base 0x100000 not found as a constant; allocation and reuse order not found. Needs a second pass.
 
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).
@@ -138,12 +151,12 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~4%** of the 1:1 rewrite.
+**Overall: ~5%** of the 1:1 rewrite.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
-| Game.dll analysis (names, classes, specs) | 10% | ~10% | FPU mode; full decompile export running |
+| Game.dll analysis (names, classes, specs) | 10% | ~20% | full decompile export; specs: JASS front end, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | 0% | |
 | JASS VM + ~1000 natives | 12% | ~6% | parser + type checker |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
@@ -177,6 +190,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (8)**: full decompile export (70,526 functions, 1.58M lines, 0 failures; scratchpad only). Analysis agents: specs `docs/spec/{jass-frontend,math,handles}.md`. **Correction**: math comes from MSVCR80 `_CI*`, not software inside Game.dll.
 - **2026-10-10 (7)**: merged `crates/blp` (Haiku agent, worktree). Then `crates/gamedata`, `crates/w3map`, mpq codecs. Then `crates/mdx`, the jass type checker, the viewer. 145 tests in the workspace, clippy clean.
 - **2026-10-10 (6)**: 4 Haiku agents studied OpenRealm (reports in `docs/research/openrealm/`). Verified the right-associativity claim myself.
 - **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
