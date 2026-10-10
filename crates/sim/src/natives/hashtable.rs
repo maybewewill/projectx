@@ -57,7 +57,7 @@ use crate::hashmap::BucketMap;
 /// The handle kind of each typed `Save*Handle` / `Load*Handle` native. `None` for the handle types the
 /// simulation does not model (no object of that type can exist, so the typed check always fails).
 const HANDLE_NATIVES: &[(&str, Option<HandleKind>)] = &[
-    ("PlayerHandle", None),
+    ("PlayerHandle", Some(HandleKind::Player)),
     ("WidgetHandle", None),
     ("DestructableHandle", None),
     ("ItemHandle", None),
@@ -69,7 +69,7 @@ const HANDLE_NATIVES: &[(&str, Option<HandleKind>)] = &[
     ("TriggerConditionHandle", Some(HandleKind::Condition)),
     ("TriggerActionHandle", Some(HandleKind::Action)),
     ("TriggerEventHandle", Some(HandleKind::Event)),
-    ("ForceHandle", None),
+    ("ForceHandle", Some(HandleKind::Force)),
     ("GroupHandle", None),
     ("LocationHandle", Some(HandleKind::Location)),
     ("RectHandle", Some(HandleKind::Rect)),
