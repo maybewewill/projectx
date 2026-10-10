@@ -59,6 +59,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jass"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "libbz2-rs-sys"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

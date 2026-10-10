@@ -26,7 +26,7 @@ crates/
   w3g/        replay parser .w3g (1.26a) — the test oracle            [v0.1: header, blocks, players, slots, seed, ticks; actions raw]
   mpq/        MPQ archive reader                                        [v0.1: tables, encryption, zlib/bzip2/DCL; Huffman/ADPCM todo]
   wc3-math/   bit-exact WC3 math (x87 rounding, software sin/cos/sqrt)  [todo — waiting on Ghidra]
-  jass/       JASS lexer/parser/VM                                      [todo]
+  jass/       JASS lexer/parser/VM                                      [v0.1: lexer + parser + AST; VM todo]
   sim/        deterministic simulation (units, abilities, pathing)      [todo]
   formats/    BLP, MDX, W3E/W3I/DOO/SLK                                 [todo]
   render/     wgpu renderer (native + WebGPU/WebGL)                     [todo]
@@ -128,6 +128,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [ ] `crates/w3g`: check on real 1.26a replays (`cargo run -p w3g --example dump -- file.w3g`), parse actions (0x10–0x1E ability/order, 0x16 selection, etc.)
 - [x] `crates/mpq` v0.1: header search (512-byte aligned, HM3W prefix, MPQ\x1B user data), hash/block tables, encryption + FIX_KEY, single-unit/sectored, zlib/bzip2/PKWARE DCL, `(listfile)`. Synthetic tests (5).
 - [ ] `crates/mpq`: Huffman + ADPCM (WAV), check on real War3.mpq/War3x.mpq (`cargo run -p mpq --example mpqls -- War3.mpq`), streaming instead of loading the whole file
+- [x] `crates/jass` v0.1: lexer (rawcodes, hex/$/octal, real, escapes), parser of the whole grammar (type/globals/native/function/locals/set/call/if-elseif-else/loop/exitwhen/return/debug), 5 tests.
+- [ ] `crates/jass`: check on common.j/blizzard.j from the user's MPQ; **verify operator precedence and literal overflow against the original parser in Game.dll** (`parser.cpp`, `scanner.cpp`); type checker; VM (bytecode like the original, handles, threads/TriggerSleepAction, op limit)
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
@@ -135,6 +137,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-10 (5)**: `crates/jass` v0.1. Precedence follows pjass (and/or on one level) and is marked TODO to verify against Game.dll.
 - **2026-10-10 (4)**: `crates/mpq` v0.1 (reader + tests + `examples/mpqls.rs`). Dependencies: flate2, bzip2 (pure-Rust backend libbz2-rs-sys, works in wasm), explode (DCL).
 - **2026-10-10 (3)**: Found the FPU mode: `_control87(0x9001F)` = PC_53 + RC_NEAR. Added `tools/analysis/fpu_control.py`, `find_callers.py`.
 - **2026-10-10 (2)**: Cargo workspace + `crates/w3g` (parser, 3 tests, clippy clean, `examples/dump.rs`). The stat-string layout (flags/width/height/crc/path/host) is best-effort and needs checking on real replays.
