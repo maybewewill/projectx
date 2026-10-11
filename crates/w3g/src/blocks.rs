@@ -33,6 +33,8 @@ pub enum Block {
     StartBlock { id: u8, value: u32 },
     /// 0x1E (old) / 0x1F — one lockstep tick.
     TimeSlot {
+        /// The block id byte, 0x1E or 0x1F (the net checksum folds it in, docs/spec/lockstep.md section 15).
+        id: u8,
         increment_ms: u16,
         commands: Vec<CommandBlock>,
     },
@@ -54,6 +56,27 @@ pub enum Block {
 }
 
 impl Block {
+    /// The payload bytes of a time-slot block as the original's receive queue holds them (the bytes after the
+    /// block's u16 length: the u16 time increment, then each player's `u8 id, u16 len, actions`).
+    pub fn time_slot_payload(&self) -> Option<Vec<u8>> {
+        match self {
+            Block::TimeSlot {
+                increment_ms,
+                commands,
+                ..
+            } => {
+                let mut out = increment_ms.to_le_bytes().to_vec();
+                for c in commands {
+                    out.push(c.player_id);
+                    out.extend_from_slice(&(c.actions.len() as u16).to_le_bytes());
+                    out.extend_from_slice(&c.actions);
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
     pub fn checksum_u32(&self) -> Option<u32> {
         match self {
             Block::Checksum { csum } => Some(*csum),
@@ -106,6 +129,7 @@ pub(crate) fn parse_blocks(r: &mut Reader) -> Result<Vec<Block>, Error> {
                 let body_offset = r.pos();
                 let commands = parse_commands(r.bytes(n - 2)?, body_offset)?;
                 Block::TimeSlot {
+                    id,
                     increment_ms,
                     commands,
                 }

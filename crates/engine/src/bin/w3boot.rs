@@ -4,7 +4,12 @@
 //! w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | --mpq War3.mpq [--mpq War3x.mpq])
 //!        [--ai-common common.ai] [--ai-script NAME=PATH]... [--computer SLOT[:RACE]]... [--ai-log N]
 //!        [--seed S] [--steps N] [--check-natives] map.w3x
+//! w3boot --replay FILE.w3g --check-sync
 //! ```
+//!
+//! `--check-sync` needs no map or archives: it walks the replay's time slots and compares the stored 0x22 sync
+//! records with the model of `sim::sync` (net checksum, tick clock, record rule) and prints the first mismatch
+//! and the number of record pairs predicted exactly (`engine::sync_check`, `docs/spec/lockstep.md` section 15).
 //!
 //! `--mpq` reads `Scripts\common.j` and `Scripts\Blizzard.j` from the archives (later ones override),
 //! and the AI scripts `Scripts\common.ai`, `human.ai`, `orc.ai`, `undead.ai` and `elf.ai` when they are there.
@@ -40,6 +45,8 @@ struct Args {
     ai_log: usize,
     /// `--check-natives`: reject `native` lines that the 1.26a native table does not have (like the game).
     check_natives: bool,
+    /// `--check-sync`: with `--replay`, compare the replay's 0x22 sync records with the model (no map needed).
+    check_sync: bool,
     map: Option<String>,
 }
 
@@ -101,6 +108,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .ai_scripts
                 .push(parse_ai_script(&value("--ai-script")?)?),
             "--check-natives" => args.check_natives = true,
+            "--check-sync" => args.check_sync = true,
             "--seed" => args.seed = Some(parse_seed(&value("--seed")?)?),
             "--replay" => args.replay = Some(value("--replay")?),
             "--ai-log" => {
@@ -124,6 +132,12 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 }
             }
         }
+    }
+    if args.check_sync {
+        if args.replay.is_none() {
+            return Err("--check-sync needs --replay FILE.w3g".to_string());
+        }
+        return Ok(args);
     }
     if args.map.is_none() {
         return Err("no map file given".to_string());
@@ -191,6 +205,13 @@ fn inputs(args: &Args) -> Result<Inputs, String> {
 
 fn run(argv: &[String]) -> Result<(), String> {
     let args = parse_args(argv)?;
+    if args.check_sync {
+        let path = args.replay.as_deref().unwrap_or_default();
+        let replay =
+            w3g::Replay::parse(&read(path)?).map_err(|e| format!("--replay {path}: {e}"))?;
+        print!("{}", engine::sync_check::check_replay(&replay).render());
+        return Ok(());
+    }
     let mut engine = Engine::boot(inputs(&args)?).map_err(|e| e.to_string())?;
     for &(slot, race) in &args.computers {
         let host = engine.host();

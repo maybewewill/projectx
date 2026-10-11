@@ -832,6 +832,10 @@ except where noted.
 
 ## 13. Pass 9 (2026-10-11): the 0x22 sync record, its content and its sender (replay oracle)
 
+> **Correction (2026-10-12, section 15):** the value chain in 13.3 and 13.5 is wrong. It is `rol(rol(rol(rol(T ^ c, 3) ^ X, 3) ^ Y, 3) ^ R, 3)`: `X`
+> once, and a fourth term `R` = the byte-hash sum of the global generator state, which 13.3 called dead. Registry slot 2 is `CNetData` (a running checksum
+> of the received blocks); the 13.7 participants are the custom-data kinds. Use section 15.
+
 Labels: CONFIRMED = read in the Game.dll machine code (addresses given) and checked on the real 1.26a replay
 where a file check is possible; LIKELY = strong structure, not run; UNSURE = open.
 
@@ -1175,3 +1179,159 @@ the periodic flag read), and the sleep handler `0x6F2E3320` just resumes the thr
 * The flag bit 0 of `+0x4C` (clock paused): never set in the sim.
 * The cut of long timeouts at the JASS level (14.3).
 * `GetGameTime`-style readers: the native `TimerGetElapsed(bj_gameTimer)` style use is the same getter; no separate game clock.
+
+---
+
+## 15. Pass 12 (2026-10-12): the 0x22 value decoded (net checksum, registry slots, tags) and the replay oracle
+
+Labels as in section 13. Addresses are Game.dll 1.26a. Tools: IDA (database `game126a`), `tools/emu/net_checksum_emu.py`
+(Unicorn), the real replay `Replay\2856263.w3g` (DotA v6.83se, 9 players, 142,647 time slots, seed `0xd8917f0a`; the user's file,
+never committed), `w3boot --replay FILE --check-sync`, code in `crates/sim/src/sync.rs` and `crates/engine/src/sync_check.rs`.
+
+### 15.0 Corrections to section 13 (read this first)
+
+The Ghidra decompile of `0x6F545840` that sections 13.3 and 13.5 were built on dropped an output argument. From the machine code
+(`0x6F5458B8..0x6F5458F9`, and the Unicorn run below):
+
+```text
+c      = rol(A ^ 0x17AB, 3)                     A = registry fold (13.5)
+v      = T ^ c                                  T = [CNetData+0x1C70]
+v      = rol(v,3) ^ X                           X = [world+0x40], or [world+0x1C] when that is -1
+v      = rol(v,3) ^ Y                           Y = [world+0x50]
+v      = rol(v,3) ^ R                           R = the value 0x6F280BE0 stores through its edx argument
+sync   = rol(v,3)                               -> [CNetData+0x1C64]
+```
+
+* **`X` is used once, not twice**, and there is a **fourth term `R`**. The accumulator that 13.3 called "dead" is `var_C`, the
+  output of `0x6F280BE0([0x6FAB73D8], &var_C)`: it is XORed in the third step. `0x6F280BE0` (CONFIRMED) sums the byte hash
+  `h(b) = b ^ (b * 0x7A2D)` (32-bit) over the 8 bytes at `[0x6FAB73D8]` and `[0x6FAB73D8]+4`, i.e. over the global generator state
+  (A, B). So `R` is the hash of the generator state used by `GetRandomInt`.
+* The value is linear over GF(2): `sync = rol12(T) ^ rol12(c) ^ rol9(X) ^ rol6(Y) ^ rol3(R)`.
+* CONFIRMED by running the original `0x6F545840` in Unicorn on 400 synthetic states (a fake CNetData, world object, generator object and
+  a registry whose slots are `CCheatData` objects): 0 mismatches (`tools/emu/net_checksum_emu.py`; 40 of the vectors are embedded in
+  `crates/sim/tests/sync_vectors.rs`). The 13.5 "start-state test" (A = 0, Y = 0, T = 0 unreachable) and the 13.7 numbers
+  (`implied fold`) used the wrong chain and are void.
+* Section 13.7 named `CMiscCustom` as the registry-13 participant. It is one of the **custom-data** kinds (slots 12..19, 15.2); the
+  participants that vary during a game are different objects.
+
+### 15.1 The net checksum (registry slot 2, `CNetData+0x227C`): CONFIRMED
+
+Registry 13 slot 2 is the `CNetData` object itself (vtable `0x6F9590D0`; many `CNetData` methods fetch it with
+`mov ecx,0Dh; call 0x6F4C34D0; mov eax,[eax+10h]; mov eax,[eax+8]`). Its vtable slot 0 `0x6F537E10` jumps to slot 1 of the embedded
+`CSyncData` (`0x6F536BE0`), which returns the dword at `this+4`, i.e. **`CNetData+0x227C`** (written by the constructor with 0,
+`0x6F550639`). That field is a running checksum of the received **blocks**; it is the part of the sync value that changes in every slot.
+
+The block pump is `0x6F5530D0` (thiscall, one stack argument `a2`). For every pending block node (node+0x14 = block id, +0x15 = flag,
++8 = payload pointer, +0xC = payload length) it computes, when the block is applied (`a2 != 0`), the node's term and then runs the block
+handler (`0x6F551D80`; for a time slot that is the time applier `0x6F5516E0`, which computes the sync value). So the slot's own term is
+**already in the checksum when the slot's record is computed**.
+
+Conditions for hashing a node (`0x6F55315A..0x6F553191`, LIKELY meaning): `(node+0x15 != 0) == ([CNetData+0x610] == 0)` and
+`[CNetData+0x278] >= 4`. In replay playback the replay pump enqueues with flag 0 and `+0x610` is nonzero; the replay oracle below works
+with exactly these conditions true. Block ids that are hashed: `0x1E`, `0x1F` (time slots), `0x17` (leave), `0x21`, `0x2F`; every other id is only applied.
+
+Terms (machine code `0x6F553307..0x6F5533BA`; `h4(x)` = sum of the four byte hashes of `x`, i.e. `0x6F280B90` into a zero accumulator):
+
+| block | `v` | checksum update |
+|---|---|---|
+| `0x1E` / `0x1F` | `id + h4(P)` where `P = 0x6F39E5C0(payload, len)` | `N += h4(v)` |
+| `0x17` leave | `0x17 + h4(reason) + h4(player) + h4(result)` (fields of `w3g::Block::LeaveGame`; the 4th field is not hashed) | `N += h4(v)` |
+| `0x2F` game end | `0x2F + h4(mode) + h4(countdown)` | `N += h4(v)` |
+| `0x21` | two bytes of the block, `h4` each (no `w3g` block) | not implemented |
+
+`0x6F39E5C0(ptr, len)` (CONFIRMED): `acc = 0`; for each little-endian dword `w`: `acc = rol(w ^ acc, 3)`; then for each remaining byte `b`:
+`acc = rol(b ^ acc, 3)`. The payload of a time slot is the block body **after its u16 length**: the u16 time increment, then for each player
+`u8 id, u16 len, actions` (exactly what `w3g::Block::time_slot_payload` rebuilds; the replay stores the network bytes unchanged).
+
+Unicorn: the real `0x6F5530D0` on a one-node queue (all other calls stubbed) agrees with `sim::sync::NetChecksum` on 300 random
+time-slot nodes and 60 leave + 60 game-end nodes, 0 mismatches. The primitives `0x6F39E5C0`, `0x6F280B90`, `0x6F280BE0`, `0x6F280C80`,
+`0x6F3834D0` also match (900 + 80 cases).
+
+### 15.2 The twenty slots of registry 13: CONFIRMED indices, partial contents
+
+The dump function `0x6F5455A0` (it prints "build 6059", "next presence tag", "next birth tag" and the checksums below) reads slots 0..19 in
+order and calls vtable slot 0 of each non-null one:
+
+| slot | class (vtable) | vtable slot 0 | notes |
+|---|---|---|---|
+| 0 | `CCheatData` `0x6F940A90` | `[this+4] & 0xFFFFEFFF` (`0x6F3834D0`) | printed as "cheat checksum"; 82 readers |
+| 1 | combat (printed "combat checksum") | | **null**: no code besides the dump reads or creates it |
+| 2 | `CNetData` `0x6F9590D0` | the net checksum, 15.1 | printed "net checksum" |
+| 3 | `CRandData` `0x6F92FE18` | `0x6F280C80`: sum of `0x6F280BE0` over the **45 streams** (the object holds the 45 8-byte states at +4) | printed "rand checksum"; accessed by `0x6F285320` (stream draws) |
+| 4 | unit data ("unit checksum") | | null (no other reader) |
+| 5 | `CAbilityDatabase` `0x6F92E0A8` | `0x6F005D60`: `[this+0xC]` once mixed with a file hash (`0x6F4C9050`) | created lazily; static per game |
+| 6 | `CGameWar3` `0x6F941B10` | `0x6F3A1690`: `acc = 12`; for the 12 player objects `acc = rol(acc ^ H(player), 3)`, `H = 0x6F40FEB0` | printed "game checksum"; player state hash not decoded |
+| 7, 8, 9 | data databases (slot 7 created by `0x6F2B6860`, a 0x118-byte object; slot 8 cleared at `0x6F26B6D2`; slot 9 created by `0x6F25F0B0`) | not decoded | static per game |
+| 10, 11, 15 | | | no creator/reader: null |
+| 12..19 | `CCustom*Data` (CMiscCustom `0x6F8750A4`, CSkinCustom ...) | map-custom text tables (string hash `0x6F39E5C0` of key/value pairs) | created on demand (get/create/clear triples `0x6F25AA20..`, `0x6F25B420..`); static during a game |
+
+The walk and fold (13.5) are unchanged: slots 19 down to 0, null slots skipped, `acc = rol(v ^ acc, 3)`. The rotation with which slot `s` reaches the
+sync value is `12 + 3 + 3 * (number of non-null slots with index <= s)` (`sim::sync::participant_rotation`). With slots 0 and 2 non-null and
+slot 1 null the net checksum enters as `rol21(N)`. **The real replay confirms rotation 21 and no other** (15.3), so slot 1 is null and slot 0
+is present for the whole game.
+
+### 15.3 The record stream of the real replay: what is reproduced
+
+* One record per computed slot: the time applier computes the value only when the slot's **increment is nonzero**; on a zero-increment slot the
+  file repeats the previous value, and the first slot (increment 0) carries 0. 142,647 slots, 142,616 records (31 slots at the very end have none),
+  71,308 slots with a nonzero increment.
+* **Rotation scan**: for consecutive computed records the residual `v_a ^ v_b ^ rol(N_a ^ N_b, s)` is small (its `rotr12` is below 4096) in 367 of the
+  first 5,000 pairs for `s = 21` and in **no** pair for any other `s` in 0..31. The net checksum is therefore right, bit for bit, wherever the
+  hidden words did not change.
+* **Clock model**: `T = 25 * floor(elapsed_before / 25)` (elapsed = sum of the earlier increments): the frame driver runs 5 ms ticks in 25 ms units
+  (13.5) and the slot is applied once the earlier slots' ticks are done. Pairs with exactly zero residual under this model: **516** (of 71,307) with
+  `T = 25*floor(c/25)`; shifting the model by +-1 ms leaves 444 / 461, +-2 ms 410 / 413, and so on down; `T = c` exactly gives 6 and
+  `T = 5*floor(c/5)` gives 0. So the 25 ms granularity is real.
+  The leave blocks occur mid-game in this file (the first one before pair 16,359, ten in all): without their terms 493 pairs are exact and none after the
+  first leave; with the `0x17` term hashed as in 15.1, **23 more exact pairs appear after the leaves**, which confirms that term (516 total).
+* `w3boot --replay FILE.w3g --check-sync` output on this file:
+
+```text
+  time slots 142647  records 142616  computed 71308 (nonzero increment)
+  net checksum rotation 21  final net checksum 0xa849e6c4  leave blocks 10
+  absolute: 0 of 71308 computed records equal the start-state prediction; first mismatch: slot 1
+  differential: 71307 pairs, 516 exact (clock + net explain everything), 16268 birth-tag-like, 54523 other
+  first inexact pair: 0  first exact pair: 3350  longest exact run: 2
+  exact pairs per 5000 pairs: 333 141 14 5 3 2 1 1 2 1 2 1 5 4 1
+```
+
+* **How far the match goes**: records are **not** reproducible in absolute terms. The first record (slot 1, 38 ms, value `0xED219BF0`) depends on
+  hidden words fixed by the DotA map script before the first slot (the number of pathing-side objects created: Y, the presence count X, the
+  generator state after the map's own draws: R, and the static data slots 5..9 and 12..19). What is reproduced from the replay stream alone is every
+  term that depends on the stream: the clock and the net checksum, exactly, which is proved by the 516 zero-residual pairs and by 16,268 further pairs
+  whose residual is a pure `rol6` change of at most 16 bits (see 15.4). **No** pair of consecutive records is constant-state from the start: the birth tag
+  `Y` changes in almost every slot.
+
+### 15.4 `X` and `Y`: what the tags are (CONFIRMED meaning, producers partly open)
+
+* The dump prints `[world+0x40]` (or `[world+0x1C]` when that is -1) as "next presence tag" and `[world+0x50]` as "next birth tag". `world` is the
+  0xDC-byte object at `[0x6FAB778C]` (also `[0x6FAB7788]`; allocated in `tempest_thread.h`): its first two members are `NTempest::CDynTable<CPrRgEntry>`
+  containers (vtable `0x6F9517D8`, data pointer +0x0C, element count +0x1C, 8-byte entries `(key, object)`).
+* `0x6F4AEFF0` is the registration of a `CPrRgEntry`-derived object: it takes a slot in the table (`0x6F4BC310`); the object's tag is
+  `world+0x50` (then `world+0x50 += 1`, **birth tag**), or, when no slot could be allocated, `world+0x54`. `X` (+0x1C) is the number of table entries
+  (a high-water mark that never shrinks), used while `+0x40 == -1`. The `CPr*` classes that register (callers of `0x6F4AEFF0`: `0x6F483080`, `0x6F487ED0`,
+  `0x6F48ED30`, `0x6F48F0D0`, `0x6F4924D0` = the movement cluster of 12 unit records (movement-3.md), `0x6F49A330`, `0x6F49B680`, `0x6F49F5D0`,
+  `0x6F4A0710`, `0x6F4A6070`, `0x6F4AA340`) are the pathing/movement objects: every path-request or mover object creation advances `Y`.
+* On the real file `Y` advances in almost every slot (the residual is a `rol6` change in 16,268 of the 70,791 inexact pairs, and the rest are mixed
+  changes of Y with X, R or the unit/data slots). Reproducing Y needs the pathing and movement object lifetimes of the whole game, i.e. a
+  simulation of every unit order of every player and creep: out of reach until movement and pathing are complete, and independent of the map-script gap.
+
+### 15.5 Code and tests
+
+* `sim::sync` (`crates/sim/src/sync.rs`): `sync_value(t, fold, x, y, r)`, `registry_fold`, `participant_rotation`, `byte_hash`, `word_hash`,
+  `payload_hash`, `NetChecksum` (time slot, leave, game end), `rng_state_hash`, `rand_data_hash`, `cheat_data_hash`, `game_data_hash`,
+  `tick_clock_at_slot`, `SyncState` (feeds blocks, applies the zero-increment rule, keeps the hidden words as inputs), `residual`.
+* `engine::sync_check` (`check_replay`, report as above), `Engine::sync_time_slot` (the per-slot hook: net checksum, `R` and the rand slot from the host's
+  generator, hidden words settable through `Engine::sync_mut`), `w3boot --replay FILE.w3g --check-sync`.
+* `w3g`: `Block::TimeSlot` now keeps the block id (`id`), `Block::time_slot_payload`, example `slotdump`; `w3g::sync::sync_value` has the corrected 5-input form.
+* Tests: 20 unit tests in `sim::sync`, `crates/sim/tests/sync_vectors.rs` (40 original-code vectors), 4 in `engine::sync_check`, `engine/tests/sync_real.rs`
+  (`W3G_REPLAY`: at least one exact pair, rotation 21, absolute mismatch), `w3g/tests/sync_state.rs`.
+
+### 15.6 Open / next
+
+1. The static hash of slots 5, 7, 8, 9 and 12..19 (data tables; custom text from the map) and the player hash `0x6F40FEB0` (slot 6): needed for an absolute
+   match once Y is known. Slot 6 and the generator hash are the pieces the sim can already supply (`R`, slot 3).
+2. `X`/`Y` producers: the `CPr*` object lifetimes (path requests, mover clusters). A way to calibrate without the full game: choose the registry constant by
+   fitting one record, then check the `Y` sequence is a non-decreasing counter (the XOR structure of the residuals allows this); not done.
+3. `0x21` block: its 2-byte reader `0x6F6516F0` and where the replay shows it (none in the DotA file).
+4. Whether the pump conditions hold (`+0x610`, `+0x15`) for a live game: irrelevant for replays.
