@@ -10,6 +10,7 @@ name = "w3boot"
 path = "src/bin/w3boot.rs"
 
 [dependencies]
+gamedata = { path = "../gamedata" }
 jass = { path = "../jass" }
 mpq = { path = "../mpq" }
 sim = { path = "../sim" }

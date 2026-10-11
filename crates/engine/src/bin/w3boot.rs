@@ -7,6 +7,8 @@
 //!
 //! `--mpq` reads `Scripts\common.j` and `Scripts\Blizzard.j` from the archives (later ones override),
 //! and the AI scripts `Scripts\common.ai`, `human.ai`, `orc.ai`, `undead.ai` and `elf.ai` when they are there.
+//! The same archives give the Misc constants and the unit rows (`Units\MiscData.txt`, `Units\UnitBalance.slk`, ...);
+//! the damage model is `SpecDamage` only with `--dll` as well (see `engine::data`).
 //! `--ai-common` and `--ai-script NAME=PATH` give AI scripts as files; they override the archive ones.
 //! `--seed` is the raw game-start seed (decimal or `0x` hex, default 0); see `engine::Inputs::rng_seed`.
 
@@ -136,6 +138,7 @@ fn inputs(args: &Args) -> Result<Inputs, String> {
         rng_seed: args.seed,
         ai_common: ai.common,
         ai_scripts: ai.scripts,
+        game_archives: archives,
     })
 }
 

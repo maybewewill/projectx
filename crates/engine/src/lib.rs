@@ -44,6 +44,7 @@ use sim::{Game, RngTable, ScriptHost};
 use softfloat::{Tables, F32};
 use w3map::MapInfo;
 
+pub mod data;
 pub mod map;
 pub mod pathing;
 pub mod scripts;
@@ -104,6 +105,10 @@ pub struct Inputs {
     /// `StartMeleeAI(player, "human.ai")` runs the script with that name (case-insensitive). A later
     /// entry with the same name replaces an earlier one.
     pub ai_scripts: Vec<(String, String)>,
+    /// The user's game archives in load order (`War3.mpq`, then `War3x.mpq`). They give the `[Misc]` layers
+    /// (`Units\MiscData.txt`, `Units\MiscGame.txt`) and the unit rows (`Units\UnitBalance.slk`,
+    /// `Units\UnitWeapons.slk`). Empty: the Misc values and unit rows are defaults and the damage stays the placeholder.
+    pub game_archives: Vec<Vec<u8>>,
 }
 
 /// A booted map: the script host, the map info and the boot results.
@@ -123,6 +128,7 @@ pub struct Engine {
     steps: u64,
     timers_fired: u64,
     notes: Vec<String>,
+    combat: data::CombatSetup,
 }
 
 /// What the AI host did, as the report shows it (see [`sim::ai::AiShared`] for the full logs).
@@ -172,6 +178,8 @@ pub struct Report {
     pub game_time: f32,
     /// The pathing data installed at boot, or `None` (straight-line movement).
     pub pathing: Option<PathingSummary>,
+    /// The combat setup: the damage model in use (and why the placeholder is kept, if it is), and the unit rows.
+    pub combat: data::CombatSetup,
     /// The AI host's summary (no AI players when no AI was started).
     pub ai: AiReport,
     pub notes: Vec<String>,
@@ -237,7 +245,7 @@ impl Engine {
         for (name, source) in &inputs.ai_scripts {
             library.add_script(name, source);
         }
-        let ai = AiHost::new(game, ai_shared, library, tables);
+        let ai = AiHost::new(game, ai_shared, library, tables.clone());
         let playable = playable_area(&info);
         host.set_playable(Some(playable));
         apply_players(&mut host.game_mut(), &info, &mut notes);
@@ -266,6 +274,11 @@ impl Engine {
 
         let (natives_referenced, natives_missing) = native_usage(host.vm().module(), &host);
 
+        let game_refs: Vec<&[u8]> = inputs.game_archives.iter().map(Vec::as_slice).collect();
+        let game_data = data::load(&game_refs, &archive, tables.as_ref())?;
+        notes.extend(game_data.notes.iter().cloned());
+        let combat = data::install(&mut host.game_mut(), &game_data, tables.as_ref());
+
         let mut engine = Engine {
             host,
             info,
@@ -282,6 +295,7 @@ impl Engine {
             timers_fired: 0,
             notes,
             ai,
+            combat,
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
@@ -393,6 +407,7 @@ impl Engine {
             timers_fired: self.timers_fired,
             game_time: self.host.clock().now(),
             pathing: self.pathing.clone(),
+            combat: self.combat.clone(),
             ai: self.ai_report(),
             notes: self.notes.clone(),
         }
@@ -506,6 +521,8 @@ impl fmt::Display for Report {
         for name in &self.natives_missing {
             writeln!(f, "  {name}")?;
         }
+        writeln!(f, "damage model: {}", self.combat.damage_model)?;
+        writeln!(f, "unit types with combat rows: {}", self.combat.unit_types)?;
         writeln!(f, "config: {}", self.config)?;
         writeln!(f, "main: {}", self.main)?;
         writeln!(

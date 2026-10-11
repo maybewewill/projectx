@@ -303,7 +303,11 @@ impl Game {
 
     /// The defense of `unit`, from its type; the default for an unregistered type.
     pub fn unit_defense(&self, unit: ObjKey) -> Defense {
-        let type_id = self.unit(unit).type_id;
+        self.defense_of_type(self.unit(unit).type_id)
+    }
+
+    /// The defense registered for unit type `type_id`; the default for an unregistered type.
+    pub fn defense_of_type(&self, type_id: u32) -> Defense {
         self.combat
             .defense
             .get(&type_id)

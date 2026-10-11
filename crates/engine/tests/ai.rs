@@ -122,6 +122,7 @@ fn inputs(map: Vec<u8>, ai_scripts: &[(&str, &str)]) -> Inputs {
             .iter()
             .map(|(n, s)| (n.to_string(), s.to_string()))
             .collect(),
+        game_archives: Vec::new(),
     }
 }
 
