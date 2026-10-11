@@ -594,6 +594,8 @@ pub struct UnitObj {
     pub vision_extra: u16,
     /// Loaded flag (object `+0x5C` bit 4). Read by `IsUnitLoaded`; no transport system sets it yet.
     pub loaded: bool,
+    /// Rescuable flags per player (SetUnitRescuable, one bool per player slot 0..15).
+    pub rescuable: [bool; 16],
     /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
     pub abilities: UnitAbilities,
     /// The unit's buffs in the order they were added (see [`crate::abilities`]).
