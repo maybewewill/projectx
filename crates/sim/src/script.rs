@@ -51,6 +51,7 @@ impl ScriptHost {
         tables: Option<Tables>,
     ) -> Result<Self, VmError> {
         let game = Rc::new(RefCell::new(Game::new()));
+        game.borrow_mut().set_tables(tables.clone());
         natives::register(&mut natives, &game);
         let vm = Vm::new(module, natives, tables)?;
         Ok(ScriptHost {
@@ -168,6 +169,7 @@ impl ScriptHost {
                 }
             }
         }
+        self.game.borrow_mut().tick_orders();
         self.vm.step(F32::from_bits(target.to_bits()));
         fired
     }

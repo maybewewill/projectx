@@ -45,6 +45,8 @@ pub enum Ctx {
         trigger: ObjKey,
         event: Option<ObjKey>,
         unit: Option<ObjKey>,
+        /// Index of the issued-order record of an order event (`GetIssuedOrderId`), if any.
+        order: Option<u32>,
     },
     /// A timer handler started at the timer's expiry.
     Timer(ObjKey),
@@ -904,6 +906,8 @@ pub struct Game {
     /// Blight, terrain overlay, start locations, player tech and misc player state, and the native log
     /// (see `natives/misc.rs`).
     pub(crate) misc: super::misc::MiscState,
+    /// The order system: unit order lists, the issued-order records and the mover (see `orders.rs`).
+    pub(crate) orders: crate::orders::OrderSystem,
 }
 
 impl Default for Game {
@@ -948,6 +952,7 @@ impl Game {
             game_state: super::gamestate::GameState::new(),
             fog: super::fog::FogState::default(),
             misc: super::misc::MiscState::default(),
+            orders: crate::orders::OrderSystem::new(),
         }
     }
 

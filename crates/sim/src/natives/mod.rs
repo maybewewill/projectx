@@ -25,6 +25,7 @@ mod hashtable;
 mod item;
 mod location;
 pub mod misc;
+mod order;
 mod player;
 pub mod presentation;
 mod region;
@@ -74,4 +75,5 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     gamestate::register(reg, game);
     fog::register(reg, game);
     misc::register(reg, game);
+    order::register(reg, game);
 }

@@ -196,6 +196,7 @@ pub(crate) fn filter_passes(
         trigger: node.trigger,
         event: Some(node.event),
         unit: Some(unit),
+        order: None,
     });
     game.borrow_mut().push_filter_unit(id);
     let ok = eval_boolexpr(game, rt, b, key);
