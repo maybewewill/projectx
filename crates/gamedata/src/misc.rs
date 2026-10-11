@@ -4,24 +4,27 @@
 //! Sources, in load order (the caller passes the layers in this order and a later layer overrides an earlier one,
 //! key by key): `Units\MiscData.txt`, then `Units\MiscGame.txt`, then the map's `war3mapMisc.txt`.
 //!
-//! Keys and shapes:
-//! - `DefenseArmor`: one real, the armor constant `K`.
+//! Keys and shapes (CONFIRMED by the disassembly of the builder `0x6F26D300` and the reader `0x6F009EE0`):
+//! - `DefenseArmor`: one real, the armor constant `K`, read as element 0 of the key.
 //! - `DamageBonusSpells`, `DamageBonusNormal`, `DamageBonusPierce`, `DamageBonusSiege`, `DamageBonusMagic`,
-//!   `DamageBonusChaos`, `DamageBonusHero`: a comma list of 8 reals each. Row = attack type in the binary order of
-//!   the spec (section 7: Spells 0, Normal 1, Pierce 2, Siege 3, Magic 4, Chaos 5, Hero 6); column = armor type
-//!   0 to 7 (the list order).
-//! - `EtherealDamageBonus`: a comma list of 7 reals (UNSURE: the count, from spec section 8 item 2).
-//! - `ReactionDelay`: one real, seconds. `AttackHalfAngle`: one real, radians (UNSURE meaning, spec attack-cycle).
+//!   `DamageBonusChaos`, `DamageBonusHero`: a comma list. Row = attack type (0 Spells, 1 Normal, 2 Pierce, 3 Siege,
+//!   4 Magic, 5 Chaos, 6 Hero); column = armor type 0 to 7, element `column` of the list.
+//! - `EtherealDamageBonus`: a comma list read as elements 0 to 6. Their place in the damage table is not in
+//!   list order: see [`MiscData::ethereal_for_attack_type`].
+//! - `ReactionDelay`: one real, seconds. `AttackHalfAngle`: one real, radians (meaning UNSURE, attack-cycle spec).
 //!
-//! Defaults, used when no layer sets the key (all UNSURE, none is in the decompile export):
-//! - `DefenseArmor` = 0.06 (the value OpenRealm uses; the negative-armor table also hard-codes 0.06).
-//! - every `DamageBonus*` cell and every ethereal entry = 1.0 (a neutral factor).
-//! - `ReactionDelay` = 0.0 (the placeholder of `sim::combat::CombatMisc`).
-//! - `AttackHalfAngle` absent = `None`, which skips the facing gate (the placeholder of `sim::combat::CombatMisc`).
+//! Reading rules of the original (CONFIRMED by disassembly, see `docs/spec/attack-damage.md` section 4.1):
+//! - the value of element `i` of a key is parsed with the S2R real parser (`0x6F6F0520`);
+//! - a key that is absent, an element past the end of the list, and every error path return `0.0`
+//!   (the reader's default `DAT_6FAAE470`, which is `0.0`). A missing `DamageBonus*` cell is therefore `0.0`,
+//!   not a neutral `1.0`, and a missing `DefenseArmor` is `K = 0.0`;
+//! - elements past the eighth of a `DamageBonus*` list are not read; a short list leaves its tail at `0.0`.
 //!
-//! A value that is present but malformed (not a real, wrong list length) is rejected: the key takes its default and
-//! a note says why. Reals go through [`crate::real::parse_real`]: the S2R rules when the Game.dll tables are given
-//! (UNSURE that the original's Misc reader uses S2R), `f64` rounding otherwise.
+//! Only the malformed-text case is not seen in the disassembly: S2R on a non-number. Here it is recorded as a note
+//! and takes `0.0` (UNSURE what the original returns for such text).
+//!
+//! Reals go through [`crate::real::parse_real`]: the S2R rules when the Game.dll tables are given, `f64` rounding
+//! otherwise.
 
 use softfloat::{Tables, F32};
 
@@ -34,8 +37,11 @@ pub const MISC_SECTION: &str = "Misc";
 pub const ATTACK_ROWS: usize = 7;
 /// Number of armor-type columns of the damage-type table.
 pub const ARMOR_COLUMNS: usize = 8;
-/// Number of entries of `EtherealDamageBonus` (UNSURE, see the module documentation).
+/// Number of elements read from `EtherealDamageBonus` (the builder reads indices 0 to 6).
 pub const ETHEREAL_ENTRIES: usize = 7;
+/// For each attack type (row), the element of `EtherealDamageBonus` stored in its slot. CONFIRMED by the store
+/// addresses of the builder: slots `0x6FAB42E4 + 4 * row` hold elements `5, 0, 1, 2, 3, 4, 6`.
+pub const ETHEREAL_ELEMENT_BY_ROW: [usize; ATTACK_ROWS] = [5, 0, 1, 2, 3, 4, 6];
 /// The `DamageBonus*` keys, in row order (binary order, spec section 7).
 pub const DAMAGE_BONUS_KEYS: [&str; ATTACK_ROWS] = [
     "DamageBonusSpells",
@@ -50,11 +56,12 @@ pub const DAMAGE_BONUS_KEYS: [&str; ATTACK_ROWS] = [
 /// The typed Misc constants (see the module documentation for the sources and the defaults).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiscData {
-    /// `DefenseArmor`, the armor constant `K`.
+    /// `DefenseArmor`, the armor constant `K` (`0.0` when absent, as in the original).
     pub defense_armor: F32,
     /// `damage_bonus[attack_row][armor_column]`.
     pub damage_bonus: [[F32; ARMOR_COLUMNS]; ATTACK_ROWS],
-    /// `EtherealDamageBonus`.
+    /// `EtherealDamageBonus` elements 0 to 6, in list order (not in table order, see
+    /// [`MiscData::ethereal_for_attack_type`]).
     pub ethereal_damage_bonus: [F32; ETHEREAL_ENTRIES],
     /// `ReactionDelay` in seconds.
     pub reaction_delay: F32,
@@ -117,13 +124,22 @@ impl MiscData {
         }
     }
 
-    /// The defaults of every constant (see the module documentation; UNSURE).
+    /// The ethereal factor stored for an attack type (row `0..=6`), as the builder stores it in the table slot
+    /// `0x6FAB42E4 + 4 * row`. Rows above 6 are not used by the original and return `0.0` here.
+    pub fn ethereal_for_attack_type(&self, row: usize) -> F32 {
+        match ETHEREAL_ELEMENT_BY_ROW.get(row) {
+            Some(&element) => self.ethereal_damage_bonus[element],
+            None => F32::ZERO,
+        }
+    }
+
+    /// The defaults of every constant: what the original's reader returns for a missing key (`0.0`), except
+    /// `AttackHalfAngle`, which has no default in the binary that was checked (`None`).
     fn default_values() -> MiscData {
-        let neutral = F32::ONE;
         MiscData {
-            defense_armor: F32::from_bits(0.06f32.to_bits()),
-            damage_bonus: [[neutral; ARMOR_COLUMNS]; ATTACK_ROWS],
-            ethereal_damage_bonus: [neutral; ETHEREAL_ENTRIES],
+            defense_armor: F32::ZERO,
+            damage_bonus: [[F32::ZERO; ARMOR_COLUMNS]; ATTACK_ROWS],
+            ethereal_damage_bonus: [F32::ZERO; ETHEREAL_ENTRIES],
             reaction_delay: F32::ZERO,
             attack_half_angle: None,
             defaulted: Vec::new(),
@@ -161,32 +177,33 @@ impl Reader<'_> {
         }
     }
 
-    /// A comma list of exactly `N` reals.
+    /// The first `N` elements of a comma list, by index. An absent key is `None` (recorded as defaulted). A list
+    /// shorter than `N` leaves the missing elements at `0.0`, as the reader does for a missing index; a malformed
+    /// element is `0.0` with a note.
     fn list<const N: usize>(&mut self, key: &'static str) -> Option<[F32; N]> {
         if self.profile.get(MISC_SECTION, key).is_none() {
             self.defaulted.push(key);
             return None;
         }
         let items = self.profile.get_list(MISC_SECTION, key);
-        if items.len() != N {
-            self.defaulted.push(key);
-            self.notes.push(format!(
-                "{key}: {} values, {N} expected; default used",
-                items.len()
-            ));
-            return None;
-        }
         let mut out = [F32::ZERO; N];
-        for (slot, item) in out.iter_mut().zip(&items) {
+        for (i, slot) in out.iter_mut().enumerate() {
+            let Some(item) = items.get(i) else {
+                break;
+            };
             match parse_real(item, self.tables) {
                 Some(v) => *slot = v,
                 None => {
-                    self.defaulted.push(key);
                     self.notes
-                        .push(format!("{key}: {item:?} is not a real; default used"));
-                    return None;
+                        .push(format!("{key}[{i}]: {item:?} is not a real; 0.0 used"));
                 }
             }
+        }
+        if items.len() < N {
+            self.notes.push(format!(
+                "{key}: {} values, {N} read; the rest are 0.0",
+                items.len()
+            ));
         }
         Some(out)
     }
