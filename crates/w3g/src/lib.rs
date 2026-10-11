@@ -107,6 +107,7 @@ impl Replay {
             Block::TimeSlot {
                 increment_ms,
                 commands,
+                ..
             } => {
                 t += *increment_ms as u64;
                 Some((t, commands.as_slice()))

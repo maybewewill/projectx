@@ -141,6 +141,9 @@ fn real_replay_passes_every_crc_and_sync_records_follow_their_slots() {
         prev_was_slot = false;
     }
     eprintln!("real replay: {slots} time slots, {syncs} sync records");
-    assert_eq!(slots, syncs);
+    // One record per slot in the first real file (89,259 of 89,259). The DotA 6.83se file (142,616 records for
+    // 142,647 slots) lacks the records of 31 slots, all of them in the last 100 slots (the game end), so a few
+    // missing records at the tail are allowed.
+    assert!(syncs <= slots && slots - syncs <= 64, "slots {slots} records {syncs}");
     assert!(slots > 0);
 }

@@ -61,6 +61,7 @@ pub mod pathing;
 pub mod replay;
 pub mod replay_setup;
 pub mod scripts;
+pub mod sync_check;
 
 pub use map::{apply_players, controller_of, playable_area};
 pub use pathing::PathingSummary;
@@ -162,6 +163,8 @@ pub struct Engine {
     economy: data::EconomySetup,
     /// Replay command state: selections, hotkey groups, the object table and the speed setting.
     commands: CommandState,
+    /// The 0x22 sync tracker (docs/spec/lockstep.md section 15): net checksum, tick clock and record rule.
+    sync: sim::sync::SyncState,
 }
 
 /// What the AI host did, as the report shows it (see [`sim::ai::AiShared`] for the full logs).
@@ -418,6 +421,7 @@ impl Engine {
             combat,
             economy,
             commands: CommandState::new(),
+            sync: sim::sync::SyncState::new(),
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
@@ -490,6 +494,31 @@ impl Engine {
     pub fn run_turn(&mut self, turn: &TurnReport<Command>) -> usize {
         self.apply_commands(&turn.actions);
         self.step_ticks(turn.game_ticks)
+    }
+
+    /// Sync hook for a replay time slot (docs/spec/lockstep.md section 15): folds the slot's block into the net
+    /// checksum, refreshes the hidden words this engine can supply (the generator hash `R` and the rand slot, from
+    /// the host's streams; they are zero without a `Game.dll` RNG table) and returns the 0x22 record the original
+    /// would write for the slot. `payload` is the block body after its length: the u16 increment, then each
+    /// player's `u8 id, u16 len, actions` (`w3g::Block::time_slot_payload`). The record matches the file only
+    /// when X, Y and the data-table slots are right too; [`sync_check`] reports how far that goes.
+    pub fn sync_time_slot(&mut self, id: u8, payload: &[u8]) -> u32 {
+        {
+            let streams = self.host.rng();
+            self.sync.rng_hash = sim::sync::rng_state_hash(&streams.global);
+            self.sync.registry[sim::sync::slot::RAND] = Some(sim::sync::rand_data_hash(&streams));
+        }
+        self.sync.time_slot(id, payload)
+    }
+
+    /// The sync tracker (net checksum, clock, hidden words).
+    pub fn sync(&self) -> &sim::sync::SyncState {
+        &self.sync
+    }
+
+    /// Mutable access to the sync tracker, to set the hidden words the simulation produces (X, Y, data slots).
+    pub fn sync_mut(&mut self) -> &mut sim::sync::SyncState {
+        &mut self.sync
     }
 
     /// Applies commands in the given order and returns their outcomes (one per command).

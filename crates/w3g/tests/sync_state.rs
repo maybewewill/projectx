@@ -1,11 +1,11 @@
-//! Structural test of the 0x22 sync stream (docs/spec/lockstep.md section 13.6).
+//! Structural test of the 0x22 sync stream (docs/spec/lockstep.md sections 13 and 15).
 //!
-//! For fixed registry fold A, world words X and Y, the value is GF(2)-affine in the tick clock T:
+//! For fixed registry fold A, world words X, Y and RNG hash R, the value is GF(2)-affine in the tick clock T:
 //! `sync(T) ^ sync(T') = rol(T ^ T', 12)`. So for two consecutive records with unchanged hidden state,
-//! `rotr(csum_k ^ csum_k+1, 12) = T_k ^ T_k+1`, a small number (T grows by about 110 per slot).
-//! The synthetic case always runs and checks that this signature is detected. `W3G_REPLAY=/path/file.w3g`
-//! runs the same count on the user's real 1.26a file (never committed): the test documents that no pair of
-//! consecutive records shows the signature, i.e. the hidden state (A, X, Y) changes between slots.
+//! `rotr(csum_k ^ csum_k+1, 12) = T_k ^ T_k+1`, a small number. The synthetic cases always run and check that this
+//! signature is detected or hidden. `W3G_REPLAY=/path/file.w3g` checks the stream structure of the user's real
+//! 1.26a file (never committed): one record after every time slot. The content of the records is checked in
+//! `engine/tests/sync_real.rs`, which has the net checksum.
 
 use w3g::sync::sync_value;
 use w3g::{Block, Replay};
@@ -23,9 +23,9 @@ fn small_pairs(clock: &[u32], csum: &[u32]) -> usize {
 
 #[test]
 fn constant_state_produces_the_signature() {
-    let (a, x, y) = (0x1234_5678u32, 0x0BAD_F00D, 0x0F0F_1234);
+    let (a, x, y, r) = (0x1234_5678u32, 0x0BAD_F00D, 0x0F0F_1234, 0x0001_0203);
     let clock: Vec<u32> = (0..200u32).map(|k| 110 * k).collect();
-    let csum: Vec<u32> = clock.iter().map(|&t| sync_value(t, a, x, y)).collect();
+    let csum: Vec<u32> = clock.iter().map(|&t| sync_value(t, a, x, y, r)).collect();
     assert_eq!(small_pairs(&clock, &csum), clock.len() - 1);
 }
 
@@ -35,7 +35,7 @@ fn changing_state_hides_the_signature() {
     let csum: Vec<u32> = clock
         .iter()
         .enumerate()
-        .map(|(k, &t)| sync_value(t, (k as u32).wrapping_mul(0x9E37_79B9), 0x55, 0xAA))
+        .map(|(k, &t)| sync_value(t, (k as u32).wrapping_mul(0x9E37_79B9), 0x55, 0xAA, 0x33))
         .collect();
     // Random-like state: only a handful of pairs can fall below 2^16 by chance (expected about 0.4).
     assert!(small_pairs(&clock, &csum) < 5);
@@ -47,31 +47,20 @@ fn real_replay() -> Option<Vec<u8>> {
 }
 
 #[test]
-fn real_replay_has_no_constant_state_pairs() {
+fn real_replay_has_one_record_per_time_slot() {
     let Some(bytes) = real_replay() else {
         return;
     };
     let r = Replay::parse(&bytes).expect("real replay parses");
-    // T = game milliseconds before each slot (the tick clock at the record, LIKELY; see section 13.5).
-    let mut clock = Vec::new();
-    let mut csum = Vec::new();
-    let mut time = 0u32;
-    let mut pending_slot = false;
+    let mut slots = 0usize;
+    let mut records = 0usize;
     for b in &r.blocks {
         match b {
-            Block::TimeSlot { increment_ms, .. } => {
-                clock.push(time);
-                time = time.wrapping_add(*increment_ms as u32);
-                pending_slot = true;
-            }
-            Block::Checksum { csum: c } if pending_slot => {
-                csum.push(*c);
-                pending_slot = false;
-            }
+            Block::TimeSlot { .. } => slots += 1,
+            Block::Checksum { .. } => records += 1,
             _ => {}
         }
     }
-    assert_eq!(csum.len(), clock.len(), "one record per time slot");
-    let n = small_pairs(&clock, &csum);
-    assert_eq!(n, 0, "consecutive records must not share one hidden state");
+    // The real file has a record after every slot except possibly the last one(s).
+    assert!(records + 64 >= slots && records <= slots, "slots {slots} records {records}");
 }
