@@ -31,6 +31,7 @@ pub mod orders;
 pub mod pathing;
 pub mod rng;
 pub mod script;
+pub mod sync;
 pub mod timer;
 pub mod unit_counts;
 pub mod vision;
