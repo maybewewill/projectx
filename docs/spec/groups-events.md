@@ -297,6 +297,65 @@ level (see 3.5 and 3.7).
 - Dead units are NOT excluded by the range test. Only the removed flag is checked.
   LIKELY.
 
+### 3.9 Category list walk 0x6F46D0B0 (pass 2, 2026-10-11; supersedes 3.5 where they differ)
+
+Harness: `tools/emu/category_walk_emu.py` (real walk, handle lookup and predicate replaced by hooks; 2,000 random
+lists, 2,122 predicate calls, **0 mismatches** against the Python model below). Read from the disassembly and
+confirmed by that run unless marked otherwise.
+
+- **Calling form (CONFIRMED).** `ECX` = holder, `EDX` = predicate function pointer, three stack arguments
+  (A1 = predicate context, passed to the predicate in EDX; A2 unused by the list part; A3 = flag for the cell
+  part); `ret 0xC`. The predicate is called with `ECX` = the node's reference object (`[node+0x54]`), `EDX` = A1,
+  no stack arguments.
+- **Category head (CONFIRMED).** `cat = [holder+0x6C]`. When `cat` is 0 the list part is skipped (no list
+  access). Otherwise the walk starts at `[cat+0x58]`.
+- **Per node (CONFIRMED).** Order: (1) node `+0x20` non-zero: skip, no call; (2) `ref = [node+0x54]`,
+  `obj = handle(ECX = [ref+0xC], EDX = [ref+0x10])` (`0x6F03FA30`, a fast-call with no stack arguments);
+  (3) `obj == 0` or `[obj+0x0C] != 0x2B61676C` (the unit tag 'lga+'): skip. Note the sign: the code keeps the
+  object only when the tag **equals** 0x2B61676C (`setne`, `sub 1`, `and`); (4) `[obj+0x20] != 0` (removed):
+  skip; (5) call the predicate with `ECX = ref`; the result is recorded as a visit; (6) **the walk stops after the
+  first predicate call that returns ZERO** (the loop bit is `predicate == 0`, `neg/sbb/add 1`). Otherwise it
+  moves to `[node+8]`.
+- **Cell part (CONFIRMED structure, partly read).** Entered only when the list part did not stop, A3 != 0 and
+  `[holder+0x50]` (count) > 0. It walks the cell array at `[holder+0x48]` (12-byte cells, next index at +4;
+  key at `+0x18`, cached child entry at `+0x1C`, created through the key builder `0x6F4C8520` and lookup
+  `0x6F001EC0` when the cache is empty) and recurses with ECX = child entry and the same predicate. Not run in
+  Unicorn (the harness uses A3 = 0).
+- **Consequence for the registry (CONFIRMED by the two call sites).** `0x6F46D1B0` (the global walk) and the
+  candidate builder `0x6F2A46F0` call it with ECX = the registry entry that `0x6F001EC0` returns for the key built
+  from the value in ECX (`0x6F2075E0` returns 'AHer' = 0x41486572 for the builder). **No NULL check** is made on
+  that entry: a missing key dereferences 0 (so the category entries must exist before the first query; they are
+  created by the registrations `0x6F2075F0` and `0x6F207670`, which run at start-up).
+- **Predicates seen (CONFIRMED).** The candidate builder passes EDX = `0x6F290770` (`mov eax,[ecx+0x30]`; a zero
+  there calls `0x6F472890`; then `0x6F28B990`; returns **1**, so every candidate is visited: the kill-XP walk never
+  stops early). This is the reason the stop rule matters only for other callers.
+
+**Correction to earlier text.** heroes.md 8.7 said the walk "stops at the first non-zero predicate" and that the
+unit tag must be "other than" 0x2B61676C. Both are wrong: the walk stops at the first **zero** predicate result
+(the original text of this section was right) and the object must **have** tag 0x2B61676C. Fixed in heroes.md 8.9.
+
+**Membership and order (NOT found).** Who writes the list (`cat+0x58`) and the node links (`node+8`) for a unit that
+gains a category is still open. What was checked (static, no insert routine found):
+- Every `mov [reg+0x58], reg` in `.text` was filtered by a neighbouring `+8` store (window 10 and 40
+  instructions) and by a read of the old head. No routine both loads an old head from `+0x58` and stores a node
+  at `+8` in the same pattern. The only old-head copy is `0x6F75433C` (object copy, not a membership insert).
+- The 11 `lea reg,[reg+0x58]` sites were read: `0x6F478FA0` is a flags accessor, the others are not list
+  inserts (none passes `&head` to an insert).
+- `E+0x6C` (the category object of a registry entry) has writers only in the map/load loop `0x6F471460` (its
+  inner loop `0x6F471520`: `entry+0x6C` = the unit found by the handle `0x6F03FA30` for a record) and in
+  unrelated object constructors (`0x6F479F90`, `0x6F4873E0`: different vtables). In a fresh game the registry
+  entry for 'AHer' therefore probably has `+0x6C = 0`, so the list part is empty and members would be reached
+  only through the cells. **UNSURE**: this is the most important open point and must be checked dynamically
+  (run the start-up registrations, then a hero creation, and watch `E+0x6C`, `E+0x48/+0x50`).
+- The hero ability 'AHer' (ability code 0x41486572) sets `unit+0x1F0` in the ability-attach routine `0x6F079A20`
+  (switch: `cmp 'AHer'` at `0x6F079A5D`, store at `0x6F079A73`). That routine does not touch a category list.
+  `0x6F201914` (`push 'AHer'`, `call 0x6F0787D0`, then `0x6F208820`) is a lookup of the unit's hero ability, not a
+  membership insert.
+
+**Decision for the sim (no code change).** The order of the category list is not confirmed, so
+`GroupEnumUnitsOfType` / `OfPlayer` keep creation order (LIKELY, unchanged). The walk itself is now confirmed
+(list order, skips, zero-stop), so once an insert is found the sim can use the list order directly.
+
 ---
 
 ## 4. ForGroup, removed units and ghost entries
