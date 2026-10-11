@@ -174,3 +174,37 @@ state) for 300 random cases (count 1..16, sides 1..100) and compares with the mo
 `sum over dice of floor(step() * sides / 2^32)`: **0 mismatches**. So each die is 0..sides-1 inside
 the sampler; if the game's damage uses 1..sides per die, the +count must be added by the caller
 (still to locate in 0x6F0C6940). The >16-dice Gaussian path is not covered by this test.
+
+## Implementation status (Haiku, 2026-10-11): `crates/sim/src/damage.rs`
+
+Implemented as `sim::damage::SpecDamage` (a `DamageModel`; install with `Game::set_damage_model`). Not the default:
+the default stays `PlaceholderDamage` because the model needs Misc values (`DefenseArmor`, the 7 x 8 table) that the
+engine does not load yet.
+
+| Step | Implementation | Verified |
+|---|---|---|
+| Dice | `dice_sum`: one stream-2 step per die, `floor(r * sides / 2^32)`, plus the flat bonus (added to the integer sum), clamped at 0, `i2r` | Sampler per die: original, by the addendum above. Synthetic tests for step count and range only |
+| Dice > 16 | Not modelled: the model returns the weapon's placeholder value (`AttackType::damage`) | No |
+| Armor A >= 0 | `M = 1 - div(K A, 1 + K A)` (softfloat) | Formula from the spec. Division needs `Tables`; only a GAME_DLL-gated check (the stock K = 0.06 is a test input) |
+| Armor A < 0 | `R = table[min(trunc(-A), 20)]`, `M = 1 - R` | Synthetic table. Table contents not verified (see below) |
+| Attack x armor type | `DamageTypeTable[attack_type][armor_type]`, clamped indices | Structure only |
+| `R > 1` | factor 0 | Spec wording only |
+| Physical only | `AttackType::physical` gates the armor factor | LIKELY (spec 4 step 7) |
+| Negative table load | `NegativeArmorTable::from_game_dll`, VA `0x6FAB4300`, refused if all zero or non-finite | Reader tested on a synthetic PE. Not tested on a real file |
+| Defense per unit type | `Game::set_unit_defense`, `Game::unit_defense` | Not tested beyond compilation |
+
+Deviations from the task brief, with reasons:
+- The 7 x 8 damage-type table is **not** read from `Game.dll`. The spec (0x6F26D300) builds it from the Misc
+  `DamageBonus*` keys at run time, so the host passes it in as `DamageMisc`.
+- Each die is `0..sides-1`, as the sampler gives. The +1 per die is **not** added: the addendum says it must come from
+  the caller, and the caller (0x6F0C6940) is not located. This is the biggest open question for the damage values.
+- The bonus position (integer sum versus after conversion) is a choice; the spec leaves it open.
+- The ethereal table is not implemented: its lookup key is UNSURE (section 7). Evasion, the other handler categories,
+  the relation factor and the miss/critical rolls are not implemented either.
+
+Not verified against the original: no `Game.dll` was available in this environment, so no Unicorn vectors were
+generated. The GAME_DLL-gated test in `crates/sim/tests/damage.rs` only checks the positive-armor formula on the real
+tables and skips without the variable. The 0x6FAB4300 table may be all zeros in the file (the AGENTS notes say it is
+filled at run time); in that case `from_game_dll` refuses it, and the model cannot be built from the DLL alone.
+Next step: dump the bytes at 0x6FAB4300 and 0x6FAB4358 with `tools/emu/runtime_consts.py` on a real `Game.dll`, and
+run the dice (+1 question) and armor factor through the Unicorn harness.
