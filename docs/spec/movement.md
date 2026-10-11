@@ -260,8 +260,10 @@ facing is set BEFORE the path step (section 2, step 4).
   stores of 0x14).
 - FUN_6F490E60 (CONFIRMED structure) sets a wait counter at group+0x64 (not path+0x94) when it is -1: it computes
   t = trunc(0.5 + k * d), with d = sqrt(a^2 + b^2) of two unit-derived values, and clamps t to 16..132
-  (+165 when group flag 0x400 is set). The constants k = 0x6FAB7414 (3.8e-9) and 0x6FAB7430 (4.9e-8) are in
-  .data, not immediate stores. UNSURE what the wait means in ticks.
+  (+165 when group flag 0x400 is set). The constants k = 0x6FAB7414 and 0x6FAB7430 are in
+  .data, not immediate stores. **Correction 2026-10-11 (runtime-constants audit):** their start-up values are
+  0.33 (0x3EA8F5C3) and 1.0 (0x3F800000), not 3.8e-9 and 4.9e-8 (those numbers were wrong; the file image has 0 at both).
+  UNSURE what the wait means in ticks.
 - "Propulsion window" (a facing window in which the unit may move): NOT found. The mover moves whenever the
   step is not gated (3.3) and the flags are clear. LIKELY no facing window exists in the mover.
 

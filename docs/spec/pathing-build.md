@@ -42,7 +42,7 @@ scan of .text (all E8/E9 targets), and Unicorn runs of the two builders on rando
 
 ### 1.1 Entry and file name (CONFIRMED call, LIKELY name)
 - Called from the map-load routine FUN_6F01DE80 (call at 0x6F01E100). Arguments: the playable-bounds rect global at
-  0x6FADB3F8 and a name pointer at 0x6FAB7370. The name is "war3map" plus the extension string ".wpm" (string at 0x6F876A24,
+  0x6FADB3F8 and a name pointer at 0x6FAB7370. **Correction 2026-10-11 (runtime-constants audit):** 0x6FAB7370 is not a name pointer; its start-up value is the float 0.03 (the movement walk timer, movement-4/5). 0x6FADB3F8 holds the float 32.0 at start-up, not a bounds rect, so the source of the bounds argument is still open (UNSURE). The name is "war3map" plus the extension string ".wpm" (string at 0x6F876A24,
   from pathing.md). The reader first stores the bounds floats into the world object: 0x6FAB7368 +0x6C gets bounds[1],
   +0x70 gets bounds[0], +0x74 gets bounds[3], +0x78 gets bounds[2] (CONFIRMED stores; which of x and y the origin
   subtraction uses is UNSURE, see 5.3).
@@ -268,7 +268,7 @@ So LIKELY these change cell words only, and the pyramid is stale for the search 
 - wpm magic 0x5733504D; header order: magic, u32, width, height; data at offset 16.
 - Type OR values for file bytes: 0x02 to 0x13, 0x04 to 0x05, 0x08 to 0x09, 0x20 to 0x20, 0x40 to 0x41, 0x80 or 0x42 to 0x81.
 - Per-type masks: 0x06000006, 0x80000080, 0x40000040, 0x04000004 at 0x6FA84E84, 0x6FA84E88, 0x6FA84E8C, 0x6FA84E90.
-- Pathing world pointer slot 0x6FAB73D8; map bounds global 0x6FADB3F8; name pointer 0x6FAB7370; origin slot 0x6FAB7368.
+- Pathing world pointer slot 0x6FAB73D8; 0x6FADB3F8 (float 32.0 at start-up, not a bounds rect; correction 2026-10-11); 0x6FAB7370 = float 0.03 (correction 2026-10-11, was called "name pointer"); origin slot 0x6FAB7368.
 - Functions: wpm reader 0x6F46B850; map load 0x6F01DE80; new game 0x6F3B0750; world init 0x6F3A2920; full rebuild entry
   0x6F468C70; rect rebuild 0x6F488330; level-0 builder 0x6F485150 and its cell step 0x6F483160; upper builder 0x6F4881C0 and
   its child step 0x6F488010; cell test 0x6F4A0E80 (wrapper 0x6F4A38C0); tag fill 0x6F4852C0; tag fill with rebuild 0x6F488420;

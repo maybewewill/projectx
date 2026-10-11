@@ -91,12 +91,12 @@ CONFIRMED: none of the normalize helpers checks for a zero-length input. With al
 ### 4.2 Helper FUN_6f7e11e0 (the main R2I path)
 
 - CONFIRMED: about 180 call sites in the decompile.
-- CONFIRMED: behaviour when the global `DAT_6fae759c` is 0 (the only path that appears to be used, since no writer of that flag was found in the decompile):
+- **Correction 2026-10-11 (runtime-constants audit):** the flag is NOT 0 at run time. Its writer is the CRT routine `__get_sse2_info` (decompile name `@ 6f7e1d2d`; the store `mov [0x6FAE759C], eax` is at 0x6F7E1D92, which is why the decompile shows no writer). It stores the SSE2 detection result, 1 on any SSE2 CPU, and the start-up dump gives 1. So the **run-time path is the truncating branch below**, not the FISTP branch. The FISTP branch (flag 0) is the path for CPUs without SSE2 and is kept only for reference. The text below describes that unused branch:
   1. Round ST0 with FISTP. Ghidra models FISTP as `round(ST0)`, so the result follows the current FPU rounding mode, which is round-to-nearest-even (section 4.1). This is 64-bit.
   2. If the result is non-zero (or the high word is non-zero), correct it for the fraction using the 0x80000000 test on the difference between ST0 and the rounded integer. This makes negative inputs round toward the nearest integer in the same direction and gives a 64-bit result.
   3. Return the 64-bit integer. Callers normally use the low 32 bits.
 - CONFIRMED: when `DAT_6fae759c` is non-zero, the helper returns a plain truncating (int) cast of ST0 instead.
-- So the default float-to-int in the game is round-to-nearest, not truncation. R2I-style conversions that need truncation must switch the control word (see 4.3).
+- **Correction 2026-10-11:** so the default float-to-int of the game is the **truncating** (int) cast on SSE2 CPUs (flag = 1), not round-to-nearest. The round-to-nearest statement above was based on the file image (flag 0). See the correction at the top of this section. Section 4.3 (control word) still applies to the `fldcw` sites that are not this helper.
 
 ### 4.3 Explicit rounding-mode switches
 
@@ -133,7 +133,7 @@ The decompile refers to these constants by address. Their values are in .rdata a
 | DAT_6f93660c | Returned for the input <= -threshold case in FUN_6f4b20e0 | -PI/2 | LIKELY |
 | DAT_6f875aa0 | Scale factor in several ROUND(x * C) sites | 1.0 or a scale | UNSURE |
 | DAT_6f876610 / DAT_6f876618 | Ramp bounds in FUN_6f00d5c0 | radius bounds | UNSURE |
-| DAT_6fae759c | Mode flag for the float-to-int helper (0 = FPU rounding path) | 0 | CONFIRMED (read as 0 in default path) |
+| DAT_6fae759c | Mode flag for the float-to-int helper (0 = FPU rounding path, nonzero = truncating (int) cast) | **1 at run time** (SSE2 detection in `__get_sse2_info`, 2026-10-11 correction; file image 0) | CONFIRMED |
 
 Candidate float bit patterns, computed here, so that the binary can be checked against them later. These are the standard float encodings of the values, not values read from the binary:
 

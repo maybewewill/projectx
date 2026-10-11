@@ -45,6 +45,7 @@ Method: decompile chunks (scratchpad/decomp), PE image reads (pefile), and a uni
 - UpkeepUsage: 10 food thresholds per race row (read by 0x6F00A2A0, cache at 0x6FA4F740).
 - UpkeepGoldTax: 10 floats, one per tier (read by 0x6F00A3B0, cache at 0x6FAAE3C8, returns the entry for the requested tier).
 - UpkeepLumberTax: 10 floats, one per tier (read by 0x6F00A4D0, cache at 0x6FAAE3F0).
+- **Correction 2026-10-11 (runtime-constants audit):** the cache's "not loaded" marker is the float -1.0 (0x6FAAE464) in the first cell: the reader compares `DAT_6faae464 == DAT_6faae3c8` and reloads only when they are equal. The start-up dump shows the first cell is -1.0 at run time (0.0 in the file image). Once loaded, the cells hold the MiscData values, or the built-in defaults copied from the block at 0x6FAAE378..0x6FAAE39C (start-up values 0.0, 0.3, then 0.6 for the remaining eight tiers).
 - Each reader only loads from MiscData when a config table is present (flag check at 0x6F002790). Otherwise it uses the built-in defaults below.
 - The tooltip code (0x6F358F80 and 0x6F358F00) shows each tier as "100 minus tax" percent, so the tax value is a percent taken off income. CONFIRMED.
 

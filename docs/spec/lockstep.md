@@ -439,7 +439,7 @@ populated agent in emulation needs the allocator stubs (`0x6F4C1AB0`, `0x6F629E9
 
 ### 9.2 The float: `0x6FACC8CC` = 0.005f (CONFIRMED value)
 
-- The file holds 0 at `0x6FACC8CC` (also 0 at its neighbours `0x6FACC8C8`, `0x6FACC8D0`).
+- The file holds 0 at `0x6FACC8CC` (also 0 at its neighbour `0x6FACC8D0`). **Correction 2026-10-11 (runtime-constants audit):** the other neighbour `0x6FACC8C8` is not zero at start-up: it holds 180/pi (0x42652EE1).
 - The only writer is the static initializer **`0x6F8621C0`** (CONFIRMED by its code). It is listed
   in the start-up initializer table in `.rdata` at `0x6F87438C` (byte search; CONFIRMED membership,
   LIKELY that the CRT calls it at start-up, as for the other entries).

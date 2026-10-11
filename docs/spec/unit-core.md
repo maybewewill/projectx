@@ -323,11 +323,11 @@ The 0xD0xxx IDs go through the CEvent path (a CEvent object with the ID is dispa
 | Name / address | Value | Status |
 |---|---|---|
 | 0x6FAAE470 (zero, default return) | 0.0 | LIKELY. Zero in the file, used as default return and zero compare. Runtime value not verified |
-| 0x6FAAE4A0 | timed-facing threshold (0.0 in file) | UNSURE, likely 0.0 |
-| 0x6FAAE5E8 | angle multiplier (degrees to radians) | LIKELY, value not verified (zero in file) |
-| 0x6FAAE60C | angle multiplier (radians to degrees) | LIKELY, value not verified |
-| 0x6FAAE570 | placement threshold | UNSURE |
-| 0x6FAAE614 | epsilon for placement | UNSURE |
+| 0x6FAAE4A0 | step constant (**correction 2026-10-11**: start-up value 0.1, not 0.0; the "timed-facing threshold" reading was wrong) | CONFIRMED value (0.1) |
+| 0x6FAAE5E8 | angle multiplier (degrees to radians) | CONFIRMED value pi/180 = 0x3C8EFA35 (start-up; 2026-10-11) |
+| 0x6FAAE60C | angle multiplier (radians to degrees) | CONFIRMED value 180/pi = 0x42652EE1 (start-up; 2026-10-11) |
+| 0x6FAAE570 | placement threshold | CONFIRMED value 90.0 (start-up; 2026-10-11); its use is still UNSURE |
+| 0x6FAAE614 | epsilon for placement | CONFIRMED value 2e-7 (start-up; 2026-10-11); its use is still UNSURE |
 | 0x2B61676C | unit agent kind tag (checked at agent +0x0C) | CONFIRMED value |
 | 0x100000 | handle id base | CONFIRMED (handles-2.md) |
 

@@ -101,7 +101,7 @@ Structure (CONFIRMED from the decompiled body and the table addresses):
 - Heading difference: 0x6F496630 is called with the node's +0x8C angle. It returns the NEGATED value for |x| <= pi
   (pi = 0x6FAAE600, CONFIRMED value 3.1415927). Its |x| > pi branch uses the softfloat SUB with an operand not
   resolved (the prologue leaves EDX unset in the call; UNSURE). So the difference d = -wrap(x) (LIKELY).
-- Magnitude a = |d| is compared with 0x6FAB7540 = 3.4272e-8 (CONFIRMED value). Below it: the node's virtual slot
+- Magnitude a = |d| is compared with 0x6FAB7540 = 0.001 (**correction 2026-10-11, runtime-constants audit**: the earlier 3.4272e-8 was wrong; the start-up float is 0x3A83126F). Below it: the node's virtual slot
   0x58 is called with 0 (no turn, LIKELY "arrived"). Above it: the turn branch runs.
 - Turn branch: the sign of d picks T0 or -T0; the result is written to node+0xCC (through ADD with an operand not
   resolved), then clamped to [T1, T2] by compares with T1 (0x6FAB7444) and T2 (0x6FAB7448), with DIV 0x6F6EFE10 when
