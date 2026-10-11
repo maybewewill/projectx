@@ -58,7 +58,9 @@ use jass::vm::{NativeRegistry, NativeResult, Value};
 use softfloat::{arith, F32};
 
 use super::game::{Game, HandleKind, ObjKey, Object, UnitType};
+use crate::unitclass;
 use super::group::in_range;
+use super::hashtable::enum_at;
 use super::hero::is_hero_id;
 use super::player::raw_at;
 use crate::abilities::{is_factory_code, Ability};
@@ -233,9 +235,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitIdType",
-        support: Support::NotImplemented(
-            "N:type-class switch needs the type flag words (FUN_6F29CB80 and helpers), not read",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "IsUnitIllusion",
@@ -259,9 +259,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitInTransport",
-        support: Support::NotImplemented(
-            "N:transport relation (FUN_6F079F80) is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "IsUnitInvisible",
@@ -295,9 +293,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitType",
-        support: Support::NotImplemented(
-            "N:type-class switch needs the type flag words (FUN_6F3B2EB0 mapping), not recovered",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "IsUnitVisible",
@@ -455,9 +451,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitAddType",
-        support: Support::NotImplemented(
-            "N:type flag word mapping (FUN_6F3B2EB0) not recovered",
-        ),
+        support: Support::Confirmed,
     },
     NativeEntry {
         name: "UnitApplyTimedLife",
@@ -535,9 +529,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitRemoveType",
-        support: Support::NotImplemented(
-            "N:type flag word mapping (FUN_6F3B2EB0) not recovered",
-        ),
+        support: Support::Confirmed,
     },
     NativeEntry {
         name: "UnitResetCooldown",
@@ -560,9 +552,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitSetUsesAltIcon",
-        support: Support::NotImplemented(
-            "N:the icon state is not modelled",
-        ),
+        support: Support::Confirmed,
     },
     NativeEntry {
         name: "UnitShareVision",
@@ -950,6 +940,70 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         NativeResult::Return(Value::Boolean(v))
     });
 
+    // Unit classification (docs/spec/unit-classification.md). `IsUnitType`: the value is the ConvertUnitType index,
+    // 0 to 26; anything else, and an invalid unit, gives false (CONFIRMED: the switch is range-checked, `0x6F3C7E90`).
+    let g = Rc::clone(game);
+    reg.register("IsUnitType", move |_, a| {
+        let gm = g.borrow();
+        let t = enum_at(a, 1) as u32;
+        let v = unit_at(&gm, a, 0).is_some_and(|k| is_unit_type(&gm, gm.unit(k), t));
+        NativeResult::Return(Value::Boolean(v))
+    });
+
+    // `UnitAddType` / `UnitRemoveType`: change the unit's classification word; true only for the nine values that
+    // have a bit (CONFIRMED, `0x6F3C7BC0` / `0x6F3C7C20`).
+    for (name, add) in [("UnitAddType", true), ("UnitRemoveType", false)] {
+        let g = Rc::clone(game);
+        reg.register(name, move |_, a| {
+            let mut gm = g.borrow_mut();
+            let t = enum_at(a, 1) as u32;
+            let v = match unit_at(&gm, a, 0) {
+                Some(k) => {
+                    let w = &mut gm.unit_mut(k).class_flags;
+                    if add {
+                        unitclass::add_type(w, t)
+                    } else {
+                        unitclass::remove_type(w, t)
+                    }
+                }
+                None => false,
+            };
+            NativeResult::Return(Value::Boolean(v))
+        });
+    }
+
+    // `IsUnitIdType(id, unittype)`: the same classes read from the type record (CONFIRMED, `0x6F3B7F60`).
+    let g = Rc::clone(game);
+    reg.register("IsUnitIdType", move |_, a| {
+        let gm = g.borrow();
+        let id = raw_at(a, 0) as u32;
+        let t = enum_at(a, 1) as u32;
+        let view = gm.unit_types().get(id).map_or_else(unitclass::IdView::default, |ut| unitclass::IdView {
+            structure: gm.unit_types().is_building(id),
+            movement: ut.movement,
+            classification: ut.classification,
+            weapons_on: ut.weapons_on,
+            kind: ut.weapon_kind,
+            targs: ut.weapon_targs,
+        });
+        let v = t < unitclass::ty::COUNT && unitclass::id_type_test(id, &view, t);
+        NativeResult::Return(Value::Boolean(v))
+    });
+
+    // `IsUnitInTransport(unit, transport)`: the cargo relation (`0x6F079F80`) needs a transport system, which the model
+    // does not have, so no unit is ever inside another (LIKELY; invalid handles give false, CONFIRMED).
+    reg.register("IsUnitInTransport", |_, _| NativeResult::Return(Value::Boolean(false)));
+
+    // `UnitSetUsesAltIcon` (CONFIRMED, `0x6F3CB860`): sets or clears bit 0x200 of object `+0x280`.
+    let g = Rc::clone(game);
+    reg.register("UnitSetUsesAltIcon", move |_, a| {
+        let mut gm = g.borrow_mut();
+        if let Some(k) = unit_at(&gm, a, 0) {
+            gm.unit_mut(k).alt_icon = matches!(a.get(1), Some(Value::Boolean(true)));
+        }
+        NativeResult::Return(Value::Null)
+    });
+
     reg.register("IsHeroUnitId", |_, a| {
         let v = is_hero_id(raw_at(a, 0) as u32);
         NativeResult::Return(Value::Boolean(v))
@@ -1094,6 +1148,44 @@ fn loc_at(gm: &Game, a: &[Value], i: usize) -> Option<(F32, F32)> {
 /// The handle id in argument `i`, or 0 (the null handle) when there is none.
 fn handle_arg(a: &[Value], i: usize) -> u32 {
     a.get(i).and_then(|v| v.as_handle()).unwrap_or(0)
+}
+
+/// `IsUnitType` on a resolved unit (`0x6F3C7E90`). See `crate::unitclass` for the per-value rules.
+pub fn is_unit_type(gm: &Game, u: &super::game::UnitObj, t: u32) -> bool {
+    use crate::unitclass as uc;
+    if t >= uc::ty::COUNT {
+        return false;
+    }
+    let ut = gm.unit_types().get(u.type_id);
+    let view = uc::UnitView {
+        type_id: u.type_id,
+        illusion: u.illusion,
+        dead: u.dead,
+        structure: gm.unit_types().is_building(u.type_id),
+        movement: ut.map_or(0, |t| t.movement),
+        class_flags: u.class_flags,
+        ethereal: u.ethereal,
+        magic_immune: u.magic_immune,
+    };
+    if let Some(v) = uc::simple_test(&view, t) {
+        return v;
+    }
+    match t {
+        uc::ty::ATTACKS_FLYING | uc::ty::ATTACKS_GROUND | uc::ty::MELEE_ATTACKER | uc::ty::RANGED_ATTACKER => {
+            // The attack ability holds the weapon data copied from the type record (LIKELY: same values). A weapon
+            // is enabled by its `weapsOn` bit; the disabling counters have no writer in the model.
+            let w = u.abilities.get(crate::abilities::ATTACK).and(ut).map(|t| uc::WeaponView {
+                kind: t.weapon_kind,
+                targs: t.weapon_targs,
+                enabled: [t.weapons_on & 1 != 0, t.weapons_on & 2 != 0],
+            });
+            uc::attack_test(t, w.as_ref())
+        }
+        _ => {
+            u.buffs.iter().any(|b| uc::code_gives_state(t, b.base))
+                || u.abilities.iter().any(|a| uc::code_gives_state(t, a.base))
+        }
+    }
 }
 
 /// The real in argument `i`, or 0.0.

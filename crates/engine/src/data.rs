@@ -147,6 +147,9 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         };
         unit_types += 1;
         game.unit_types_mut().insert(id, sim_unit_type(ty));
+        // `isbldg` marks structures: IsUnitType(STRUCTURE) and the structure counters read it (the original reads the
+        // type's `IsStructure` meta value, LIKELY the same column).
+        game.unit_types_mut().set_building(id, ty.is_building != 0);
         // The order data (the fixed move and attack ability slots) is set before any unit of the type can be
         // created: units take their abilities at creation (`natives/unit.rs`).
         game.set_type_orders(id, type_order_data(ty));
@@ -325,6 +328,12 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
             .collect(),
         gold_cost: ty.gold_cost,
         wood_cost: ty.lumber_cost,
+        // Classification inputs of IsUnitType / IsUnitIdType (docs/spec/unit-classification.md).
+        classification: ty.classification,
+        movement: ty.movement,
+        weapons_on: ty.weapons_on as u32,
+        weapon_kind: ty.weapon_kind,
+        weapon_targs: ty.weapon_targs,
     }
 }
 

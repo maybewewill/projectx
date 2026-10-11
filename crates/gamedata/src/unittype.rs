@@ -302,6 +302,14 @@ pub struct UnitTypeData {
     pub impact_swim_z: f32,
     /// The two weapon slots (`<name>1` and `<name>2`).
     pub weapons: [WeaponSlot; 2],
+    /// Classification bits of the `UnitBalance` `type` column (record `+0x1C8`), see [`crate::unitclass`].
+    pub classification: u32,
+    /// Movement type bits of `movetp` (record `+0x1A8`).
+    pub movement: u32,
+    /// Weapon kind enums of `weapTp1` / `weapTp2` (record `+0xF8`, `+0xFC`).
+    pub weapon_kind: [u32; 2],
+    /// Target flag words of `targs1` / `targs2` (record `+0xA0`, `+0xA4`).
+    pub weapon_targs: [u32; 2],
 }
 
 /// Strips one pair of surrounding double quotes and the spaces around them.
@@ -651,6 +659,15 @@ pub fn load_unit_type(
                 ..WeaponSlot::default()
             },
         ];
+    }
+
+    // Classification inputs of IsUnitType / IsUnitIdType (docs/spec/unit-classification.md). A missing cell is the
+    // empty text, which every parser maps to 0.
+    out.classification = crate::unitclass::parse_classification(unquote(&bal.text("type")));
+    out.movement = crate::unitclass::parse_movement(unquote(&out.move_type));
+    for w in 0..2 {
+        out.weapon_kind[w] = crate::unitclass::parse_weapon_kind(unquote(&out.weapons[w].weap_tp));
+        out.weapon_targs[w] = crate::unitclass::parse_target_flags(unquote(&out.weapons[w].targs));
     }
 
     // Load-time rules. Balance missing: acquire is 1.0 (the builder stores it after the weapon read).
