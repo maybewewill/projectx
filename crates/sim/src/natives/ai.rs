@@ -126,16 +126,16 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "GetHeroLevelAI", sig: "()I", addr: 0x6F2D_E0E0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body is (FUN_6f473170() - hero+0x90) + 2 on the AI's hero record; the hero record and FUN_6f473170 are not modelled" },
     AiNative { name: "SetHeroLevels", sig: "(C)V", addr: 0x6F2E_0B00, level: Level::Confirmed, implemented: true, note: "stores the code value in the AI state (+0x40); no getter native" },
     AiNative { name: "SetNewHeroes", sig: "(B)V", addr: 0x6F2E_3020, level: Level::Confirmed, implemented: true, note: "sets or clears flag bit 0x4 of the AI flag word (+0x2D0)" },
-    AiNative { name: "GetUnitCount", sig: "(I)I", addr: 0x6F2D_D050, level: Level::Unsure, implemented: true, note: "body = units under construction of the type (FUN_6f2d1c10, not modelled: no construction state) + owned units with mask 0x36; the model counts the owned live units of the type" },
+    AiNative { name: "GetUnitCount", sig: "(I)I", addr: 0x6F2D_D050, level: Level::Likely, implemented: true, note: "typed count incl. in progress + queued trainees + pending builds (ai_manager::unit_count; mask 0x36 and FUN_6f2d1c10 CONFIRMED)" },
     AiNative { name: "GetPlayerUnitTypeCount", sig: "(Hplayer;I)I", addr: 0x6F2E_2B60, level: Level::Likely, implemented: true, note: "owned units of the type with mask 0x36 (CONFIRMED mask); 0 for a null or invalid player (CONFIRMED gate); the model counts owned live units" },
     AiNative { name: "GetTownUnitCount", sig: "(IIB)I", addr: 0x6F2D_D0C0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: body = units under construction (FUN_6f2d1c10) + units of the type inside the given town (FUN_6f2d5430); the town membership is not modelled" },
-    AiNative { name: "GetUnitCountDone", sig: "(I)I", addr: 0x6F2D_D010, level: Level::Unsure, implemented: true, note: "body counts with mask 0x30 (finished units, CONFIRMED mask); the sim has no construction state, so this is the owned live count" },
+    AiNative { name: "GetUnitCountDone", sig: "(I)I", addr: 0x6F2D_D010, level: Level::Likely, implemented: true, note: "typed count of completed units (mask 0x30 CONFIRMED)" },
     AiNative { name: "GetUpgradeLevel", sig: "(I)I", addr: 0x6F2D_D130, level: Level::Likely, implemented: true, note: "researched level of the tech; the body adds 1 when an entity with mask 2 of the tech exists (in-progress research: not modelled)" },
     AiNative { name: "GetUnitGoldCost", sig: "(I)I", addr: 0x6F2D_D1E0, level: Level::Confirmed, implemented: true, note: "the gold cost of the unit type (UnitType::gold_cost, the type record field +0x20); 0 for an unknown id. Research ids (uppercase first letter) give 0 here: their gate (FUN_6f473170) is not decoded" },
     AiNative { name: "GetUnitWoodCost", sig: "(I)I", addr: 0x6F2D_D240, level: Level::Confirmed, implemented: true, note: "the wood cost of the unit type (UnitType::wood_cost, the type record field +0x24); 0 for an unknown id; same research gate as the gold cost" },
-    AiNative { name: "GetUnitBuildTime", sig: "(I)I", addr: 0x6F2D_D190, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body searches the player's production records first (FUN_6f2d2fb0) and only then the type data; the production records are not modelled" },
-    AiNative { name: "GetUpgradeGoldCost", sig: "(I)I", addr: 0x6F2D_D2A0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body is base + increment * (level - 1) from the upgrade tables (FUN_6f2b0260); the sim holds no upgrade cost records" },
-    AiNative { name: "GetUpgradeWoodCost", sig: "(I)I", addr: 0x6F2D_D2C0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body is base + increment * (level - 1) from the upgrade tables (FUN_6f2b0280); the sim holds no upgrade cost records" },
+    AiNative { name: "GetUnitBuildTime", sig: "(I)I", addr: 0x6F2D_D190, level: Level::Likely, implemented: true, note: "the type data: the type bldtm (the production records FUN_6f2d2fb0 that the body searches first are not modelled: UNSURE)" },
+    AiNative { name: "GetUpgradeGoldCost", sig: "(I)I", addr: 0x6F2D_D2A0, level: Level::Likely, implemented: true, note: "base + mod * level of UpgradeData for the level after the researched one (shape CONFIRMED by the body: base plus increment times level minus one; the in-progress +1 of FUN_6f2dd130 is not added)" },
+    AiNative { name: "GetUpgradeWoodCost", sig: "(I)I", addr: 0x6F2D_D2C0, level: Level::Likely, implemented: true, note: "as GetUpgradeGoldCost, with the lumber columns" },
     AiNative { name: "GetEnemyPower", sig: "()I", addr: 0x6F2D_C150, level: Level::Confirmed, implemented: true, note: "body is 'return 0': always 0" },
     AiNative { name: "GetMinesOwned", sig: "()I", addr: 0x6F2D_DFD0, level: Level::Likely, implemented: true, note: "counts the live mine references of the four town slots' sites (FUN_6f2d11a0); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
     AiNative { name: "GetGoldOwned", sig: "()I", addr: 0x6F2D_E000, level: Level::Likely, implemented: true, note: "sums the remaining gold ('Agmb' +0x6C) of those mines (FUN_6f2d1210), not the player's gold; body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
@@ -149,14 +149,14 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "GetBuilding", sig: "(Hplayer;)Hunit;", addr: 0x6F2E_2E80, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: searches the player's buildings through a callback (FUN_6f2a3270; the callback is not decoded)" },
     AiNative { name: "SetAllianceTarget", sig: "(Hunit;)V", addr: 0x6F2E_0630, level: Level::Likely, implemented: true, note: "stores the unit handle as the AI's alliance target (the body keeps a unit reference in the AI state)" },
     AiNative { name: "GetAllianceTarget", sig: "()Hunit;", addr: 0x6F2D_D570, level: Level::Likely, implemented: true, note: "returns the stored alliance target; null when none" },
-    AiNative { name: "SetProduce", sig: "(III)B", addr: 0x6F2D_D450, level: Level::Unsure, implemented: true, note: "a count of 0 or less returns true (CONFIRMED: the loop does not run); a positive count returns the engine's production result (FUN_6f2d8130, not modelled): false; the request is recorded" },
+    AiNative { name: "SetProduce", sig: "(III)B", addr: 0x6F2D_D450, level: Level::Likely, implemented: true, note: "CONFIRMED loop (zero returns true, the first failed request returns false); each request is the train or build path of ai_manager.rs (spec ai-natives section 7); the order is issued at once" },
     AiNative { name: "MergeUnits", sig: "(IIII)B", addr: 0x6F2D_D320, level: Level::Unsure, implemented: true, note: "true when the owned units of the fourth type already reach the count (CONFIRMED guard, with the pending count of the second type taken as 0: UNSURE); otherwise the merge (FUN_6f2d2580) is not modelled: false" },
     AiNative { name: "ConvertUnits", sig: "(II)B", addr: 0x6F2D_D2E0, level: Level::Unsure, implemented: true, note: "the body returns no value (CONFIRMED); the model returns false. The conversion (FUN_6f2d2440) is recorded" },
-    AiNative { name: "SetUpgrade", sig: "(I)B", addr: 0x6F2D_D4B0, level: Level::Confirmed, implemented: true, note: "body returns 0 after the request (CONFIRMED): always false; the request is recorded" },
+    AiNative { name: "SetUpgrade", sig: "(I)B", addr: 0x6F2D_D4B0, level: Level::Likely, implemented: true, note: "CONFIRMED constant return false; the research order goes to the first usable building (ai_manager::set_upgrade)" },
     AiNative { name: "Unsummon", sig: "(Hunit;)V", addr: 0x6F2E_08A0, level: Level::Likely, implemented: true, note: "unsummon request (FUN_6f2d2790) recorded; no game effect" },
-    AiNative { name: "ClearHarvestAI", sig: "()V", addr: 0x6F2D_D5B0, level: Level::Likely, implemented: true, note: "harvest state reset (FUN_6f2d5e40) recorded; no game effect" },
-    AiNative { name: "HarvestGold", sig: "(II)V", addr: 0x6F2D_D5E0, level: Level::Confirmed, implemented: true, note: "the request is made only when the count is above 0 (CONFIRMED guard); recorded" },
-    AiNative { name: "HarvestWood", sig: "(II)V", addr: 0x6F2D_D630, level: Level::Confirmed, implemented: true, note: "the request is made only when the count is above 0 (CONFIRMED guard); recorded" },
+    AiNative { name: "ClearHarvestAI", sig: "()V", addr: 0x6F2D_D5B0, level: Level::Confirmed, implemented: true, note: "previous-cycle bits (CONFIRMED, 0x6F2DD5B0)" },
+    AiNative { name: "HarvestGold", sig: "(II)V", addr: 0x6F2D_D5E0, level: Level::Likely, implemented: true, note: "CONFIRMED structure (0x6F2D9710): gate, retention of the previous cycle, new assignments; the walk and trip times are stand-ins" },
+    AiNative { name: "HarvestWood", sig: "(II)V", addr: 0x6F2D_D630, level: Level::Likely, implemented: true, note: "as HarvestGold; wood on town 0 first sends every idle worker (CONFIRMED quirk)" },
     AiNative { name: "StopGathering", sig: "()V", addr: 0x6F2D_CE00, level: Level::Likely, implemented: true, note: "gathering stop (FUN_6f2d7710) recorded; no game effect" },
     AiNative { name: "AddGuardPost", sig: "(IRR)V", addr: 0x6F2D_CE30, level: Level::Likely, implemented: true, note: "guard post request (FUN_6f2daa40) recorded; no game effect" },
     AiNative { name: "FillGuardPosts", sig: "()V", addr: 0x6F2D_CF80, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
@@ -339,6 +339,28 @@ fn sync_towns(env: &Env) {
     sh.towns.set_scanned(total);
 }
 
+/// The town in slot `slot` of this AI, as the manager needs it (`None` when the slot is above 3 or empty).
+fn town_info(env: &Env, slot: i32) -> Option<crate::ai_manager::TownInfo> {
+    if !(0..crate::ai_towns::TOWN_SLOTS as i32).contains(&slot) {
+        return None;
+    }
+    sync_towns(env);
+    let gm = env.game.borrow();
+    let sh = env.shared.borrow();
+    let site = sh.towns.site_of_slot(env.player, i64::from(slot))?;
+    let live = |k: ObjKey| matches!(gm.object(k), Object::Unit(u) if !u.removed);
+    let hall = site.hall.filter(|&k| live(k));
+    let mine = site.mines.iter().flatten().copied().find(|&k| live(k));
+    let (x, y) = match hall {
+        Some(h) => {
+            let u = gm.unit(h);
+            (u.x.to_f32(), u.y.to_f32())
+        }
+        None => (site.x, site.y),
+    };
+    Some(crate::ai_manager::TownInfo { slot: slot as usize, hall, mine, x, y })
+}
+
 /// The five town natives on the model.
 fn town_call(name: &'static str, env: &Env, a: &[Value]) -> NativeResult {
     sync_towns(env);
@@ -482,10 +504,11 @@ fn ai_call(
         // Unit and player queries on the game's state.
         "GetUnitCount" | "GetUnitCountDone" => {
             let gm = env.game.borrow();
-            ret(Value::Integer(count_units(
+            ret(Value::Integer(crate::ai_manager::unit_count(
                 &gm,
                 env.player,
                 int_arg(a, 0) as u32,
+                name == "GetUnitCountDone",
             )))
         }
         "GetPlayerUnitTypeCount" => {
@@ -608,12 +631,46 @@ fn ai_call(
         }
 
         // Requests that the body returns a fixed value for.
-        "SetUpgrade" | "ConvertUnits" | "AddAssault" | "AddDefenders" => {
+        "ConvertUnits" | "AddAssault" | "AddDefenders" => {
+            Some(log(env, ctx, name, a, Value::Boolean(false)))
+        }
+        "SetUpgrade" => {
+            // The native returns the constant 0 (CONFIRMED); the order goes out before it returns.
+            crate::ai_manager::set_upgrade(&mut env.game.borrow_mut(), env.player, int_arg(a, 0) as u32);
             Some(log(env, ctx, name, a, Value::Boolean(false)))
         }
         "SetProduce" => {
-            let ok = int_arg(a, 0) <= 0;
+            let town = town_info(env, int_arg(a, 2));
+            let ok = {
+                let mut gm = env.game.borrow_mut();
+                crate::ai_manager::set_produce(&mut gm, env.player, int_arg(a, 0), int_arg(a, 1) as u32, town)
+            };
             Some(log(env, ctx, name, a, Value::Boolean(ok)))
+        }
+        "GetUpgradeGoldCost" | "GetUpgradeWoodCost" => {
+            let gm = env.game.borrow();
+            let tech = int_arg(a, 0) as u32;
+            // The level the cost is for: the researched level plus one, plus one more while it is in progress
+            // (`0x6F2DD130` adds 1 for a research in progress); the cost is `base + mod * (level - 1)`.
+            let level = gm.tech_level(env.player, tech) + 1;
+            let v = gm.production().upgrades.get(&tech).map_or(0, |u| {
+                if name == "GetUpgradeGoldCost" {
+                    u.gold_for(level - 1)
+                } else {
+                    u.lumber_for(level - 1)
+                }
+            });
+            ret(Value::Integer(v))
+        }
+        "GetUnitBuildTime" => {
+            let gm = env.game.borrow();
+            ret(Value::Integer(
+                gm.production().build_seconds.get(&(int_arg(a, 0) as u32)).copied().unwrap_or(0),
+            ))
+        }
+        "ClearHarvestAI" => {
+            crate::ai_manager::clear_harvest(&mut env.game.borrow_mut(), env.player);
+            Some(log(env, ctx, name, a, Value::Null))
         }
         "MergeUnits" => {
             // The guard of the body: enough units of the fourth type already exist, so nothing is done.
@@ -645,6 +702,14 @@ fn ai_call(
         }
         "HarvestGold" | "HarvestWood" => {
             if int_arg(a, 1) > 0 {
+                let town = town_info(env, int_arg(a, 0));
+                crate::ai_manager::harvest(
+                    &mut env.game.borrow_mut(),
+                    env.player,
+                    town,
+                    int_arg(a, 1),
+                    name == "HarvestGold",
+                );
                 Some(log(env, ctx, name, a, Value::Null))
             } else {
                 ret(Value::Null)
@@ -667,8 +732,7 @@ fn ai_call(
         }
 
         // Commands that the model records (no game effect).
-        "ClearHarvestAI"
-        | "StopGathering"
+        "StopGathering"
         | "AddGuardPost"
         | "FillGuardPosts"
         | "ReturnGuardPosts"
@@ -852,12 +916,12 @@ mod tests {
         // The 36 rows not bound yet, each blocked by a subsystem the AI model does not hold (docs/spec/ai-natives.md
         // sections 2 and 5). A change here must come with a change of that document.
         let unbound: Vec<&str> = AI_NATIVES.iter().filter(|r| !r.implemented).map(|r| r.name).collect();
-        assert_eq!(unbound.len(), 27);
+        assert_eq!(unbound.len(), 24);
         for row in AI_NATIVES.iter().filter(|r| !r.implemented) {
             assert_eq!(row.level, Level::Unsure, "{} is unbound but not UNSURE", row.name);
             assert!(row.note.starts_with("NOT IMPLEMENTED"), "{} has no reason", row.name);
         }
-        for name in ["GetHeroId", "GetExpansionX", "CreepsOnMap", "UnitInvis", "GetUpgradeGoldCost", "SetExpansion"] {
+        for name in ["GetHeroId", "GetExpansionX", "CreepsOnMap", "UnitInvis", "GetHeroLevelAI", "SetExpansion"] {
             assert!(unbound.contains(&name), "{name} should be unbound");
         }
     }

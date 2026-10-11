@@ -46,7 +46,7 @@ mod region;
 mod rng;
 mod timer;
 mod trigger;
-mod unit;
+pub(crate) mod unit;
 pub mod unit_attr;
 mod unit_event;
 

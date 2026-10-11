@@ -200,8 +200,15 @@ fn run(argv: &[String]) -> Result<(), String> {
             p.race = r;
         }
     }
-    for _ in 0..args.steps {
+    for i in 0..args.steps {
         engine.step();
+        // One status line per game minute for every computer slot.
+        if (i + 1) % 600 == 0 {
+            for &(slot, _) in &args.computers {
+                let line = engine.host().game().production_summary(slot);
+                println!("t={:4}s p{slot}: {line}", (i + 1) / 10);
+            }
+        }
     }
     print!("{}", engine.report());
     if args.ai_log > 0 {

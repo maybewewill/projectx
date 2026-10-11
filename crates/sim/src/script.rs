@@ -229,6 +229,7 @@ impl ScriptHost {
             self.ticks = self.ticks.saturating_add(1);
             let target = self.clock.now();
             fired += self.pump(target);
+            self.game.borrow_mut().production_tick(target);
             self.continue_threads(target);
             if self.at_batch_boundary() {
                 self.batch();
@@ -306,7 +307,9 @@ impl ScriptHost {
     /// movement timer in [`ScriptHost::pump`]; JASS threads run in the pump (sleep wake-ups, events,
     /// timer handlers) and when they start (section 12).
     fn batch(&mut self) {
-        self.game.borrow_mut().tick_combat();
+        let mut game = self.game.borrow_mut();
+        game.tick_combat();
+        game.production_batch();
     }
 
     /// Continues the threads that stopped on their budget or yielded (section 12.3). Runs at the end of

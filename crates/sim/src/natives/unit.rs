@@ -626,6 +626,11 @@ fn count_move_owner(gm: &mut Game, k: ObjKey, to: u32) {
     gm.unit_mut(k).owner = to;
 }
 
+/// Removes the unit for another system (the production model consumes a builder this way).
+pub(crate) fn remove_unit(gm: &mut Game, k: ObjKey) {
+    remove(gm, k);
+}
+
 /// Removes the unit (the body of `RemoveUnit`, see the module notes).
 fn remove(gm: &mut Game, k: ObjKey) {
     count_unregister(gm, k);

@@ -12,8 +12,8 @@ Behaviour is written in plain words. The bodies were read in a Ghidra decompile 
 | | Count |
 |---|---|
 | AI natives in table `ai` | 124 |
-| Bound (`implemented: true`) | 97 |
-| Not bound (`implemented: false`, logged and return the default) | 27 |
+| Bound (`implemented: true`) | 100 (97 before lane H) |
+| Not bound (`implemented: false`, logged and return the default) | 24 (27 before lane H) |
 | Level UNSURE in total | 38 (27 unbound + 11 bound: the 7 older ones, 4 captain/threat idle values) |
 | Level CONFIRMED / LIKELY (all bound rows, 128 rows incl. the 4 main natives) | 43 / 47 |
 | Raised to CONFIRMED by a Unicorn run | 0 as a row label; the bodies of 5 town natives are Unicorn-checked (section 6) |
@@ -223,3 +223,85 @@ defense captain (`0x6F2D0A00`: `+0x114`, `+0x120`) resolves; `TownThreatened` is
 reference at `+0x164` resolves (`0x6F2DD8E0`). The sim has no writer for these fields (no captain groups, no combat
 tracking, no threat scan), so they read the fields of `AiControl` (`captain_group_size`, `captain_in_combat`,
 `town_threatened`), which are idle (0, false, false) unless a host sets them. UNSURE.
+
+## 7. Production and order natives (2026-10-11, lane H)
+
+Code: `crates/sim/src/ai_manager.rs` (what the natives do), `crates/sim/src/production.rs` (training, construction,
+research, harvesting), tech data in `crates/engine/src/objdata.rs` and `data.rs`. Tests:
+`crates/sim/tests/ai_production.rs`, `crates/engine/tests/ai_production.rs`. The bodies were read statically (IDA).
+There is no Unicorn run: every body walks the AI's unit lists and ability objects, which the harness does not model.
+No dynamic tracing was done; none is needed for what is claimed here, but the stand-ins in 7.5 would need it.
+
+### 7.1 What the original does (CONFIRMED structure, from the decompile)
+* `SetProduce(n, type, town)` `0x6F2DD450`: n = 0 returns true. Otherwise n requests of `0x6F2D8130`; the first failed
+  request returns false. A structure type (`IsStructure` meta value) goes to the build request `0x6F2D2B70`, anything
+  else to the train request `0x6F2D5B90`. The order is issued inside the native, before it returns.
+* Train request `0x6F2D5B90`: a hero type the player already has (alive or dead, list at player `+0x2B0`) returns true
+  (`0x6F2D2D80`, revive path). Otherwise the AI player's units are walked in list order. A unit qualifies when the usable
+  test `0x6F2D5940` passes (not under construction, not busy: the queue ability's slot 804 and the upgrade ability's
+  counter are clear), its train ability accepts the type (slots 828 / 624) and, when a town is given and its slot is
+  set, the unit belongs to that town. The first one gets the train order (order id = the type code, replace, drain).
+  Insufficient money or food is not looked at: the order is refused later and the native still returns true.
+  The model reads "busy" as "queue not empty" (LIKELY): the AI never queues behind a running head.
+* Build request `0x6F2D2B70` and `0x6F2D2880`: gates first (AI not paused `0x6F2D1A20`, a per-AI agile float equal to 0,
+  requirements of the type `0x6F40B370` / `0x6F40B380`). Then the units are walked in list order for one whose AI mode is
+  0 (idle), 5 or 6 (harvesting), whose build ability accepts the type, and that belongs to the requested town. The
+  site comes from `0x6F2E50E0` (build-spot finder around the town position). No site sets a flag and the request fails
+  (a delayed message is posted). With a builder and a site the unit gets the build order (`0x6F294B30`). A hall tier is
+  the same path with the hall as the "builder". The haunted mine `ugol` uses an acolyte ability order.
+* `SetUpgrade(tech)` `0x6F2DD4B0`, body `0x6F2D5A00`: the native always returns 0. The first usable building whose
+  research ability accepts the tech, with an empty research counter and a passing start check (slot 800), gets the
+  research order.
+* `ClearHarvestAI` `0x6F2DD5B0`: for every unit of the player with an AI record, bit 1 (gold this cycle) becomes bit 4
+  (gold last cycle), else bit 4 is cleared; bit 2 becomes bit 8 the same way.
+* `HarvestGold/Wood(town, n)` `0x6F2DD5E0` / `0x6F2DD630`, body `0x6F2D9710`: n <= 0 does nothing; a town slot above 3 or
+  empty does nothing; for gold the town needs a completed hall (or a completed mine of the kinds that stand alone).
+  Wood on town 0 first (`0x6F2D8940`, first block) sends every idle harvester to wood; the count only decreases, it does
+  not stop the loop (CONFIRMED quirk). Then (`0x6F2D8940`, second loop) units of the same town that were on that resource
+  last cycle (bit 4 / 8) and still harvest (mode 5 / 6) keep it without a new order, one per count. Finally
+  (`0x6F2D8C20`) other units that can harvest the resource, are idle or harvesting and are not yet assigned this cycle
+  take a new order, in list order, until the count is used.
+* `GetUnitCount` `0x6F2DD050` = typed count with mask `0x36` (completed and in progress) plus `0x6F2D1C10` (workers in AI
+  mode 2 heading to build the type); `GetUnitCountDone` `0x6F2DD010` = typed count with mask `0x30`.
+
+### 7.2 What the sim does now
+* All of the above, on `Game`: `ai_manager::{set_produce, set_upgrade, harvest, clear_harvest, unit_count}`. A queued
+  trainee counts as an in-progress unit of its type from the queueing on (LIKELY: the scripts rely on it).
+* Training (`Game::train_unit`): `economy::TrainQueue` (seven slots, cost at queue time, food when the head starts),
+  timer = `bldtm`, the unit appears south of the building; the food reserved by the head is handed to the created unit.
+* Construction (`start_build_job`, `place_building`): the worker walks to the site through the order system; on arrival
+  the cost is paid (shape of `0x6F0EDA70`), the building is created in progress, grows from 10 % to 100 % linearly and
+  completes after `bldtm` with the registration transition (food made at the finish). The builder of a night elf or
+  undead building is consumed. Hall tiers (`Upgrade=`) change the unit's type in place at the end of `bldtm`.
+* Research (`start_research`): `UpgradeData.slk` cost `base + mod * level`, time `timebase + timemod * level`, the
+  player's tech level rises at the end.
+* Harvesting (`assign_harvest`, `step_harvester`): walk to the mine or tree, work, walk to the nearest completed hall,
+  deposit through `economy::Worker::deposit` (income changer, upkeep tax); the gold trip is `Worker::gold_trip` on the
+  `Mine` record. Trees come from `war3map.doo`; the pathing type bytes of `war3map.wpm` give the buildable area.
+* Bound as a side effect: `GetUnitBuildTime`, `GetUpgradeGoldCost`, `GetUpgradeWoodCost` (24 AI natives are unbound now).
+
+### 7.3 w3boot, orc computer on (2)Circumvention
+`w3boot ... --computer 1:orc --steps 12000 map` prints one status line per game minute. Selected lines:
+* 60 s: 8 peons (3 trained), 4 on gold, 340 gold deposited, altar and two burrows under construction.
+* 180 s: 12 peons, blademaster, barracks under construction, 1,290 gold and 230 lumber deposited.
+* 300 s: 13 trained, 5 built; 2 grunts, a head hunter, war mill, 2 burrows; food 27/30.
+* 600 s: 19 trained, 8 built; 6 grunts, 3 head hunters, 4 burrows; 4,650 gold and 1,400 lumber deposited.
+* 1200 s: 28 trained, 12 built; stronghold (hall tier), second hero, spirit lodge, bestiary, 7 researches, 9,430 gold
+  and 2,190 lumber deposited. 0 aborted AI threads. Human vs orc (both computers) also runs; undead and night elf stall.
+
+### 7.4 Not done
+Expansions (`GetNextExpansion` and its neighbours stay unbound), attack waves and captains (the commands are only
+logged), hero revive, `MergeUnits` / `ConvertUnits`, item and shop buying, undead (blight, ghoul lumber) and night elf
+(wisp, entangled mines) production.
+
+### 7.5 Stand-ins (UNSURE)
+* Build spot (`0x6F2E50E0` is not decoded): rings of 64 units around the town hall, first free square on the buildable
+  grid, clear of structures, mines and trees; footprint half-size 128 / 96 / 64 by type (no pathing-texture data).
+* Builder among equals: the first eligible unit in creation order (CONFIRMED order rule); the town membership test is
+  not modelled, any worker may serve any town.
+* Times: training and construction = `bldtm` (the progress timers are not decoded), research = `UpgradeData` time,
+  1.0 s inside the mine, 10 hits of 1.0 s per lumber trip, 10 gold or lumber per trip, 50 lumber per tree. Walking uses
+  the existing order system (its speed-to-step conversion is itself a stand-in).
+* Hero requirement tiers (`Requires`, `Requires1`, ...) follow the number of heroes owned; the food ceiling is 100.
+* Trees are the doodads whose second type letter is `T` (the category column is `D` for them).
+* The `ProdStats` totals are per game, not per player.
