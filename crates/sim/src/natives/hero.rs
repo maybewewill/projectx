@@ -226,21 +226,21 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
     reg.register("SetHeroInt", move |_, a| {
         let value = int_arg(a, 1);
-        with_attribute_change(&g, a, |h| h.int_base = heroes::rebase(h.int_base, h.int_plus, h.level - 1, value));
+        with_attribute_change(&g, a, bool_arg(a, 2), |h| h.int_base = heroes::rebase(h.int_base, h.int_plus, h.level - 1, value));
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
     reg.register("SetHeroStr", move |_, a| {
         let value = int_arg(a, 1);
-        with_attribute_change(&g, a, |h| h.str_base = heroes::rebase(h.str_base, h.str_plus, h.level - 1, value));
+        with_attribute_change(&g, a, bool_arg(a, 2), |h| h.str_base = heroes::rebase(h.str_base, h.str_plus, h.level - 1, value));
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
     reg.register("SetHeroAgi", move |_, a| {
         let value = int_arg(a, 1);
-        with_attribute_change(&g, a, |h| h.agi_base = heroes::rebase(h.agi_base, h.agi_plus, h.level - 1, value));
+        with_attribute_change(&g, a, bool_arg(a, 2), |h| h.agi_base = heroes::rebase(h.agi_base, h.agi_plus, h.level - 1, value));
         NativeResult::Return(Value::Null)
     });
 }
@@ -275,32 +275,54 @@ fn hero_key(gm: &Game, a: &[Value]) -> Option<ObjKey> {
     (is_hero_id(u.type_id) && !u.illusion).then_some(k)
 }
 
-/// Runs an attribute setter on argument 0 and applies the derived life and mana changes it causes (`heroes.rs`,
-/// section 9 of `docs/spec/heroes.md`). The hit-point factor is `1.0` (LIKELY, see `DerivedBonuses::hit_points`).
+/// Runs an attribute setter on argument 0 and applies the derived changes it causes (`docs/spec/heroes.md`, section
+/// 10). `permanent` is the setter's boolean: it selects the life sink mode `2` (absolute) instead of `1`
+/// (proportional), `mode = (permanent != 0) + 1` as the setter `0x6F209000` computes it (CONFIRMED).
 ///
-/// The current life and mana move by the same change as the maximum, clamped to `[0, max]` (UNSURE: the original's
-/// life sink `0x6F2AC450` has a proportional and an absolute mode; the mode is not decided, see the spec).
-fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], f: impl FnOnce(&mut HeroObj)) {
+/// The derived values are the readers' results before and after the change (`heroes::derived_bonuses`, factor `1.0`,
+/// see `heroes::DerivedBonuses::hit_points`). The hit-point change goes through the life sink
+/// (`heroes::life_sink`, CONFIRMED by Unicorn). The armor, regeneration, attack speed and attack bonuses are stored
+/// on the unit as totals (section 10); the move bonus is added to the move speed. Mana uses the placeholder rule
+/// (current mana moves with the maximum, clamped to `[0, max]`): its sink is `0x6F278F50`, not decoded (UNVERIFIED).
+fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], permanent: bool, f: impl FnOnce(&mut HeroObj)) {
     let mut gm = g.borrow_mut();
     let Some(k) = hero_key(&gm, a) else {
         return;
     };
     let rates = *gm.hero_rates();
-    let (d_life, d_mana) = {
+    let (before, after) = {
         let Some(h) = gm.unit_mut(k).hero.as_mut() else {
             return;
         };
-        let one = softfloat::F32(0x3F80_0000);
+        let one = softfloat::F32::ONE;
         let before = heroes::derived_bonuses(h, &rates, one);
         f(h);
-        let after = heroes::derived_bonuses(h, &rates, one);
-        (heroes::max_life_delta(&before, &after), heroes::max_mana_delta(&before, &after))
+        (before, heroes::derived_bonuses(h, &rates, one))
     };
+    let mode = if permanent { 2 } else { 1 };
+    let hp_delta = heroes::max_life_delta(&before, &after);
+    let mana_delta = heroes::max_mana_delta(&before, &after);
+    let move_delta = softfloat::arith::sub(after.move_speed, before.move_speed);
+    let (life, max_life, flagged) = {
+        let u = gm.unit(k);
+        (u.life, u.max_life, u.dead)
+    };
+    let mut cells = heroes::LifeCells {
+        life,
+        max: max_life,
+        floor: softfloat::F32::ZERO,
+    };
+    heroes::life_sink(&mut cells, flagged, hp_delta, mode, gm.order_tables());
     let u = gm.unit_mut(k);
-    u.max_life = softfloat::arith::add(u.max_life, d_life);
-    u.life = clamp_to(softfloat::arith::add(u.life, d_life), u.max_life);
-    u.max_mana = softfloat::arith::add(u.max_mana, d_mana);
-    u.mana = clamp_to(softfloat::arith::add(u.mana, d_mana), u.max_mana);
+    u.life = cells.life;
+    u.max_life = cells.max;
+    u.max_mana = softfloat::arith::add(u.max_mana, mana_delta);
+    u.mana = clamp_to(softfloat::arith::add(u.mana, mana_delta), u.max_mana);
+    u.move_speed = softfloat::arith::add(u.move_speed, move_delta);
+    u.hero_armor = after.armor;
+    u.hero_regen = after.regen;
+    u.hero_attack_speed = after.attack_speed;
+    u.hero_attack = after.attack;
 }
 
 /// `value` clamped to `[0, max]`, with the same comparisons the simulation uses for life (`softfloat::arith::lt`).
