@@ -75,15 +75,20 @@ fn fifo_holds_for_many_equal_expiries() {
 }
 
 #[test]
-fn negative_timeout_is_clamped_to_zero() {
+fn short_timeouts_are_clamped_to_the_minimum() {
+    // `0x6F477F80`: timeouts strictly below the runtime float at 0x6FAAE478 (1e-4) become 1e-4.
+    let min = f32::from_bits(sim::timer::MIN_TIMEOUT_BITS);
     let mut q = TimerQueue::new();
     q.start(-2.5, false, 7u32);
     q.start(f32::NAN, false, 8);
-    assert_eq!(q.next_expiry(), Some(0.0));
-    let fired = fire_all(&mut q, 0.0);
-    assert_eq!(fired.len(), 2);
-    assert_eq!(fired[0].1, 0.0f32.to_bits());
-    assert_eq!(fired[1].1, 0.0f32.to_bits());
+    q.start(0.0, false, 9);
+    assert_eq!(q.next_expiry(), Some(min));
+    assert!(fire_all(&mut q, 0.0).is_empty());
+    let fired = fire_all(&mut q, min);
+    assert_eq!(fired.len(), 3);
+    for f in &fired {
+        assert_eq!(f.1, sim::timer::MIN_TIMEOUT_BITS);
+    }
 }
 
 #[test]
@@ -155,15 +160,17 @@ fn periodic_timer_can_be_cancelled_from_its_callback() {
 }
 
 #[test]
-fn zero_period_periodic_timer_terminates_each_pump_once() {
-    // UNVERIFIED behaviour: a zero period fires once per pump call.
+fn zero_period_periodic_timer_runs_at_the_minimum_period() {
+    // A zero period is clamped to 1e-4, so the timer fires about 10,000 times per second
+    // of clock and a pump always terminates.
     let mut q: TimerQueue<u32> = TimerQueue::new();
     q.start(0.0, true, 4);
     let mut count = 0;
     q.pump(0.5, |_, _| count += 1);
-    assert_eq!(count, 1);
+    assert!((4_000..=6_000).contains(&count), "{count}");
+    let first = count;
     q.pump(0.5, |_, _| count += 1);
-    assert_eq!(count, 2);
+    assert_eq!(count, first);
 }
 
 #[test]
@@ -229,6 +236,7 @@ fn many_one_shot_timers_fire_sorted_by_expiry_then_insertion() {
     for i in 0..2000u32 {
         let t = (xorshift(&mut rng) % 40) as f32 * 0.1;
         q.start(t, false, i);
+        let t = t.max(f32::from_bits(sim::timer::MIN_TIMEOUT_BITS));
         expect.push((t.to_bits(), i));
     }
     expect.sort_by(|x, y| {

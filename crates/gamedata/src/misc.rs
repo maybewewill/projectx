@@ -102,6 +102,16 @@ pub struct MiscData {
     pub revive_refund_rate: F32,
     /// `LowGoldAmount`, the mine threshold of the low-gold notice. `0.0` when absent.
     pub low_gold_amount: F32,
+    /// `DayLength`: the seconds of one day cycle (the time-of-day rate divides by it, `docs/spec/vision.md` 13).
+    /// `0.0` when absent, as the original's reader does.
+    pub day_length: F32,
+    /// `DayHours`: the hours of game time (state 2) that one day cycle covers; also the value at which the cycle wraps.
+    /// `0.0` when absent.
+    pub day_hours: F32,
+    /// `Dawn`: the hour at which day starts (inclusive). `0.0` when absent.
+    pub dawn: F32,
+    /// `Dusk`: the hour at which night starts (exclusive). `0.0` when absent.
+    pub dusk: F32,
 }
 
 impl MiscData {
@@ -151,6 +161,10 @@ impl MiscData {
         let research_refund_rate = reader.real("ResearchRefundRate").unwrap_or(F32::ZERO);
         let revive_refund_rate = reader.real("ReviveRefundRate").unwrap_or(F32::ZERO);
         let low_gold_amount = reader.real("LowGoldAmount").unwrap_or(F32::ZERO);
+        let day_length = reader.real("DayLength").unwrap_or(F32::ZERO);
+        let day_hours = reader.real("DayHours").unwrap_or(F32::ZERO);
+        let dawn = reader.real("Dawn").unwrap_or(F32::ZERO);
+        let dusk = reader.real("Dusk").unwrap_or(F32::ZERO);
         let hero = HeroMisc::read(&mut reader);
         let Reader {
             defaulted, notes, ..
@@ -172,6 +186,10 @@ impl MiscData {
             research_refund_rate,
             revive_refund_rate,
             low_gold_amount,
+            day_length,
+            day_hours,
+            dawn,
+            dusk,
         }
     }
 
@@ -204,6 +222,10 @@ impl MiscData {
             research_refund_rate: F32::ZERO,
             revive_refund_rate: F32::ZERO,
             low_gold_amount: F32::ZERO,
+            day_length: F32::ZERO,
+            day_hours: F32::ZERO,
+            dawn: F32::ZERO,
+            dusk: F32::ZERO,
         }
     }
 }
@@ -237,6 +259,15 @@ pub struct HeroMisc {
     pub grant_normal_xp_formula: [F32; 3],
     /// The per-attribute bonus keys (`docs/spec/heroes.md`, section 9). Read by the derived-bonus readers.
     pub attr_bonus: AttrBonusMisc,
+    /// `BuildingKillsGiveExp` (`0x6FAB4268`): a kill of a building gives experience. Read by the integer reader of
+    /// the Misc loader `0x6F26E080` (key at `0x6F92F244`); absent gives `false` (LIKELY: the reader's default 0).
+    pub building_kills_give_exp: bool,
+    /// `GlobalExperience` (`0x6FA70E94`): the kill experience also goes to the global list (key at `0x6F92F25C`).
+    /// Absent gives `false` (LIKELY, same reader). Only a non-zero value counts as on.
+    pub global_experience: bool,
+    /// `MaxLevelHeroesDrainExp` (`0x6FA70E98`): heroes at the maximum level still take kill experience (key at
+    /// `0x6F92F270`). Absent gives `false` (LIKELY, same reader).
+    pub max_level_heroes_drain_exp: bool,
 }
 
 /// The eight reals that turn a hero attribute into a derived bonus (`docs/spec/heroes.md`, section 9). Each is read
@@ -303,6 +334,9 @@ impl HeroMisc {
             reader.real_or_zero("GrantNormalXPFormulaC"),
         ];
         let attr_bonus = AttrBonusMisc::read(reader);
+        let building_kills_give_exp = reader.int_element("BuildingKillsGiveExp") != 0;
+        let global_experience = reader.int_element("GlobalExperience") != 0;
+        let max_level_heroes_drain_exp = reader.int_element("MaxLevelHeroesDrainExp") != 0;
         HeroMisc {
             max_hero_level,
             need_hero_xp,
@@ -314,6 +348,9 @@ impl HeroMisc {
             grant_normal_xp,
             grant_normal_xp_formula,
             attr_bonus,
+            building_kills_give_exp,
+            global_experience,
+            max_level_heroes_drain_exp,
         }
     }
 }

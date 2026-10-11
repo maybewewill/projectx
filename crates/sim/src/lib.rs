@@ -19,6 +19,7 @@ pub mod combat;
 pub mod commands;
 pub mod construction;
 pub mod damage;
+pub mod daynight;
 pub mod economy;
 pub mod handles;
 pub mod heroes;

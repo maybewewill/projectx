@@ -1214,6 +1214,9 @@ pub struct Game {
     pub(crate) hero_rates: crate::heroes::BonusRates,
     /// Hero attributes of each hero type (base and per-level gain), copied into a new hero (see `heroes`).
     pub(crate) hero_attributes: BTreeMap<u32, crate::heroes::HeroAttributes>,
+    /// The day cycle (`[Misc]` DayLength, DayHours, Dawn, Dusk; `crate::daynight`). The default is the usual cycle until
+    /// the engine installs the map's Misc values.
+    pub(crate) day_cycle: crate::daynight::DayCycle,
 }
 
 impl Default for Game {
@@ -1275,6 +1278,7 @@ impl Game {
             hero_xp: crate::heroes::XpTables::default(),
             hero_rates: crate::heroes::BonusRates::default(),
             hero_attributes: BTreeMap::new(),
+            day_cycle: crate::daynight::DayCycle::default(),
         }
     }
 
@@ -1445,6 +1449,16 @@ impl Game {
     /// Installs the hero experience tables (built by `crate::heroes::build` from the Misc values).
     pub fn set_hero_xp(&mut self, tables: crate::heroes::XpTables) {
         self.hero_xp = tables;
+    }
+
+    /// Installs the day cycle (`[Misc]` DayLength, DayHours, Dawn and Dusk, `crate::daynight`).
+    pub fn set_day_cycle(&mut self, cycle: crate::daynight::DayCycle) {
+        self.day_cycle = cycle;
+    }
+
+    /// The day cycle in force.
+    pub fn day_cycle(&self) -> &crate::daynight::DayCycle {
+        &self.day_cycle
     }
 
     /// Installs the derived attribute bonus rates (`[Misc]`, see `crate::heroes::derived_bonuses`).

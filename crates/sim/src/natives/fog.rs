@@ -167,11 +167,11 @@ impl Game {
         }
     }
 
-    /// Whether the time of day counts as night for the night-sight values (LIKELY the usual 18:00 to 06:00 rule, UNSURE:
-    /// the original's rule is not read; the time is float game state 2, `GetFloatGameState(GAME_TIME_OF_DAY)`).
+    /// Whether the time of day counts as night for the night-sight values. CONFIRMED rule of the original: night iff not
+    /// `Dawn <= t < Dusk` with the Misc values (`crate::daynight`, `docs/spec/vision.md` section 13); the time is float
+    /// game state 2, `GetFloatGameState(GAME_TIME_OF_DAY)`.
     pub fn is_night(&self) -> bool {
-        let t = self.game_state.float_state.to_f32();
-        !(6.0..18.0).contains(&t)
+        self.day_cycle.is_night(self.game_state.float_state)
     }
 
     /// The sight sources of the unit pass: the position, the sight radius and the player mask of every live unit with
