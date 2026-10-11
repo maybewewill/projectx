@@ -5,21 +5,32 @@
 //! timer queue (see `natives`). Timer handles, timer expiries and trigger events are queued in the
 //! same queue.
 //!
-//! One host step ([`ScriptHost::step`]) does, in this order:
+//! The basic unit of time is one game tick ([`ScriptHost::step_ticks`]). For each tick, in this order:
 //!
-//! 1. Advances the agile clock by one step (0.1 s, soft-float add) to `target`.
-//! 2. Pops every queue entry with expiry `<= target`, in expiry order and then by insertion order.
-//!    A sleep resumes exactly its own thread at the expiry ([`Vm::resume`]). A timer expiry runs the
-//!    timer's handler and fires its listening triggers. A trigger event fires its trigger. Each of
-//!    these runs at the expiry as the game time, so timers started from there are relative to it.
-//!    Entries queued by a callback with an expiry `<= target` are popped in the same step.
-//! 3. Runs one scheduler pass at `target` ([`Vm::step`]): every runnable thread (budget exhausted,
-//!    yielded, or started during the step) runs once, in list order. Sleeping threads that are not
-//!    due are skipped.
+//! 1. Advances the agile clock by one tick: one soft-float add of 0.005 s
+//!    ([`lockstep::TICK_INCREMENT_BITS`], lockstep.md sections 9 and 10).
+//! 2. Runs the timer pump to the new clock value. It pops every queue entry with expiry `<= target`,
+//!    in expiry order and then by insertion order. A sleep resumes exactly its own thread at the
+//!    expiry ([`Vm::resume`]). A timer expiry runs the timer's handler and fires its listening
+//!    triggers. A trigger event fires its trigger. Each of these runs at the expiry as the game time,
+//!    so timers started from there are relative to it. Entries queued by a callback with an expiry
+//!    `<= target` are popped in the same tick. When the pump ends, the queue time and the VM time are
+//!    `target`.
 //!
-//! So a thread that was resumed in step 2 and used up its budget gets one more budget slice in step 3
-//! of the same host step. This follows from the order above, and it is deterministic. It is
-//! UNVERIFIED against the original, whose exact resume order is not in the spec (game-loop-2 4.5).
+//! Every [`lockstep::TICKS_PER_BATCH`] ticks (the boundary is counted from the host's creation, so
+//! the first batch ends at tick 20), the host also runs its per-step work at `target`:
+//!
+//! 3. The order and movement tick ([`Game::tick_orders`]).
+//! 4. One JASS scheduler pass ([`Vm::step`]): every runnable thread (budget exhausted, yielded, or
+//!    started during the step) runs once, in list order. Sleeping threads that are not due are skipped.
+//!
+//! UNSURE: the cadence of steps 3 and 4 is not in the spec. The original calls the interpreter only
+//! from the wake-up paths (game-loop-2 4.5), so the batch is a model of the old 0.1 s step, kept at
+//! 100 ms. The AI host runs at the same boundaries (see `crate::ai` and `engine`).
+//!
+//! A thread that was resumed in step 2 and used up its budget gets one more budget slice in step 4
+//! of the same batch. This follows from the order above, and it is deterministic. It is UNVERIFIED
+//! against the original, whose exact resume order is not in the spec (game-loop-2 4.5).
 
 use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
@@ -29,6 +40,7 @@ use jass::vm::{NativeRegistry, ResumeError, RunStatus, ThreadId, Value, Vm, VmEr
 use softfloat::{Tables, F32};
 
 use crate::combat;
+use crate::lockstep;
 use crate::natives::{self, Game, Payload};
 use crate::rng::{RngTable, Streams};
 use crate::timer::{AgileClock, TimerQueue};
@@ -37,6 +49,8 @@ use crate::timer::{AgileClock, TimerQueue};
 pub struct ScriptHost {
     vm: Vm,
     clock: AgileClock,
+    /// Game ticks run since the host was created.
+    ticks: u64,
     game: Rc<RefCell<Game>>,
     /// Resumes the host refused. Empty in normal operation (see [`ScriptHost::misfires`]).
     misfires: Vec<(ThreadId, ResumeError)>,
@@ -69,6 +83,7 @@ impl ScriptHost {
         Ok(ScriptHost {
             vm,
             clock: AgileClock::new(),
+            ticks: 0,
             game,
             misfires: Vec::new(),
         })
@@ -151,11 +166,51 @@ impl ScriptHost {
         self.vm.start(name, args)
     }
 
-    /// Runs one host step (see the module documentation for the order) and returns the number of
-    /// queue entries that fired (sleeps, timer expiries and trigger events).
+    /// Game ticks run since the host was created.
+    pub fn ticks(&self) -> u64 {
+        self.ticks
+    }
+
+    /// Whether the last tick run ended a batch (see [`lockstep::TICKS_PER_BATCH`]). A host that has
+    /// run no tick is at a boundary.
+    pub fn at_batch_boundary(&self) -> bool {
+        self.ticks.is_multiple_of(lockstep::TICKS_PER_BATCH)
+    }
+
+    /// Ticks until the next batch boundary, in `1..=TICKS_PER_BATCH`. A caller that runs other
+    /// per-step work (the AI host) splits its ticks here, so that work runs at the same boundaries.
+    pub fn ticks_to_batch(&self) -> u64 {
+        lockstep::TICKS_PER_BATCH - self.ticks % lockstep::TICKS_PER_BATCH
+    }
+
+    /// Runs one batch: [`lockstep::TICKS_PER_BATCH`] ticks (100 ms of game time). See the module
+    /// documentation. Returns the number of queue entries that fired.
     pub fn step(&mut self) -> usize {
-        self.clock.advance_step();
-        let target = self.clock.now();
+        self.step_ticks(lockstep::TICKS_PER_BATCH)
+    }
+
+    /// Runs `n` game ticks. Each tick adds 0.005 s to the clock (one soft-float add) and runs the
+    /// timer pump to the new time. The per-step work runs at each batch boundary. Returns the number
+    /// of queue entries that fired (sleeps, timer expiries and trigger events).
+    ///
+    /// `n` is the tick count of a turn: `lockstep::TurnReport::game_ticks` when a replay is played.
+    pub fn step_ticks(&mut self, n: u64) -> usize {
+        let mut fired = 0usize;
+        for _ in 0..n {
+            self.clock.advance(lockstep::TICK_INCREMENT_BITS);
+            self.ticks = self.ticks.saturating_add(1);
+            let target = self.clock.now();
+            fired += self.pump(target);
+            if self.at_batch_boundary() {
+                self.batch(target);
+            }
+        }
+        fired
+    }
+
+    /// Runs the timer pump to `target` (the clock value of this tick) and returns the number of
+    /// entries that fired. The VM time is `target` when it returns.
+    fn pump(&mut self, target: f32) -> usize {
         let mut fired = 0usize;
         loop {
             let next = self.game.borrow_mut().timers.pop_due(target);
@@ -194,8 +249,13 @@ impl ScriptHost {
                 }
             }
         }
+        self.vm.set_now(F32::from_bits(target.to_bits()));
+        fired
+    }
+
+    /// The per-step work at a batch boundary: the order and movement tick, then one scheduler pass.
+    fn batch(&mut self, target: f32) {
         self.game.borrow_mut().tick_orders();
         self.vm.step(F32::from_bits(target.to_bits()));
-        fired
     }
 }

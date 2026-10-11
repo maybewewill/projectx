@@ -3,6 +3,7 @@
 
 use jass::compile::compile;
 use jass::vm::{NativeRegistry, Value};
+use sim::lockstep::{TICKS_PER_BATCH, TICK_INCREMENT_BITS};
 use sim::{AgileClock, ScriptHost};
 use softfloat::{arith, F32};
 
@@ -54,30 +55,32 @@ fn sub(a: f32, b: f32) -> f32 {
     arith::sub(F32::from_bits(a.to_bits()), F32::from_bits(b.to_bits())).to_f32()
 }
 
-/// The clock value after `k` steps.
-fn clock_after(k: usize) -> f32 {
+/// The agile clock after `ticks` game ticks: one soft-float add of the tick increment per tick
+/// (`sim::lockstep::TICK_INCREMENT_BITS`, 0.005 s).
+fn clock_at_tick(ticks: u64) -> f32 {
     let mut c = AgileClock::new();
-    for _ in 0..k {
-        c.advance_step();
+    for _ in 0..ticks {
+        c.advance(TICK_INCREMENT_BITS);
     }
     c.now()
 }
 
-/// The first step (1-based) whose clock value reaches `expiry`. That is the step that fires it.
-fn step_of(expiry: f32) -> usize {
-    let mut c = AgileClock::new();
-    let mut k = 0;
-    loop {
-        c.advance_step();
-        k += 1;
-        if c.now() >= expiry {
-            return k;
-        }
-    }
+/// The clock at the end of batch `k` (`TICKS_PER_BATCH` ticks each). An entry fires by the end of
+/// batch `k` exactly when its expiry is at most this clock, because the clock only grows.
+fn clock_after(k: usize) -> f32 {
+    clock_at_tick(TICKS_PER_BATCH * k as u64)
 }
 
-// Timers start on step 1, when the clock is 0.1.
-const START: f32 = 0.1;
+/// The start time: Main runs in batch 1, at the boundary tick 20, so timers start from that clock.
+fn start() -> f32 {
+    clock_at_tick(TICKS_PER_BATCH)
+}
+
+/// The first batch (1-based) whose end clock reaches `expiry`. That is the batch that fires it.
+fn step_of(expiry: f32) -> usize {
+    (1..).find(|&k| clock_after(k) >= expiry).expect("expiry is reached")
+}
+
 
 #[test]
 fn one_shot_timer_fires_at_the_step_its_expiry_reaches() {
@@ -102,7 +105,7 @@ endfunction
 "#;
     let mut host = host_for(src);
     host.start("Main", &[]).unwrap();
-    let expiry = add(START, 0.25);
+    let expiry = add(start(), 0.25);
     let fire_step = step_of(expiry);
     for k in 1..=10 {
         host.step();
@@ -134,7 +137,7 @@ endfunction
     // Expiries: e0 = now + period, then e_{n+1} = e_n + period (soft-float adds).
     let period = 0.2f32;
     let mut expiries = Vec::new();
-    let mut e = add(START, period);
+    let mut e = add(start(), period);
     for _ in 0..20 {
         expiries.push(e);
         e = add(e, period);
@@ -172,8 +175,8 @@ endfunction
     for _ in 0..10 {
         host.step();
     }
-    let expiry = add(START, 1.0);
-    let wake = add(START, 0.5);
+    let expiry = add(start(), 1.0);
+    let wake = add(start(), 0.5);
     let remaining = sub(expiry, wake);
     let elapsed = sub(1.0, remaining);
     assert_eq!(real(&host, "gTimeout"), 1.0f32.to_bits());
@@ -211,8 +214,8 @@ endfunction
 "#;
     let mut host = host_for(src);
     host.start("Main", &[]).unwrap();
-    let expiry0 = add(START, 1.0);
-    let wake1 = add(START, 0.3);
+    let expiry0 = add(start(), 1.0);
+    let wake1 = add(start(), 0.3);
     let remaining1 = sub(expiry0, wake1);
     let wake2 = add(wake1, 1.0);
     // After the resume at wake2 the timer expires at wake2 + remaining1.
@@ -306,7 +309,7 @@ endfunction
 "#;
     let mut host = host_for(src);
     host.start("Main", &[]).unwrap();
-    let fire_step = step_of(add(START, 0.5));
+    let fire_step = step_of(add(start(), 0.5));
     for k in 1..=10 {
         host.step();
         let expect = i32::from(k >= fire_step);

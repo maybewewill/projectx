@@ -136,6 +136,26 @@ fn ai_int(rig: &Rig, player: u32, name: &str) -> i32 {
         .unwrap_or_else(|| panic!("global {name} of player {player} is not an integer"))
 }
 
+/// Runs batches until every listed AI VM has run `n` times (its `ticks` global). A computer player
+/// sleeps 0.1 s and wakes at the first batch boundary whose clock reaches its wake time, so the number of
+/// batches per run is 1 or 2 (the clock is a sum of 0.005 s ticks, and it drifts below 0.1 per batch).
+fn run_until(rig: &mut Rig, players: &[u32], n: i32) {
+    for _ in 0..200 {
+        let runs = |p: u32| {
+            rig.ai
+                .vm(p)
+                .and_then(|vm| vm.global("ticks"))
+                .and_then(|v| v.as_integer())
+                .unwrap_or(0)
+        };
+        if players.iter().all(|&p| runs(p) >= n) {
+            return;
+        }
+        tick(rig);
+    }
+    panic!("AI runs did not reach {n}");
+}
+
 /// The player indices of the `DebugFI("tick", ...)` log entries, in log order.
 fn tick_players(shared: &SharedAi) -> Vec<u32> {
     shared
@@ -150,7 +170,7 @@ fn tick_players(shared: &SharedAi) -> Vec<u32> {
         .collect()
 }
 
-/// Two computer players run the same tick script: their ticks alternate in player-index order every 0.1 s.
+/// Two computer players run the same tick script: their ticks alternate in player-index order.
 #[test]
 fn two_ai_players_interleave_in_index_order() {
     let main = r#"
@@ -160,7 +180,7 @@ function main takes nothing returns nothing
 endfunction
 "#;
     let mut r = rig(main, library());
-    ticks(&mut r, 5);
+    run_until(&mut r, &[0, 1], 5);
     assert_eq!(r.ai.players(), vec![0, 1]);
     assert_eq!(tick_players(&r.shared), vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1]);
     assert_eq!(ai_int(&r, 0, "ticks"), 5);
@@ -518,7 +538,7 @@ function main takes nothing returns nothing
 endfunction
 "#;
     let mut r = rig(main, library());
-    ticks(&mut r, 4);
+    run_until(&mut r, &[1], 4);
     assert_eq!(tick_players(&r.shared), vec![1, 1, 1, 1]);
     assert_eq!(r.shared.borrow().control(0).map(|c| c.pause), Some(1));
 }
@@ -568,7 +588,7 @@ function main takes nothing returns nothing
 endfunction
 "#;
     let mut r = rig(main, library());
-    ticks(&mut r, 3);
+    run_until(&mut r, &[3, 5], 3);
     assert_eq!(r.ai.players(), vec![3, 5]);
     assert_eq!(ai_int(&r, 3, "ticks"), 3);
     assert_eq!(ai_int(&r, 5, "ticks"), 3);

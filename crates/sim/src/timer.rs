@@ -1,8 +1,9 @@
 //! Game ("agile") clock and the timer queue of the 1.26a engine (see `docs/spec/game-loop-2.md`).
 //!
-//! * [`AgileClock`]: game time in seconds as an f32 bit pattern. It advances by
-//!   [`STEP`] (0.1 s, bits `0x3DCCCCCD`) per simulation step, using the truncating
-//!   soft-float add from the `softfloat` crate (`softfloat::arith::add`).
+//! * [`AgileClock`]: game time in seconds as an f32 bit pattern. The host advances it by one game
+//!   tick per soft-float add of 0.005 s ([`crate::lockstep::TICK_INCREMENT_BITS`], lockstep.md
+//!   section 9), using the truncating add from the `softfloat` crate (`softfloat::arith::add`).
+//!   [`AgileClock::advance_step`] is the old 0.1 s step, kept for tests that model it.
 //! * [`TimerQueue`]: a 1-based binary min-heap ordered by expiry, then by a
 //!   monotonically increasing sequence number (FIFO for equal expiry). The
 //!   original is a `CPriorityQ` with the same two keys (spec 3.4).
@@ -24,9 +25,9 @@ pub const STEP: f32 = f32::from_bits(STEP_BITS);
 
 /// Game time in seconds, kept as an f32 bit pattern.
 ///
-/// Starts at 0.0. Each [`AgileClock::advance_step`] adds [`STEP`] with the truncating
-/// soft-float add, so the value after `n` steps is the result of `n` soft-float adds
-/// (not `n * 0.1` in IEEE arithmetic).
+/// Starts at 0.0. Each advance adds one increment with the truncating soft-float add, so the value
+/// after `n` advances is the result of `n` soft-float adds (not `n * increment` in IEEE arithmetic).
+/// The host's tick is [`crate::lockstep::TICK_INCREMENT_BITS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AgileClock {
     bits: u32,
@@ -48,9 +49,18 @@ impl AgileClock {
         f32::from_bits(self.bits)
     }
 
-    /// Advances the clock by one step.
+    /// Advances the clock by one 0.1 s step (one soft-float add of [`STEP_BITS`]). This is not what
+    /// the host does any more: the host adds one 0.005 s tick per tick (see [`AgileClock::advance`]).
+    /// It is kept for the tests and probes that model the old step.
     pub fn advance_step(&mut self) {
-        self.bits = arith::add(F32::from_bits(self.bits), F32::from_bits(STEP_BITS)).to_bits();
+        self.advance(STEP_BITS);
+    }
+
+    /// Advances the clock by an f32 increment given as a bit pattern, with one soft-float add.
+    /// The frame driver's per-tick increment is `lockstep::TICK_INCREMENT_BITS` (0.005 s,
+    /// lockstep.md section 9).
+    pub fn advance(&mut self, increment_bits: u32) {
+        self.bits = arith::add(F32::from_bits(self.bits), F32::from_bits(increment_bits)).to_bits();
     }
 }
 

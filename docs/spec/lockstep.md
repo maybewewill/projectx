@@ -332,7 +332,7 @@ ids).
   So the handler expects **ECX = object O** and reads the float at **T = O + 0x14**.
 - `0x6F470C70 → 0x6F46E9D0 → 0x6F46E520(T)`: `now := now + *T` (LIKELY softfloat add, see 7.3).
 
-### 8.4 Which object is O: NOT identified (UNSURE)
+### 8.4 Which object is O: NOT identified (UNSURE; superseded by section 9: O = the tick event E)
 - The node's context is 0, so the dispatcher cannot pass `node+0x18` as ECX (it would read T = 0x14).
   The dispatcher walker that calls `node+0x14` with some ECX was **not found**. The obvious linear
   sweep of .text stops early (about 190k instructions, desync on data), and the observer walker is not
@@ -378,3 +378,209 @@ ids).
 - Then read the float at O+0x14 in Unicorn, with the observer populated (needs the pool at `this+0x1C`
   and the manager slot 0xD). Compare with 0.005f (`0x3BA3D70A`, present in .rdata at 8 places, none
   identified yet).
+
+---
+
+## 9. Pass 5 (2026-10-11): the tick event object, the handler's `this`, the per-tick float
+
+Sources: per-function disassembly (capstone, each function from its entry), Ghidra decompile
+export chunks (chunk_019, chunk_022, chunk_024), a byte-level search of the image for absolute
+addresses, and Unicorn runs of the static initializer and of the slot-3 to handler hop
+(`tools/emu/emu.py`, probes outside the repo). Resolves the "UNSURE" items of sections 7.3, 8.4 and 8.7.
+Result in one line: **the handler `0x6F2F4950` receives the tick event object itself as ECX, and
+the float it adds to the agile clock is `0.005f` (= 5 ms), written once at start-up to
+`0x6FACC8CC` and copied into the event at +0x14.**
+
+### 9.1 The chain from the frame driver to the handler (CONFIRMED)
+
+1. **The event object E** is built on the frame driver's stack (`0x6F553470`, around 0x6F5536FD):
+   - `E+0x00` = vptr `0x6F9580E4` (CNetEventGameTick);
+   - `E+0x08` = event id `0x40090092` (`mov [esp+0x30], 0x40090092` at 0x6F553701);
+   - `E+0x14` = the dword at **`0x6FACC8CC`** (`mov edx, [0x6facc8cc]` at 0x6F553715, stored at
+     0x6F553723). This is the only place that reads that address (byte search, CONFIRMED).
+   - E is built once per driver call. The tick loop (0x6F553770..0x6F5537A5) then calls the dispatcher
+     `n` times with the same E (`lea edx,[esp+0x28]; push edx; mov ecx, esi+8; call 0x6F5378E0`), and
+     adds 5 to `+0x1C70` before each call (CONFIRMED, lockstep 7.1).
+2. **`0x6F5378E0`** (thiscall, `ret 4`, CONFIRMED): `ECX = R = CNetData+8` (observer record 0, the
+   `CNetObserver` at `CNetData+8`, 0x304 bytes per player). It calls slot 4 (`+0x10`) of the vptr at
+   `R+4` (`A`, `CNetData+0xC`) with `ECX = R+4` and the event, then slot 4 of the vptr at `R+0x10`
+   (`B`, `CNetData+0x18`) with `ECX = R+0x10`, and returns OR of the two results.
+3. **Slot 4 of A** (vtable `0x6F970780`, `0x6F629A90`, CONFIRMED): calls slot 5 (`0x6F62A7B0`) with
+   the event id (`E+8`) and E as arguments.
+4. **Slot 5** (`0x6F62A7B0`, CONFIRMED): `ECX = [A+8]` = the observer agent (an event hash). If it is
+   non-zero, it calls the walker `0x6F62A5D0` with `ECX = agent`, `param_2 = id`, `param_3 = E`.
+   The agent is created lazily by the registration notice: `0x6F548F70` calls slot 2 of A
+   (`0x6F62A9A0`, which calls `0x6F629F70` to create `[A+8]` and then `0x6F62A820` to insert a listener).
+5. **The walker `0x6F62A5D0`** (CONFIRMED by decompile and disassembly): takes the bucket of `id`
+   (`[agent+4] + ((byte[agent+1]-1) & id) * 4`), walks its list, and for each entry whose key
+   `entry[1]` equals `id`: stores `E+8 := entry[3]` (the id again, so E+8 is overwritten during the
+   walk, harmless) and calls **vtable slot 3 of `entry[2]` with ECX = entry[2] and one stack argument
+   = E** (`call [vptr+0xC]`). `entry[2]` is the observer node `N` from the registration (the
+   `0x6F548F70` node, passed as the notice's third argument).
+6. **Node slot 3** (`N`'s vtable `0x6F9582A8`, slot 3 = `0x6F5375B0`, CONFIRMED): 
+   ```
+   mov eax, ecx          ; N
+   mov edx, [eax+0x18]   ; context (0 for player 0, CONFIRMED from registration)
+   mov ecx, [esp+4]      ; the stack argument = E
+   mov eax, [eax+0x14]   ; handler
+   call eax              ; handler(ECX = E, EDX = context)
+   ret 4
+   ```
+   **So the handler's ECX is the event object E.** The node's context is not used as `this`.
+7. **Handler `0x6F2F4950`** (`add ecx, 0x14; call 0x6F470C70; mov eax, 1; ret`, CONFIRMED bytes):
+   `T = E + 0x14` (the float `[0x6FACC8CC]` copied at step 1), passed as the pointer `p` to
+   `0x6F470C70`.
+
+**Unicorn check of steps 6-7 (CONFIRMED for this hop):** `probe_hop` ran `0x6F5375B0` with ECX = a
+node (handler at +0x14 = `0x6F2F4950`, context 0) and `[esp+4]` = E, after the static initializer.
+The handler was reached with **ECX = E** (`True`), and `[ECX+0x14]` read `0x3BA3D70A` (0.005f).
+Not run end-to-end: steps 3-5 (the agent's bucket list) were checked by reading only; building a
+populated agent in emulation needs the allocator stubs (`0x6F4C1AB0`, `0x6F629E90`) and was not done.
+
+### 9.2 The float: `0x6FACC8CC` = 0.005f (CONFIRMED value)
+
+- The file holds 0 at `0x6FACC8CC` (also 0 at its neighbours `0x6FACC8C8`, `0x6FACC8D0`).
+- The only writer is the static initializer **`0x6F8621C0`** (CONFIRMED by its code). It is listed
+  in the start-up initializer table in `.rdata` at `0x6F87438C` (byte search; CONFIRMED membership,
+  LIKELY that the CRT calls it at start-up, as for the other entries).
+- Its code (CONFIRMED by disassembly): `i2r(1000)` into a stack slot; `i2r(5)` into a second slot;
+  then `div(ECX = 0x6FACC8CC, EDX = pointer to 5.0, stack = pointer to 1000.0)`. So the value is
+  **`5 / 1000`** (operand A = 5, B = 1000, from the register flow; CONFIRMED).
+- **Unicorn run** (`probe_tick`, the initializer alone): `0x6FACC8CC` goes from `0x00000000` to
+  **`0x3BA3D70A`** = 0.004999999888241291 as f32 (= the f32 nearest to 0.005). CONFIRMED.
+- Rust check: `crates/sim/src/lockstep.rs` `tick_increment_is_five_over_thousand_in_soft_float`
+  computes `div(i2r(5), i2r(1000))` with the soft-float tables from `GAME_DLL` and gets `0x3BA3D70A`
+  (passes). CONFIRMED.
+- Nothing else writes the address (byte search of all sections for `CC C8 AC 6F`: two hits, the read
+  in the driver and the initializer). The value is the same for every speed and every tick.
+
+### 9.3 What the handler does with the float (LIKELY for the operator, CONFIRMED for the read)
+
+- `0x6F470C70(p)` (fastcall, CONFIRMED decompile): if the agile manager (global `0x6FAB7368`) `+0x38`
+  is 0, it calls `0x6F46E9D0(p)` (queue A), then `0x6F46F390(p)`, `0x6F46F3A0(p)`, `0x6F470740(p)`.
+- `0x6F46E9D0` (tiny) → `0x6F46E520(ECX = p, EDX = queue A)` (CONFIRMED decompile): if the queue flag
+  `+0x4C` bit 0 is clear, it computes `tmp = add(*(queue+0x40), *p)` (softfloat add `0x6F6EF000`; the
+  operand pointer is in EDX and is hidden by the decompiler, LIKELY `queue+0x40`). If `tmp < queue+0x48`
+  (the horizon), it stores `queue+0x40 := tmp` and runs the timer pump `0x6F46E370`. Otherwise it takes
+  the horizon branch (`0x6F6EEEF0`, `0x6F469D40`, not analysed; UNSURE).
+- So **each tick adds the float `*p = 0.005f` to the agile clock by one soft-float add**. The increment
+  is the same constant on every call. (The earlier reading of `0x6FAAE4A0` = 0.1 as the per-call step
+  is withdrawn for the tick path, see section 8.5.)
+
+### 9.4 Consequences (answer)
+
+| Question | Answer | Confidence |
+|---|---|---|
+| Object passed as ECX to the handler `0x6F2F4950` | the tick event object E (built on the driver's stack, `esp+0x28` at the call) | CONFIRMED (static chain + Unicorn hop) |
+| Why not the observer record or the node | the walker calls node slot 3, which forwards `[esp+4]` (= E) as ECX | CONFIRMED |
+| Float at `T = E+0x14` | `[0x6FACC8CC]` copied into E by the driver | CONFIRMED |
+| Value of `[0x6FACC8CC]` | 0x3BA3D70A = 0.005f = `I2R(5)/I2R(1000)` (initializer `0x6F8621C0`) | CONFIRMED (Unicorn + soft-float test) |
+| Initializer runs at start-up | in the initializer table `.rdata:0x6F87438C` | LIKELY |
+| Speed dependence of the increment | none: a single constant; speed changes only the tick count per unit | CONFIRMED |
+| Agile clock per tick | `now := add(now, 0.005f)` (softfloat), then the timer pump | LIKELY (operand order hidden; the read is CONFIRMED) |
+| Tick = 5 ms of agile time | 0.005 s, the same 5 ms as `+0x1C70 += 5` | CONFIRMED value, LIKELY unit match |
+| 0.1 s "step" | still no engine event (section 8.5 unchanged) | LIKELY |
+| Horizon branch (`tmp >= queue+0x48`) | not analysed | UNSURE |
+
+### 9.5 Code changes that follow (this pass)
+
+- `crates/sim/src/lockstep.rs`: `TICK_INCREMENT_BITS = 0x3BA3_D70A` and `advance_agile_clock(clock,
+  ticks)` (one soft-float add per tick; linear cost, no shortcut because each add rounds). Tests:
+  the value, the soft-float division (with `GAME_DLL`), two adds, 200 ticks against a hand fold.
+- `crates/sim/src/timer.rs`: `AgileClock::advance(increment_bits)`; `advance_step` now calls it with the
+  0.1 s step bits (unchanged result, existing tests unchanged).
+- `TurnScheduler::push_turn` is not changed: it computes ticks in integers, and the clock is advanced
+  by the caller with `advance_agile_clock`, because a turn can hold up to `u64::MAX` ticks in the
+  saturation test.
+
+### 9.6 Open items
+
+- Run the agent walk end to end in Unicorn (steps 3-5): needs the bucket list layout of `[A+8]`
+  (intrusive list with sentinels; the walker's lock calls `0x6F629730/0x6F629740`) and allocator stubs.
+  Expected to give the same ECX = E.
+- Run `0x6F46E520` in Unicorn with a queue object (flags, `+0x40`, `+0x48`) to confirm the add operand
+  order and the horizon branch.
+- The idle events `0x40090093` / `0x40090094` build their float payload differently (`fild` of the
+  tick total, a double constant at `0x6F932C60`); not analysed here.
+
+---
+
+## 10. Pass 6 (2026-10-11): the simulation driver advances one game tick at a time
+
+Implementation: `crates/sim/src/script.rs` (`ScriptHost::step_ticks`, `ScriptHost::step` = one batch),
+`crates/engine/src/lib.rs` (`Engine::step_ticks`, `Engine::step`, `Engine::run_turn`),
+`crates/sim/src/lockstep.rs` (`TICK_INCREMENT_BITS`, `TICKS_PER_BATCH`). Before this pass the host added
+0.1 s (`0x3DCCCCCD`) once per `step()`, which is not what the original does.
+
+### 10.1 What the driver does per game tick (in this order)
+
+1. **Clock.** `clock := softfloat_add(clock, 0.005f)` with `TICK_INCREMENT_BITS = 0x3BA3D70A` (section 9).
+   CONFIRMED value; the operator is LIKELY (section 9.3). One add per tick, no speed scaling.
+2. **Timer pump to the new clock** (`0x6F46E370`, CONFIRMED in section 7.3): pops every queue entry with
+   expiry `<= clock`, in (expiry, insertion) order. During each callback the queue time (and the VM time)
+   is that entry's expiry; when the pump ends it is the clock. Callbacks may queue entries that are due
+   at or before the clock; those are popped in the same tick. Entry kinds: sleep (resume the thread at
+   its expiry), timer expiry (handler and listening triggers), trigger event, timed life, attack timer.
+3. **Batch work** only at tick multiples of `TICKS_PER_BATCH = 20` (counted from host creation):
+   a. order and movement tick (`Game::tick_orders`, which includes the combat tick of units with orders);
+   b. one JASS scheduler pass (`Vm::step(clock)`), every runnable thread once;
+   c. (engine only) the AI host pass (`AiHost::step(clock)`), after the main host's batch work.
+
+`ScriptHost::step()` is one batch (20 ticks = 100 ms), so existing callers keep their meaning. The
+engine counts `steps` as batches and `ticks` as game ticks. A replay drives the same path:
+`TurnScheduler::push_turn(...).game_ticks` is the tick count, passed to `Engine::run_turn` after the
+turn's commands are applied (section 3 order).
+
+### 10.2 Cadence of each per-step piece
+
+| Piece | Cadence in this model | Original | Status |
+|---|---|---|---|
+| Clock add | every tick | every tick (driver `0x6F553470`, listener `0x6F2F4950`) | CONFIRMED value, LIKELY operator |
+| Timer pump | every tick | every tick (`0x6F46E520` after the add) | LIKELY (horizon branch below) |
+| Timers, sleeps, trigger events, attack timers (`0xD01AF..C1`) | exact, at the tick the clock reaches the expiry (queue timers) | queue timers, game-loop-2 4.2 | LIKELY |
+| Order and movement tick (`tick_orders`) | every 20 ticks; a move is `speed * 0.1` per call (`STEP_BITS`, orders.rs) | movement message `0x8026A` (movement.md); the cadence of the mover call is not known | **UNSURE** |
+| Combat tick of units with orders | every 20 ticks (inside `tick_orders`) | attack cycle is timer-driven (attack-cycle.md) | **UNSURE** |
+| JASS scheduler pass (`Vm::step`) | every 20 ticks | the interpreter is only called from the wake paths (game-loop-2 4.5), so there is no polling pass | **UNSURE**, a model |
+| AI host pass | every 20 ticks, after the main batch | AI dispatcher with a +100 ms next run (ai.rs notes, base UNSURE) | **UNSURE** |
+
+### 10.3 Consequences of the 0.005 s tick (CONFIRMED arithmetic, measured in tests)
+
+- The clock after `n` ticks is an `n`-fold soft-float add, not `n * 0.005` nor `0.1` at batch 1
+  (`per_tick_clock_is_twenty_soft_adds_per_batch`). Truncating adds drift, so a value that is exactly
+  reached in IEEE arithmetic may be reached one tick later.
+- A 0.1 s `TimerStart` at tick 20 fires at the first tick whose clock is `>= expiry`, where
+  `expiry = soft_add(clock(20), 0.1f)`. The test `point_one_second_timer_fires_on_the_first_tick_whose_clock_reaches_expiry`
+  checks this tick by tick.
+- A timer is observed by batch code only at the batch boundary after its tick. A 0.5 s scan armed at
+  tick 20 fires in the batch after tick 120 (test `idle_unit_acquires_an_enemy_that_enters_range_at_the_next_scan`
+  derives the step from the scan chain).
+- A computer player's `Sleep(0.1)` wakes at the first batch boundary whose clock reaches the wake time.
+  Because that clock drifts, a 0.1 s sleep takes 1 or 2 batches. The AI tests therefore run until the
+  count is reached and check the interleaving (`run_until` in `tests/ai_natives.rs`). UNSURE: the original
+  wakes the AI from a 100 ms timer on the tick that reaches it, so this is a known divergence of the
+  batch model.
+
+### 10.4 What is UNSURE in the driver
+
+- **Batch length 20 ticks** for the order/movement, JASS-scheduler and AI work: no source in the spec.
+  It is kept at the old 100 ms so the per-step behaviour does not change. Change `TICKS_PER_BATCH` when
+  the original's cadence is known.
+- **Horizon branch.** `0x6F46E520` advances only if `tmp < queue+0x48` (the limit); otherwise it takes a
+  branch not analysed (section 9.3). The driver always advances: no limit is modelled.
+- **Movement step.** A move step is `speed * 0.1` per `tick_orders` call. Under the 20-tick batch that is
+  per 100 ms of game time; the original's per-tick movement (`0x8026A`) may move `speed * 0.005` per tick.
+  Not verified (movement.md still-open list).
+- **Frame-driver ticks per turn.** The driver runs `SPEED * m` ticks per 25 ms unit (section 7.1). The
+  multiplier `m` is still UNSURE (section 7.2); the engine takes `game_ticks` from `TurnScheduler` as is.
+- **Agile clock vs +0x1C70.** Both advance per tick; whether `+0x1C70` (5 per tick) is the same time base
+  as the agile clock is LIKELY (section 8.2), not confirmed.
+- **Wake order** inside one tick (timers before sleeps of the same expiry) follows the queue's (expiry, seq)
+  order; the original's order for equal expiries is not in the spec (game-loop-2 4.5).
+
+### 10.5 Verification
+
+- `cargo test --workspace` (no `GAME_DLL`) and with `GAME_DLL` set: all pass.
+- Clock tests: `per_tick_clock_is_twenty_soft_adds_per_batch` (sim `tests/timer.rs`), the lockstep unit tests
+  (`agile_clock_advances_by_one_soft_float_add_per_tick`, `tick_increment_is_five_over_thousand_in_soft_float`
+  with `GAME_DLL`).
+- No Unicorn check of the pump after the tick add yet (needs the populated queue object, section 9.6).

@@ -21,8 +21,11 @@
 //!    `InitCustomTriggers` and `RunInitializationTriggers`. Both are also callable separately
 //!    ([`Engine::run_config`], [`Engine::start_main`]).
 //!
-//! [`Engine::step`] advances the game clock by 0.1 s: first the main host step (see
-//! `sim::ScriptHost::step`), then the AI host step at the same time (see `sim::ai::AiHost::step`).
+//! [`Engine::step_ticks`] advances the game clock one game tick (0.005 s, one soft-float add) at a
+//! time, with the timer pump after each tick (`sim::ScriptHost::step_ticks`). Every
+//! [`TICKS_PER_BATCH`] ticks (100 ms, UNSURE cadence, lockstep.md section 10) the main host runs its
+//! order tick and scheduler pass, and then the AI host runs once at the same game time
+//! (`sim::ai::AiHost::step`). [`Engine::step`] is one batch.
 //!
 //! Missing natives: a native that is declared but has no implementation is reported, and a
 //! script call to it aborts the calling thread (`RunStatus::FunctionNotFound`). The report lists
@@ -40,6 +43,7 @@ use jass::compile::{compile, CompileError};
 use jass::vm::{NativeRegistry, RunStatus, ThreadId, VmError};
 use mpq::Archive;
 use sim::ai::{AiEvent, AiHost, AiLibrary};
+use sim::lockstep::{TurnReport, TICKS_PER_BATCH};
 use sim::{Game, RngTable, ScriptHost};
 use softfloat::{Tables, F32};
 use w3map::MapInfo;
@@ -125,7 +129,10 @@ pub struct Engine {
     pathing: Option<PathingSummary>,
     config_status: String,
     main_status: String,
+    /// Batches run (each one is [`TICKS_PER_BATCH`] ticks; the AI host runs once per batch).
     steps: u64,
+    /// Game ticks run.
+    ticks: u64,
     timers_fired: u64,
     notes: Vec<String>,
     combat: data::CombatSetup,
@@ -173,7 +180,10 @@ pub struct Report {
     pub natives_missing: Vec<String>,
     pub config: String,
     pub main: String,
+    /// Batches run (see [`Engine::step_ticks`]).
     pub steps: u64,
+    /// Game ticks run (0.005 s each).
+    pub ticks: u64,
     pub timers_fired: u64,
     pub game_time: f32,
     /// The pathing data installed at boot, or `None` (straight-line movement).
@@ -292,6 +302,7 @@ impl Engine {
             config_status: String::new(),
             main_status: String::new(),
             steps: 0,
+            ticks: 0,
             timers_fired: 0,
             notes,
             ai,
@@ -322,15 +333,39 @@ impl Engine {
         result
     }
 
-    /// Advances the game by one 0.1 s step: the main host step, then the AI host step at the same game time.
-    /// Returns the number of queue entries of the main host that fired.
+    /// Advances the game by one batch of [`TICKS_PER_BATCH`] ticks (100 ms of game time). Same as
+    /// [`Engine::step_ticks`] with that count. Returns the number of queue entries of the main host
+    /// that fired.
     pub fn step(&mut self) -> usize {
-        let fired = self.host.step();
-        let now = F32::from_bits(self.host.clock().now().to_bits());
-        self.ai.step(now);
-        self.steps += 1;
+        self.step_ticks(TICKS_PER_BATCH)
+    }
+
+    /// Advances the game by `n` game ticks (0.005 s each). The main host runs every tick (clock add,
+    /// timer pump). After each batch boundary the AI host runs at the same game time, after the main
+    /// host's batch work. A replay passes `TurnReport::game_ticks` here, after applying the turn's
+    /// commands. Returns the number of queue entries of the main host that fired.
+    pub fn step_ticks(&mut self, n: u64) -> usize {
+        let mut fired = 0usize;
+        let mut left = n;
+        while left > 0 {
+            let k = left.min(self.host.ticks_to_batch());
+            fired += self.host.step_ticks(k);
+            left -= k;
+            if self.host.at_batch_boundary() {
+                let now = F32::from_bits(self.host.clock().now().to_bits());
+                self.ai.step(now);
+                self.steps += 1;
+            }
+        }
+        self.ticks = self.host.ticks();
         self.timers_fired += fired as u64;
         fired
+    }
+
+    /// Runs one replay turn: the game ticks it produced (see [`sim::lockstep::TurnScheduler`]).
+    /// The caller applies `turn.actions` first, as the turn's commands come before its ticks.
+    pub fn run_turn<A>(&mut self, turn: &TurnReport<A>) -> usize {
+        self.step_ticks(turn.game_ticks)
     }
 
     /// The script host (VM, clock, timers and game state).
@@ -404,6 +439,7 @@ impl Engine {
             config: self.config_status.clone(),
             main: self.main_status.clone(),
             steps: self.steps,
+            ticks: self.ticks,
             timers_fired: self.timers_fired,
             game_time: self.host.clock().now(),
             pathing: self.pathing.clone(),
@@ -527,8 +563,8 @@ impl fmt::Display for Report {
         writeln!(f, "main: {}", self.main)?;
         writeln!(
             f,
-            "steps: {} (game time {:.1} s), timer and sleep entries fired: {}",
-            self.steps, self.game_time, self.timers_fired
+            "ticks: {} (batches: {}, game time {:.2} s), timer and sleep entries fired: {}",
+            self.ticks, self.steps, self.game_time, self.timers_fired
         )?;
         if self.ai.started.is_empty() {
             writeln!(f, "AI players started: none")?;

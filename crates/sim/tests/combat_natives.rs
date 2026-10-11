@@ -14,7 +14,8 @@ use sim::combat::{AttackType, CombatMisc, DamageModel};
 use sim::natives::game::{Game, ObjKey, UnitEvent, UnitType};
 use sim::orders::{AbilityKind, TypeOrderData, ORDER_ATTACK};
 use sim::rng::RngTable;
-use sim::ScriptHost;
+use sim::lockstep::{TICKS_PER_BATCH, TICK_INCREMENT_BITS};
+use sim::{AgileClock, ScriptHost};
 use softfloat::{arith, Tables, F32};
 
 const PRELUDE: &str = r#"
@@ -223,8 +224,31 @@ fn death_stops_the_cycle() {
         .contains(&UnitEvent::Death(ub)));
 }
 
-/// The step of the first acquisition in [`idle_unit_acquires_an_enemy_that_enters_range_at_the_next_scan`] (model).
-const FIRST_ACQUIRE_STEP: usize = 5;
+/// Soft-float add of two f32 values, as the timers compute expiries.
+fn soft_add(a: f32, b: f32) -> f32 {
+    arith::add(F32::from_bits(a.to_bits()), F32::from_bits(b.to_bits())).to_f32()
+}
+
+/// The step (1-based, as the test counts them) in which the first scan after tick 80 acquires. The scan timer
+/// is armed at tick 20 (setup) with expiry clock(20) + 0.5, then re-armed every 0.5 s with the soft-float add.
+/// A timer fires at the first tick whose clock reaches its expiry. Step k ends at tick 20 * (k + 1).
+fn first_acquire_step() -> usize {
+    let clock_at = |ticks: u64| {
+        let mut c = AgileClock::new();
+        for _ in 0..ticks {
+            c.advance(TICK_INCREMENT_BITS);
+        }
+        c.now()
+    };
+    let fires_at = |expiry: f32| (1u64..).find(|&t| clock_at(t) >= expiry).expect("reached");
+    let mut expiry = soft_add(clock_at(TICKS_PER_BATCH), 0.5);
+    let mut tick = fires_at(expiry);
+    while tick <= 80 {
+        expiry = soft_add(expiry, 0.5);
+        tick = fires_at(expiry);
+    }
+    tick.div_ceil(TICKS_PER_BATCH) as usize - 1
+}
 
 /// An idle unit with an acquire range scans every 0.5 s and takes an enemy that moved into range.
 #[test]
@@ -249,7 +273,7 @@ fn idle_unit_acquires_an_enemy_that_enters_range_at_the_next_scan() {
     }
     assert_eq!(
         first_order_at,
-        Some(FIRST_ACQUIRE_STEP),
+        Some(first_acquire_step()),
         "the scan after the move acquires"
     );
     assert_eq!(order_ids(&host, ua)[0], ORDER_ATTACK);
