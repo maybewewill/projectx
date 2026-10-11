@@ -284,7 +284,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~46.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~47%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -354,6 +354,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (34)**: replay load (replay-load.md): header magic/reader `0x6F534750` (size 0x40 v0 / 0x44 v1 enforced in w3g), block reader `0x6F535050` (8-byte block header with a 16-bit folded CRC), stat-string encoder `0x6F651860` (our decoder is its exact inverse), setup builder `0x6F443860`. `Engine::boot_from_replay` (seed + slots from the replay; races/colors/teams LIKELY). Open: the game-info record reader (replay → start blob link still LIKELY), settings flag meanings, game speed bits, handicap not stored in the sim.
 
 - **2026-10-11 (33)**: killer tracking: a unit killed by an attack fires its death events with the attacker as Killer (GetKillingUnit for 0x14/0x35); KillUnit/SetWidgetLife keep null. Kill-XP candidate routine `0x6F28B990` (Unicorn 2,000, 0 mismatches): listed unless V < D (ties and NaN listed); gate = illusion/removed flags + shared-XP bit + max-level rule; dead-but-not-removed heroes qualify (LIKELY). Normaliser cell term and 'AHer' list order still open → kill XP not wired into the death path. ~46.5%.
 
