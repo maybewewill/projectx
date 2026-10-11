@@ -173,3 +173,21 @@ Not wired into natives or `Game` (another agent is editing `natives/economy.rs`)
 5. The validator's `0x6F172ED0` (slot 192) and `0x6F172F30` (slot 193): the requirement and cost checks.
 6. The cap used by the queue food check: FoodCeiling (`0x6F00A210`) or the minimum of three (`0x6F40F850`).
 7. Nearest town hall (section 7).
+
+## 9. Pass 2 (2026-10-11): the train's progress setter is the base one (CONFIRMED structure, Unicorn for the arithmetic)
+
+- `CAbilityTrain` does not override vtable slot 191 (`0x2FC`): it runs `CAbilityBaseBuild::vf191` = `0x6F0239B0`.
+  (The construction class overrides it at `0x6F054690`, construction.md section 12.2.)
+- `0x6F0239B0(p)` writes `this+0x78 * (100 - q) / 100` (q = p clamped as unsigned to 100) through the property at
+  `this+0x7C` (`0x6F477350`). CONFIRMED in Unicorn over 6,180 vectors (`tools/emu/base_progress_emu.py`), and the Rust
+  port `sim::construction::remaining_after_percent` matches all of them. This is the **remaining** part of a total
+  stored at `this+0x78`.
+- Consequence for the train: the progress is a percent-remaining of a stored total. The total is LIKELY the head's
+  build time (`bldtm`) and the remaining value is what the timer or modifier at `+0x7C` reads. Both the total's writer
+  and the driver of `p` are NOT found in this pass, so the train timer length stays UNSURE and `economy::TrainQueue`
+  is not changed.
+- Completion of a train remains `0xD01C4` (sections 2 and 4). The construction completion uses key `0x80241`
+  (construction.md section 12.4). The two completions are different keys; the train's own finish key is not
+  confirmed beyond `0xD01C4`.
+- Still open: the writer of `this+0x78` for the train, the driver of `p`, the listener of `+0x7C`, nearest town hall
+  (section 7).
