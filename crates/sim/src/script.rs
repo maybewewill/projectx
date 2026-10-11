@@ -47,10 +47,21 @@ impl ScriptHost {
     /// `natives`, replacing any native with the same name (`TriggerSleepAction` included).
     pub fn new(
         module: Module,
-        mut natives: NativeRegistry,
+        natives: NativeRegistry,
         tables: Option<Tables>,
     ) -> Result<Self, VmError> {
-        let game = Rc::new(RefCell::new(Game::new()));
+        Self::with_game(module, natives, tables, Rc::new(RefCell::new(Game::new())))
+    }
+
+    /// Like [`ScriptHost::new`], but on a game the caller already holds. The caller can register natives that
+    /// need the game (the AI natives of `natives::ai::register_main`) before the VM exists, and share the game
+    /// with an `ai::AiHost`.
+    pub fn with_game(
+        module: Module,
+        mut natives: NativeRegistry,
+        tables: Option<Tables>,
+        game: Rc<RefCell<Game>>,
+    ) -> Result<Self, VmError> {
         game.borrow_mut().set_tables(tables.clone());
         natives::register(&mut natives, &game);
         let vm = Vm::new(module, natives, tables)?;
@@ -60,6 +71,11 @@ impl ScriptHost {
             game,
             misfires: Vec::new(),
         })
+    }
+
+    /// The shared game state, as an `Rc` (for an `ai::AiHost` or a host that reads it).
+    pub fn game_handle(&self) -> Rc<RefCell<Game>> {
+        Rc::clone(&self.game)
     }
 
     /// The JASS VM (globals, thread count, failures).

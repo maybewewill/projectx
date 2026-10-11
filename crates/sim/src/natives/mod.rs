@@ -15,6 +15,7 @@ use jass::vm::{clamp_sleep, NativeRegistry, NativeResult};
 use softfloat::F32;
 
 mod ability;
+pub mod ai;
 mod destructable;
 pub mod fog;
 mod force;
@@ -63,6 +64,14 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
     timer::register(reg, game);
     trigger::register(reg, game);
+    register_world(reg, game);
+}
+
+/// Registers the world natives that do not queue timers or triggers: hashtables, game caches, locations, players,
+/// forces, the random natives, presentation, units, groups, items, destructables, orders and the rest. The main VM
+/// gets them from [`register`]; the AI VMs (`ai.rs`) get them without the timer and trigger natives, because their
+/// expiries run on the main host's queue.
+pub fn register_world(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     hashtable::register(reg, game);
     gamecache::register(reg, game);
     location::register(reg, game);
