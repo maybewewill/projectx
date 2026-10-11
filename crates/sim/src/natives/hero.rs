@@ -226,21 +226,21 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
     reg.register("SetHeroInt", move |_, a| {
         let value = int_arg(a, 1);
-        with_hero_only(&g, a, |h| h.int_base = heroes::rebase(h.int_base, h.int_plus, h.level - 1, value));
+        with_attribute_change(&g, a, |h| h.int_base = heroes::rebase(h.int_base, h.int_plus, h.level - 1, value));
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
     reg.register("SetHeroStr", move |_, a| {
         let value = int_arg(a, 1);
-        with_hero_only(&g, a, |h| h.str_base = heroes::rebase(h.str_base, h.str_plus, h.level - 1, value));
+        with_attribute_change(&g, a, |h| h.str_base = heroes::rebase(h.str_base, h.str_plus, h.level - 1, value));
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
     reg.register("SetHeroAgi", move |_, a| {
         let value = int_arg(a, 1);
-        with_hero_only(&g, a, |h| h.agi_base = heroes::rebase(h.agi_base, h.agi_plus, h.level - 1, value));
+        with_attribute_change(&g, a, |h| h.agi_base = heroes::rebase(h.agi_base, h.agi_plus, h.level - 1, value));
         NativeResult::Return(Value::Null)
     });
 }
@@ -273,6 +273,45 @@ fn hero_key(gm: &Game, a: &[Value]) -> Option<ObjKey> {
     let k = gm.unit_of_handle(handle_arg(a, 0))?;
     let u = gm.unit(k);
     (is_hero_id(u.type_id) && !u.illusion).then_some(k)
+}
+
+/// Runs an attribute setter on argument 0 and applies the derived life and mana changes it causes (`heroes.rs`,
+/// section 9 of `docs/spec/heroes.md`). The hit-point factor is `1.0` (LIKELY, see `DerivedBonuses::hit_points`).
+///
+/// The current life and mana move by the same change as the maximum, clamped to `[0, max]` (UNSURE: the original's
+/// life sink `0x6F2AC450` has a proportional and an absolute mode; the mode is not decided, see the spec).
+fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], f: impl FnOnce(&mut HeroObj)) {
+    let mut gm = g.borrow_mut();
+    let Some(k) = hero_key(&gm, a) else {
+        return;
+    };
+    let rates = *gm.hero_rates();
+    let (d_life, d_mana) = {
+        let Some(h) = gm.unit_mut(k).hero.as_mut() else {
+            return;
+        };
+        let one = softfloat::F32(0x3F80_0000);
+        let before = heroes::derived_bonuses(h, &rates, one);
+        f(h);
+        let after = heroes::derived_bonuses(h, &rates, one);
+        (heroes::max_life_delta(&before, &after), heroes::max_mana_delta(&before, &after))
+    };
+    let u = gm.unit_mut(k);
+    u.max_life = softfloat::arith::add(u.max_life, d_life);
+    u.life = clamp_to(softfloat::arith::add(u.life, d_life), u.max_life);
+    u.max_mana = softfloat::arith::add(u.max_mana, d_mana);
+    u.mana = clamp_to(softfloat::arith::add(u.mana, d_mana), u.max_mana);
+}
+
+/// `value` clamped to `[0, max]`, with the same comparisons the simulation uses for life (`softfloat::arith::lt`).
+fn clamp_to(value: softfloat::F32, max: softfloat::F32) -> softfloat::F32 {
+    if softfloat::arith::lt(value, softfloat::F32::ZERO) {
+        return softfloat::F32::ZERO;
+    }
+    if softfloat::arith::lt(max, value) {
+        return max;
+    }
+    value
 }
 
 /// The hero state of argument 0, or `None` when the gate fails or the unit has no hero state.
