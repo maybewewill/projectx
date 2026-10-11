@@ -250,35 +250,101 @@ The order of the list does not change any number (each recipient depends only on
 
 Open for the amount/split: none found in the disassembly.
 
-### 8.3 Candidate selection (structure read, the numbers are NOT run)
+### 8.3 Candidate selection (routine CONFIRMED in Unicorn; normaliser partly decoded)
 
-- Killer and dying: `0x6F2A4880` calls the builder `0x6F2A46F0` (dying, killer). No record when the killer is absent,
-  when `0x6F285AC0(killer, dying)` is non-zero (the dying owner's bit in the killer owner's `+0x38` mask, CONFIRMED
-  structure; LIKELY an ally test), or when the killer has flag `0x10000` (building, LIKELY) and the Misc key
-  `BuildingKillsGiveExp` is off (`0x6FAB4268`, read by `0x6F26E1xx`). Killer owner = `vf59` of the killer.
-- Range: `R = HeroExpRange` (Misc real, `0x6F009EE0`), `V = mul(R, R)` (record `+0x0C`, R is not divided by 32 here).
-  A candidate is in range when `D <= V`, `D` = squared distance of the normalised positions of the dying unit and of the
-  candidate (`0x6F28B990`, `dist2` `0x6F020000`). **The normaliser `0x6F4743A0 / 0x6F4742F0` is not understood** (it
-  reads the map object), so the units of `D` against `R` are UNSURE.
-- Candidates are all heroes of the global hero category list (`0x6F46D0B0` with category `0x41486572`, from
-  `0x6F2075E0`), in list order. Each candidate is eligible when: the flags `+0x5C & 0x40000100 == 0`; the candidate's
-  owner bit is set in the killer owner's `+0x68` mask (`0x6F3A34B0`, the shared-experience alliance, LIKELY); and when the
-  Misc key `MaxLevelHeroesDrainExp` (`0x6FA70E98`) is off, the hero is not at maximum level (`0x6F207F10`).
-- `GlobalExperience` (`0x6FA70E94`): when on, every eligible candidate is added to the global list (`+0xE0`); every
-  eligible candidate in range is also added to the in-range list (`+0x14`).
-- Misc values at runtime: the loader `0x6F26E1xx` reads `BuildingKillsGiveExp`, `GlobalExperience` and
-  `MaxLevelHeroesDrainExp` into `0x6FAB4268`, `0x6FA70E94`, `0x6FA70E98`. The file's own values (1, 1) are overwritten
-  at load; the Misc values are inputs (UNSURE for 1.26a defaults).
-- Not checked: dead heroes (no life test seen in the filter; whether the global list keeps dead heroes is UNSURE),
-  the normaliser, the `0x100` flag meaning, the alliance mask names (`+0x38`, `+0x68`).
+Harness: `tools/emu/hero_candidate_emu.py` (run `GAME_DLL=... python3 tools/emu/hero_candidate_emu.py OUT N SEED`).
+The real per-candidate routine `0x6F28B990` runs on a synthetic killer record and candidate, with the real normaliser
+chain, `0x6F020000` (distance) and the x87 compare below it. Only these are answered by the harness: the handle lookup
+`0x6F03FA30`, the hero-at-maximum test `0x6F26EB10`, the shared-experience test `0x6F3A34E0`, the parent `0x6F079770`,
+the list append `0x6F286640`, and the position getter (vtable `0xB8`). The run reads the distance and the record's V from
+the code and checks the list routing against the expectations below. **2,000 cases, 0 mismatches**: 522 passed the
+eligibility (342 listed in range, 180 out), 264 global-list appends, 381 flag-0x10 candidates whose position getter
+received the parent, 175 tie re-runs with V = D (all listed), 42 re-runs with V = NaN (all listed). The distances are
+not compared with a Python model (the softfloat result is the binary's own); the comparison is checked on the real value.
+
+**Killer and dying (CONFIRMED structure, disassembly).** The death handler `0x6F2A4880` returns at once when the dying
+unit's `+0x254 & +0x250` is `-1`, when `0x6F4786B0()` (the killer) is null, or when `0x6F285B00(dying)` is zero. Only then
+it calls the candidate builder `0x6F2A46F0(record, dying, killer)`. So **no XP is given when the killer is null**. The
+killer comes from `0x6F4786B0`: the `+0x54` field of the object that `0x6F03FA30()` returns, when that object's `+0x20`
+is zero (LIKELY: the current damage or event context; the setter of that context was not traced, UNSURE).
+
+**Record (CONFIRMED, `0x6F2A46F0`).** `record[0..1]` = the normalised position of the dying unit (`0xB8` getter, then
+normaliser); `record[2]` = killer owner (`vf59`, `0xEC`); `record[3]` = `V = mul(R, R)` with `R = HeroExpRange`
+(Misc real, read with `0x6F009EE0`; `R` is not divided by 32). Lists: in-range list `+0x10`, global list `+0xDC`.
+
+**Per candidate `0x6F28B990` (CONFIRMED by Unicorn, order as in the disassembly).**
+1. Eligibility: `(MaxLevelHeroesDrainExp != 0 or not at_max) and (flags & 0x40000100) == 0 and shared`, where `at_max`
+   is `0x6F26EB10(candidate)` = `0x6F207F10` on the hero (`MaxHeroLevel <= level`), and `shared` is `0x6F3A34E0(killer
+   owner, candidate)`: it reads the candidate's owner index (`vf59`) and tests that bit in the mask `0x6F3A34B0` returns
+   for the killer owner (the `+0x68` reading of `0x6F473170` after `0x6F41B420`, LIKELY). In the harness this test is
+   hooked, so the mask name stays LIKELY. Bit 30 (`0x40000000`) is the illusion flag and `0x100` the removal-sequence
+   flag (`docs/spec/unit-core.md`).
+2. If `GlobalExperience` (`0x6FA70E94`) is on, the candidate is appended to the global list **before** the range test
+   (so out-of-range candidates are in the global list too).
+3. Flag `0x10` on the candidate: the position comes from the parent `0x6F079770(candidate)` (loop while the flag is set;
+   the harness uses a flag-0 parent). LIKELY: a building or attached unit, not checked further.
+4. Position: `0xB8` getter (`ret 0`, the out pointer stays on the stack for the normaliser), then the normaliser
+   `0x6F4743A0`/`0x6F4742F0`, then `D = dist2(record, candidate)` (`0x6F020000`).
+5. In range: **listed unless `V < D`** (`fcompp`, `test ah,5`, `jnp`): a tie is listed, and NaN on either side is listed
+   (unordered). Model: `heroes::in_range(d, v) = !(v < d)`. Verified: 0 mismatches over the 2,000 cases, boundary ties
+   and NaN as above. `heroes::is_candidate` is the eligibility of step 1.
+
+**Normaliser (PARTLY decoded, numbers from the binary, formula UNSURE).** `0x6F4743A0` zeroes the output and calls
+`0x6F4742F0` with ECX = the position reference (P). P+8 and P+0xC go to the handle lookup `0x6F03FA30` (index, tag: the
+object is returned only when its `+0x18` equals the tag), which gives the unit `O`. Then `0x6F497460` (cell to world
+through the grid sub-object `G = O+0x14`, or `O+0x68` when bit 31 of `O+0x14` is set, via `0x6F483270`, and `0x6F483E70`),
+`0x6F38B0B0` (a two-component transform of one value `v`), a multiply by 32 (`+0x2800000` on the exponent, applied to
+non-zero values), and the world origin add (`W` = the object at `[0x6FAB7368]`).
+
+Probes (about 40 single-field runs of the real normaliser in Unicorn, scratch scripts, not committed):
+- Origins: `out.x = W+0x6C`, `out.y = W+0x70` (CONFIRMED; x uses +0x6C, y uses +0x70).
+- Position: with `v = 0` the output is `32 * (O+0x78, O+0x7C) + (W+0x6C, W+0x70)` (CONFIRMED for values 1.0 and 0.5).
+- Transform: `X = O+0x78 - O+0x80 * v`, `Y = O+0x7C - O+0x84 * v` (CONFIRMED for `v = i` in the probes: i = 1, 2 with
+  O+0x80 / O+0x84 = 1, 2, 3, 5). The value `v` is the cell term of `0x6F483E70`; in the probes `v` equalled the cell
+  coordinate `O+0x70` with `O+0x5C = 0`, and `O+0x74` (j) had no visible effect. So the cell term, its scale (`G+0x48`)
+  and the j part are UNSURE.
+- Units: the output is in world units (x32 from cells; the pathing cell size is 32). LIKELY: the candidate and the dying
+  unit are compared in world units, so `V = R*R` is `HeroExpRange` in world units (LIKELY, not confirmed).
+
+**Candidate list (LIKELY, partly UNSURE).** The candidates are the heroes of the global category list (`0x6F2075E0` returns
+the category `0x41486572` = 'AHer'; the enumerator `0x6F46D1B0` / `0x6F46D0B0` walks a singly linked list through `+8`
+from the category head `+0x58`). The walk skips nodes whose `+0x20` (removed) is set and calls a predicate that stops
+the walk when it returns zero; the predicate used by the builder was not identified. **Insertion order** of the list
+is not decoded (UNSURE; LIKELY creation order). **Dead heroes:** neither the routine nor the walk tests life, so a dead
+hero that is not removed is a candidate (LIKELY). The `MaxLevelHeroesDrainExp` gate is the only level test.
+
+**Misc booleans (LIKELY).** `BuildingKillsGiveExp` (`0x6FAB4268`), `GlobalExperience` (`0x6FA70E94`),
+`MaxLevelHeroesDrainExp` (`0x6FA70E98`) are read once with the integer list reader `0x6F009F90(0)` (in the loader
+`0x6F26E080`). The reader returns `0` for an absent key (LIKELY: `local_4 = 0` before the lookup). The 1.26a value in
+the user's `Misc.txt` is not in the repo: UNSURE.
+
+**Ally and shared-experience masks (LIKELY).** The builder's gate `0x6F285AC0(killer, dying)` = `0x6F3A3430(killer owner,
+dying owner)` (the `+0x38` mask; a non-zero result returns with no record). The routine's `0x6F3A34E0` uses the `+0x68`
+mask. Mask names are LIKELY (`+0x38` passive or alliance, `+0x68` shared experience), not confirmed.
+
+**Wiring (NOT done).** `sim::heroes::distribute_kill` is not called from the death path: the normaliser's cell term and the
+candidate list order are not confirmed, so the candidate set and the distances would be guesses. Killer tracking is wired
+(section 8.6).
 
 ### 8.4 Model status
 
 - `sim::heroes::{experience_engine, distribute_kill, kill_amount}` implement 8.2 with `Gain` (handicap, walk, range).
-  Not wired into the death path: the simulation does not track the killer (`GetKillingUnit` is null) and the candidate
-  selection in 8.3 is not verified, so a hook would be guesswork. The death path and the combat code are untouched.
+  Not wired into the death path: the candidate set (8.3) is not confirmed end to end (the normaliser's cell term and the
+  list order are open). The routine's gate and range rule are in `sim::heroes::{is_candidate, in_range}` (tests only).
 
 ### 8.5 Model changes
+
+- `sim::heroes::{is_candidate, in_range}` and `CANDIDATE_EXCLUDED_FLAGS` (section 8.3), with unit tests.
+
+### 8.6 Killer tracking (LIKELY, model)
+
+- A combat kill (swing execute or missile impact, `combat.rs::expire_attack_timer`) passes the attacker to the death
+  dispatch (`natives/unit_event.rs::dispatch_unit_death_by`). The events `0x80214` (owner) and `0x80235` (unit) and the
+  widget death key then run with a firing whose `Killer` field is the attacker, and `GetKillingUnit` reads it for the event
+  ids `0x14` and `0x35`. Test: `crates/sim/tests/killer_tracking.rs`.
+- `KillUnit`, `SetWidgetLife` and `SetUnitState` (life 0) have no damage source: the killer stays null (`unit_event_natives`
+  checks this). The original reads its killer through `0x6F4786B0` (section 8.3); which setter fills that context for a
+  JASS kill is not traced (UNSURE). `UnitDamageTarget` is NotImplemented in the model, so it cannot pass its source yet.
 
 ## 9. Derived attribute bonuses
 
@@ -399,9 +465,10 @@ vector test above.
 
 ## 10. Open items (priority)
 
-1. Kill candidate selection (section 8.3): the position normaliser `0x6F4743A0` / `0x6F4742F0` and the units of the
-   range test, dead heroes in the global hero list, the alliance mask names. The numeric split is done (section 8.2).
-   Wiring it into the death path needs the killer in the simulation (`GetKillingUnit` is null today).
+1. Kill candidate selection (section 8.3): decode the normaliser's cell term (`0x6F483E70`) and the `0x6F38B0B0`
+   transform fully, the candidate list's insertion order and predicate (`0x6F46D0B0` / `0x6F46D1B0`), and the mask names
+   (`+0x38`, `+0x68`). The routine's gate and the range rule are CONFIRMED (Unicorn, section 8.3). The numeric split is
+   done (section 8.2). The killer is tracked (section 8.6); the original's killer context (`0x6F4786B0`) is not traced.
 2. The per-recipient level walk in `0x6F20B080` (section 7.1), Unicorn-checked with stubs.
 3. Hero ability slots and the ability-level rules of the skill points (sections 4 and 7).
 4. Derived bonuses (section 7.2): the Misc values and the unit fields they set.
