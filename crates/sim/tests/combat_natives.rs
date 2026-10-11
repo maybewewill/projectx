@@ -57,6 +57,7 @@ fn weapon() -> AttackType {
         collision: f(0.5),
         damage: f(10.0),
         missile_speed: None,
+        ..Default::default()
     }
 }
 
@@ -299,7 +300,7 @@ struct ThreeDamage {
 }
 
 impl DamageModel for ThreeDamage {
-    fn roll(&mut self, _g: &Game, _a: ObjKey, _t: ObjKey, _w: &AttackType) -> F32 {
+    fn roll(&mut self, _g: &mut Game, _a: ObjKey, _t: ObjKey, _w: &AttackType) -> F32 {
         *self.calls.borrow_mut() += 1;
         f(3.0)
     }

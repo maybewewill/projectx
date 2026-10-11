@@ -107,6 +107,26 @@ pub struct AttackType {
     /// Missile speed in world units per second, or `None` for an instant attack (phase 1). UNSURE: the unit and
     /// the per-step meaning of "Missilespeed" are not decoded.
     pub missile_speed: Option<F32>,
+    /// Number of dice of the damage roll (`docs/spec/attack-damage.md` 3.4). Zero rolls no dice.
+    pub dice: u32,
+    /// Sides of each die. Each die gives `0..sides-1` (the sampler, CONFIRMED; the +1 question is UNSURE).
+    pub sides: u32,
+    /// Flat bonus added to the dice sum (`dmgplus`).
+    pub dice_bonus: i32,
+    /// Attack type row of the damage-type table: 0 Spells, 1 Normal, 2 Pierce, 3 Siege, 4 Magic, 5 Chaos, 6 Hero
+    /// (binary order of the spec, section 7).
+    pub damage_type: u8,
+    /// Whether the damage class is physical, so the armor factor applies (LIKELY, spec section 4 step 7).
+    pub physical: bool,
+}
+
+/// The defense of a unit type: the armor value and the armor type column (spec section 4, `+0xE0` and `+0xE4`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Defense {
+    /// Armor value. Negative armor uses the negative table in the model.
+    pub armor: F32,
+    /// Armor type column of the damage-type table, 0 to 7.
+    pub armor_type: u8,
 }
 
 /// Misc values of the attack cycle. Host input: the engine reads them from the user's Misc data.
@@ -126,7 +146,13 @@ pub struct CombatMisc {
 /// `Debug` is required so that [`Game`] keeps its `Debug` derive.
 pub trait DamageModel: std::fmt::Debug {
     /// The amount of life `target` loses from one execute of `attacker` with the weapon `weapon`.
-    fn roll(&mut self, game: &Game, attacker: ObjKey, target: ObjKey, weapon: &AttackType) -> F32;
+    fn roll(
+        &mut self,
+        game: &mut Game,
+        attacker: ObjKey,
+        target: ObjKey,
+        weapon: &AttackType,
+    ) -> F32;
 }
 
 /// PLACEHOLDER damage model: the fixed per-weapon value [`AttackType::damage`]. It ignores armor, types, dice and
@@ -137,7 +163,7 @@ pub struct PlaceholderDamage;
 impl DamageModel for PlaceholderDamage {
     fn roll(
         &mut self,
-        _game: &Game,
+        _game: &mut Game,
         _attacker: ObjKey,
         _target: ObjKey,
         weapon: &AttackType,
@@ -225,6 +251,7 @@ pub struct AttackView {
 #[derive(Debug, Default)]
 pub struct CombatSystem {
     types: BTreeMap<u32, AttackType>,
+    defense: BTreeMap<u32, Defense>,
     states: BTreeMap<ObjKey, AttackObj>,
     misc: CombatMisc,
     damage: Option<Box<dyn DamageModel>>,
@@ -268,7 +295,22 @@ impl Game {
         self.combat.misc = misc;
     }
 
-    /// Replaces the damage model (default: [`PlaceholderDamage`]).
+    /// Sets the defense of unit type `type_id` (see [`Defense`]). Unregistered types have zero armor and type 0.
+    pub fn set_unit_defense(&mut self, type_id: u32, defense: Defense) {
+        self.combat.defense.insert(type_id, defense);
+    }
+
+    /// The defense of `unit`, from its type; the default for an unregistered type.
+    pub fn unit_defense(&self, unit: ObjKey) -> Defense {
+        let type_id = self.unit(unit).type_id;
+        self.combat
+            .defense
+            .get(&type_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Replaces the damage model (default: [`PlaceholderDamage`]; the spec model is [`crate::damage::SpecDamage`]).
     pub fn set_damage_model(&mut self, model: Box<dyn DamageModel>) {
         self.combat.damage = Some(model);
     }
