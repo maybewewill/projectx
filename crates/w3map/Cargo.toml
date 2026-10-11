@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 thiserror = "2.0.21"
+
+[dev-dependencies]
+mpq = { path = "../mpq" }

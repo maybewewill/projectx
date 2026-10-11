@@ -41,6 +41,10 @@ impl<'a> Reader<'a> {
         Ok(self.array::<1>()?[0])
     }
 
+    pub(crate) fn u16(&mut self) -> Result<u16, Error> {
+        Ok(u16::from_le_bytes(self.array()?))
+    }
+
     pub(crate) fn u32(&mut self) -> Result<u32, Error> {
         Ok(u32::from_le_bytes(self.array()?))
     }
