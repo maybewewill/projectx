@@ -539,12 +539,14 @@ fn support_tables_cover_the_work_list() {
         .chain(HERO_NATIVES.iter())
         .filter(|e| !matches!(e.support, Support::NotImplemented(_)))
         .count();
-    assert_eq!(implemented, 55);
+    // 55 before the hero progression pass; it implements nine more hero natives (AddHeroXP, SetHeroXP, SetHeroLevel,
+    // UnitStripHeroLevel, UnitModifySkillPoints, GetHeroStr/Agi, SetHeroStr/Agi), see docs/spec/heroes.md.
+    assert_eq!(implemented, 64);
 
     let host = host_for(
         r#"
 native GetUnitName takes unit whichUnit returns string
-native SetHeroXP takes unit whichUnit, integer newXPVal, boolean showEyeCandy returns nothing
+native SetHeroInt takes unit whichUnit, integer newInt, boolean permanent returns nothing
 native UnitAddSleep takes unit whichUnit, boolean add returns nothing
 native GetUnitLevel takes unit whichUnit returns integer
 native GetHeroXP takes unit whichUnit returns integer
@@ -552,7 +554,7 @@ function unused takes nothing returns nothing
     local string s
     local unit u
     set s = GetUnitName(u)
-    call SetHeroXP(u, 5, true)
+    call SetHeroInt(u, 5, true)
     call UnitAddSleep(u, true)
     set s = null
 endfunction
@@ -562,7 +564,7 @@ endfunction
     );
     let unbound = host.vm().unbound_natives();
     assert!(unbound.contains(&"GetUnitName"));
-    assert!(unbound.contains(&"SetHeroXP"));
+    assert!(unbound.contains(&"SetHeroInt"));
     assert!(unbound.contains(&"UnitAddSleep"));
     assert!(!unbound.contains(&"GetHeroXP"), "GetHeroXP is registered");
 }

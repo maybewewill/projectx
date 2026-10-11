@@ -1,31 +1,30 @@
-//! Hero natives: the hero experience, level and skill point getters, `SuspendHeroXP`, and the table of every
-//! hero native (implemented or not). The model is in `natives/game.rs` ([`HeroObj`]).
+//! Hero natives: the experience and level natives, the skill points, the strength and agility getters and setters,
+//! `SuspendHeroXP`, and the table of every hero native (implemented or not). The arithmetic is in `crate::heroes`; the
+//! model is in `natives/game.rs` ([`HeroObj`]). The derivation and the verification labels are in
+//! `docs/spec/heroes.md`.
 //!
-//! Behaviour notes. Addresses are the 1.26a `Game.dll` functions (`natives.c` bodies in the decompile export,
-//! the helpers in `chunk_010.c`, `chunk_012.c` and `chunk_013.c`). Labels as in `unit.rs`: CONFIRMED = read in the
-//! decompile, LIKELY = strong inference, UNSURE = guessed or not read.
+//! Behaviour notes. Addresses are the 1.26a `Game.dll` functions (`natives.c` bodies in the decompile export).
 //!
 //! * Hero gate (CONFIRMED, every hero native): the unit must be live, its type id must start with an uppercase
 //!   letter (`IsHeroUnitId`, the top byte of the four-character code in `'A'..='Z'`), and the unit must not be an
 //!   illusion (object `+0x5C` bit 30). Otherwise the native returns its default and does nothing.
-//! * Experience (CONFIRMED offset, LIKELY meaning): `GetHeroXP` reads the hero sub-object at `+0x8C`.
-//! * Skill points (CONFIRMED offset): `GetHeroSkillPoints` reads the hero sub-object at `+0x90`.
-//! * `SuspendHeroXP` (CONFIRMED store into the hero sub-object at `+0xEC`). What the flag stops is not read.
-//! * Level (UNSURE): the hero level is read through the unit-level counter helpers (`FUN_6F473170`, plus one). The
-//!   model stores the level directly and starts a hero at 1.
-//!
-//! Not implemented (see [`NATIVES`]): the experience curve, the level-up and level-down engine (`FUN_6F20B080`,
-//! `FUN_6F20B4D0`), the stat formulas (they use the softfloat helpers with an x87-style calling convention and the
-//! item bonus helpers), the revive path, skill learning, and the proper-name table. Each of these needs more of
-//! the decompile read before its behaviour can be matched. The XP curve is game data (TODO(gamedata)).
+//! * Experience and levels: see `crate::heroes` (`AddHeroXP` / `SetHeroXP` / `SetHeroLevel` / `UnitStripHeroLevel`).
+//!   `showEyeCandy` is ignored (presentation only). The experience tables are installed with `Game::set_hero_xp`;
+//!   without them the heroes have no thresholds.
+//! * Skill points: `UnitModifySkillPoints` and the level-up gain; the cap by the learnable ability levels is not
+//!   applied because the five hero ability slots are not modelled (`crate::heroes`).
+//! * Attributes: `GetHeroStr` / `GetHeroAgi` = base + trunc(gain * (level - 1)); item bonuses are not modelled and
+//!   count as 0. `GetHeroInt` / `SetHeroInt` are not implemented (see [`NATIVES`]).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use jass::vm::{NativeRegistry, NativeResult, Value};
+use softfloat::conv;
 
 use super::game::{Game, HeroObj, ObjKey};
 use super::unit_attr::{NativeEntry, Support};
+use crate::heroes;
 
 /// Every hero native with its support level. The ones marked `NotImplemented` are not registered: a script that
 /// calls one fails to bind (see `unbound_natives` in the VM), which is the work queue for the hero system.
@@ -36,25 +35,21 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "AddHeroXP",
-        support: Support::NotImplemented(
-            "N:experience gain runs the level-up engine (FUN_6F20B080, FUN_6F20B4D0), not read",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "GetHeroAgi",
-        support: Support::NotImplemented(
-            "N:stat formula: softfloat helpers with an x87-style calling convention and item bonus helpers not read",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "GetHeroInt",
         support: Support::NotImplemented(
-            "N:stat formula not read (see GetHeroAgi)",
+            "N:the intelligence getter adds the level counter of the unit object (not the hero's) to a gain term; which field is its base is not settled (heroes.md section 4)",
         ),
     },
     NativeEntry {
         name: "GetHeroLevel",
-        support: Support::Unsure,
+        support: Support::Confirmed,
     },
     NativeEntry {
         name: "GetHeroProperName",
@@ -68,9 +63,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "GetHeroStr",
-        support: Support::NotImplemented(
-            "N:stat formula not read (see GetHeroAgi)",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "GetHeroXP",
@@ -96,33 +89,25 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SetHeroAgi",
-        support: Support::NotImplemented(
-            "N:stat set path (FUN_6F20A1E0, FUN_6F20A260, FUN_6F20A160) not read",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetHeroInt",
         support: Support::NotImplemented(
-            "N:stat set path not read (see SetHeroAgi)",
+            "N:the setter moves the intelligence base, which depends on the open question of GetHeroInt",
         ),
     },
     NativeEntry {
         name: "SetHeroLevel",
-        support: Support::NotImplemented(
-            "N:needs the experience curve (game data) and the level-up engine",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetHeroStr",
-        support: Support::NotImplemented(
-            "N:stat set path not read (see SetHeroAgi)",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetHeroXP",
-        support: Support::NotImplemented(
-            "N:needs the level-up engine (FUN_6F20B080) and the experience curve",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SuspendHeroXP",
@@ -130,15 +115,11 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitModifySkillPoints",
-        support: Support::NotImplemented(
-            "N:skill bookkeeping (FUN_6F208B80) only partly read; the skill slots are not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitStripHeroLevel",
-        support: Support::NotImplemented(
-            "N:level-down loop (FUN_6F20B6E0, FUN_6F20B4D0) not read",
-        ),
+        support: Support::Likely,
     },
 ];
 
@@ -190,6 +171,90 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         }
         NativeResult::Return(Value::Null)
     });
+
+    let g = Rc::clone(game);
+    reg.register("AddHeroXP", move |_, a| {
+        with_hero(&g, a, |t, h| heroes::add_xp(t, h, conv::i2r(int_arg(a, 1)), None));
+        NativeResult::Return(Value::Null)
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SetHeroXP", move |_, a| {
+        with_hero(&g, a, |t, h| heroes::set_xp(t, h, int_arg(a, 1), None));
+        NativeResult::Return(Value::Null)
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SetHeroLevel", move |_, a| {
+        with_hero(&g, a, |t, h| heroes::set_level(t, h, int_arg(a, 1), None));
+        NativeResult::Return(Value::Null)
+    });
+
+    let g = Rc::clone(game);
+    reg.register("UnitStripHeroLevel", move |_, a| {
+        let mut removed = false;
+        with_hero(&g, a, |t, h| removed = heroes::strip_levels(t, h, int_arg(a, 1) as u32));
+        NativeResult::Return(Value::Boolean(removed))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("UnitModifySkillPoints", move |_, a| {
+        let mut changed = false;
+        let delta = int_arg(a, 1);
+        with_hero_only(&g, a, |h| changed = heroes::modify_skill_points(h, delta, None));
+        NativeResult::Return(Value::Boolean(changed))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetHeroStr", move |_, a| {
+        let gm = g.borrow();
+        let v = hero_of(&gm, a).map_or(0, |h| heroes::attribute(h.str_base, h.str_plus, h.level - 1));
+        NativeResult::Return(Value::Integer(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetHeroAgi", move |_, a| {
+        let gm = g.borrow();
+        let v = hero_of(&gm, a).map_or(0, |h| heroes::attribute(h.agi_base, h.agi_plus, h.level - 1));
+        NativeResult::Return(Value::Integer(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SetHeroStr", move |_, a| {
+        let value = int_arg(a, 1);
+        with_hero_only(&g, a, |h| h.str_base = heroes::rebase(h.str_base, h.str_plus, h.level - 1, value));
+        NativeResult::Return(Value::Null)
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SetHeroAgi", move |_, a| {
+        let value = int_arg(a, 1);
+        with_hero_only(&g, a, |h| h.agi_base = heroes::rebase(h.agi_base, h.agi_plus, h.level - 1, value));
+        NativeResult::Return(Value::Null)
+    });
+}
+
+/// Runs `f` on the experience tables and the hero state of argument 0 when the hero gate passes.
+fn with_hero(g: &Rc<RefCell<Game>>, a: &[Value], f: impl FnOnce(&heroes::XpTables, &mut HeroObj)) {
+    let mut gm = g.borrow_mut();
+    let Some(k) = hero_key(&gm, a) else {
+        return;
+    };
+    let tables = gm.hero_xp().clone();
+    if let Some(h) = gm.unit_mut(k).hero.as_mut() {
+        f(&tables, h);
+    }
+}
+
+/// Runs `f` on the hero state of argument 0 when the hero gate passes.
+fn with_hero_only(g: &Rc<RefCell<Game>>, a: &[Value], f: impl FnOnce(&mut HeroObj)) {
+    let mut gm = g.borrow_mut();
+    let Some(k) = hero_key(&gm, a) else {
+        return;
+    };
+    if let Some(h) = gm.unit_mut(k).hero.as_mut() {
+        f(h);
+    }
 }
 
 /// The unit key of argument 0 when it passes the hero gate (see the module notes).
@@ -208,6 +273,15 @@ fn hero_of<'a>(gm: &'a Game, a: &[Value]) -> Option<&'a HeroObj> {
 /// The handle id in argument `i`, or 0 (the null handle) when there is none.
 fn handle_arg(a: &[Value], i: usize) -> u32 {
     a.get(i).and_then(|v| v.as_handle()).unwrap_or(0)
+}
+
+/// The integer in argument `i`, or 0.
+fn int_arg(a: &[Value], i: usize) -> i32 {
+    match a.get(i) {
+        Some(Value::Integer(n)) => *n,
+        Some(Value::Boolean(b)) => i32::from(*b),
+        _ => 0,
+    }
 }
 
 /// The boolean in argument `i`, or false.
