@@ -18,7 +18,7 @@ Each case is written as one line of hex bit patterns (cells are the stored unit+
   mode 2 = raw pair {xin, yin} (the same setter; SetUnitPosition's arithmetic is LIKELY the same, not run here).
   nx, ny = GetUnitX/GetUnitY after the set (the real normaliser); cx1, cy1 = unit+0x78/+0x7C after the set.
 
-Run:  GAME_DLL=/path/to/Game.dll python3 tools/emu/unit_position_emu.py OUT.txt [N_CASES] [SEED]
+Run:  GAME_DLL=/path/to/Game.dll python3 tools/emu/unit_position_emu.py [N_CASES] [SEED] [OUT.txt]
 """
 import os
 import random
