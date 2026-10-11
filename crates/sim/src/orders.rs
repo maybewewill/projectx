@@ -230,8 +230,17 @@ fn point_family(kind: BaseKind, id: u32) -> bool {
                 | 0x000D_0017
         ),
         BaseKind::Attack => id == ORDER_ATTACK,
+        BaseKind::Build => is_build_order_id(id),
         _ => false,
     }
+}
+
+/// Whether `id` is a build order id: the order id of a build order is the raw code of the unit type to place
+/// (`IssueBuildOrderById`, `0x6F3C8BE0` passes the type id as the order id). The internal orders all live in the
+/// `0x000Dxxxx` range, so a raw code has a non-zero top byte. UNSURE: the original's build ability checks the id
+/// against the unit's build list (`natives/lane_f.rs` notes); the model accepts any raw code.
+pub fn is_build_order_id(id: u32) -> bool {
+    id >> 24 != 0
 }
 
 /// Whether ability `kind` accepts the immediate order `id` (stop is handled before this check).
@@ -642,6 +651,12 @@ impl Game {
         } else {
             self.complete_head(unit);
         }
+    }
+
+    /// The stop-everything step of the order system (`0x6F2964E0`): the stop notification, then every order of the unit
+    /// is cleared (the unit teardown `0x6F2A4A10`, the unit-suspend-decay native and the corpse creation use it).
+    pub(crate) fn stop_all_orders(&mut self, unit: ObjKey) {
+        self.clear_orders(unit);
     }
 
     /// Issues an order from a native: validation, then dispatch. Returns `(validated, record index)`:

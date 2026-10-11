@@ -24,7 +24,7 @@
 //! | SetUnitAnimation, ...ByIndex, ...WithRarity, SetUnitBlendTime, SetUnitColor, UnitAddIndicator | various | LIKELY | presentation only: logged to the `PresentationLog` |
 //! | ChangeLevel / LoadGame / SaveGame | 0x6F3BBC30 / 0x6F3BBE60 / 0x6F3BBEE0 | CONFIRMED structure | recorded as host requests; Load/Save only act in a single-player, non-replay game |
 //!
-//! Not registered (see [`NATIVES`] for the reasons): `GetLocalizedHotkey`, `TriggerWaitForSound`.
+//! `GetLocalizedHotkey` and `TriggerWaitForSound` are registered in `lane_f.rs` (`docs/spec/natives-lane-f.md`).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -81,14 +81,8 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry { name: "ChangeLevel", support: Support::Likely },
     NativeEntry { name: "LoadGame", support: Support::Likely },
     NativeEntry { name: "SaveGame", support: Support::Likely },
-    NativeEntry {
-        name: "GetLocalizedHotkey",
-        support: Support::NotImplemented("after a non-empty check of the raw string argument (no TRIGSTR substitution) the native calls the key-name lookup 0x6F009F90 -> 0x6F4D1F80 -> 0x6F4D1EB0/0x6F4CE050, which maps a key text to a virtual-key code through the input configuration tables; those tables and the two helpers are not decoded"),
-    },
-    NativeEntry {
-        name: "TriggerWaitForSound",
-        support: Support::NotImplemented("the native resolves the sound and calls 0x6F44B2F0, which puts the running thread into wait state 1 with the sound object and the real offset stored in the thread record (thread+0x34/+0x38/+0x40); the thread is resumed by the sound system when the sound's remaining play time reaches the offset. The simulation has no sound playback, and sound lengths come from the audio files, so the wake time cannot be computed"),
-    },
+    NativeEntry { name: "GetLocalizedHotkey", support: Support::Likely },
+    NativeEntry { name: "TriggerWaitForSound", support: Support::Likely },
 ];
 
 /// A request for the host: the original leaves the running game or touches files.

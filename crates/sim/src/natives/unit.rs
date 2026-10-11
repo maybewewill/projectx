@@ -308,6 +308,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
                     if from == new_owner {
                         None
                     } else {
+                        gm.food_move_owner(k, new_owner);
                         count_move_owner(&mut gm, k, new_owner);
                         gm.push_unit_event(UnitEvent::OwnerChanged {
                             unit: k,
@@ -523,6 +524,7 @@ pub(crate) fn build(
         loaded: false,
         class_flags: ty.classification,
         alt_icon: false,
+        food_reg: 0,
         ethereal: 0,
         magic_immune: 0,
         sight: ty.sight,
@@ -542,6 +544,7 @@ pub(crate) fn build(
     };
     gm.place_new_unit(key, x, y);
     count_add_completed(gm, key);
+    gm.food_apply_creation(key);
     gm.combat_on_create(key);
     Some((key, id))
 }
@@ -614,6 +617,7 @@ fn count_move_owner(gm: &mut Game, k: ObjKey, to: u32) {
 /// Removes the unit (the body of `RemoveUnit`, see the module notes).
 fn remove(gm: &mut Game, k: ObjKey) {
     count_unregister(gm, k);
+    gm.food_release(k);
     gm.unit_mut(k).removed = true;
     gm.push_unit_event(UnitEvent::Removed(k));
     for id in REMOVE_SEQUENCE {

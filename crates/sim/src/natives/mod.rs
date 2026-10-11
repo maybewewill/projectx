@@ -31,6 +31,7 @@ mod hashtable;
 pub mod hero;
 pub mod item;
 pub mod lane_e;
+pub mod lane_f;
 mod location;
 pub mod melee_start;
 pub mod misc;
@@ -78,6 +79,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     timer::register(reg, game);
     trigger::register(reg, game);
     lane_e::register_sleeping(reg, game);
+    lane_f::register_sleeping(reg, game);
     register_world(reg, game);
 }
 
@@ -115,4 +117,5 @@ pub fn register_world(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     shop::register(reg, game);
     melee_start::register(reg, game);
     lane_e::register(reg, game);
+    lane_f::register(reg, game);
 }

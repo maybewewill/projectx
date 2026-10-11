@@ -111,6 +111,9 @@ pub enum BaseKind {
     Invulnerable,
     /// `Aloc`: the locust ability (no behaviour yet).
     Locust,
+    /// One of the six build abilities (`ANbu`, `AHbu`, `AEbu`, `AGbu`, `AObu`, `AUbu`, fixed field `+0x1F4`). Accepts
+    /// the build orders (an order id that is a unit type id), see `orders.rs`.
+    Build,
     /// `BTLF`: the timed life buff.
     TimedLife,
     /// Any other base code: data only.
@@ -125,6 +128,7 @@ impl BaseKind {
             ATTACK => BaseKind::Attack,
             INVULNERABLE => BaseKind::Invulnerable,
             LOCUST => BaseKind::Locust,
+            b if BUILD_CODES.contains(&b) => BaseKind::Build,
             TIMED_LIFE => BaseKind::TimedLife,
             _ => BaseKind::Generic,
         }
