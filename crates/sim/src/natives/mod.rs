@@ -23,6 +23,7 @@ mod item;
 mod location;
 mod player;
 pub mod presentation;
+mod region;
 mod rng;
 mod timer;
 mod trigger;
@@ -62,6 +63,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     presentation::register(reg, game);
     unit::register(reg, game);
     unit_event::register(reg, game);
+    region::register(reg, game);
     group::register(reg, game);
     item::register(reg, game);
 }

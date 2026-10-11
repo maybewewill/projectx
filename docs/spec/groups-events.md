@@ -533,3 +533,7 @@ which is a different path.
 Suggested harness work: each check above is a single native or helper call with
 known arguments, so the existing Unicorn harness (tools/emu) can run them. Do not write
 harness output into the repo; keep it in scratchpad.
+
+
+## Addendum (lead, 2026-10-11)
+Event 0x3D is TriggerRegisterUnitInRange (FUN_6F3D25F0, key 0x8023D), not an alternative region-enter event (found while implementing regions). The world-to-cell origin is world+0x6C for x and +0x70 for y (Unicorn-checked in the region box helper 0x6F47BA20), which also corrects groups-events-2.md section 1.2.

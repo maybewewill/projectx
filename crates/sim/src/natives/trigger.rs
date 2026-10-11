@@ -483,7 +483,10 @@ fn destroy(gm: &mut Game, t: ObjKey) {
                     tm.listeners.retain(|&(trig, _)| trig != t);
                 }
             }
-            EventSource::UnitEvent { .. } | EventSource::PlayerUnitEvent { .. } => {}
+            // Observer entries are dropped by `forget_observers_of` below.
+            EventSource::UnitEvent { .. }
+            | EventSource::PlayerUnitEvent { .. }
+            | EventSource::RegionEvent { .. } => {}
         }
         gm.kill(ev);
     }
