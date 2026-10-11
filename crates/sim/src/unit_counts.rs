@@ -96,6 +96,11 @@ impl PlayerCounts {
         Self::default()
     }
 
+    /// Every record in type-id order (the original walks its record list; the score natives sum over it).
+    pub fn records(&self) -> impl Iterator<Item = (u32, &TypeRecord)> + '_ {
+        self.records.iter().map(|(&k, r)| (k, r))
+    }
+
     /// The record of `type_id`, if one was created.
     pub fn record(&self, type_id: u32) -> Option<&TypeRecord> {
         self.records.get(&type_id)

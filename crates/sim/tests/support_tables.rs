@@ -22,6 +22,7 @@ fn tables() -> Vec<(&'static str, &'static [NativeEntry])> {
         ("group orders", order::GROUP_NATIVES),
         ("pending", pending::NATIVES),
         ("melee start", natives::melee_start::NATIVES),
+        ("lane e", natives::lane_e::NATIVES),
         ("slots", natives::gamestate::SLOT_NATIVES),
         ("shop", natives::shop::NATIVES),
     ]

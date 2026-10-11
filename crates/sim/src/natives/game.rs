@@ -1225,6 +1225,8 @@ pub struct Game {
     rng_table: Option<RngTable>,
     /// Presentation state: the event log, the camera and the non-handle pools (see `presentation.rs`).
     pres: PresentationState,
+    /// State of the selection, string, player-removal and timed-turn natives (`lane_e.rs`).
+    pub lane: super::lane_e::LaneE,
     /// The unit type registry the host fills (see [`UnitTypes`]).
     unit_types: UnitTypes,
     /// Unit events in the order they were produced, until the host takes them (see [`UnitEvent`]).
@@ -1332,6 +1334,7 @@ impl Game {
             rng: Streams::default(),
             rng_table: None,
             pres: PresentationState::default(),
+            lane: super::lane_e::LaneE::default(),
             unit_types: UnitTypes::new(),
             shops: ShopState::default(),
             unit_events: Vec::new(),

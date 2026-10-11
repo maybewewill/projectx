@@ -520,13 +520,12 @@ endfunction
     );
 }
 
-/// The tables cover every native of the work list once, and an entry is registered exactly when it is not
+/// The tables cover every native of the work list once (the eight presentation and timed-turn natives moved to lane_e.rs), and an entry is registered exactly when it is not
 /// `NotImplemented`. The `NotImplemented` entries are checked through the VM: a script that calls them leaves
 /// them unbound.
 #[test]
 fn support_tables_cover_the_work_list() {
-    // 123 before the sleep/alarm natives moved to natives::melee_start (melee-start-natives.md).
-    assert_eq!(UNIT_NATIVES.len() + HERO_NATIVES.len(), 115);
+    assert_eq!(UNIT_NATIVES.len() + HERO_NATIVES.len(), 107);
     let mut names: Vec<&str> = UNIT_NATIVES
         .iter()
         .chain(HERO_NATIVES.iter())
@@ -534,7 +533,7 @@ fn support_tables_cover_the_work_list() {
         .collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 115, "no name appears twice");
+    assert_eq!(names.len(), 107, "no name appears twice");
     let implemented = UNIT_NATIVES
         .iter()
         .chain(HERO_NATIVES.iter())

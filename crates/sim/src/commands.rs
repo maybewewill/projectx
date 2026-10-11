@@ -198,6 +198,19 @@ impl CommandState {
         rt: Option<&mut dyn ScriptRuntime>,
         cmd: &Command,
     ) -> Outcome {
+        // The selections live in `Game::lane` (the selection natives edit them too): take them in, apply, give back.
+        self.selections = game.borrow().lane.selections.clone();
+        let out = self.apply_inner(game, rt, cmd);
+        game.borrow_mut().lane.selections = self.selections.clone();
+        out
+    }
+
+    fn apply_inner(
+        &mut self,
+        game: &RefCell<Game>,
+        rt: Option<&mut dyn ScriptRuntime>,
+        cmd: &Command,
+    ) -> Outcome {
         self.applied += 1;
         match cmd {
             Command::Select { player, add, units } => {
