@@ -355,6 +355,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (36)**: vision pass 3: unit centre `0x6f474460` = centre of the footprint rect at unit+0x98 (Unicorn 200/200); fog cell for units = pathing cell >> 2 (128 units). Unit sight writer `0x6f409e00` is NOT the plain circle for R ≥ 3 (depends on span data at grid+0x1C/+0x20, producer not found; reads cliff levels → cliffs can block sight) — sim still uses the circle (known wrong). Time of day = game state slot at game+0x28; advance rate and night threshold not found.
+
 - **2026-10-11 (35)**: hero life sink `0x6F2AC450` (heroes.md §10; Unicorn 800 cases): mode 1 proportional (life = floor(newmax·life/max + 0.5)), mode 2/3 absolute, clamp rules of the max/life setters. ⚠ **Known divergence**: 1 of 800 cases differs only in the sign of a zero (mode 2, min path) — the test tolerates ≤ 4 such cases; this is NOT bit-exact and must be fixed (signed zero can matter downstream). Hero bonuses applied: HP via the sink, armor/move added (LIKELY), attack bonus added to the dice bonus (UNSURE which field), regen/attack speed stored only; mana sink `0x6F278F50` not run. Factor at global+0x29C unknown (1.0 used).
 
 - **2026-10-11 (34)**: replay load (replay-load.md): header magic/reader `0x6F534750` (size 0x40 v0 / 0x44 v1 enforced in w3g), block reader `0x6F535050` (8-byte block header with a 16-bit folded CRC), stat-string encoder `0x6F651860` (our decoder is its exact inverse), setup builder `0x6F443860`. `Engine::boot_from_replay` (seed + slots from the replay; races/colors/teams LIKELY). Open: the game-info record reader (replay → start blob link still LIKELY), settings flag meanings, game speed bits, handicap not stored in the sim.
