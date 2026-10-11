@@ -17,11 +17,16 @@
 //!
 //! * Paletted: a 256-entry BGRA palette (1024 bytes) follows the header. Each mip is
 //!   `w*h` palette indices followed by alpha data packed at `alpha_bits` per pixel.
-//! * JPEG: a u32 header size, then the shared JPEG header bytes. Each mip is stored without
-//!   the shared header; the decoder prepends it before handing the data to the JPEG decoder.
+//! * JPEG: a u32 header size, then the shared JPEG header bytes (SOI through the start of the
+//!   frame header). Each mip is stored without the shared header; the decoder prepends it.
+//!   Every JPEG mip is a 4-component frame with no colour transform: the components are
+//!   B, G, R and alpha, stored as-is. `alpha_bits` is 0 for opaque files and 8 when the fourth
+//!   component carries alpha. The layout was checked against the shipped Warcraft III 1.26
+//!   textures: the decoded colours and the alpha of a glowing rune texture come out right
+//!   only with this reading.
 //!
-//! Details not yet verified against real game files are marked `UNVERIFIED` in the code:
-//! JPEG channel order, 4-bit alpha nibble order, and top-to-bottom row order.
+//! Details not confirmed by real files are marked `UNVERIFIED` in the code: the 1-bit and
+//! 4-bit alpha packing (the shipped archives only use 0 and 8), and top-to-bottom row order.
 
 /// Size of the fixed header (magic through the mip size table).
 pub const HEADER_LEN: usize = 0x9C;
@@ -273,18 +278,24 @@ impl Blp {
         Ok(out)
     }
 
-    /// Decodes one JPEG mip: the shared header, then this mip's JPEG data, then (when the
-    /// header declares alpha bits) the alpha section stored at the end of the mip.
+    /// Decodes one JPEG mip: the shared header followed by this mip's JPEG data. Alpha is the
+    /// fourth JPEG component; there is no separate alpha section (checked on real terrain
+    /// textures: mip 0 ends with the JPEG end-of-image marker and the fourth component spans
+    /// the full 0..=255 range).
     fn decode_jpeg(&self, mip: &[u8], w: u32, h: u32) -> Result<Vec<u8>, Error> {
         let header_len = u32_at(&self.data, HEADER_LEN) as usize;
         let shared = &self.data[HEADER_LEN + 4..HEADER_LEN + 4 + header_len];
-        let (jpeg_data, alpha) = split_jpeg_mip(mip, w, h, self.header.alpha_bits);
+        let jpeg_data = mip;
 
         let mut jpeg = Vec::with_capacity(shared.len() + jpeg_data.len());
         jpeg.extend_from_slice(shared);
         jpeg.extend_from_slice(jpeg_data);
 
-        let mut decoder = zune_jpeg::JpegDecoder::new(&jpeg);
+        // jpeg-decoder does no colour conversion for 4-component frames without a colour
+        // transform, but it reports each CMYK component as 255 - stored value. Undoing that
+        // gives the stored B, G, R and alpha bytes. zune-jpeg is not used: it converts CMYK
+        // to RGB and drops the fourth component.
+        let mut decoder = jpeg_decoder::Decoder::new(jpeg.as_slice());
         let pixels = decoder.decode().map_err(|e| Error::Jpeg(e.to_string()))?;
         let info = decoder
             .info()
@@ -295,77 +306,25 @@ impl Blp {
                 info.width, info.height, w, h
             )));
         }
-        let channels = decoder
-            .get_output_colorspace()
-            .map(|c| c.num_components())
-            .unwrap_or(0);
-
-        // UNVERIFIED channel order: BLP JPEG data is treated as BGR(A). The JPEG is decoded
-        // with its native component order and the bytes are reversed for RGB(A) output.
-        let count = w as usize * h as usize;
-        if pixels.len() != count * channels {
+        if info.pixel_format != jpeg_decoder::PixelFormat::CMYK32 {
             return Err(Error::Jpeg(format!(
-                "decoded {} bytes, expected {} for {channels} channels",
+                "expected a 4-component frame, got {:?}",
+                info.pixel_format
+            )));
+        }
+        let count = w as usize * h as usize;
+        if pixels.len() != count * 4 {
+            return Err(Error::Jpeg(format!(
+                "decoded {} bytes, expected {}",
                 pixels.len(),
-                count * channels
+                count * 4
             )));
         }
         let mut out = vec![0u8; count * 4];
-        match channels {
-            1 => {
-                for (px, &g) in out.chunks_exact_mut(4).zip(&pixels) {
-                    px.copy_from_slice(&[g, g, g, 255]);
-                }
-            }
-            3 => {
-                for (px, src) in out.chunks_exact_mut(4).zip(pixels.chunks_exact(3)) {
-                    px.copy_from_slice(&[src[2], src[1], src[0], 255]);
-                }
-            }
-            // zune-jpeg converts CMYK/YCCK input to RGB by default, so a 4-channel output does
-            // not occur with default options. Any other count is an error.
-            other => {
-                return Err(Error::Jpeg(format!(
-                    "unsupported JPEG component count {other}"
-                )))
-            }
-        }
-        if let Some(alpha) = alpha {
-            apply_alpha(&mut out, alpha, self.header.alpha_bits);
+        for (dst, src) in out.chunks_exact_mut(4).zip(pixels.chunks_exact(4)) {
+            dst.copy_from_slice(&[255 - src[2], 255 - src[1], 255 - src[0], 255 - src[3]]);
         }
         Ok(out)
-    }
-}
-
-/// Bytes of the alpha section that follows the JPEG data of a `w x h` mip.
-pub fn alpha_section_len(w: u32, h: u32, alpha_bits: u32) -> usize {
-    let pixels = w as usize * h as usize;
-    match alpha_bits {
-        1 => pixels.div_ceil(8),
-        4 => pixels.div_ceil(2),
-        8 => pixels,
-        _ => 0,
-    }
-}
-
-/// Splits a JPEG mip into its JPEG bytes and its alpha section. The alpha section is the last
-/// [`alpha_section_len`] bytes of the mip. A mip too short to hold it is taken as pure JPEG.
-///
-/// Real 512x256 terrain textures (8-bit alpha) confirm the tail layout: the JPEG part of the
-/// mip ends where the alpha section begins, and it has no end-of-image marker.
-pub fn split_jpeg_mip(mip: &[u8], w: u32, h: u32, alpha_bits: u32) -> (&[u8], Option<&[u8]>) {
-    let alpha_len = alpha_section_len(w, h, alpha_bits);
-    if alpha_len == 0 || mip.len() <= alpha_len {
-        return (mip, None);
-    }
-    let (jpeg, alpha) = mip.split_at(mip.len() - alpha_len);
-    (jpeg, Some(alpha))
-}
-
-/// Writes the alpha of every pixel of an RGBA buffer, using [`alpha_at`].
-pub fn apply_alpha(rgba: &mut [u8], alpha: &[u8], alpha_bits: u32) {
-    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
-        px[3] = alpha_at(alpha, alpha_bits, i);
     }
 }
 

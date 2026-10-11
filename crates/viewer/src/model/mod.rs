@@ -149,13 +149,11 @@ mod tests {
                 mdx::Texture {
                     replaceable_id: 0,
                     path: "a.blp".into(),
-                    unknown: 0,
                     flags: 0,
                 },
                 mdx::Texture {
                     replaceable_id: 0,
                     path: "b.blp".into(),
-                    unknown: 0,
                     flags: 0,
                 },
             ],
@@ -253,7 +251,6 @@ mod tests {
         m.textures.push(mdx::Texture {
             replaceable_id: 1,
             path: String::new(),
-            unknown: 0,
             flags: 0,
         });
         let a = ModelAsset::new(m, |_| None).unwrap();
