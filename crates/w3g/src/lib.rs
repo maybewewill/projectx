@@ -5,11 +5,17 @@
 
 mod actions;
 mod blocks;
+mod checksum;
 mod game;
 mod header;
 pub mod leading;
 mod reader;
 pub mod start;
+pub mod sync;
+mod writer;
+
+pub use checksum::{block_data_check, block_header_check, crc32, fold, header_check};
+pub use writer::write_file;
 
 pub use actions::{
     decode_actions, Action, AbilityHeader, AbilityPointObject, ObjectId, Point, NO_OBJECT,
@@ -32,6 +38,15 @@ pub enum Error {
         size: u32,
         expected: u32,
     },
+    /// The header CRC (`FUN_6f534750`, error `0x0D`) does not match.
+    #[error("replay header CRC {computed:#010x} does not match the stored {expected:#010x}")]
+    HeaderCrc { expected: u32, computed: u32 },
+    /// The block's 8-byte header CRC (`FUN_6f535050`, error `0x13`) does not match.
+    #[error("block {block}: header CRC does not match")]
+    BlockHeaderCrc { block: u32 },
+    /// The block's compressed payload CRC (`FUN_6f535050`, error `0x19`) does not match.
+    #[error("block {block}: payload CRC does not match")]
+    BlockDataCrc { block: u32 },
     #[error("unexpected end of data at offset {offset:#x} (wanted {wanted} bytes)")]
     UnexpectedEof { offset: usize, wanted: usize },
     #[error("unterminated string at offset {offset:#x}")]

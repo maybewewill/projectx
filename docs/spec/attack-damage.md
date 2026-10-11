@@ -37,7 +37,7 @@ Addresses are 1.26a. "FUN_x" names are the decompiler's names.
 
 Software float helpers (all float32 bit patterns, truncation, not IEEE): add 0x6F6EF000, subtract 0x6F6EEEF0 (negate the second operand, then add), multiply 0x6F6EEE20, reciprocal 0x6F6EF100 (table-driven, 2 entries at 0x6F9774C8, linear interpolation on the top mantissa bits), integer to float 0x6F6EF350, float to int with truncation toward zero 0x6F6EEC20, and divide 0x6F6EFE10 (returns 1.0 when both operands are equal, else x times reciprocal(y)). The add, subtract and multiply helpers match the repo model in crates/sim/src/softfloat.rs. CONFIRMED for add, subtract, multiply, truncation. LIKELY for divide. The reciprocal needs its table bytes from Game.dll (UNSURE).
 
-Float constants (read as the runtime values): DAT_0x6FAAE470 = 0.0 (LIKELY), DAT_0x6FAAE4F4 = 1.0 (LIKELY; matches rng.md section 3.3 and the literal 0x3F800000 in the divide helper), DAT_0x6FAAE464 = -1.0 (LIKELY, AGENTS 4.3f). The bit pattern 1.4e-45 (denormal, one mantissa bit) is used as a status flag (section 4).
+Float constants (read as the runtime values; confirmed against the start-up dump 2026-10-11, see runtime-constants-audit.md): DAT_0x6FAAE470 = 0.0, DAT_0x6FAAE4F4 = 1.0 (matches rng.md section 3.3 and the literal 0x3F800000 in the divide helper), DAT_0x6FAAE464 = -1.0 (AGENTS 4.3f). The bit pattern 1.4e-45 (denormal, one mantissa bit) is used as a status flag (section 4).
 
 ## 2. Unit-type data per weapon (2 weapon slots)
 

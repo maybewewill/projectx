@@ -125,7 +125,7 @@ resolved in this pass. The rule is "advance after the 0.2 arrival test passes", 
   values: T0 at +0, T1 at +4, T2 at +8, T3 at +0xC). The table values are small (about 2e-7 to 2e-6, LIKELY
   rates per tick). Their meaning is not decoded here.
 - The heading difference is wrapped by 0x6F496630 with pi at 0x6FAAE600 = 3.1415927 (CONFIRMED value), and
-  the magnitude is compared with 0x6FAB7540 = 3.4e-8 (CONFIRMED value). Below it, the function calls the
+  the magnitude is compared with 0x6FAB7540 = 0.001 (0x3A83126F; **correction 2026-10-11, runtime-constants audit**: the earlier value 3.4e-8 was wrong, the start-up value is 0.001). Below it, the function calls the
   unit's virtual at slot 0x58 (no turn, LIKELY "arrived").
 - Above it: the magnitude is clamped against T1 and T2 with DIV (0x6F6EFE10) and pow (0x6F6F0810), then
   0x6F493910 is called and the result written to the output. Full formula UNSURE.

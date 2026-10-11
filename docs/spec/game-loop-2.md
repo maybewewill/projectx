@@ -137,9 +137,10 @@ Ordering among threads that wake on the same step: by expiry, then by the sequen
 |---|---|---|---|---|
 | Queue A "now" | float at dispatch+0x40 | seconds | pump 0x6F46E370 and advance 0x6F46E520 | CONFIRMED (location), LIKELY (unit) |
 | Queue horizon | float at dispatch+0x48 | seconds | runtime value UNSURE | UNSURE |
-| Agile cursor | float global 0x6FAB7380 | seconds | pump via 0x6F46FFE0 loop | LIKELY |
+| Agile cursor | float global 0x6FAB7380 | seconds | pump via 0x6F46FFE0 loop | LIKELY; **open (2026-10-11 audit)**: the start-up value is 299.0, not 0, so the "advance from 0" reading needs a dynamic check |
 | Frame target | float global 0x6FAAE4A0 | seconds (LIKELY) | writers not found; read by 0x6F470C70 and 0x6F46FFE0 | UNSURE for writers |
-| Zero constant | float 0x6FAAE470 (also 0x6FAAE47C, 0x6FAAE594) | none | file image is 0.0 | CONFIRMED (file image); **0x6FAAE478 is 1e-4 at runtime** (the timer minimum) |
+| Zero constant | float 0x6FAAE470 | none | file image is 0.0 and so is the runtime value | CONFIRMED |
+| Start-up constants (not zero) | 0x6FAAE478 = 1e-4 (timer minimum), 0x6FAAE47C = 0.001, 0x6FAAE594 = 300.0 | none | file image is 0.0 for all three; runtime values differ | CONFIRMED (runtime-constants audit, 2026-10-11; the row above used to list 0x6FAAE47C and 0x6FAAE594 as zero constants, which was wrong) |
 | Net step counter | int at CNetData+0x628 (from first pass) | steps (unit UNSURE) | net bracket 0x6F65C7D0 / 0x6F65C840 | CONFIRMED (from first pass) |
 | Wall clock | GetTickCount (import slot 0x6F86D230) | milliseconds | system | CONFIRMED |
 

@@ -238,32 +238,7 @@ mod tests {
 
     /// Wraps a body in one zlib block with the header layout the w3g tests use.
     fn synthetic_file(body: &[u8]) -> Vec<u8> {
-        use std::io::Write;
-        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-        let mut padded = body.to_vec();
-        padded.resize(body.len().max(1), 0);
-        z.write_all(&padded).unwrap();
-        let data = z.finish().unwrap();
-        let mut blocks = Vec::new();
-        blocks.extend_from_slice(&(data.len() as u16).to_le_bytes());
-        blocks.extend_from_slice(&(body.len() as u16).to_le_bytes());
-        blocks.extend_from_slice(&0u32.to_le_bytes());
-        blocks.extend_from_slice(&data);
-        let mut f = Vec::new();
-        f.extend_from_slice(w3g::MAGIC);
-        f.extend_from_slice(&0x44u32.to_le_bytes());
-        f.extend_from_slice(&((0x44 + blocks.len()) as u32).to_le_bytes());
-        f.extend_from_slice(&1u32.to_le_bytes());
-        f.extend_from_slice(&(body.len() as u32).to_le_bytes());
-        f.extend_from_slice(&1u32.to_le_bytes());
-        f.extend_from_slice(b"PX3W");
-        f.extend_from_slice(&26u32.to_le_bytes());
-        f.extend_from_slice(&6059u16.to_le_bytes());
-        f.extend_from_slice(&0x8000u16.to_le_bytes());
-        f.extend_from_slice(&350u32.to_le_bytes());
-        f.extend_from_slice(&0u32.to_le_bytes());
-        f.extend_from_slice(&blocks);
-        f
+        w3g::write_file(body, body.len().max(1), 6059, 0x8000, 350)
     }
 
     #[test]

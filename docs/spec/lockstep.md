@@ -439,7 +439,7 @@ populated agent in emulation needs the allocator stubs (`0x6F4C1AB0`, `0x6F629E9
 
 ### 9.2 The float: `0x6FACC8CC` = 0.005f (CONFIRMED value)
 
-- The file holds 0 at `0x6FACC8CC` (also 0 at its neighbours `0x6FACC8C8`, `0x6FACC8D0`).
+- The file holds 0 at `0x6FACC8CC` (also 0 at its neighbour `0x6FACC8D0`). **Correction 2026-10-11 (runtime-constants audit):** the other neighbour `0x6FACC8C8` is not zero at start-up: it holds 180/pi (0x42652EE1).
 - The only writer is the static initializer **`0x6F8621C0`** (CONFIRMED by its code). It is listed
   in the start-up initializer table in `.rdata` at `0x6F87438C` (byte search; CONFIRMED membership,
   LIKELY that the CRT calls it at start-up, as for the other entries).
@@ -829,3 +829,74 @@ except where noted.
 | Budget-exhausted or yielded thread | continues once per tick, only when runnable | UNSURE |
 | Combat tick of units with orders | every 20 ticks | UNSURE |
 | AI dispatch | batch boundaries (engine) | UNSURE (section 11.5) |
+
+## 13. Pass 9 (2026-10-11): the 0x22 sync record, its content and its sender (replay oracle)
+
+Labels: CONFIRMED = read in the Game.dll machine code (addresses given) and checked on the real 1.26a replay
+where a file check is possible; LIKELY = strong structure, not run; UNSURE = open.
+
+### 13.1 Record layout (CONFIRMED on the real file, `crates/w3g` `Block::Checksum`)
+
+- Block id `0x22`, then `u8 n` (= 4 in all 89,259 records of the real file), then `u32` little endian.
+  Total 6 bytes. Parsed as `w3g::Block::Checksum { csum }`; any other length is refused (`BadBlockLength`).
+- One record follows **every** time slot (`0x1E`/`0x1F`): 89,259 time slots, 89,259 records, each record
+  directly after its slot (`crates/w3g/tests/checksums.rs`, env `W3G_REPLAY`). The record has no time increment.
+- Receiver (CONFIRMED): block handler `0x6F551D80`, case `0x22`. It reads the record, checks that all its bytes
+  were consumed (length), and when the local player is not a computer/replay mode it compares the 4 bytes with
+  `CNetData+0x1C64` (the local value, section 13.3) with a 4-byte loop, when `CNetData+0x610 != 0` and the flags
+  `+0x2270` and `+0x226C` are both zero (other cases only log). A mismatch takes the desync path (`0x6F5378A0`,
+  `0x6F2C8A10`); the log line `csum[%08X]` comes from the sync object printer `0x6F536C30`. So the record is the
+  word the original computed for this slot. The record's own count and the `count` field printed in
+  the log (`CNetData+0x1C68`, incremented by `0x6F5516E0` for player 0) are not in the record.
+
+### 13.2 The sync object and the record writer (CONFIRMED structure)
+
+- `CSyncData` (`NTempest`, vtable `0x6F9581A4`, RTTI from `tools/analysis/rtti_vtables.py`): embedded in
+  `CNetData` at `+0x2278` (`0x6F55062F`). Slot 1 (`vtable+4`, `0x6F536BE0`) returns the dword at `this+4`, slot 2
+  (`0x6F536C10`) clears `this+4` and `this+8`, slot 4 (`0x6F536C30`) prints `csum` through slot 1 of `this+8`.
+  The CSyncData methods are not the checksum computation; the value itself is computed in 13.3.
+- The record is written by `0x6F537820` (called in the time applier `0x6F5516E0` right after 13.3, for the local
+  player, CONFIRMED call order) with `&CNetData+0x1C64` as its value argument (the record body is its
+  serialisation; the exact bytes it emits are the `u8 4` + `u32` of 13.1, CONFIRMED by the real file).
+  Replay reading: block `0x22` → `0x6F54E140` → `0x6F54CC10` → `0x6F54CAD0` (CONFIRMED path, which does not add
+  time for `0x22`; only `0x1E/0x1F` do).
+
+### 13.3 The value (CONFIRMED arithmetic, `FUN_6f545840`, `crates/w3g/src/sync.rs`)
+
+Called only from the time applier `FUN_6f5516E0` (`0x6F551818`) for player 0 when the applied amount is nonzero
+and the replay/online conditions hold. Writes `CNetData+0x1C64`:
+
+```
+A  = FUN_6f005e20(FUN_6f4c34d0(13))   fold over the sync participants of registry 13:
+                                      for i = n-1 .. 0: v = vtable[0](participant_i); acc = rol(v ^ acc, 3)
+c  = rol(A ^ 0x17AB, 3)
+T  = CNetData+0x1C70   (the tick clock; +5 per tick, section 11), or FUN_6f543d40(world) when CNetData+0x2F8 != 0
+X  = world+0x40, or world+0x1C when that is -1          (world = dword at 0x6FAB778C, set by 0x6F46D910)
+Y  = world+0x50
+v  = T ^ c
+v  = rol(v,3) ^ X ;  v = rol(v,3) ^ X ;  v = rol(v,3) ^ Y
+value = rol(v,3)                                          -> CNetData+0x1C64
+```
+
+Facts checked on the disassembly: the RNG-state hash `FUN_6f280BE0` of `[0x6FAB73D8]` is computed in
+`FUN_6f545840` but its accumulator is never read (dead for the value). The whole-state variant `FUN_6f545930`
+(which also folds X, Y and the RNG bytes through `FUN_6f4AB660` seeding) is **not** the 0x22 value; its callers
+are `0x6F26CA98`, `0x6F2751E2`, `0x6F2852EC` (not the sync path). `FUN_6f4AB660` is the RNG seeding of section 4.3f.
+
+Consequences (CONFIRMED by the algebra, tested in `sync.rs`):
+- For fixed A, X, Y the value is GF(2)-affine in T: `value(T) ^ value(T') = rol(T ^ T', 12)`.
+- A, X, Y change during a game (the real file's consecutive values are not affine in the millisecond clock: the
+  test of `T` = the prefix ms sums gives 1 match in 89,259). So the record covers game state through A, X, Y.
+- Verifying the value needs the game state at each slot. It cannot be checked from the file alone; the
+  record stream is the oracle for the engine once A, X, Y and T are computed by the simulation.
+
+### 13.4 Open (UNSURE)
+
+- Which objects register in registry 13 (`0x6F6D98E0` is the per-thread table accessor; the registering call is
+  not found) and what their vtable slot 0 returns. This is the main gap for A.
+- The producers of world+0x1C, +0x40, +0x50 (world = the dword at `0x6FAB778C`, set by `0x6F46D910`). The other
+  global used by the same function, `0x6FAB73D8`, is only read there (its first 8 bytes are hashed into a dead
+  accumulator).
+- Whether T is the tick clock before or after the slot's own ticks (the applier runs before the ticks; LIKELY
+  before). The GF(2) test above assumed the prefix sums; with the state-dependent A, X, Y it cannot decide.
+- `CNetData+0x2F8` (alternative tick source) and the flag that gates the computation (`+0x2288` tag, `+0x610`).
