@@ -251,6 +251,8 @@ impl ScriptHost {
                 fired += 1;
             }
             let expiry = F32::from_bits(event.expiry.to_bits());
+            // Positions are evaluated at the queue time of the callback (movement-6.md section 6).
+            self.game.borrow_mut().set_game_time(expiry);
             match event.payload {
                 Payload::Sleep(thread) => {
                     if let Err(e) = self.vm.resume(thread, expiry) {
@@ -296,6 +298,7 @@ impl ScriptHost {
             }
         }
         self.vm.set_now(F32::from_bits(target.to_bits()));
+        self.game.borrow_mut().set_game_time(F32::from_bits(target.to_bits()));
         fired
     }
 

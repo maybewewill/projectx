@@ -22,16 +22,15 @@
 //!   `0xD000F`, `0xD0012`, `0xD0014`, `0xD0016`, `0xD0017`; for immediate orders the move ability also takes
 //!   hold position (`0xD0019`, the slot-135 accept list). The attack family is `{0xD000F}` (UNVERIFIED: the
 //!   attack family set was not read).
-//! * Movement (UNVERIFIED where marked). A point order with a move or attack ability plans a route through
-//!   the pathing search when the host set pathing data ([`PathingMap`]); without it, or when the search
-//!   start is outside the pyramid, the route is the straight line to the goal. The route is walked one step
-//!   per movement walk (the walk is the repeating timer of message 0x8026A, period 0.03 s of agile clock,
-//!   lockstep.md section 11.2; [`Game::tick_movement`]). The facing becomes the heading of the step vector
-//!   before the move (CONFIRMED order), the step length is `speed * 0.03` capped at the remaining distance
-//!   (the speed unit is UNSURE; movement-4.md found no 0.03 multiply in the original, so this is a model),
-//!   and a waypoint counts as reached when the distance is at most `0.2` cells
-//!   (`6.4` world units with a cell size of 32, UNVERIFIED scale). Without tables (the softfloat division,
-//!   square root and arccosine need them) the mover does not move anything.
+//! * Movement (see `docs/spec/movement-6.md`, CONFIRMED kernels in [`crate::mover`]). A point order with a move or
+//!   attack ability plans a route through the pathing search when the host set pathing data ([`PathingMap`]);
+//!   without it, or when the search start is outside the pyramid, the route is the straight line to the goal.
+//!   The move issue gives the unit's mover its speed cap and a zero velocity; every movement walk (the repeating
+//!   timer of message 0x8026A, period 0.03 s of agile clock, lockstep.md section 11.2; [`Game::tick_movement`])
+//!   steers the mover with the original's walk (`mover::walk`: acceleration, turn limit, arrival test). The
+//!   position is **evaluated** from the velocity and the game time, not stepped (`crate::movement`). A route
+//!   waypoint counts as reached inside 0.49 cells (LIKELY). Without tables (the softfloat division, square root
+//!   and arccosine need them) the mover does not move anything.
 //!
 //! Attack orders of a unit with the attack ability are run by the attack cycle (`combat.rs`): it decides the
 //! chase and the swing, and completes the order. Other target orders complete at once (no target following).
@@ -40,10 +39,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use softfloat::{arith, math, Tables, F32};
+use softfloat::{arith, Tables, F32};
 
 use crate::abilities::{Ability, BaseKind};
-use crate::lockstep::MOVE_PERIOD_BITS;
+use crate::mover::{self, PathState};
 use crate::natives::game::{Game, ObjKey, Object};
 use crate::pathing::grid::scale_by_1_32;
 use crate::pathing::search::{Request, Search, POP_BUDGET};
@@ -207,13 +206,10 @@ pub struct OrderSystem {
     issued: Vec<IssuedOrder>,
     notices: Vec<(ObjKey, u32)>,
     pathing: Option<PathingMap>,
-    tables: Option<Tables>,
+    pub(crate) tables: Option<Tables>,
 }
 
-/// Softfloat constants used by the mover (bit patterns, CONFIRMED values in movement.md section 6).
-const TWO_PI: F32 = F32::from_bits(0x40C9_0FDB);
-const ANGLE_EPS: F32 = F32::from_bits(0x3727_C5AC);
-const ARRIVE_CELLS: F32 = F32::from_bits(0x3E4C_CCCD);
+/// Softfloat constants used by the order system (bit patterns).
 const CELL_SIZE: F32 = F32::from_bits(0x4200_0000);
 
 /// Whether ability `kind` takes the point or target order `id` by its family (CONFIRMED for the move family).
@@ -446,6 +442,7 @@ impl Game {
     /// notification for each order, then the lists and the route are emptied (orders.md section 5, clear-all).
     fn clear_orders(&mut self, unit: ObjKey) {
         self.combat_end(unit);
+        self.mover_halt(unit);
         let Some(st) = self.orders.units.get_mut(&unit) else {
             return;
         };
@@ -507,6 +504,7 @@ impl Game {
             }
             OrderClass::Target => {}
         }
+        let routed = route.is_some();
         let st = self.orders.units.entry(unit).or_default();
         st.starting = false;
         st.route = route;
@@ -514,6 +512,11 @@ impl Game {
             e.started = true;
         }
         let pending = std::mem::take(&mut st.pending);
+        if routed {
+            self.issue_route_motion(unit);
+        } else {
+            self.mover_halt(unit);
+        }
         if combat.is_some() {
             self.combat_begin(unit);
         } else if complete {
@@ -538,8 +541,11 @@ impl Game {
             st.list.remove(0);
         }
         st.route = None;
-        if !st.list.is_empty() {
+        let more = !st.list.is_empty();
+        if more {
             self.start_head(unit);
+        } else {
+            self.mover_halt(unit);
         }
     }
 
@@ -623,6 +629,7 @@ impl Game {
         if let Some(u) = self.orders.units.get_mut(&unit) {
             u.route = None;
         }
+        self.mover_halt(unit);
     }
 
     /// Plans a route from `unit` to `goal` and makes it the unit's route. Returns `false`, with no route, when the
@@ -632,10 +639,22 @@ impl Game {
         let st = self.orders.units.entry(unit).or_default();
         if points.is_empty() {
             st.route = None;
+            self.mover_halt(unit);
             return false;
         }
         st.route = Some(Route { points, next: 0 });
+        self.issue_route_motion(unit);
         true
+    }
+
+    /// The move issue of a freshly planned route: the mover takes the unit's speed and a zero velocity
+    /// (`movement-6.md` section 5; `Game::mover_issue`). Without tables there is no mover and the unit stays put.
+    fn issue_route_motion(&mut self, unit: ObjKey) {
+        let Some(t) = self.orders.tables.take() else {
+            return;
+        };
+        self.mover_issue(unit, F32::ZERO, &t);
+        self.orders.tables = Some(t);
     }
 
     /// The softfloat tables of the order system, when the host set them.
@@ -732,15 +751,18 @@ impl Game {
         self.orders.tables = Some(tables);
     }
 
-    /// One mover step of a unit with a route (see the module notes).
+    /// One movement walk of a unit with a route (`mover::walk`, `docs/spec/movement-6.md`): the walk steers (speed,
+    /// heading) and re-bases the position at the current game time; the position itself is evaluated, not stepped.
     fn step_unit(&mut self, unit: ObjKey, t: &Tables) {
-        let (x, y, move_speed, live) = {
+        let live = {
             let Object::Unit(u) = self.object(unit) else {
                 return;
             };
-            (u.x, u.y, u.move_speed, !(u.dead || u.removed))
+            !(u.dead || u.removed)
         };
         if !live {
+            // A dead or removed unit stops where it is (its velocity would otherwise carry it on).
+            self.mover_halt(unit);
             return;
         }
         let Some(route) = self.orders.units.get(&unit).and_then(|s| s.route.clone()) else {
@@ -750,58 +772,39 @@ impl Game {
             self.route_finished(unit);
             return;
         }
-        let target = route.points[route.next];
-        let vx = arith::sub(target.0, x);
-        let vy = arith::sub(target.1, y);
-        let r = math::sqrt(arith::add(arith::mul(vx, vx), arith::mul(vy, vy)), t);
-        if arith::le(r, arith::mul(ARRIVE_CELLS, CELL_SIZE)) {
-            let next = route.next + 1;
-            if let Some(s) = self.orders.units.get_mut(&unit) {
-                if let Some(rt) = s.route.as_mut() {
-                    rt.next = next;
-                }
+        let g = self.layer();
+        let mut kin = self.kin_of(unit);
+        let pos = kin.position(&g);
+        // Intermediate waypoints count as reached inside 0.49 cells (0x6F49C3B0, squared compare, LIKELY).
+        let last = route.points.len() - 1;
+        let mut next = route.next;
+        while next < last {
+            let wp = self.cells_of(route.points[next]);
+            let dx = arith::sub(wp.0, pos.0);
+            let dy = arith::sub(wp.1, pos.1);
+            let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
+            if arith::lt(d2, crate::movement::waypoint_radius_sq()) {
+                next += 1;
+            } else {
+                break;
             }
-            if next >= route.points.len() {
-                self.route_finished(unit);
-            }
-            return;
         }
-        let heading = heading(vx, vy, r, t);
-        let speed = move_speed;
-        // Per-call distance: speed (per second) times the movement period. This is the model only.
-        // movement-4.md (sections 1-2, 6) found that the original takes the step length from the owner's
-        // vector `unit+0x80/+0x84`, capped at `unit+0x88` (set from the unit type at creation), and that no
-        // multiply by the 0.03 period exists in the mover chain. The speed-to-step conversion is open (UNSURE).
-        let speed_step = arith::mul(speed, F32::from_bits(MOVE_PERIOD_BITS));
-        let step = if arith::lt(speed_step, r) {
-            speed_step
-        } else {
-            r
-        };
-        let dir_x = arith::div(vx, r, t);
-        let dir_y = arith::div(vy, r, t);
-        let nx = arith::add(x, arith::mul(dir_x, step));
-        let ny = arith::add(y, arith::mul(dir_y, step));
-        self.unit_mut(unit).facing = heading;
-        // The step is written through the cell storage (unit_position.rs).
-        self.store_unit_position(unit, nx, ny);
-    }
-}
-
-/// Heading of the step vector `(vx, vy)` of length `r` (movement.md 4.1, CONFIRMED structure): `acos(vx/r)`,
-/// mirrored to `2*pi - a` when `vy < 0`, zero for tiny lengths and tiny angles.
-fn heading(vx: F32, vy: F32, r: F32, t: &Tables) -> F32 {
-    if arith::le(r, ANGLE_EPS) {
-        return F32::ZERO;
-    }
-    let u = arith::div(vx, r, t);
-    let a = math::acos(u, t);
-    if arith::le(a, ANGLE_EPS) {
-        return F32::ZERO;
-    }
-    if arith::le(F32::ZERO, vy) {
-        a
-    } else {
-        arith::sub(TWO_PI, a)
+        if next != route.next {
+            if let Some(rt) = self.orders.units.get_mut(&unit).and_then(|s| s.route.as_mut()) {
+                rt.next = next;
+            }
+        }
+        let goal = self.cells_of(route.points[last]);
+        let waypoint = self.cells_of(route.points[next]);
+        let pilot = self.pilot_of(unit);
+        let trace = mover::walk(&mut kin, &pilot, &g, goal, PathState::Open(waypoint), t);
+        if !trace.arrived {
+            // The facing of a unit in motion follows its heading (UNSURE: the original smooths it, 0x6F494200).
+            kin.facing = trace.heading;
+        }
+        self.commit_kin(unit, &kin);
+        if trace.arrived {
+            self.route_finished(unit);
+        }
     }
 }

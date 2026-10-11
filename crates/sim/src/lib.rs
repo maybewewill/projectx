@@ -27,6 +27,8 @@ pub mod heroes;
 pub mod hashmap;
 pub mod lockstep;
 pub mod missiles;
+pub mod mover;
+pub mod movement;
 pub mod natives;
 pub mod orders;
 pub mod pathing;

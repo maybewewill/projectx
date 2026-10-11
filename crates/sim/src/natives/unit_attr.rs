@@ -722,6 +722,8 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         if let Some(k) = unit_at(&gm, a, 0) {
             gm.unit_mut(k).move_speed = real_at(a, 1);
+            // The speed sink updates the mover's cap (0x6F4747B0, movement-6.md section 5).
+            gm.mover_speed_changed(k);
         }
         NativeResult::Return(Value::Null)
     });
