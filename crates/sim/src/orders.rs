@@ -25,9 +25,10 @@
 //! * Movement (UNVERIFIED where marked). A point order with a move or attack ability plans a route through
 //!   the pathing search when the host set pathing data ([`PathingMap`]); without it, or when the search
 //!   start is outside the pyramid, the route is the straight line to the goal. The route is walked one step
-//!   per simulation step: the facing becomes the heading of the step vector before the move (CONFIRMED
-//!   order), the step length is `speed * 0.1` capped at the remaining distance (speed unit and the per-step
-//!   conversion UNVERIFIED), and a waypoint counts as reached when the distance is at most `0.2` cells
+//!   per movement walk (the walk is the repeating timer of message 0x8026A, period 0.03 s of agile clock,
+//!   lockstep.md section 11.2; [`Game::tick_movement`]). The facing becomes the heading of the step vector
+//!   before the move (CONFIRMED order), the step length is `speed * 0.03` capped at the remaining distance
+//!   (the cap `unit+0x88` and the speed unit are UNSURE, lockstep.md section 11.3), and a waypoint counts as reached when the distance is at most `0.2` cells
 //!   (`6.4` world units with a cell size of 32, UNVERIFIED scale). Without tables (the softfloat division,
 //!   square root and arccosine need them) the mover does not move anything.
 //!
@@ -41,10 +42,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use softfloat::{arith, math, Tables, F32};
 
 use crate::abilities::{Ability, BaseKind};
+use crate::lockstep::MOVE_PERIOD_BITS;
 use crate::natives::game::{Game, ObjKey, Object};
 use crate::pathing::grid::scale_by_1_32;
 use crate::pathing::search::{Request, Search, POP_BUDGET};
-use crate::timer::STEP_BITS;
 
 /// Maximum number of orders a unit holds (CONFIRMED: refused when the count is above 500).
 pub const ORDER_LIMIT: u32 = 500;
@@ -678,10 +679,9 @@ impl Game {
         self.dispatch_order(unit, order, false).is_some()
     }
 
-    /// Runs one step of every moving unit (the mover of `movement.md` section 1, per unit in key order).
-    /// Called once per simulation step by the script host.
-    pub fn tick_orders(&mut self) {
-        // The attack cycle runs for every unit with an order; it needs no tables (the chase walk does).
+    /// The combat tick of every unit with an order. Called once per batch by the script host (cadence
+    /// UNSURE, lockstep.md section 11.7). It needs no tables (the chase walk does).
+    pub fn tick_combat(&mut self) {
         let busy: Vec<ObjKey> = self
             .orders
             .units
@@ -692,6 +692,13 @@ impl Game {
         for unit in busy {
             self.combat_tick(unit);
         }
+    }
+
+    /// Runs one movement walk: one step of every unit with a route (the mover of `movement.md` section 1,
+    /// per unit in key order). Called by the movement timer (message 0x8026A), every
+    /// [`crate::lockstep::MOVE_PERIOD_BITS`] = 0.03 s of agile clock (lockstep.md section 11.2-11.3).
+    pub fn tick_movement(&mut self) {
+        self.movement_calls += 1;
         let Some(tables) = self.orders.tables.take() else {
             return;
         };
@@ -744,7 +751,9 @@ impl Game {
         }
         let heading = heading(vx, vy, r, t);
         let speed = move_speed;
-        let speed_step = arith::mul(speed, F32::from_bits(STEP_BITS));
+        // Per-call distance: speed (per second) times the movement period. The cap at unit+0x88 is
+        // not identified in the original (lockstep.md section 11.3, UNSURE); this is the model.
+        let speed_step = arith::mul(speed, F32::from_bits(MOVE_PERIOD_BITS));
         let step = if arith::lt(speed_step, r) {
             speed_step
         } else {

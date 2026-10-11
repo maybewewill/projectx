@@ -584,3 +584,142 @@ turn's commands are applied (section 3 order).
   (`agile_clock_advances_by_one_soft_float_add_per_tick`, `tick_increment_is_five_over_thousand_in_soft_float`
   with `GAME_DLL`).
 - No Unicorn check of the pump after the tick add yet (needs the populated queue object, section 9.6).
+
+---
+
+## 11. Pass 7 (2026-10-11): the real cadence of the per-tick work
+
+Question: how often do unit movement, the AI dispatcher and the JASS scheduler run, now that one game
+tick is 0.005 s of agile clock (section 9) and the tick pumps the timer queues (section 10).
+Sources: disassembly, decompile chunks, call-site scans, and Unicorn runs of the start-up initialisers
+(`tools/emu/runtime_consts.py`). Addresses are in the original image.
+
+### 11.1 The tick hook and the four timer receivers (CONFIRMED structure)
+
+`0x6F470C70` is the per-tick body, called by the listener `0x6F2F4950` with p = `&E+0x14` (section 9):
+
+```
+mgr = [0x6FAB7368]                       ; agile manager
+if mgr.+0x38 == 0:
+    6F46E9D0(p)  ECX = mgr.+0x40          ; queue A   -> 6F46E520
+    6F46F390(p)  ECX = world.+0x14        ; queue G1  -> 6F46E9E0
+    6F46F3A0(p)  ECX = world.+0xBC        ; queue G2  -> 6F46EAB0
+    6F470740(p)  ECX = world.+0x164       ; queue G3  -> 6F46F3B0
+world = [0x6FAB73D8]
+```
+
+The four receivers share one template (disassembled in 6F46E9E0, 6F46EAB0, 6F46F3B0, 6F46E520):
+`if (obj.flags+0x4C & 1) == 0: tmp = softadd(obj.clock(+0x40), *p); if tmp < obj.horizon(+0x48):
+obj.clock = tmp; pump(obj)`; otherwise the horizon branch (not analysed; UNSURE). Each object is a 1-based
+min-heap of timers with head/count at +0x10/+0x20. An element has expiry +4, flags +0x10 (bit 0 = repeat,
+bit 16 = cancelled), owner +0x18 and period +0x8. Re-arm (`6F46D570`, `6F46D5F0`, `6F46CC80`):
+`expiry := softadd(clock, elem+8)`.
+
+| receiver | pump | fire (per due element) | Confidence |
+|---|---|---|---|
+| queue A `mgr+0x40` (6F46E520) | 6F46E370 | owner vtable slot 3 (`6F46D520`) | CONFIRMED |
+| G1 `world+0x14` (6F46E9E0) | 6F46E910 | owner vtable slot 18 (`6F46E480`) | CONFIRMED |
+| G2 `world+0xBC` (6F46EAB0) | 6F46EB80 | `6F46E5F0` → `6F49F1E0` (clears a bit set at +0x98, calls `6F49F030` per bit) | CONFIRMED (fire); LIKELY (what is queued) |
+| G3 `world+0x164` (6F46F3B0) | 6F46EB80 | as G2 | LIKELY (same pump) |
+
+### 11.2 Message 0x8026A: who posts it and at which period
+
+- The only post of 0x8026A is `0x6F426BF0(flag=1)`, called once from the map-start routine `0x6F3B0750`
+  (call at `0x6F3B0AB8`). `0x6F426BF0(0)` (from `0x6F3A2EE8` in the game-start initialiser `0x6F3A2EC0`)
+  cancels it. CONFIRMED (byte scan and the two call sites).
+- `0x6F426BF0` pushes `(0x6FAB7370, 0x8026A, obj, 1, 0)` and calls `0x6F4778F0` on the holder `obj+0x294`.
+  That calls the holder's vtable slot 2 with `(agent, timeout*, msg, repeat=1, queue-select=0.0)`. The
+  target is `CAgentTimer::vf2 0x6F477FF0`: arg2 is a `float*` read as the timeout, a nonzero arg3 means
+  repeat, and arg5 == 0.0 selects queue A (`mgr+0x40`); otherwise queue B (`mgr+0x44`) with flag 4.
+  CONFIRMED for the argument order (disassembly); LIKELY for the slot-2 identity (the vtable is built
+  at run time).
+- **The timeout is the f32 at `0x6FAB7370` = 0.03 (`0x3CF5C290`).** The static initialiser `0x6F85F650`
+  calls `S2R` (`jmp 0x6F6F0520`) on the literal at `0x6F942DD8`, which is the text `"0.03"`. Unicorn run of
+  the initialisers: `0x6FAB7370 = 0x3CF5C290`. CONFIRMED.
+- The post is a repeating timer: element flag bit 0 is set, and `6F46E480` re-arms it with
+  `expiry := softadd(clock at fire, period)`. The period is the same 0.03 (the element's +8 is the
+  timeout; LIKELY, the element constructor `6F477F80` is not decoded).
+- Dispatch: element fire → queue A pump → owner slot 3 → message switch `6F42FC80` (case 0x8026A) →
+  `6F426C30` → `6F4675C0` → `jmp 0x6F483300` (the mover walk). CONFIRMED.
+
+**Answer 1a.** The movement walk runs from a repeating agent timer on queue A with period **0.03 s of
+agile clock** (6 game ticks). It is not every tick and not from G1-G3. The first fire is 0.03 after the
+timer is armed at map start (clock 0; LIKELY).
+
+### 11.3 The mover walk and the per-call step
+
+- `0x6F483300` (CONFIRMED): increments the walk counter `world.+0x538`; calls `0x6F49AC40`; walks the
+  cluster list `world.+0x38C` (`0x6F48E4C0`); walks the mover list `world.+0x3B8` calling `0x6F493410`
+  per unit (`0x6F490FC0` → `0x6F4907F0` per 44-byte record); walks the turn list `world.+0x440`
+  (`0x6F494200`); toggles `world.+0x53C` and walks `world.+0x51C` on every second call (`0x6F4961C0`).
+- `0x6F4907F0` (the per-record step; structure CONFIRMED): r = sqrt(dx² + dy²) of the delta vector
+  `unit+0x80/+0x84` (softfloat mul/add/sqrt). `record.+0x20 := r` if |r| ≥ `DAT_6FAAE618`, else 0.0.
+  Facing `record.+0x24 := heading` (`0x6F4B2DE0`), or `unit+0x8C` when there is no step. Then
+  **`record.+0x20 := min(record.+0x20, unit+0x88)`**. So the per-call distance is capped by `unit+0x88`.
+  Nothing in the chain multiplies by an elapsed time; the cap is the only time-dependent input.
+- The writer of `unit+0x88` is **not identified**. The store scan finds about 190 candidates and none is a
+  speed setter with a constant multiply. The speed chain (`0x6F26DE00` → `0x6F202F30` → `0x6F201D50` →
+  vtable 0xB8/0x18 of an unidentified class) does not reach it in the decompile. **UNSURE**: if the cap
+  is `speed × period`, the per-call step is `speed × 0.03`. The earlier `speed × 0.1`
+  (`orders.rs` `STEP_BITS`) is therefore withdrawn for movement.
+- Arrival (`|r| ≤ 0.2`, section 4.3k) and the 0.49 path margin are unchanged.
+
+**Answer 1b.** Per movement call the step is `min(distance, unit+0x88)`. The elapsed time of the call is
+the 0.03 period (CONFIRMED value); the cap formula is UNSURE. No multiply by 0.005 is in the mover chain.
+
+### 11.4 What 0x6F46F390, 0x6F46F3A0, 0x6F470740 do
+
+- `0x6F46F390`: advances the clock of G1 (`world+0x14`) by p and pumps its due timers (`6F46E910`); each
+  fire calls the owner's vtable slot 18 (CONFIRMED).
+- `0x6F46F3A0`: advances the clock of G2 (`world+0xBC`) by p and pumps its due entries (`6F46EB80`); each
+  fire clears a bit set on the pathing side (`6F49F1E0`) (CONFIRMED).
+- `0x6F470740`: thunk to `0x6F46F3B0`; advances the clock of G3 (`world+0x164`) and pumps it as G2 (LIKELY).
+
+### 11.5 The AI dispatcher cadence (CONFIRMED values, UNSURE mapping)
+
+- The agent switch `0x6F2DBEE0` dispatches 0xD01C2 to the AI dispatcher `0x6F2DB4B0`, and 0xD01C1 to
+  `0x6F2DB230` (CONFIRMED).
+- 0xD01C2 is posted through the agent timer with two timeout constants (CONFIRMED values, Unicorn):
+  `0x6FAAE484 = 0.02` (`0x3CA3D70A`), one-shot (repeat 0), from `0x6F044340`; and `0x6FAAECA8 = 1.0`
+  (`0x3F800000`), repeating, from a site in chunk_001 near line 12708 (guarded by a unit-type check).
+  0xD01C1 uses `0x6FAAF0A0 = 1.0`, repeating, from `0x6F04C579`, `0x6F070CB7` and `0x6F070DC1`.
+- Inside `0x6F2DB4B0`: a budget `local_20 = 5000` (ms-like). For each candidate, `next = (object+0x9c) + 100`
+  with the object from `0x6F481460` (`[ecx+0x250]`), and `local_20 = min(local_20, next)`. When the list is
+  empty it clears `0x2EC` and cancels its timer (`0x6F477D30`). So "+100" is a deadline in the object's own
+  time units, **not a 100 ms agile-clock period**. The 0.1 s batch of AiHost is not supported by the
+  original. **UNSURE** what the dispatcher's real period is; the periodic 1.0 s timers are the candidates.
+
+### 11.6 The JASS scheduler (LIKELY: no tick-driven pass)
+
+- Interpreter entry points: `0x6F44B640` (flags, budget 300000 or 0), `0x6F44B6A0` (budget 300000), and the
+  interpreter `0x6F45F8B0` / `0x6F45FA30` / `0x6F45FD00`. Callers (CONFIRMED by call-site scan):
+  `0x6F3A8340` (trigger execute path), `0x6F3B5470` and `0x6F3B54B0` (map/game natives), `0x6F2DE1D0` (AI
+  thread start, `0x6F44B6A0(0, ..., 300000, 0, 0)`), `0x6F2E0B70` (AI command run).
+- Sleeps: `TriggerSleepAction` (`0x6F44B2F0`) stores status 3; the wake is a timer (game-loop-2 4.5). Timer
+  expiries and trigger events run their callbacks inside the queue pump (section 11.1 fire path).
+- **No function found runs the interpreter on a fixed tick or batch cadence**: every caller is an event, a
+  native or a timer callback. The original runs a thread when it is started or woken, inside the tick's pump
+  or the native call. Our `batch()` pass every 20 ticks (`Vm::step`) has no original counterpart. It is kept
+  (UNSURE) only because budget-exhausted threads need a continuation rule that the original's op-limit path
+  does not show in this analysis.
+
+### 11.7 Summary (what the code does after this pass)
+
+| Piece | Cadence | Confidence |
+|---|---|---|
+| Agile clock | +0.005 per tick, pump after each add | CONFIRMED value (section 9), LIKELY operator |
+| Movement walk (0x8026A → 0x6F483300) | repeating timer, period 0.03 s, fires at the tick whose clock reaches the soft-added expiry | CONFIRMED value and path; period LIKELY |
+| Movement step | `min(distance, speed × 0.03)` per call | UNSURE (cap writer not found) |
+| Sleeps, timer expiries, trigger events | exact tick of their expiry | LIKELY |
+| Combat tick of units with orders | every 20 ticks (kept) | UNSURE |
+| JASS scheduler pass | every 20 ticks (kept as a model) | LIKELY not in the original (11.6) |
+| AI host pass | every 20 ticks (kept) | UNSURE (the original's values are 0.02 s one-shot and 1.0 s periodic 0xD01C2 timers) |
+
+### 11.8 Open
+
+- `unit+0x88`: the writer of the per-call cap and its value per second. A dynamic run of the original (watch
+  stores to `unit+0x88` while a unit walks) would settle it.
+- The element constructor `0x6F477F80` (to confirm element+8 = 0.03) and the horizon `mgr+0x48` value
+  (0.03 is far below any horizon, so no clamp is expected).
+- Which object owns the 1.0 s 0xD01C2 timer (the AI dispatcher's real owner) and the period of `6F2DB4B0`'s rearm.
+- The horizon branch of the four templates (`tmp >= horizon`).
