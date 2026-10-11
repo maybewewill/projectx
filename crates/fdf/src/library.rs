@@ -187,6 +187,11 @@ impl Library {
             .map(String::as_str)
     }
 
+    /// All StringList entries as (lower-case key, value), in key order.
+    pub fn strings(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.strings.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
     /// With `DecorateFileNames`, a value that is a StringList key is replaced
     /// by its string. Otherwise, or if the key is unknown, the value is kept.
     pub fn decorate(&self, decorated: bool, value: &str) -> String {

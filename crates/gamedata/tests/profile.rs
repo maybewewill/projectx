@@ -85,3 +85,20 @@ fn parse_bytes_decodes_windows_1252() {
     let p = Profile::parse_bytes(&bytes).unwrap();
     assert_eq!(p.get_list("hfoo", "Name"), ["Café"]);
 }
+
+#[test]
+fn lenient_parse_skips_stray_lines_and_keeps_the_rest() {
+    let p = Profile::parse_lenient("[a]
+Name=Footman
+stray text
+/ Stuffed Penguin
+[broken
+Tipx=1
+=oops
+art=x.blp
+");
+    assert_eq!(p.get("a", "Name"), Some("Footman"));
+    assert_eq!(p.get("a", "art"), Some("x.blp"));
+    assert_eq!(p.get_ci("a", "ART"), Some("x.blp"));
+    assert_eq!(p.get_list_ci("a", "NAME"), vec!["Footman".to_string()]);
+}

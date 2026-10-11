@@ -541,6 +541,10 @@ pub(crate) fn build(
         (gm.add_object_unhandled(Object::Unit(unit)), 0)
     };
     gm.place_new_unit(key, x, y);
+    let start_amount = ty.abilities.iter().find_map(|id| gm.ability_resource.get(id).copied());
+    if let Some(amount) = start_amount {
+        gm.add_resource_node(key, amount);
+    }
     count_add_completed(gm, key);
     gm.combat_on_create(key);
     Some((key, id))

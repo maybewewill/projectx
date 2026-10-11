@@ -1,4 +1,10 @@
-//! `war3map.w3i`: map info, TFT format version 25.
+//! `war3map.w3i`: map info, TFT format version 25 and the Reign of Chaos format version 18.
+//!
+//! Version 18 (the retail RoC maps, `.w3m`) has no loading screen model, game data set, fog, weather, sound
+//! environment, light environment or water tint: the loading screen is a number plus three texts, the prologue screen
+//! the same, and the player count follows. Those fields are filled with empty/zero defaults. The player and force records
+//! are the same as in version 25. Layout from community format notes; checked on the retail RoC melee maps (every
+//! one parses, with 2 to 12 players and a plausible force table).
 //!
 //! Parsed: header, names and description, camera bounds, playable size, flags, loading and
 //! prologue screens, fog and environment, player and force records.
@@ -12,6 +18,8 @@ use crate::{check_version, Error};
 
 const FILE: &str = "war3map.w3i";
 const VERSION: u32 = 25;
+/// The Reign of Chaos format.
+pub const ROC_VERSION: u32 = 18;
 /// Smallest possible player record: 4 u32 fields, empty name, 2 f32, 2 u32.
 const MIN_PLAYER_SIZE: usize = 16 + 1 + 8 + 8;
 /// Smallest possible force record: 2 u32 fields and an empty name.
@@ -64,7 +72,7 @@ pub struct Force {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MapInfo {
-    /// Always 25 for accepted files.
+    /// 25 (TFT) or 18 (Reign of Chaos) for accepted files.
     pub file_version: u32,
     pub saves: u32,
     pub editor_version: u32,
@@ -109,9 +117,102 @@ impl Screen {
 }
 
 impl MapInfo {
+    /// The version 18 body: see the module notes.
+    fn parse_roc(file_version: u32, mut r: Reader<'_>) -> Result<Self, Error> {
+        let saves = r.u32()?;
+        let editor_version = r.u32()?;
+        let name = r.cstr()?;
+        let author = r.cstr()?;
+        let description = r.cstr()?;
+        let recommended_players = r.cstr()?;
+        let mut camera_bounds = [0.0f32; 8];
+        for v in &mut camera_bounds {
+            *v = r.f32()?;
+        }
+        let camera_complements = [r.i32()?, r.i32()?, r.i32()?, r.i32()?];
+        let playable_width = r.u32()?;
+        let playable_height = r.u32()?;
+        let flags = r.u32()?;
+        let main_tileset = r.u8()?;
+        let campaign_background = r.u32()?;
+        let loading_screen = Screen {
+            model: String::new(),
+            text: r.cstr()?,
+            title: r.cstr()?,
+            subtitle: r.cstr()?,
+        };
+        // The prologue screen: a number (unused here) and the same three texts.
+        let _prologue_number = r.u32()?;
+        let prologue_screen = Screen {
+            model: String::new(),
+            text: r.cstr()?,
+            title: r.cstr()?,
+            subtitle: r.cstr()?,
+        };
+        let (players, forces) = Self::read_players_and_forces(&mut r)?;
+        Ok(Self {
+            file_version,
+            saves,
+            editor_version,
+            name,
+            author,
+            description,
+            recommended_players,
+            camera_bounds,
+            camera_complements,
+            playable_width,
+            playable_height,
+            flags,
+            main_tileset,
+            campaign_background,
+            loading_screen,
+            game_data_set: 0,
+            prologue_screen,
+            fog: Fog { style: 0, start_z: 0.0, end_z: 0.0, density: 0.0, color: [0; 4] },
+            weather_id: [0; 4],
+            sound_environment: String::new(),
+            light_environment_tileset: 0,
+            water_color: [0; 4],
+            players,
+            forces,
+            rest: r.rest().to_vec(),
+        })
+    }
+
+    fn read_players_and_forces(r: &mut Reader<'_>) -> Result<(Vec<Player>, Vec<Force>), Error> {
+        let player_count = r.count(MIN_PLAYER_SIZE, "players")?;
+        let mut players = Vec::with_capacity(player_count);
+        for _ in 0..player_count {
+            players.push(Player {
+                number: r.u32()?,
+                player_type: r.u32()?,
+                race: r.u32()?,
+                flags: r.u32()?,
+                name: r.cstr()?,
+                start_x: r.f32()?,
+                start_y: r.f32()?,
+                ally_low_priorities: r.u32()?,
+                ally_high_priorities: r.u32()?,
+            });
+        }
+        let force_count = r.count(MIN_FORCE_SIZE, "forces")?;
+        let mut forces = Vec::with_capacity(force_count);
+        for _ in 0..force_count {
+            forces.push(Force {
+                flags: r.u32()?,
+                player_masks: r.u32()?,
+                name: r.cstr()?,
+            });
+        }
+        Ok((players, forces))
+    }
+
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
         let mut r = Reader::new(data);
         let file_version = r.u32()?;
+        if file_version == ROC_VERSION {
+            return Self::parse_roc(file_version, r);
+        }
         check_version(FILE, "format version", file_version, VERSION)?;
         let saves = r.u32()?;
         let editor_version = r.u32()?;

@@ -53,6 +53,7 @@ use w3map::MapInfo;
 pub mod data;
 pub mod game_start;
 pub mod map;
+pub mod objdata;
 pub mod pathing;
 pub mod replay;
 pub mod replay_setup;
@@ -347,6 +348,26 @@ impl Engine {
             Err(_) => notes.push("no war3map.wts: TRIGSTR_nnn names stay unresolved".to_string()),
         }
         let combat = data::install(&mut host.game_mut(), &game_data, tables.as_ref());
+        // Names, art, sounds, global strings, shop stock and the gold mine amount (docs/spec/real-map-boot.md).
+        let object_text = objdata::load(&game_refs)?;
+        notes.extend(object_text.notes.iter().cloned());
+        let unit_stock: Vec<(u32, i32, f32)> = game_data
+            .unit_types
+            .iter()
+            .filter_map(|(code, ty)| {
+                gamedata::combat::rawcode(code).map(|id| (id, ty.stock_max, ty.stock_regen))
+            })
+            .collect();
+        objdata::install(&mut host.game_mut(), &object_text, &unit_stock);
+        notes.push(format!(
+            "object text: {} global strings, {} names, {} art lists, {} sound lists, {} item stock rows, Agld gold {:?}",
+            object_text.localized.len(),
+            object_text.names.len(),
+            object_text.art.len(),
+            object_text.sound.len(),
+            object_text.item_stock.len(),
+            object_text.gold_mine_amount
+        ));
         let economy = data::install_economy(&mut host.game_mut(), &game_data.misc);
 
         let mut engine = Engine {

@@ -253,3 +253,17 @@ fn frame_types_are_upper_cased_and_names_kept() {
     assert_eq!(f.kind, "SIMPLEFRAME");
     assert_eq!(f.name, "MixedCase");
 }
+
+#[test]
+fn a_trailing_float_suffix_is_accepted() {
+    // The shipped Glue\CampaignMenu.fdf writes `Height 0.090f,`.
+    let doc = parse("Frame \"BACKDROP\" \"U\" {
+  Height 0.090f,
+  Width 2F,
+}").unwrap();
+    assert_eq!(doc.items.len(), 1);
+    let err = parse("Frame \"BACKDROP\" \"U\" {
+  Width 0.2fx,
+}").unwrap_err();
+    assert!(err.message.contains("unit suffix"), "{err}");
+}

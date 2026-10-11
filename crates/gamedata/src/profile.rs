@@ -19,6 +19,21 @@ impl Profile {
     /// Parses profile text. A later duplicate key in the same section replaces
     /// the earlier value.
     pub fn parse(src: &str) -> Result<Profile, Error> {
+        Self::parse_with(src, true)
+    }
+
+    /// Like [`Profile::parse`], but lines that are not `key=value` (stray text in the shipped files, such as a
+    /// continuation line) are skipped instead of failing the file.
+    pub fn parse_lenient(src: &str) -> Profile {
+        Self::parse_with(src, false).unwrap_or_default()
+    }
+
+    /// Like [`Profile::parse_lenient`] on bytes (UTF-8 or Windows-1252).
+    pub fn parse_lenient_bytes(bytes: &[u8]) -> Profile {
+        Self::parse_lenient(&decode_text(bytes))
+    }
+
+    fn parse_with(src: &str, strict: bool) -> Result<Profile, Error> {
         let src = src.strip_prefix('\u{feff}').unwrap_or(src);
         let mut profile = Profile::default();
         let mut section = String::new();
@@ -30,6 +45,9 @@ impl Profile {
             }
             if let Some(rest) = line.strip_prefix('[') {
                 let Some(name) = rest.strip_suffix(']') else {
+                    if !strict {
+                        continue;
+                    }
                     return Err(Error::Profile {
                         line: line_no,
                         msg: "unterminated section header".to_owned(),
@@ -40,6 +58,9 @@ impl Profile {
                 continue;
             }
             let Some((key, value)) = line.split_once('=') else {
+                if !strict {
+                    continue;
+                }
                 return Err(Error::Profile {
                     line: line_no,
                     msg: format!("expected key=value, found {line:?}"),
@@ -47,6 +68,9 @@ impl Profile {
             };
             let key = key.trim();
             if key.is_empty() {
+                if !strict {
+                    continue;
+                }
                 return Err(Error::Profile {
                     line: line_no,
                     msg: "empty key".to_owned(),
@@ -69,6 +93,26 @@ impl Profile {
     /// The raw trimmed value of `key` in `section`, quotes included.
     pub fn get(&self, section: &str, key: &str) -> Option<&str> {
         self.sections.get(section)?.get(key).map(String::as_str)
+    }
+
+    /// Like [`Profile::get`], but the key is compared case-insensitively (the first match in key order).
+    pub fn get_ci(&self, section: &str, key: &str) -> Option<&str> {
+        let entries = self.sections.get(section)?;
+        if let Some(v) = entries.get(key) {
+            return Some(v.as_str());
+        }
+        entries
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Like [`Profile::get_list`], with a case-insensitive key.
+    pub fn get_list_ci(&self, section: &str, key: &str) -> Vec<String> {
+        match self.get_ci(section, key) {
+            Some(raw) => split_list(raw),
+            None => Vec::new(),
+        }
     }
 
     /// The value of `key` in `section` split on commas outside quotes.

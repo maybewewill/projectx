@@ -104,6 +104,13 @@ impl Game {
         self.mines.insert(unit, Mine { remaining: amount });
     }
 
+    /// Sets the gold a unit with the resource ability `code` (`Agld`) starts with. A unit built afterwards that
+    /// carries the ability becomes a resource node with this amount (the original's ability class reads the
+    /// ability's level-1 `DataA` when it is created).
+    pub fn set_ability_resource_amount(&mut self, code: u32, amount: i32) {
+        self.ability_resource.insert(code, amount);
+    }
+
     /// The amount of the resource node `unit`, or `None` when it is not one.
     pub fn resource_amount(&self, unit: ObjKey) -> Option<i32> {
         self.mines.get(&unit).map(|m| m.remaining)
