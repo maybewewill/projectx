@@ -1,4 +1,5 @@
-//! wgpu renderer: one textured, unlit pipeline. Each mesh gets its own vertex and index buffer.
+//! wgpu renderer: one textured, unlit model pipeline, plus the terrain pipelines of
+//! [`crate::terrain_gpu`]. Each model mesh gets its own vertex and index buffer.
 //!
 //! Works on native (Vulkan, Metal, DX12, GL) and in the browser (WebGPU, or WebGL2 when the
 //! browser has no WebGPU).
@@ -11,6 +12,8 @@ use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use crate::scene::{Scene, TextureData};
+use crate::terrain::{Atlas, TerrainMesh};
+use crate::terrain_gpu::TerrainGpu;
 
 const SHADER: &str = include_str!("shader.wgsl");
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -53,6 +56,7 @@ pub struct Renderer {
     texture_bind_group: Option<wgpu::BindGroup>,
     depth_view: wgpu::TextureView,
     meshes: Vec<GpuMesh>,
+    terrain: TerrainGpu,
 }
 
 impl Renderer {
@@ -210,8 +214,10 @@ impl Renderer {
             ..Default::default()
         });
         let depth_view = create_depth_view(&device, width, height);
+        let terrain = TerrainGpu::new(&device, config.format, &uniform_layout, &texture_layout);
 
         Ok(Renderer {
+            terrain,
             surface,
             device,
             queue,
@@ -276,6 +282,12 @@ impl Renderer {
             .collect();
     }
 
+    /// Replaces the terrain meshes and the ground atlas.
+    pub fn upload_terrain(&mut self, mesh: &TerrainMesh, atlas: &Atlas) {
+        self.terrain
+            .upload(&self.device, &self.queue, &self.texture_layout, mesh, atlas);
+    }
+
     fn upload_texture(&self, texture: &TextureData) -> wgpu::TextureView {
         let gpu_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("model texture"),
@@ -324,9 +336,11 @@ impl Renderer {
         self.depth_view = create_depth_view(&self.device, width, height);
     }
 
-    /// Draws one frame with the given view-projection matrix. A frame that cannot be acquired
-    /// (timeout, occlusion) is skipped; a lost or outdated surface is reconfigured.
-    pub fn render(&mut self, view_proj: Mat4) {
+    /// Draws one frame with the given view-projection matrix. Models are drawn only when
+    /// `draw_models` is set (the terrain view turns them off). Terrain is drawn when uploaded.
+    /// A frame that cannot be acquired (timeout, occlusion) is skipped; a lost or outdated
+    /// surface is reconfigured.
+    pub fn render(&mut self, view_proj: Mat4, draw_models: bool) {
         let uniforms = Uniforms {
             view_proj: view_proj.to_cols_array_2d(),
         };
@@ -374,16 +388,19 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            if let Some(texture_bind_group) = &self.texture_bind_group {
-                pass.set_bind_group(1, texture_bind_group, &[]);
-                for mesh in &self.meshes {
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
-                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            if draw_models {
+                pass.set_pipeline(&self.pipeline);
+                if let Some(texture_bind_group) = &self.texture_bind_group {
+                    pass.set_bind_group(1, texture_bind_group, &[]);
+                    for mesh in &self.meshes {
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+                        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    }
                 }
             }
+            self.terrain.draw(&mut pass, &self.uniform_bind_group);
         }
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
