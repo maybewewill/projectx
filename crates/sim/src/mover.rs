@@ -439,3 +439,409 @@ pub fn wrap_positive(x: F32) -> F32 {
     }
     arith::sub(x, t)
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Pass 7 (docs/spec/movement-7.md): the velocity notification, the facing smoother and the push-apart record.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// `0.001` (`0x6FAB7540`, `0x6FAAE47C`): the facing smoother is finished when the error is below it; two units closer
+/// than it share a place (the random direction of the push-apart).
+pub const NEAR_ZERO: F32 = F32(0x3A83_126F);
+
+impl Kin {
+    /// The velocity-changed notification `0x6F494620` -> `0x6F4A74A0` (vtable slot `+0x50`, called by `0x6F4A70D0` when
+    /// its flag is 1, i.e. by the walk's speed writer and the stop sequence `0x6F4956C0`; not by the cap setter): while
+    /// `|V|^2` is at least `4e-7` the facing `U+0x8C` becomes the heading of `V` (`0x6F1D2AB0`: length by soft square
+    /// root, heading by `0x6F4B2DE0`). CONFIRMED (Unicorn `SN`, `tools/emu/movement7_emu.py`). The notification also
+    /// links the mover into the world's smoother list (`crate::movement::MoverRt::listed`).
+    pub fn notify_facing(&mut self, t: &Tables) {
+        let s2 = arith::add(arith::mul(self.vx, self.vx), arith::mul(self.vy, self.vy));
+        let d = arith::sub(s2, F32::ZERO);
+        if lt(abs(d), SPEED_FLOOR) {
+            return;
+        }
+        let r = math::sqrt(s2, t);
+        self.facing = heading_of(self.vx, self.vy, r, t);
+    }
+
+    /// [`Kin::set_speed_heading`] followed by the real notification, as the original's `0x6F494160` runs it (it calls the
+    /// velocity setter with the notify flag 1 on both paths).
+    pub fn set_speed_heading_notify(&mut self, g: &GridCell, speed: F32, heading: F32, t: &Tables) {
+        self.set_speed_heading(g, speed, heading, t);
+        self.notify_facing(t);
+    }
+}
+
+fn flip(a: F32) -> F32 {
+    F32(a.0 ^ 0x8000_0000)
+}
+
+/// One row of the facing class table `0x6FAB7440` (indexed by `(U+0xD8 >> 8) & 0xF`): the smoother's angular
+/// acceleration, rate cap, shaping window and shaping exponent. The original builds the rows at start-up by parsing
+/// decimal literals with `S2R` (`0x6F85FA40`); [`FACING_TEXT`] holds the literals, [`FACING_BITS`] their `S2R` values
+/// (a test parses the text with the game's tables and compares).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FacingClass {
+    pub accel: F32,
+    pub cap: F32,
+    pub window: F32,
+    pub shape: F32,
+}
+
+/// The decimal literals of the facing class rows 0..=8 (rows 9..=15 repeat row 0).
+pub const FACING_TEXT: [[&str; 4]; 9] = [
+    ["0.07", "0.2", "0.2", "0.25"],
+    ["0.03", "0.1", "0.2", "0.25"],
+    ["0.015", "0.4", "0.8", "0.25"],
+    ["0.005", "0.1", "1.2", "0.5"],
+    ["0.04", "0.15", "1.2", "0.6"],
+    ["0.05", "0.18", "1.2", "0.6"],
+    ["0.1", "0.3", "0.8", "0.4"],
+    ["0.003", "0.08", "1.2", "0.5"],
+    ["0.001", "0.05", "1.4", "0.5"],
+];
+
+/// `S2R` of [`FACING_TEXT`] (soft divide: `0.1` is `0x3DCCCCCE`, not the correctly rounded float).
+pub const FACING_BITS: [[u32; 4]; 9] = [
+    [0x3D8F_5C29, 0x3E4C_CCCE, 0x3E4C_CCCE, 0x3E80_0000],
+    [0x3CF5_C290, 0x3DCC_CCCE, 0x3E4C_CCCE, 0x3E80_0000],
+    [0x3C75_C290, 0x3ECC_CCCE, 0x3F4C_CCCE, 0x3E80_0000],
+    [0x3BA3_D70A, 0x3DCC_CCCE, 0x3F99_999A, 0x3F00_0000],
+    [0x3D23_D70B, 0x3E19_999A, 0x3F99_999A, 0x3F19_999A],
+    [0x3D4C_CCCD, 0x3E38_51EC, 0x3F99_999A, 0x3F19_999A],
+    [0x3DCC_CCCE, 0x3E99_999A, 0x3F4C_CCCE, 0x3ECC_CCCE],
+    [0x3B44_9BA6, 0x3DA3_D70B, 0x3F99_999A, 0x3F00_0000],
+    [0x3A83_126F, 0x3D4C_CCCD, 0x3FB3_3334, 0x3F00_0000],
+];
+
+/// The class row `index` (0..=15; rows 9..=15 repeat row 0, CONFIRMED by the start-up initialiser `0x6F85FA40`).
+pub fn facing_class(index: u32) -> FacingClass {
+    let b = FACING_BITS[if index < 9 { index as usize } else { 0 }];
+    FacingClass { accel: F32(b[0]), cap: F32(b[1]), window: F32(b[2]), shape: F32(b[3]) }
+}
+
+/// The result of one smoother step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FacingStep {
+    /// The error is below `0.001`: the finish routine `0x6F4954F0` runs (`U+0xC8 = U+0x8C`, `U+0xCC = 0`, unlink).
+    Finished,
+    /// The new smoothed angle `U+0xC8` and angular velocity `U+0xCC`.
+    Turned { angle: F32, rate: F32 },
+}
+
+/// The facing smoother `0x6F494200` for one mover: `angle` = `U+0xC8`, `rate` = `U+0xCC`, `target` = the facing
+/// `U+0x8C`. The rate gains the class acceleration toward the target (sign of the wrapped error), its magnitude is
+/// capped by `min(cap, |err|) * (|err| / window)^shape` (the shape factor only inside the window), and the angle
+/// advances by the rate and is folded into `[0, 2*pi)`. CONFIRMED (Unicorn `FS`).
+pub fn smooth_facing(angle: F32, rate: F32, target: F32, class: &FacingClass, t: &Tables) -> FacingStep {
+    let err = wrap_error(angle, target);
+    let neg = err.to_f32() < 0.0;
+    let aerr = if neg { flip(err) } else { err };
+    if gt(NEAR_ZERO, aerr) {
+        return FacingStep::Finished;
+    }
+    let step = if neg { flip(class.accel) } else { class.accel };
+    let r1 = arith::add(rate, step);
+    let neg2 = r1.to_f32() < 0.0;
+    let mut mag = if neg2 { flip(r1) } else { r1 };
+    let mut m = if gt(class.cap, aerr) { aerr } else { class.cap };
+    // the shaping factor: 1.0 outside the window, |err| / window inside; clamped to [0, 1]
+    let mut q = if gt(class.window, aerr) { arith::div(aerr, class.window, t) } else { F32(0x3F80_0000) };
+    if gt(F32::ZERO, q) {
+        q = F32::ZERO;
+    } else if gt(q, F32(0x3F80_0000)) {
+        q = F32(0x3F80_0000);
+    }
+    if q.to_f32() != 1.0 {
+        m = arith::mul(m, math::pow(q, class.shape, t));
+    }
+    if lt(m, mag) {
+        mag = m;
+    }
+    let new_rate = if neg2 { flip(mag) } else { mag };
+    let new_angle = normalise_angle(arith::add(angle, new_rate), t);
+    FacingStep::Turned { angle: new_angle, rate: new_rate }
+}
+
+// ---- the path follower's waypoint test (0x6F49C3B0) ---------------------------------------------------------------
+
+/// The follower object `P` (`U+0xA8`) fields the waypoint test touches (`docs/spec/movement-7.md` section 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Follower {
+    /// `P+0x74`: index of the waypoint being walked to (the path array is walked downward); `0xFFFFFFFF` = replanning.
+    pub index: u32,
+    /// `P+0x78`: number of waypoints of the stored path.
+    pub count: u32,
+    /// `P+0x88`: flags (`0x100000` = the walk is blocked / waiting).
+    pub flags: u32,
+    /// `P+0x94`: the wait counter (a blocked unit waits at least 20 walks before it tries again).
+    pub wait: u32,
+    /// `P+0x98`: the blocked-step counter, cleared with the flag.
+    pub blocked: u32,
+}
+
+/// What the waypoint test decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// The waypoint is farther than 0.49 cells: keep walking (the blocked state is cleared).
+    Far,
+    /// Reached, and more waypoints follow: the caller advances the index (`0x6F49C380` skips ahead over waypoints it can
+    /// see) and returns the new waypoint; result code 0.
+    Advance,
+    /// Reached the last stored waypoint of a path that has a goal list: the replan step `0x6F49C2E0` ran (`replanned` is
+    /// its answer), the index becomes `0xFFFFFFFF`; result code 2.
+    Replan { replanned: bool },
+    /// Reached with nothing left: result code 4 (path finished).
+    End,
+}
+
+/// The reach test alone: the fused squared distance `dist2(wp, pos)` is not greater than `0.49 * 0.49` (soft multiply),
+/// an unordered compare counts as not reached (`fcompp` + `test ah,1` of `0x6F49C3B0`).
+pub fn waypoint_reached(pos: (F32, F32), wp: (F32, F32)) -> bool {
+    let d2 = arith::dist2(wp.0, wp.1, pos.0, pos.1);
+    let r = F32(0x3EFA_E148);
+    let c = arith::mul(r, r);
+    !(c.to_f32() < d2.to_f32() || c.to_f32().is_nan() || d2.to_f32().is_nan())
+}
+
+/// `0x6F49C3B0`: the waypoint-reached test of the follower. A waypoint counts as reached when the squared distance
+/// from `pos` is **not greater** than `0.49 * 0.49` (soft multiply; a tie counts, as does an unordered compare), the
+/// distance being the fused `0x6F6EF3B0` (`dist2(wp, pos)`); an unordered compare counts as not reached. Returns the
+/// result code (0, 2, 4) and the decision.
+/// CONFIRMED (Unicorn `WR`, `tools/emu/movement7_emu.py`; the callees `0x6F49C380` and `0x6F49C2E0` are answered by the
+/// harness).
+pub fn follower_reach(f: &mut Follower, pos: (F32, F32), wp: (F32, F32), replan: impl FnOnce() -> bool) -> (u32, Reach) {
+    let clear = |f: &mut Follower| {
+        f.flags &= !0x0010_0000;
+        f.blocked = 0;
+        f.wait = 0;
+    };
+    if !waypoint_reached(pos, wp) {
+        clear(f);
+        return (0, Reach::Far);
+    }
+    if f.index != 0 {
+        clear(f);
+        return (0, Reach::Advance);
+    }
+    if f.count != 0 {
+        let replanned = replan();
+        if !replanned && f.wait < 0x14 {
+            f.wait = 0x14;
+        }
+        f.index = u32::MAX;
+        return (2, Reach::Replan { replanned });
+    }
+    (4, Reach::End)
+}
+
+// ---- group speed matching (0x6F4900A0, 0x6F490C30) -------------------------------------------------------------
+
+/// One 44-byte record of a movement group (`R`): the owner's speed cap `U+0x88`, the record flags `R+0x28` and the owner's
+/// flag byte `U+0xDB`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupMember {
+    pub cap: F32,
+    pub flags: u32,
+    pub unit_flags: u8,
+}
+
+/// The leader object of a group (`G+0x7C`): `limit` (`+0x20`, `FLT_MAX` = unset) and the running minimum (`+0x24`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupLeader {
+    pub limit: F32,
+    pub minimum: F32,
+}
+
+/// `0x6F4900A0`: the speed limit of a group = the smallest cap of its members that are not flagged `0x200000`
+/// (`FLT_MAX` when there is none); a leader records the minimum (`+0x24 = min(+0x24, limit)`) and, when its own limit
+/// (`+0x20`) is set, replaces the result. CONFIRMED (Unicorn `GL`, 3000 groups).
+pub fn group_limit(members: &[GroupMember], leader: Option<&mut GroupLeader>) -> F32 {
+    let mut limit = FLT_MAX;
+    for m in members {
+        if m.flags & 0x0020_0000 == 0 && gt(limit, m.cap) {
+            limit = m.cap;
+        }
+    }
+    match leader {
+        Some(l) => {
+            if gt(l.minimum, limit) {
+                l.minimum = limit;
+            }
+            if l.limit.to_f32() != FLT_MAX.to_f32() {
+                l.limit
+            } else {
+                limit
+            }
+        }
+        None => limit,
+    }
+}
+
+/// `0x6F490C30`: whether the group matches speeds at all: the group flag byte (`G+0x80`) must not have bit 3 set and no
+/// member may carry record flags `0x210000` or the owner flag bit 0 (`U+0xDB`). CONFIRMED (Unicorn `GL`).
+pub fn group_gate(group_flags: u8, members: &[GroupMember]) -> bool {
+    if group_flags & 8 != 0 {
+        return false;
+    }
+    members.iter().all(|m| m.flags & 0x0021_0000 == 0 && m.unit_flags & 1 == 0)
+}
+
+// ---- the push-apart record (0x6F4961C0) -------------------------------------------------------------------------
+
+/// One row of the separation table `0x6FAB75F8` (indexed by the record's class nibble, `R+0x22 & 0xF`): the query
+/// radius in cells, the dead zone and the cap of the push length, the strength and the length factor. Decimal literals
+/// parsed with `S2R` like the original's initialiser `0x6F860070`; rows 5..=15 are all `0.0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushRow {
+    pub radius: F32,
+    pub dead: F32,
+    pub cap: F32,
+    pub strength: F32,
+    pub scale: F32,
+}
+
+/// The decimal literals of the separation rows 0..=4 (rows 5..=15 are `0.0`).
+pub const PUSH_TEXT: [[&str; 5]; 5] = [
+    ["5.0", "0.01", "0.5", "0.4", "0.7"],
+    ["7.0", "0.01", "0.2", "0.4", "0.7"],
+    ["8.0", "0.01", "0.2", "0.4", "0.7"],
+    ["9.0", "0.01", "0.2", "0.4", "0.7"],
+    ["10.0", "0.01", "0.2", "0.4", "0.7"],
+];
+
+/// `S2R` of [`PUSH_TEXT`] (`7.0` is `0x40E00001` in the original's soft divide).
+pub const PUSH_BITS: [[u32; 5]; 5] = [
+    [0x40A0_0000, 0x3C23_D70B, 0x3F00_0000, 0x3ECC_CCCE, 0x3F33_3334],
+    [0x40E0_0001, 0x3C23_D70B, 0x3E4C_CCCE, 0x3ECC_CCCE, 0x3F33_3334],
+    [0x4100_0000, 0x3C23_D70B, 0x3E4C_CCCE, 0x3ECC_CCCE, 0x3F33_3334],
+    [0x4110_0000, 0x3C23_D70B, 0x3E4C_CCCE, 0x3ECC_CCCE, 0x3F33_3334],
+    [0x4120_0000, 0x3C23_D70B, 0x3E4C_CCCE, 0x3ECC_CCCE, 0x3F33_3334],
+];
+
+/// The separation row `index` (0..=15).
+pub fn push_row(index: u32) -> PushRow {
+    match PUSH_BITS.get(index as usize) {
+        Some(b) => PushRow { radius: F32(b[0]), dead: F32(b[1]), cap: F32(b[2]), strength: F32(b[3]), scale: F32(b[4]) },
+        None => PushRow { radius: F32::ZERO, dead: F32::ZERO, cap: F32::ZERO, strength: F32::ZERO, scale: F32::ZERO },
+    }
+}
+
+/// The state of a push-apart record R (`R+0x20` flags, `R+0x18/+0x1C` the separation vector of the last round).
+/// Flag word: bits 0..15 cooldown (walks), bits 16..19 table row, bits 20..27 and 28..31 the filter values handed to the
+/// neighbour query (`0x6F495D60`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushRecord {
+    pub flags: u32,
+    pub vx: F32,
+    pub vy: F32,
+}
+
+/// The world services the record needs (the callees `0x6F494E10`, `0x6F4737D0`, the neighbour gather
+/// `0x6F495D60`/`0x6F496170` and the random direction `0x6F4B7FE0`).
+pub trait PushHost {
+    /// The evaluated position (cells) of the record's own unit, read at the moment of the call.
+    fn position(&mut self) -> (F32, F32);
+    /// The placement test of the record's unit at `target` (`0x6F494E10`).
+    fn place_ok(&mut self, target: (F32, F32)) -> bool;
+    /// The position setter (`0x6F4737D0` with the flag 1): moves the unit to `target`.
+    fn move_to(&mut self, target: (F32, F32));
+    /// The neighbours' evaluated positions (cells), in the order the cell walk lists them; `rank` and `class` are the
+    /// filter bytes from the flag word (bits 20..27 and 28..31), `radius` the table's query radius.
+    fn gather(&mut self, class: u32, rank: u32, radius: F32) -> Vec<(F32, F32)>;
+    /// The random unit direction for coincident units (`0x6F4B7FE0`: one step of the global generator).
+    fn random_direction(&mut self) -> (F32, F32);
+}
+
+/// What one call did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PushResult {
+    /// The cooldown was running (and counted down): nothing else happened.
+    Cooling,
+    /// The unit is moving (last speed positive): the vector is cleared and the cooldown set to 7.
+    Moving,
+    /// The new vector is shorter than the dead zone: cleared, cooldown 7.
+    Settled,
+    /// A new separation vector was stored.
+    Pushed,
+}
+
+/// `0x6F07B870`: scales `(x, y)` to the length `len` (`x * (len * recip(sqrt(x^2 + y^2)))`).
+pub fn scale_to(x: F32, y: F32, len: F32, t: &Tables) -> (F32, F32) {
+    let s = arith::add(arith::mul(x, x), arith::mul(y, y));
+    let r = arith::recip(math::sqrt(s, t), t);
+    let k = arith::mul(len, r);
+    (arith::mul(x, k), arith::mul(y, k))
+}
+
+/// The random direction of `0x6F4B7FE0` from the fraction `u` of one generator step (`rng::Rng::random_fraction`).
+pub fn direction_of(u: F32, t: &Tables) -> (F32, F32) {
+    let angle = arith::mul(u, TWO_PI);
+    (math::cos(angle, t), math::sin(angle, t))
+}
+
+/// The push-apart record `0x6F4961C0` (called by the movement walk `0x6F483300` for every second record of the list at
+/// `world+0x51C`, alternating each walk): a still unit is pushed away from its neighbours (units within the row's
+/// radius), by a vector that grows with the overlap; the vector computed in one round is applied in the next one when
+/// the placement test allows it. CONFIRMED (Unicorn `PA`) except the neighbour gather, which the host provides.
+pub fn push_apart(rec: &mut PushRecord, last_speed: F32, host: &mut dyn PushHost, t: &Tables) -> PushResult {
+    // 0x6F494DE0: a running cooldown (low 16 bits) counts down and ends the call
+    if rec.flags & 0xFFFF != 0 {
+        rec.flags = (rec.flags & 0xFFFF_0000) | (rec.flags.wrapping_sub(1) & 0xFFFF);
+        return PushResult::Cooling;
+    }
+    // a unit that moved (last speed > 0) is not pushed
+    if lt(F32::ZERO, last_speed) {
+        rec.vx = F32::ZERO;
+        rec.vy = F32::ZERO;
+        rec.flags = (rec.flags & 0xFFFF_0000) | 7;
+        return PushResult::Moving;
+    }
+    let row = push_row((rec.flags >> 16) & 0xF);
+    // 0x6F494EE0: apply the previous vector
+    let s = arith::add(arith::mul(rec.vx, rec.vx), arith::mul(rec.vy, rec.vy));
+    if s.to_f32() != 0.0 {
+        let p = host.position();
+        let target = (arith::add(p.0, rec.vx), arith::add(p.1, rec.vy));
+        if host.place_ok(target) {
+            host.move_to(target);
+        }
+    }
+    let inv = arith::div(F32(0x3F80_0000), row.radius, t);
+    let own = host.position();
+    let neighbours = host.gather((rec.flags >> 28) & 0xF, (rec.flags >> 20) & 0xFF, row.radius);
+    for n in neighbours {
+        let dx = arith::sub(own.0, n.0);
+        let dy = arith::sub(own.1, n.1);
+        let (mut dx, mut dy) = (dx, dy);
+        let mut dist = math::sqrt(arith::add(arith::mul(dx, dx), arith::mul(dy, dy)), t);
+        if gt(NEAR_ZERO, dist) {
+            let d = host.random_direction();
+            dx = d.0;
+            dy = d.1;
+            dist = math::sqrt(arith::add(arith::mul(dx, dx), arith::mul(dy, dy)), t);
+        }
+        if gt(row.radius, dist) {
+            let b = arith::sub(F32(0x3F80_0000), arith::mul(dist, inv));
+            let len = arith::mul(arith::mul(row.strength, b), b);
+            let (px, py) = scale_to(dx, dy, len, t);
+            rec.vx = arith::add(rec.vx, px);
+            rec.vy = arith::add(rec.vy, py);
+        }
+    }
+    let l = math::sqrt(arith::add(arith::mul(rec.vx, rec.vx), arith::mul(rec.vy, rec.vy)), t);
+    let mut v = arith::mul(l, row.scale);
+    if gt(row.dead, v) {
+        rec.vx = F32::ZERO;
+        rec.vy = F32::ZERO;
+        rec.flags = (rec.flags & 0xFFFF_0000) | 7;
+        return PushResult::Settled;
+    }
+    if lt(row.cap, v) {
+        v = row.cap;
+    }
+    let (x, y) = scale_to(rec.vx, rec.vy, v, t);
+    rec.vx = x;
+    rec.vy = y;
+    PushResult::Pushed
+}

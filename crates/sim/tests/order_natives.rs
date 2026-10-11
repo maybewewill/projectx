@@ -51,6 +51,7 @@ native OrderId2String takes integer orderId returns string
 native GetUnitX takes unit whichUnit returns real
 native GetUnitY takes unit whichUnit returns real
 native GetUnitFacing takes unit whichUnit returns real
+native SetUnitFacing takes unit whichUnit, real facingAngle returns nothing
 native GetRandomInt takes integer lo, integer hi returns integer
 "#;
 
@@ -630,4 +631,54 @@ fn unit_without_tables_keeps_its_route_and_does_not_move() {
     let u = unit_key(&host, "gU");
     assert_eq!(host.game().unit(u).x, F32::ZERO);
     assert_eq!(host.game().unit_order_ids(u), vec![MOVE as u32]);
+}
+
+/// While a unit walks, its facing is the heading of its velocity (the velocity notification `0x6F4A74A0`, CONFIRMED in
+/// Unicorn by the `SN`/`WN` vectors of `movement-7.md`): a move due north faces 90 degrees.
+#[test]
+fn facing_of_a_unit_in_motion_is_the_velocity_heading() {
+    if tables().is_none() {
+        eprintln!("GAME_DLL not set: skipping the movement test");
+        return;
+    }
+    let mut host = host_for(&footman_script(
+        0,
+        0,
+        r#"set gOk = IssuePointOrder(gU, "move", I2R(0), I2R(2000))"#,
+    ));
+    host.start("Main", &[]).expect("start");
+    let u = unit_key(&host, "gU");
+    host.step_ticks(120);
+    let facing = host.game().unit(u).facing.to_f32();
+    assert!((facing - core::f32::consts::FRAC_PI_2).abs() < 2e-3, "facing {facing}");
+    // the smoothed angle (state checksum only) has been chasing the facing from zero
+    let (smooth, _rate, _listed) = host.game().facing_smoother(u).expect("a mover");
+    assert!(smooth.to_f32() > 0.5, "smoothed angle {}", smooth.to_f32());
+}
+
+/// `SetUnitFacing` folds the angle into `[0, 2*pi)` (`0x6F4A7480`), and the smoothed angle then chases it until the
+/// error is below 0.001, when the finish routine copies the facing and the unit leaves the smoother list.
+#[test]
+fn set_unit_facing_folds_and_the_smoother_finishes() {
+    if tables().is_none() {
+        eprintln!("GAME_DLL not set: skipping the facing test");
+        return;
+    }
+    let mut host = host_for(&footman_script(
+        0,
+        0,
+        r#"call SetUnitFacing(gU, 450.0)
+  set gReal = GetUnitFacing(gU)"#,
+    ));
+    host.start("Main", &[]).expect("start");
+    let u = unit_key(&host, "gU");
+    let deg = real(&host, "gReal").to_f32();
+    assert!((deg - 90.0).abs() < 0.01, "450 degrees reads back as {deg}");
+    let (smooth0, rate0, listed0) = host.game().facing_smoother(u).expect("a mover");
+    assert!(listed0 && smooth0 == F32::ZERO && rate0 == F32::ZERO);
+    host.step_ticks(1200);
+    let (smooth, rate, listed) = host.game().facing_smoother(u).expect("a mover");
+    assert!(!listed, "finished and unlinked");
+    assert_eq!(smooth, host.game().unit(u).facing);
+    assert_eq!(rate, F32::ZERO);
 }

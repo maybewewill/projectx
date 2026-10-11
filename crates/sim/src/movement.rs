@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use softfloat::{arith, F32, Tables};
+use softfloat::{F32, Tables};
 
 use crate::heroes::GridCell;
 use crate::mover::{self, Kin};
@@ -21,12 +21,6 @@ use crate::unit_position::{cell_to_world, world_to_cell};
 
 /// The queue horizon `300.0` (`0x6FAAE594`): the layer scale of `Kin::elapsed`.
 pub(crate) const LAYER_HORIZON: F32 = F32::from_bits(0x4396_0000);
-
-/// `0.49 * 0.49 = 0.2401`: the squared distance within which a route waypoint counts as reached (`0x6F49C3B0`).
-pub(crate) fn waypoint_radius_sq() -> F32 {
-    let r = F32::from_bits(0x3EFA_E148);
-    arith::mul(r, r)
-}
 
 /// The mover state of one unit (the fields of `U` that a still unit does not need).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +37,16 @@ pub(crate) struct MoverRt {
     pub moving: bool,
     pub last_speed: F32,
     pub face_error: F32,
+    /// `U+0xC8`: the smoothed facing the facing smoother `0x6F494200` chases the facing `U+0x8C` with (the constructor
+    /// `0x6F494650` leaves it at zero). It is part of the state checksum, not of `GetUnitFacing`.
+    pub face_smooth: F32,
+    /// `U+0xCC`: the angular velocity of the smoother.
+    pub face_rate: F32,
+    /// Whether the mover is in the world's smoother list (`U+4`/`U+8` links): set by every velocity notification and by
+    /// `SetUnitFacing`, cleared by the finish routine `0x6F4954F0`.
+    pub listed: bool,
+    /// `(U+0xD8 >> 8) & 0xF`: the row of the facing class table (zero from the constructor; the writer is not found).
+    pub face_class: u32,
 }
 
 impl MoverRt {
@@ -58,6 +62,10 @@ impl MoverRt {
             moving: false,
             last_speed: F32::ZERO,
             face_error: F32::ZERO,
+            face_smooth: F32::ZERO,
+            face_rate: F32::ZERO,
+            listed: false,
+            face_class: 0,
         }
     }
 
@@ -190,6 +198,8 @@ impl Game {
         rt.radius = mover::arrival_radius(radius);
         rt.last_speed = F32::ZERO;
         rt.face_error = F32::ZERO;
+        // the stop sequence 0x6F4956C0 sets the velocity with the notify flag: the mover joins the smoother list
+        rt.listed = true;
     }
 
     /// Stops the unit where it is: the position is re-based at the current time and the velocity becomes zero (the
@@ -206,6 +216,52 @@ impl Game {
         kin.set_velocity(&g, (F32::ZERO, F32::ZERO), &t);
         self.orders.tables = Some(t);
         self.commit_kin(unit, &kin);
+        if let Some(rt) = self.movers.get_mut(&unit) {
+            rt.listed = true;
+        }
+    }
+
+    /// `SetUnitFacing` (`0x6F3C5AF0` -> `Position::set` `0x6F474830` -> `0x6F4945F0`): the angle (radians) is folded into
+    /// `[0, 2*pi)` (`0x6F4A7480`) and the mover joins the smoother list; the smoothed angle chases it from there.
+    /// Without tables the angle is stored as given. CONFIRMED (the fold is the checked `normalise_angle`).
+    pub fn set_unit_facing(&mut self, unit: ObjKey, radians: F32) {
+        let angle = match self.orders.tables.as_ref() {
+            Some(t) => mover::normalise_angle(radians, t),
+            None => radians,
+        };
+        self.unit_mut(unit).facing = angle;
+        let (now, row) = (self.game_time, self.game_row);
+        self.movers.entry(unit).or_insert_with(|| MoverRt::new(now, row)).listed = true;
+    }
+
+    /// The facing smoother state of `unit`: the smoothed angle `U+0xC8`, the angular velocity `U+0xCC` and whether the
+    /// mover is in the smoother list. `None` for a unit that never had a mover.
+    pub fn facing_smoother(&self, unit: ObjKey) -> Option<(F32, F32, bool)> {
+        self.movers.get(&unit).map(|m| (m.face_smooth, m.face_rate, m.listed))
+    }
+
+    /// The facing smoother pass of the movement walk (`0x6F483300` calls `0x6F494200` for every mover in the list, after
+    /// the walks): the smoothed angle `U+0xC8` chases the facing; a mover whose error is below 0.001 is finished
+    /// (`U+0xC8 = U+0x8C`, rate 0) and leaves the list. Presentation state plus the state checksum; `GetUnitFacing` reads
+    /// the facing itself.
+    pub(crate) fn tick_facing_smoothers(&mut self, t: &Tables) {
+        let listed: Vec<ObjKey> = self.movers.iter().filter(|(_, m)| m.listed).map(|(&k, _)| k).collect();
+        for k in listed {
+            let facing = self.unit(k).facing;
+            let Some(rt) = self.movers.get_mut(&k) else { continue };
+            let class = mover::facing_class(rt.face_class);
+            match mover::smooth_facing(rt.face_smooth, rt.face_rate, facing, &class, t) {
+                mover::FacingStep::Finished => {
+                    rt.face_smooth = facing;
+                    rt.face_rate = F32::ZERO;
+                    rt.listed = false;
+                }
+                mover::FacingStep::Turned { angle, rate } => {
+                    rt.face_smooth = angle;
+                    rt.face_rate = rate;
+                }
+            }
+        }
     }
 
     /// `SetUnitMoveSpeed` on a unit with a mover: the speed sink `0x6F4747B0` sets the cap (a lower cap rescales the

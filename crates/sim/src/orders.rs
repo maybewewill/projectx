@@ -748,6 +748,8 @@ impl Game {
         for unit in keys {
             self.step_unit(unit, &tables);
         }
+        // 0x6F483300 runs the facing smoother over the listed movers after the walks
+        self.tick_facing_smoothers(&tables);
         self.orders.tables = Some(tables);
     }
 
@@ -785,10 +787,8 @@ impl Game {
         let mut next = route.next;
         while next < last {
             let wp = self.cells_of(route.points[next]);
-            let dx = arith::sub(wp.0, pos.0);
-            let dy = arith::sub(wp.1, pos.1);
-            let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
-            if arith::lt(d2, crate::movement::waypoint_radius_sq()) {
+            // 0x6F49C3B0: the fused distance and an inclusive compare (CONFIRMED, Unicorn `WR`)
+            if mover::waypoint_reached(pos, wp) {
                 next += 1;
             } else {
                 break;
@@ -803,11 +803,13 @@ impl Game {
         let waypoint = self.cells_of(route.points[next]);
         let pilot = self.pilot_of(unit);
         let trace = mover::walk(&mut kin, &pilot, &g, goal, PathState::Open(waypoint), t);
-        if !trace.arrived {
-            // The facing of a unit in motion follows its heading (UNSURE: the original smooths it, 0x6F494200).
-            kin.facing = trace.heading;
-        }
+        // The speed writer's velocity notification (0x6F494620 -> 0x6F4A74A0, CONFIRMED by `WN` vectors): the facing
+        // of a unit in motion is the heading of its velocity. The mover joins the smoother list.
+        kin.notify_facing(t);
         self.commit_kin(unit, &kin);
+        if let Some(rt) = self.movers.get_mut(&unit) {
+            rt.listed = true;
+        }
         if trace.arrived {
             self.route_finished(unit);
         }

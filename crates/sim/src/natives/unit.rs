@@ -271,7 +271,9 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SetUnitFacing", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = unit_at(&gm, a, 0) {
-            gm.unit_mut(k).facing = arith::mul(real_at(a, 1), DEG_TO_RAD);
+            // 0x6F3C5AF0: degrees * (pi / 180), then Position::set (folds into [0, 2*pi), joins the smoother list)
+            let rad = arith::mul(real_at(a, 1), DEG_TO_RAD);
+            gm.set_unit_facing(k, rad);
         }
         NativeResult::Return(Value::Null)
     });
