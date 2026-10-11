@@ -38,11 +38,15 @@ pub struct Bone {
 pub(crate) fn parse_bones(p: &mut Reader) -> Result<Vec<Bone>, Error> {
     let mut out = Vec::new();
     while !p.is_empty() {
+        // Layout checked against Warcraft III 1.26 files: the inclusive-size record holds the
+        // common header and the tracks; the geoset id and geoset animation id follow the
+        // record, outside its size.
         let mut rec = p.record("bone")?;
         let mut node = read_header(&mut rec)?;
-        let geoset_id = rec.i32()?;
-        let geoset_anim_id = rec.i32()?;
         read_tracks(&mut rec, &mut node)?;
+        rec.finish("bone")?;
+        let geoset_id = p.i32()?;
+        let geoset_anim_id = p.i32()?;
         out.push(Bone {
             node,
             geoset_id,
@@ -58,6 +62,7 @@ pub(crate) fn parse_helpers(p: &mut Reader) -> Result<Vec<Node>, Error> {
         let mut rec = p.record("helper")?;
         let mut node = read_header(&mut rec)?;
         read_tracks(&mut rec, &mut node)?;
+        rec.finish("helper")?;
         out.push(node);
     }
     Ok(out)

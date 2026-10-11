@@ -27,6 +27,21 @@ impl<'a> Reader<'a> {
         self.remaining() == 0
     }
 
+    /// Fails if bytes are left in a record that was supposed to be fully consumed. Records
+    /// carry no sub-record sizes, so leftover bytes mean the layout was misread or an
+    /// unknown track was skipped.
+    pub(crate) fn finish(&self, what: &'static str) -> Result<(), Error> {
+        if self.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Malformed {
+                what,
+                offset: self.offset(),
+                reason: "unparsed bytes left after the last known field",
+            })
+        }
+    }
+
     pub(crate) fn bytes(&mut self, n: usize) -> Result<&'a [u8], Error> {
         if self.remaining() < n {
             return Err(Error::UnexpectedEof {

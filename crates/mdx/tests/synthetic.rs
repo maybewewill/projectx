@@ -102,7 +102,6 @@ fn sample_parts() -> Vec<Vec<u8>> {
         W::default()
             .u32(0)
             .fixed("Textures\\white.blp", 260)
-            .u32(0)
             .u32(1),
     );
 
@@ -173,14 +172,13 @@ fn sample_parts() -> Vec<Vec<u8>> {
     let geos = chunk(b"GEOS", W::default().append(geoset));
 
     // Bone 0: linear translation. Bone 1: Hermite translation with tangents, global sequence 0.
+    // Real layout: header and tracks inside the record, then the geoset ids outside it.
     let bone0 = record(
         W::default()
             .fixed("Root", 80)
             .i32(0)
             .i32(-1)
             .u32(0x100)
-            .i32(-1)
-            .i32(-1)
             .append(track(
                 b"KGTR",
                 1,
@@ -192,15 +190,15 @@ fn sample_parts() -> Vec<Vec<u8>> {
                     .u32(10)
                     .floats(&[1.0, 2.0, 3.0]),
             )),
-    );
+    )
+    .i32(-1)
+    .i32(-1);
     let bone1 = record(
         W::default()
             .fixed("Arm", 80)
             .i32(1)
             .i32(0)
             .u32(0x100)
-            .i32(-1)
-            .i32(-1)
             .append(track(
                 b"KGTR",
                 2,
@@ -212,7 +210,9 @@ fn sample_parts() -> Vec<Vec<u8>> {
                     .u32(10)
                     .floats(&[1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
             )),
-    );
+    )
+    .i32(7)
+    .i32(-1);
     let bones = chunk(b"BONE", W::default().append(bone0).append(bone1));
 
     let helpers = chunk(
@@ -339,6 +339,7 @@ fn parses_bones_with_linear_and_hermite_tracks() {
     assert_eq!(arm.node.name, "Arm");
     assert_eq!(arm.node.object_id, 1);
     assert_eq!(arm.node.parent_id, 0);
+    assert_eq!((arm.geoset_id, arm.geoset_anim_id), (7, -1));
     let t = arm.node.translation.as_ref().expect("KGTR");
     assert_eq!(t.interpolation, Interpolation::Hermite);
     assert_eq!(t.global_sequence, Some(0));
@@ -416,16 +417,17 @@ fn rejects_invalid_interpolation_and_huge_count() {
     // Bone track with interpolation 9.
     let bad_interp = chunk(
         b"BONE",
-        W::default().append(record(
-            W::default()
-                .fixed("Bad", 80)
-                .i32(0)
-                .i32(-1)
-                .u32(0)
-                .i32(-1)
-                .i32(-1)
-                .append(track(b"KGTR", 9, -1, 0, W::default())),
-        )),
+        W::default()
+            .append(record(
+                W::default()
+                    .fixed("Bad", 80)
+                    .i32(0)
+                    .i32(-1)
+                    .u32(0)
+                    .append(track(b"KGTR", 9, -1, 0, W::default())),
+            ))
+            .i32(-1)
+            .i32(-1),
     );
     let mut file = vec![b"MDLX".to_vec()];
     file.push(chunk(b"VERS", W::default().u32(800)).into_vec());
@@ -560,4 +562,86 @@ fn corrupted_bytes_never_panic() {
             let _ = Model::parse(&data);
         }
     }
+}
+
+/// Replaces one chunk of the sample (by its index in `sample_parts`) and parses the result.
+fn parse_with_chunk(index: usize, chunk: W) -> Result<Model, Error> {
+    let mut parts = sample_parts();
+    parts[index] = chunk.into_vec();
+    Model::parse(&parts.concat())
+}
+
+#[test]
+fn texs_records_are_268_bytes() {
+    // Two entries of 268 bytes each: replaceable id, 260-byte path, flags.
+    let texs = chunk(
+        b"TEXS",
+        W::default()
+            .u32(0)
+            .fixed("Textures\\a.blp", 260)
+            .u32(3)
+            .u32(1)
+            .fixed("ReplaceableTextures\\b.blp", 260)
+            .u32(2),
+    );
+    let m = parse_with_chunk(5, texs).unwrap();
+    assert_eq!(m.textures.len(), 2);
+    assert_eq!(m.textures[0].path, "Textures\\a.blp");
+    assert_eq!(m.textures[0].flags, 3);
+    assert_eq!(m.textures[1].replaceable_id, 1);
+    assert_eq!(m.textures[1].flags, 2);
+}
+
+#[test]
+fn texs_with_272_byte_records_is_rejected() {
+    // A 272-byte record (the old, wrong layout) leaves 4 bytes over.
+    let texs = chunk(
+        b"TEXS",
+        W::default().u32(0).fixed("Textures\\a.blp", 260).u32(0).u32(1),
+    );
+    assert!(matches!(
+        parse_with_chunk(5, texs),
+        Err(Error::SizeMismatch { elem: 268, .. })
+    ));
+}
+
+#[test]
+fn unknown_track_inside_a_bone_is_an_error() {
+    // The track tag KGXX is not one we read, and its size is unknown: the bone cannot be
+    // parsed to its end, so this must be reported instead of silently dropping the rest.
+    let bone = record(
+        W::default()
+            .fixed("Root", 80)
+            .i32(0)
+            .i32(-1)
+            .u32(0x100)
+            .tag(b"KGXX")
+            .u32(0),
+    )
+    .i32(-1)
+    .i32(-1);
+    assert!(matches!(
+        parse_with_chunk(8, chunk(b"BONE", bone)),
+        Err(Error::Malformed { what: "bone", .. })
+    ));
+}
+
+#[test]
+fn unknown_track_inside_a_layer_is_an_error() {
+    let layer = record(
+        W::default()
+            .u32(1)
+            .u32(0)
+            .u32(0)
+            .i32(-1)
+            .u32(0)
+            .f32(1.0)
+            .tag(b"KMTX")
+            .u32(0),
+    );
+    let material = record(W::default().i32(0).u32(0).tag(b"LAYS").u32(1).append(layer));
+    assert!(matches!(
+        parse_with_chunk(6, chunk(b"MTLS", W::default().append(material))),
+        Err(Error::Malformed { what: "layer", .. })
+    ));
 }

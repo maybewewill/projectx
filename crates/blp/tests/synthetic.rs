@@ -1,5 +1,5 @@
-//! Synthetic BLP1 files: paletted content at every alpha depth with mip-maps, JPEG content
-//! wrapped from a `jpeg-encoder` image, and header error cases. No game assets are used.
+//! Synthetic BLP1 files: paletted content at every alpha depth with mip-maps, and header
+//! error cases. JPEG content is in `jpeg.rs`. No game assets are used.
 
 use blp::{Blp, ContentType, Error, HEADER_LEN, MAX_MIPS, PALETTE_LEN};
 
@@ -263,92 +263,4 @@ fn truncated_files_are_rejected() {
         Blp::parse(&file[..HEADER_LEN + 10]),
         Err(Error::Truncated { .. })
     ));
-}
-
-/// Splits a baseline JPEG into the shared header (everything before the SOS marker) and the
-/// rest (SOS segment, entropy-coded data, EOI).
-fn split_jpeg(jpeg: &[u8]) -> (&[u8], &[u8]) {
-    assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "not a JPEG");
-    let mut pos = 2;
-    loop {
-        assert_eq!(jpeg[pos], 0xFF, "expected a marker");
-        let marker = jpeg[pos + 1];
-        if marker == 0xDA {
-            return (&jpeg[..pos], &jpeg[pos..]);
-        }
-        let len = u16::from_be_bytes([jpeg[pos + 2], jpeg[pos + 3]]) as usize;
-        pos += 2 + len;
-    }
-}
-
-/// Wraps a JPEG into a single-level BLP1 JPEG file. `bgr` must hold `w*h` pixels in B, G, R
-/// order (BLP convention, see the crate docs).
-fn build_jpeg_blp(w: u16, h: u16, bgr: &[u8]) -> Vec<u8> {
-    let mut jpeg = Vec::new();
-    jpeg_encoder::Encoder::new(&mut jpeg, 95)
-        .encode(bgr, w, h, jpeg_encoder::ColorType::Rgb)
-        .unwrap();
-    let (shared, mip) = split_jpeg(&jpeg);
-
-    let mut header = vec![0u8; HEADER_LEN];
-    header[0..4].copy_from_slice(b"BLP1");
-    header[8..12].copy_from_slice(&0u32.to_le_bytes());
-    header[12..16].copy_from_slice(&u32::from(w).to_le_bytes());
-    header[16..20].copy_from_slice(&u32::from(h).to_le_bytes());
-    let mip_offset = (HEADER_LEN + 4 + shared.len()) as u32;
-    header[0x1C..0x20].copy_from_slice(&mip_offset.to_le_bytes());
-    header[0x5C..0x60].copy_from_slice(&(mip.len() as u32).to_le_bytes());
-
-    let mut file = header;
-    file.extend_from_slice(&(shared.len() as u32).to_le_bytes());
-    file.extend_from_slice(shared);
-    file.extend_from_slice(mip);
-    file
-}
-
-#[test]
-fn jpeg_content_decodes_with_approximate_colors() {
-    // 16x16 image in BGR byte order: left half pure red, right half pure blue, with a green
-    // band across the middle rows.
-    let (w, h) = (16u16, 16u16);
-    let mut bgr = Vec::new();
-    for y in 0..h {
-        for x in 0..w {
-            let px = if (6..10).contains(&y) {
-                [0u8, 255, 0] // B, G, R = green
-            } else if x < 8 {
-                [0u8, 0, 255] // red
-            } else {
-                [255u8, 0, 0] // blue
-            };
-            bgr.extend_from_slice(&px);
-        }
-    }
-    let file = build_jpeg_blp(w, h, &bgr);
-    let blp = Blp::parse(&file).unwrap();
-    assert_eq!(blp.header.content, ContentType::Jpeg);
-    assert_eq!(blp.mip_count(), 1);
-
-    let (dw, dh, rgba) = blp.mip_rgba(0).unwrap();
-    assert_eq!((dw, dh), (16, 16));
-    assert_eq!(rgba.len(), 16 * 16 * 4);
-
-    let at = |x: usize, y: usize| {
-        let i = (y * 16 + x) * 4;
-        [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
-    };
-    let near = |got: [u8; 4], want: [u8; 3]| {
-        for c in 0..3 {
-            assert!(
-                (i32::from(got[c]) - i32::from(want[c])).abs() <= 24,
-                "got {got:?}, want ~{want:?}"
-            );
-        }
-        assert_eq!(got[3], 255, "JPEG content is opaque in this path");
-    };
-    // Interior points, away from chroma-subsampling edges.
-    near(at(2, 2), [255, 0, 0]);
-    near(at(13, 2), [0, 0, 255]);
-    near(at(4, 8), [0, 255, 0]);
-    near(at(12, 12), [0, 0, 255]);
 }

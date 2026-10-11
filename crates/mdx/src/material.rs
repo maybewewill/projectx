@@ -48,6 +48,7 @@ pub(crate) fn parse_all(p: &mut Reader) -> Result<Vec<Material>, Error> {
         for _ in 0..n {
             layers.push(parse_layer(&mut rec)?);
         }
+        rec.finish("material")?;
         out.push(Material {
             priority_plane,
             flags,
@@ -84,6 +85,7 @@ fn parse_layer(r: &mut Reader) -> Result<Layer, Error> {
             _ => break,
         }
     }
+    l.finish("layer")?;
     Ok(Layer {
         filter_mode,
         shading_flags,

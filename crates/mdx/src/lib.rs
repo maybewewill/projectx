@@ -128,7 +128,9 @@ pub struct Sequence {
     pub start: u32,
     pub end: u32,
     pub move_speed: f32,
-    /// Raw flags. Bit 0 is believed to mean non-looping (**uncertain**); see [`Sequence::is_looping`].
+    /// Raw flags. Bit 0 set means non-looping; see [`Sequence::is_looping`]. Only the values 0
+    /// and 1 occur in the shipped 1.26 models, and the names agree (Death, Attack, Birth and
+    /// Decay are set; Stand, Walk and Portrait are clear).
     pub flags: u32,
     /// Selection weight when several sequences share a name (**semantics uncertain**).
     pub rarity: f32,
@@ -137,7 +139,7 @@ pub struct Sequence {
 }
 
 impl Sequence {
-    /// True unless flag bit 0 is set. The meaning of bit 0 is **uncertain**.
+    /// True unless flag bit 0 is set.
     pub fn is_looping(&self) -> bool {
         self.flags & 1 == 0
     }
@@ -164,16 +166,15 @@ impl Sequence {
     }
 }
 
-/// One entry of TEXS.
+/// One entry of TEXS. Records are 268 bytes: replaceable id, a 260-byte path, flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Texture {
     /// 0 for a file path. Non-zero values are replaceable textures (team color, glow, ...).
     pub replaceable_id: u32,
     /// Path of the BLP file (260-byte field, NUL-terminated).
     pub path: String,
-    /// Field after the path. Always 0 in the files we know of (**uncertain**: may be padding).
-    pub unknown: u32,
-    /// Wrap flags: bit 0 = wrap width, bit 1 = wrap height (**uncertain**).
+    /// Wrap flags: bit 0 = wrap width, bit 1 = wrap height. Shipped models use 0 to 3; the
+    /// bit meaning is taken from public notes and is not checked against the renderer.
     pub flags: u32,
 }
 
@@ -355,13 +356,12 @@ fn parse_glbs(p: &mut Reader) -> Result<Vec<u32>, Error> {
 }
 
 fn parse_texs(p: &mut Reader) -> Result<Vec<Texture>, Error> {
-    check_multiple(p, 272, "TEXS")?;
+    check_multiple(p, 268, "TEXS")?;
     let mut out = Vec::new();
     while !p.is_empty() {
         out.push(Texture {
             replaceable_id: p.u32()?,
             path: p.fixed_str(260)?,
-            unknown: p.u32()?,
             flags: p.u32()?,
         });
     }

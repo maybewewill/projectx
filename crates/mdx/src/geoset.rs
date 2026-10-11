@@ -90,6 +90,7 @@ fn parse_one(r: &mut Reader) -> Result<Geoset, Error> {
         }
     }
 
+    r.finish("geoset")?;
     Ok(Geoset {
         vertices,
         normals,

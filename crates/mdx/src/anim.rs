@@ -18,7 +18,8 @@ pub enum Interpolation {
     None,
     /// Raw 1: linear interpolation between keys.
     Linear,
-    /// Raw 2 (uncertain): Hermite. Keys carry in/out tangents.
+    /// Raw 2: Hermite. Keys carry in/out tangents (confirmed on shipped models: raw-2 tracks
+    /// have tangent-sized keys and parse to the end of the record).
     Hermite,
     /// Raw 3 (uncertain): Bezier. Keys carry in/out tangents.
     Bezier,
