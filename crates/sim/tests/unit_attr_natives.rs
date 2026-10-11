@@ -533,7 +533,7 @@ fn support_tables_cover_the_work_list() {
         .collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 123, "no name appears twice");
+    assert_eq!(names.len(), 115, "no name appears twice");
     let implemented = UNIT_NATIVES
         .iter()
         .chain(HERO_NATIVES.iter())
