@@ -182,12 +182,8 @@ The structure is recorded so the next pass can start from it.
   arithmetic not Unicorn-checked). The owner's handicap (`player +0x2A4`, read through the global at `0x6F2834E0`)
   scales the value when the handicap flag is set.
 
-Open (kill XP): the formula for the value `F` in `0x6F2A3190` (the first `i2r` of the count, then `0x6F2A0230`
-which looks at the victim's ability/level and returns an int, then a division by the candidate count is LIKELY: the
-split), the `HeroFactorXP` and `SummonedKillFactor` uses, `SetPlayerHandicapXP` storage, and the rounding per
-recipient. Iteration order does not change the numbers unless a shared accumulator is updated per recipient, which
-has not been seen (LIKELY). These need a Unicorn run of `0x6F2A3190` with stubs for the candidate list and the
-per-hero call, then a second run of the level walk in `0x6F20B080`.
+The numeric rules of the kill split are now resolved and checked in Unicorn: see section 8.2 (amount, split, engine)
+and 8.3 (candidate selection, structure only).
 
 ### 7.2 Attribute bonuses (partly read)
 
@@ -200,11 +196,155 @@ per-hero call, then a second run of the level walk in `0x6F20B080`.
   `AgiAttackSpeedBonus`, `IntManaBonus`) are read into the model now (section 9; `IntRegenBonus` is not read by the
   game at all). The unit fields they set are section 9.4; the rounding and the life rule are open.
 
-## 8. Hero gate (CONFIRMED)
+## 8. Kill experience split and hero gate
+
+Labels: CONFIRMED = read in the disassembly and reproduced in Unicorn with 0 mismatches; LIKELY = read, not run;
+UNSURE = not settled. Harness: `tools/emu/hero_kill_xp_emu.py` (modes A and B), check: `crates/sim/tests/kill_xp_vectors.rs`
+(`GAME_DLL` and `KILL_XP_VECTORS` set). Model: `sim::heroes` (`Gain`, `experience_engine`, `KillVictim`, `KillEnv`,
+`kill_amount`, `distribute_kill`).
+
+Runs: mode A (the engine `0x6F20B080`) 300 + 3000 cases, mode B (amount, split and the engine calls for every
+candidate) 300 + 3000 cases; **0 mismatches**. The synthetic inputs cover handicap, walk, range, bonus slots, summoned
+victims, illusions, suspended heroes, level-ups and the skill-point cap. Every case runs the real code below the
+entries; only the callees listed in the harness answer from synthetic data (Misc readers, the level and factor tables,
+player accessors, the upgrade-based bonus lookups, the victim's ability, and side effects that carry no numbers).
+
+### 8.1 Hero gate (CONFIRMED)
 
 Every hero native first finds the unit, requires its type id to start with an uppercase letter, the unit not to be
 removed, and the unit not to be an illusion (`+0x5C` bit 30). A failing call returns its default. The model applies
 the same gate (`natives/hero.rs`).
+
+### 8.2 The numbers (CONFIRMED by the Unicorn runs)
+
+**Amount `K` (`0x6F2A0230`, victim = dying unit, an int).**
+1. Level `L`: `0x6F2A0210` gives the hero counter + 1 when the victim has a hero object (unit `+0x1F0`), else the unit
+   level (`0x6F29DCA0`). An ability found by `0x6F0787D0` (rawcode from `0x6F113CC0`) overrides it when its virtual
+   flag at slot `0x36C` answers non-zero: `L := ability +0xE4`.
+2. `L < 1` gives `K = 0`. Otherwise the table is chosen by the type: the type id starts with an uppercase letter and
+   the illusion bit is clear gives **hero** tables (`MaxHeroLevel`, `GrantHeroXP`, Misc key read at `0x6F876208`);
+   anything else gives **unit** tables (`MaxUnitLevel`, `GrantNormalXP`, key `0x6F876218`). `L := min(L, max)`.
+3. `G = grant[L - 1]`. If the victim's `+0x248` bit 2 is set (summoned), `K = f2i(mul(i2r(G), SummonedKillFactor))`
+   (real Misc key `0x6F92F288`), otherwise `K = f2i(i2r(G)) = G`.
+
+**Split (`0x6F2A3190`, record built by `0x6F2A46F0`).** The chosen list is the in-range list (record `+0x14`) when it
+is not empty, otherwise the global list (record `+0xE0`). `N` is its count. `F = div(i2r(K), i2r(N))` is computed once
+(softfloat), and when `0 < F` every entry of the list gets the engine call with value `F`, the handicap flag set, the
+range flag set, and the walk flag set when the victim's owner index is 12 or above (`vf59` = owner, `cmp 12; setge`).
+The order of the list does not change any number (each recipient depends only on `F`, `N` and its own state).
+
+**Engine (`0x6F20B080`, kill flags).** Per recipient:
+- a. Nothing when `F == 0.0` or the hero is suspended (`+0xEC`).
+- b. Handicap: `v = mul(F, H)` with `H` the owner's handicap, player `+0x2A4` (the player is `0x6F2834E0(unit)`).
+- c. Upgrade bonus: `B1 = 0x6F40B340(player, 'HERO', 11)`. Walk the nine rawcodes at `0x6FA6F044` (`1NWT`..`9NWT`)
+   while `B1 != 0`, `i < 9`, and slot `i` exists (`0x6F40B380` of the unit's list). A non-zero code with `k = levels(code)
+   != 0` sets `bonus = value(code, min(k, B1) - 1)`; the last one found wins. If `bonus != 0`: `v = mul(v, add(1.0, bonus))`.
+- d. Plain gain (victim owner below 12): `XP += f2i(round(v))`, `round(x) = floor(x + 0.5)` (`0x6F6EF330`).
+   Walk gain (victim owner 12 or above): `X = i2r(XP)`, `c` = counter. If `c < MaxHeroLevel - 1`, loop:
+   `T = factor[c]` (HeroFactorXP / 100, table field `+8`); stop if `T == 0`; `X += mul(v, T)`; `c += 1`;
+   `Nf = i2r(need(c))`; stop unless `Nf < X`; `v = div(X - Nf, T)`; `X = Nf`; stop when `c >= MaxHeroLevel - 1`.
+   Then `XP := f2i(round(X))`: the walk **sets** the experience, it does not add to it.
+- e. Tail (shared with the plain `AddHeroXP`): while `need(c + 1) <= XP` and not at maximum: level up, skill point
+   `+1` when the new counter is below `MaxHeroLevel`. At maximum `XP := need(c + 1)`. When the hero leveled, skill points
+   are capped at `sum over the 5 hero ability slots of max(0, max - min)` (`0x6F207C80`, `0x6F207CC0`) when that is lower.
+
+Open for the amount/split: none found in the disassembly.
+
+### 8.3 Candidate selection (routine CONFIRMED in Unicorn; normaliser partly decoded)
+
+Harness: `tools/emu/hero_candidate_emu.py` (run `GAME_DLL=... python3 tools/emu/hero_candidate_emu.py OUT N SEED`).
+The real per-candidate routine `0x6F28B990` runs on a synthetic killer record and candidate, with the real normaliser
+chain, `0x6F020000` (distance) and the x87 compare below it. Only these are answered by the harness: the handle lookup
+`0x6F03FA30`, the hero-at-maximum test `0x6F26EB10`, the shared-experience test `0x6F3A34E0`, the parent `0x6F079770`,
+the list append `0x6F286640`, and the position getter (vtable `0xB8`). The run reads the distance and the record's V from
+the code and checks the list routing against the expectations below. **2,000 cases, 0 mismatches**: 522 passed the
+eligibility (342 listed in range, 180 out), 264 global-list appends, 381 flag-0x10 candidates whose position getter
+received the parent, 175 tie re-runs with V = D (all listed), 42 re-runs with V = NaN (all listed). The distances are
+not compared with a Python model (the softfloat result is the binary's own); the comparison is checked on the real value.
+
+**Killer and dying (CONFIRMED structure, disassembly).** The death handler `0x6F2A4880` returns at once when the dying
+unit's `+0x254 & +0x250` is `-1`, when `0x6F4786B0()` (the killer) is null, or when `0x6F285B00(dying)` is zero. Only then
+it calls the candidate builder `0x6F2A46F0(record, dying, killer)`. So **no XP is given when the killer is null**. The
+killer comes from `0x6F4786B0`: the `+0x54` field of the object that `0x6F03FA30()` returns, when that object's `+0x20`
+is zero (LIKELY: the current damage or event context; the setter of that context was not traced, UNSURE).
+
+**Record (CONFIRMED, `0x6F2A46F0`).** `record[0..1]` = the normalised position of the dying unit (`0xB8` getter, then
+normaliser); `record[2]` = killer owner (`vf59`, `0xEC`); `record[3]` = `V = mul(R, R)` with `R = HeroExpRange`
+(Misc real, read with `0x6F009EE0`; `R` is not divided by 32). Lists: in-range list `+0x10`, global list `+0xDC`.
+
+**Per candidate `0x6F28B990` (CONFIRMED by Unicorn, order as in the disassembly).**
+1. Eligibility: `(MaxLevelHeroesDrainExp != 0 or not at_max) and (flags & 0x40000100) == 0 and shared`, where `at_max`
+   is `0x6F26EB10(candidate)` = `0x6F207F10` on the hero (`MaxHeroLevel <= level`), and `shared` is `0x6F3A34E0(killer
+   owner, candidate)`: it reads the candidate's owner index (`vf59`) and tests that bit in the mask `0x6F3A34B0` returns
+   for the killer owner (the `+0x68` reading of `0x6F473170` after `0x6F41B420`, LIKELY). In the harness this test is
+   hooked, so the mask name stays LIKELY. Bit 30 (`0x40000000`) is the illusion flag and `0x100` the removal-sequence
+   flag (`docs/spec/unit-core.md`).
+2. If `GlobalExperience` (`0x6FA70E94`) is on, the candidate is appended to the global list **before** the range test
+   (so out-of-range candidates are in the global list too).
+3. Flag `0x10` on the candidate: the position comes from the parent `0x6F079770(candidate)` (loop while the flag is set;
+   the harness uses a flag-0 parent). LIKELY: a building or attached unit, not checked further.
+4. Position: `0xB8` getter (`ret 0`, the out pointer stays on the stack for the normaliser), then the normaliser
+   `0x6F4743A0`/`0x6F4742F0`, then `D = dist2(record, candidate)` (`0x6F020000`).
+5. In range: **listed unless `V < D`** (`fcompp`, `test ah,5`, `jnp`): a tie is listed, and NaN on either side is listed
+   (unordered). Model: `heroes::in_range(d, v) = !(v < d)`. Verified: 0 mismatches over the 2,000 cases, boundary ties
+   and NaN as above. `heroes::is_candidate` is the eligibility of step 1.
+
+**Normaliser (PARTLY decoded, numbers from the binary, formula UNSURE).** `0x6F4743A0` zeroes the output and calls
+`0x6F4742F0` with ECX = the position reference (P). P+8 and P+0xC go to the handle lookup `0x6F03FA30` (index, tag: the
+object is returned only when its `+0x18` equals the tag), which gives the unit `O`. Then `0x6F497460` (cell to world
+through the grid sub-object `G = O+0x14`, or `O+0x68` when bit 31 of `O+0x14` is set, via `0x6F483270`, and `0x6F483E70`),
+`0x6F38B0B0` (a two-component transform of one value `v`), a multiply by 32 (`+0x2800000` on the exponent, applied to
+non-zero values), and the world origin add (`W` = the object at `[0x6FAB7368]`).
+
+Probes (about 40 single-field runs of the real normaliser in Unicorn, scratch scripts, not committed):
+- Origins: `out.x = W+0x6C`, `out.y = W+0x70` (CONFIRMED; x uses +0x6C, y uses +0x70).
+- Position: with `v = 0` the output is `32 * (O+0x78, O+0x7C) + (W+0x6C, W+0x70)` (CONFIRMED for values 1.0 and 0.5).
+- Transform: `X = O+0x78 - O+0x80 * v`, `Y = O+0x7C - O+0x84 * v` (CONFIRMED for `v = i` in the probes: i = 1, 2 with
+  O+0x80 / O+0x84 = 1, 2, 3, 5). The value `v` is the cell term of `0x6F483E70`; in the probes `v` equalled the cell
+  coordinate `O+0x70` with `O+0x5C = 0`, and `O+0x74` (j) had no visible effect. So the cell term, its scale (`G+0x48`)
+  and the j part are UNSURE.
+- Units: the output is in world units (x32 from cells; the pathing cell size is 32). LIKELY: the candidate and the dying
+  unit are compared in world units, so `V = R*R` is `HeroExpRange` in world units (LIKELY, not confirmed).
+
+**Candidate list (LIKELY, partly UNSURE).** The candidates are the heroes of the global category list (`0x6F2075E0` returns
+the category `0x41486572` = 'AHer'; the enumerator `0x6F46D1B0` / `0x6F46D0B0` walks a singly linked list through `+8`
+from the category head `+0x58`). The walk skips nodes whose `+0x20` (removed) is set and calls a predicate that stops
+the walk when it returns zero; the predicate used by the builder was not identified. **Insertion order** of the list
+is not decoded (UNSURE; LIKELY creation order). **Dead heroes:** neither the routine nor the walk tests life, so a dead
+hero that is not removed is a candidate (LIKELY). The `MaxLevelHeroesDrainExp` gate is the only level test.
+
+**Misc booleans (LIKELY).** `BuildingKillsGiveExp` (`0x6FAB4268`), `GlobalExperience` (`0x6FA70E94`),
+`MaxLevelHeroesDrainExp` (`0x6FA70E98`) are read once with the integer list reader `0x6F009F90(0)` (in the loader
+`0x6F26E080`). The reader returns `0` for an absent key (LIKELY: `local_4 = 0` before the lookup). The 1.26a value in
+the user's `Misc.txt` is not in the repo: UNSURE.
+
+**Ally and shared-experience masks (LIKELY).** The builder's gate `0x6F285AC0(killer, dying)` = `0x6F3A3430(killer owner,
+dying owner)` (the `+0x38` mask; a non-zero result returns with no record). The routine's `0x6F3A34E0` uses the `+0x68`
+mask. Mask names are LIKELY (`+0x38` passive or alliance, `+0x68` shared experience), not confirmed.
+
+**Wiring (NOT done).** `sim::heroes::distribute_kill` is not called from the death path: the normaliser's cell term and the
+candidate list order are not confirmed, so the candidate set and the distances would be guesses. Killer tracking is wired
+(section 8.6).
+
+### 8.4 Model status
+
+- `sim::heroes::{experience_engine, distribute_kill, kill_amount}` implement 8.2 with `Gain` (handicap, walk, range).
+  Not wired into the death path: the candidate set (8.3) is not confirmed end to end (the normaliser's cell term and the
+  list order are open). The routine's gate and range rule are in `sim::heroes::{is_candidate, in_range}` (tests only).
+
+### 8.5 Model changes
+
+- `sim::heroes::{is_candidate, in_range}` and `CANDIDATE_EXCLUDED_FLAGS` (section 8.3), with unit tests.
+
+### 8.6 Killer tracking (LIKELY, model)
+
+- A combat kill (swing execute or missile impact, `combat.rs::expire_attack_timer`) passes the attacker to the death
+  dispatch (`natives/unit_event.rs::dispatch_unit_death_by`). The events `0x80214` (owner) and `0x80235` (unit) and the
+  widget death key then run with a firing whose `Killer` field is the attacker, and `GetKillingUnit` reads it for the event
+  ids `0x14` and `0x35`. Test: `crates/sim/tests/killer_tracking.rs`.
+- `KillUnit`, `SetWidgetLife` and `SetUnitState` (life 0) have no damage source: the killer stays null (`unit_event_natives`
+  checks this). The original reads its killer through `0x6F4786B0` (section 8.3); which setter fills that context for a
+  JASS kill is not traced (UNSURE). `UnitDamageTarget` is NotImplemented in the model, so it cannot pass its source yet.
 
 ## 9. Derived attribute bonuses
 
@@ -430,7 +570,10 @@ Invalid states (life below the floor, which the original reaches only from inval
 
 ## 11. Open items (priority)
 
-1. Kill experience split: the value `F` and the candidate loop (section 7.1). Needed for any XP gained in play.
+1. Kill candidate selection (section 8.3): decode the normaliser's cell term (`0x6F483E70`) and the `0x6F38B0B0`
+   transform fully, the candidate list's insertion order and predicate (`0x6F46D0B0` / `0x6F46D1B0`), and the mask names
+   (`+0x38`, `+0x68`). The routine's gate and the range rule are CONFIRMED (Unicorn, section 8.3). The numeric split is
+   done (section 8.2). The killer is tracked (section 8.6); the original's killer context (`0x6F4786B0`) is not traced.
 2. The per-recipient level walk in `0x6F20B080` (section 7.1), Unicorn-checked with stubs.
 3. Hero ability slots and the ability-level rules of the skill points (sections 4 and 7).
 4. Derived bonuses (section 7.2): the Misc values and the unit fields they set.

@@ -51,6 +51,9 @@ pub enum Payload {
     /// The unit movement walk (message 0x8026A): a repeating timer with period
     /// [`crate::lockstep::MOVE_PERIOD_BITS`] (0.03 s), lockstep.md section 11.2.
     Movement,
+    /// The vision refresh (message 0x80269): a repeating timer with period
+    /// [`crate::lockstep::VISION_PERIOD_BITS`] (0.4 s), `docs/spec/vision.md` section 11.
+    Vision,
 }
 
 /// The timer or trigger that a script thread runs for.
@@ -418,6 +421,11 @@ pub struct UnitType {
     pub gold_cost: i32,
     /// Wood cost, read by `GetUnitWoodCost` (CONFIRMED: the type record's wood field, `+0x24`, `FUN_6f29b830`).
     pub wood_cost: i32,
+    /// Sight radius (record `+0x18C`, UnitBalance `sight`), the day sight of a new unit. 0 when the host has not
+    /// filled it (TODO(gamedata): the engine loads it from the unit rows).
+    pub sight: F32,
+    /// Night sight radius (record `+0x190`, UnitBalance `nsight`). 0 when not filled.
+    pub night_sight: F32,
 }
 
 /// The unit type registry, keyed by the raw type id (the four-character code as an integer).
@@ -567,6 +575,16 @@ pub struct UnitObj {
     pub hero_attack_speed: F32,
     /// Hero attack damage bonus (total). Added to the dice bonus of the attacker's strikes by `damage::SpecDamage`.
     pub hero_attack: F32,
+    /// Day sight radius (object `+0x18C`), copied from the type at creation (see [`UnitType::sight`]).
+    pub sight: F32,
+    /// Night sight radius (object `+0x190`).
+    pub night_sight: F32,
+    /// Players that the unit is revealed to (object `+0x148`, one bit per slot; detection and reveal). Read by the
+    /// visibility queries (`natives/fog.rs`, `unit_fog_test`).
+    pub revealed: u16,
+    /// Extra vision bits of the unit (object `+0x14C`): players whose vision the unit's sight also gives (UNSURE what
+    /// sets them; read by the refresh).
+    pub vision_extra: u16,
     /// Loaded flag (object `+0x5C` bit 4). Read by `IsUnitLoaded`; no transport system sets it yet.
     pub loaded: bool,
     /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
@@ -1111,6 +1129,10 @@ pub struct Game {
     pub movement_armed: bool,
     /// Movement walks run so far (one per firing of the movement timer).
     pub movement_calls: u64,
+    /// Whether the vision refresh timer (0x80269, [`Payload::Vision`]) has been armed. Armed once per game.
+    pub vision_armed: bool,
+    /// The softfloat tables that the playable-area grid needs (set by the host, see [`Game::set_vision_tables`]).
+    vision_tables: Option<softfloat::Tables>,
     /// The player index of `GetLocalPlayer`. Set by the host (see [`Game::set_local_player`]).
     local_player: u32,
     /// Player handles of the running `GetEnumPlayer` scopes, innermost last. Empty outside a scope.
@@ -1212,6 +1234,8 @@ impl Game {
             timers: TimerQueue::new(),
             movement_armed: false,
             movement_calls: 0,
+            vision_armed: false,
+            vision_tables: None,
             contexts: Vec::new(),
             context_keys: BTreeMap::new(),
             caches: BTreeMap::new(),
@@ -1695,9 +1719,32 @@ impl Game {
         self.filter_players.pop();
     }
 
-    /// Sets the playable area (`None` disables the rect clamp). See [`Playable`].
+    /// Sets the playable area (`None` disables the rect clamp). See [`Playable`]. The fog grid is built from it
+    /// (`vision::VisionGrid::from_playable`) when the softfloat tables are set; otherwise the grid keeps its fallback
+    /// size until the tables arrive.
     pub fn set_playable(&mut self, playable: Option<Playable>) {
         self.playable = playable;
+        if let (Some(p), Some(t)) = (playable, self.vision_tables.as_ref()) {
+            self.fog.grid = crate::vision::VisionGrid::from_playable(p.min_x, p.min_y, p.max_x, p.max_y, t);
+        }
+    }
+
+    /// Sets the softfloat tables the fog grid needs (from the user's `Game.dll`). If a playable area is already set,
+    /// the grid is rebuilt from it.
+    pub fn set_vision_tables(&mut self, tables: Option<softfloat::Tables>) {
+        self.vision_tables = tables;
+        if let (Some(p), Some(t)) = (self.playable, self.vision_tables.as_ref()) {
+            self.fog.grid = crate::vision::VisionGrid::from_playable(p.min_x, p.min_y, p.max_x, p.max_y, t);
+        }
+    }
+
+    /// The unit objects of the game with their keys, in creation order (removed and dead units included; the callers
+    /// filter).
+    pub fn unit_objects(&self) -> impl Iterator<Item = (ObjKey, &UnitObj)> + '_ {
+        self.objects.iter().enumerate().filter_map(|(i, o)| match o {
+            Object::Unit(u) => Some((ObjKey(i as u32), u)),
+            _ => None,
+        })
     }
 
     /// The playable area, if one is set.

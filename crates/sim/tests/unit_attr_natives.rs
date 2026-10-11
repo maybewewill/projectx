@@ -542,7 +542,8 @@ fn support_tables_cover_the_work_list() {
     // 56 with UnitResetCooldown (a no-op in the simulation, abilities-2.md section 1.2), plus nine hero natives
     // (AddHeroXP, SetHeroXP, SetHeroLevel, UnitStripHeroLevel, UnitModifySkillPoints, GetHeroStr/Agi/Int,
     // SetHeroStr/Agi/Int, docs/spec/heroes.md).
-    assert_eq!(implemented, 67);
+    // Plus the three fog tests IsUnitVisible / IsUnitFogged / IsUnitMasked (vision.md section 7, LIKELY).
+    assert_eq!(implemented, 70);
 
     let host = host_for(
         r#"

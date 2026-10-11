@@ -7,8 +7,10 @@
 //! suspend flag `+0xEC`. Every real operation is a [`softfloat`] operation, which is bit-exact with `Game.dll`.
 //!
 //! Verification labels follow `docs/spec/heroes.md`: the experience builder is checked in Unicorn against the
-//! original (`tools/emu/hero_xp_emu.py`, the vectors are compared by `tests/hero_xp_vectors.rs`). The level-up and
-//! stat paths are read from the disassembly and covered by unit tests; they are not run in the emulator yet.
+//! original (`tools/emu/hero_xp_emu.py`, the vectors are compared by `tests/hero_xp_vectors.rs`). The experience engine
+//! (plain and kill branches, level walk, level-up tail) and the kill split are checked the same way
+//! (`tools/emu/hero_kill_xp_emu.py`, `tests/kill_xp_vectors.rs`, `docs/spec/heroes.md` section 8). The stat paths are
+//! read from the disassembly and covered by unit tests; they are not run in the emulator yet.
 
 use softfloat::{arith, conv, math, Tables, F32};
 
@@ -76,6 +78,17 @@ impl XpTables {
         XpTables {
             need: need.to_vec(),
             ..XpTables::default()
+        }
+    }
+
+    /// The tables from their columns as the builder leaves them (need, factor, grant XP of a hero, grant XP of a
+    /// normal unit per level). Used by hosts and by the Unicorn vectors, which give the columns directly.
+    pub fn from_columns(need: Vec<i32>, factor: Vec<F32>, grant: Vec<i32>, unit_grant: Vec<u32>) -> XpTables {
+        XpTables {
+            need,
+            grant,
+            factor,
+            unit_grant,
         }
     }
 
@@ -200,7 +213,12 @@ pub fn add_xp(t: &XpTables, h: &mut HeroObj, value: F32, slack: Option<i32>) {
     }
     let gain = conv::f2i(math::floor(arith::add(value, HALF)));
     h.xp = h.xp.wrapping_add(gain);
+    grant_tail(t, h, slack);
+}
 
+/// The level loop and the tail of `0x6F20B080`, after the experience of the call has been set (shared by the plain and
+/// the kill branches). See [`add_xp`] for the rules; `slack` is the skill-point cap.
+fn grant_tail(t: &XpTables, h: &mut HeroObj, slack: Option<i32>) {
     let mut counter = h.level - 1;
     let mut leveled = false;
     if t.need_xp(counter + 1) <= h.xp {
@@ -226,6 +244,232 @@ pub fn add_xp(t: &XpTables, h: &mut HeroObj, value: F32, slack: Option<i32>) {
             }
         }
     }
+}
+
+/// `1.0` (start-up constant `0x6FAAE4F4`).
+const ONE: F32 = F32(0x3F80_0000);
+
+/// Zero of either sign: the `fucompp` equality of the original against `0.0`.
+fn is_zero(x: F32) -> bool {
+    x.0 & 0x7FFF_FFFF == 0
+}
+
+/// The upgrade-based bonus of the kill branch of `0x6F20B080` (`0x6F40B340`, `0x6F40B380`, `0x6F32E020`,
+/// `0x6F32E040`). `b1` is the count `0x6F40B340(player, 'HERO', 11)` returns for the recipient's player, `slots` the
+/// number of slots the recipient's type answers `0x6F40B380` for, `codes` the nine rawcodes at `0x6FA6F044`, and
+/// `levels` / `value` the per-code level count (`0x6F32E020`) and value of a level (`0x6F32E040`, index clamped).
+pub struct BonusEnv<'a> {
+    pub b1: i32,
+    pub slots: i32,
+    pub codes: [u32; 9],
+    pub levels: &'a dyn Fn(u32) -> i32,
+    pub value: &'a dyn Fn(u32, i32) -> F32,
+}
+
+/// What the kill branch reads from the recipient: the owner's handicap (player `+0x2A4`), the bonus source, and the
+/// five hero ability slots whose learnable levels cap the skill points after a level-up (`0x6F207C80`, `0x6F207CC0`:
+/// `(min, max)` per slot; the cap is `sum of max(0, max - min)`).
+pub struct EngineEnv<'a> {
+    pub handicap: F32,
+    pub bonus: BonusEnv<'a>,
+    pub caps: [(i32, i32); 5],
+}
+
+/// The bonus `local` of `0x6F20B080`: walks the codes of the recipient while its slot exists (at most nine), and takes
+/// the value of the last code that has levels, at level `min(levels, b1) - 1` (CONFIRMED by the Unicorn run; the walk
+/// stops at the first missing slot or when `b1` is zero).
+fn bonus_of(env: &BonusEnv) -> F32 {
+    let mut local = F32::ZERO;
+    let mut i = 0usize;
+    while env.b1 != 0 && i < 9 && (i as i32) < env.slots {
+        let code = env.codes[i];
+        i += 1;
+        if code == 0 {
+            continue;
+        }
+        let k = (env.levels)(code);
+        if k != 0 {
+            let level = (k as u32).min(env.b1 as u32) as i32;
+            local = (env.value)(code, level - 1);
+        }
+    }
+    local
+}
+
+/// The level-walk branch of `0x6F20B080` (the `value` is spread over the levels with the hero factor of each level).
+/// From the experience `xp` and the level counter (`level - 1`), with the walk value `v`:
+///
+/// - `x` starts as `i2r(xp)`; while the counter is below `MaxHeroLevel - 1` and the factor `T` of the counter is not
+///   zero: `x += v * T`, the counter moves up, `need` = `i2r(need of the new counter)`; if `need < x` then `x := need`,
+///   `v := (x_before - need) / T` and the walk goes on while the counter is below the last level; otherwise it stops.
+/// - the result is `f2i(round(x))` and it **sets** the experience (no addition).
+///
+/// Verified against the original by `tools/emu/hero_kill_xp_emu.py` (mode A, the walk flag).
+fn walk_xp(t: &XpTables, tb: &Tables, level: i32, xp: i32, mut v: F32) -> i32 {
+    let m = t.max_level();
+    let mut x = conv::i2r(xp);
+    let mut c = level - 1;
+    if c < m - 1 {
+        loop {
+            let tf = usize::try_from(c)
+                .ok()
+                .and_then(|i| t.hero_factor(i))
+                .unwrap_or(F32::ZERO);
+            if is_zero(tf) {
+                break;
+            }
+            x = arith::add(x, arith::mul(v, tf));
+            c += 1;
+            let nf = conv::i2r(t.need_xp(c));
+            if !arith::lt(nf, x) {
+                break;
+            }
+            let d = arith::sub(x, nf);
+            let q = arith::div(d, tf, tb);
+            x = nf;
+            v = q;
+            if c >= m - 1 {
+                break;
+            }
+        }
+    }
+    conv::f2i(math::round(x))
+}
+
+/// The flags of the experience engine (`0x6F20B080`): `handicap` (`param_5`) scales the value by the owner's handicap,
+/// `walk` (`param_6`) takes the level walk instead of the plain gain, `range` (`param_7`) applies the upgrade bonus.
+/// A kill split sets all three; the plain `AddHeroXP` sets none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Gain {
+    pub handicap: bool,
+    pub walk: bool,
+    pub range: bool,
+}
+
+/// The experience engine `0x6F20B080` for one hero: `value` is the amount as f32, `gain` the flags. The show flag and
+/// the effect calls carry no numbers and are not modelled.
+///
+/// Order (CONFIRMED by the disassembly and the Unicorn run): suspended or zero is a no-op; `v = value * handicap`
+/// (when `handicap`); `v = v * (1 + bonus)` (when `range` and the bonus is not zero); the gain (plain: `xp += f2i(round(v))`,
+/// walk: [`walk_xp`]); then the shared tail with the skill-point cap of `env.caps`.
+pub fn experience_engine(t: &XpTables, tb: &Tables, h: &mut HeroObj, value: F32, gain: Gain, env: &EngineEnv) {
+    if h.xp_suspended || is_zero(value) {
+        return;
+    }
+    let mut v = if gain.handicap {
+        arith::mul(value, env.handicap)
+    } else {
+        value
+    };
+    let bonus = if gain.range {
+        bonus_of(&env.bonus)
+    } else {
+        F32::ZERO
+    };
+    if !is_zero(bonus) {
+        v = arith::mul(v, arith::add(ONE, bonus));
+    }
+    h.xp = if gain.walk {
+        walk_xp(t, tb, h.level, h.xp, v)
+    } else {
+        h.xp.wrapping_add(conv::f2i(math::round(v)))
+    };
+    let slack = env
+        .caps
+        .iter()
+        .fold(0i32, |s, &(lo, hi)| s.wrapping_add(if lo < hi { hi - lo } else { 0 }));
+    grant_tail(t, h, Some(slack));
+}
+
+/// The victim of a kill as the amount function `0x6F2A0230` and the split `0x6F2A3190` read it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KillVictim {
+    /// The type id starts with an uppercase letter (`0x6F2A0230` then uses the hero table; not an illusion).
+    pub type_upper: bool,
+    /// Unit flags bit 30 (illusion).
+    pub illusion: bool,
+    /// Unit `+0x248` bit 2 (summoned): the `SummonedKillFactor` applies to the amount.
+    pub summoned: bool,
+    /// The owner index (`vf59`). Owners 12 and above take the level walk (`0x6F2A3190`, CONFIRMED by the run).
+    pub owner: i32,
+    /// The victim's level as `0x6F2A0210` answers it: the hero counter + 1, or the unit level (`0x6F29DCA0`).
+    pub level: i32,
+    /// The ability `0x6F0787D0` finds for the victim: `(answers the vf 0x36C flag, level override +0xE4)`.
+    pub ability: Option<(bool, i32)>,
+}
+
+/// The Misc values of the kill split that are not in [`XpTables`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct KillEnv {
+    /// `MaxUnitLevel`.
+    pub max_unit: i32,
+    /// `SummonedKillFactor` (a real).
+    pub summon_factor: F32,
+}
+
+/// The amount `K` of `0x6F2A0230`: the level (overridden by the victim's ability when it answers the flag), clamped to
+/// `[1, max]` (a level below 1 gives 0), the grant of the table of the victim (heroes: `GrantHeroXP`, others:
+/// `GrantNormalXP`) at index `level - 1`, times the summoned factor when the victim is summoned, truncated to an int.
+pub fn kill_amount(t: &XpTables, v: &KillVictim, env: &KillEnv) -> i32 {
+    let mut level = v.level;
+    if let Some((true, over)) = v.ability {
+        level = over;
+    }
+    if level < 1 {
+        return 0;
+    }
+    let hero_key = v.type_upper && !v.illusion;
+    let max = if hero_key { t.max_level() } else { env.max_unit };
+    if level > max {
+        level = max;
+    }
+    let index = (level - 1) as usize;
+    let grant = if hero_key {
+        t.grant_hero_xp(index)
+    } else {
+        t.grant_normal_xp(index).map(|g| g as i32)
+    }
+    .unwrap_or(0);
+    let amount = conv::i2r(grant);
+    let amount = if v.summoned {
+        arith::mul(amount, env.summon_factor)
+    } else {
+        amount
+    };
+    conv::f2i(amount)
+}
+
+/// The kill split `0x6F2A3190` on the chosen recipient list (the in-range list when it is not empty, else the global
+/// one; the caller chooses, in list order): the amount `K` (see [`kill_amount`]) is divided by the list count `N` in
+/// softfloat (`F = i2r(K) / i2r(N)`, once, before any recipient), and when `F > 0` every recipient gets
+/// [`experience_engine`] with `F` as the value, the handicap flag and the range flag set, and the walk flag set when the
+/// victim's owner is 12 or above. Returns `K`.
+pub fn distribute_kill(
+    t: &XpTables,
+    tb: &Tables,
+    victim: &KillVictim,
+    env: &KillEnv,
+    recipients: &mut [(HeroObj, EngineEnv)],
+) -> i32 {
+    let k = kill_amount(t, victim, env);
+    let n = recipients.len() as i32;
+    if n == 0 {
+        return k;
+    }
+    let share = arith::div(conv::i2r(k), conv::i2r(n), tb);
+    if !arith::lt(F32::ZERO, share) {
+        return k;
+    }
+    let walk = victim.owner >= 12;
+    let gain = Gain {
+        handicap: true,
+        walk,
+        range: true,
+    };
+    for (hero, e) in recipients.iter_mut() {
+        experience_engine(t, tb, hero, share, gain, e);
+    }
+    k
 }
 
 /// `SetHeroXP`: raises the experience to `target` through [`add_xp`]; a lower target does nothing (CONFIRMED by the
@@ -559,6 +803,34 @@ fn add_life(c: &mut LifeCells, d: F32) {
     set_core(c, sum);
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Kill candidates (docs/spec/heroes.md, section 8.3). The per-candidate routine `0x6F28B990` gates and tests each hero
+// of the killer's candidate list. Checked in Unicorn by `tools/emu/hero_candidate_emu.py` (2,000 cases with the
+// normaliser, the distance and the comparison run as the binary runs them). The position normaliser is NOT modelled:
+// its cell term is not decoded, so the candidate positions are not confirmed (UNSURE), and nothing calls these
+// helpers from the death path yet.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// The unit flags that exclude a kill candidate: `0x40000100` (bit 30, the illusion flag, and bit 8, `0x100`, which
+/// the removal sequence sets; death alone does not set it, LIKELY from `docs/spec/unit-core.md`).
+pub const CANDIDATE_EXCLUDED_FLAGS: u32 = 0x4000_0100;
+
+/// Whether a hero passes the eligibility of `0x6F28B990` (CONFIRMED): `MaxLevelHeroesDrainExp` (`drain_on`) or the hero
+/// below its maximum level (`at_max` is the answer of `0x6F26EB10`), the flags free of [`CANDIDATE_EXCLUDED_FLAGS`],
+/// and the candidate's owner bit set in the killer's shared-experience mask (`shares_xp`, the test `0x6F3A34E0`). No
+/// life test appears in the routine, so a dead hero that is not removed passes (LIKELY, see `docs/spec/heroes.md`).
+pub fn is_candidate(drain_on: bool, at_max: bool, flags: u32, shares_xp: bool) -> bool {
+    (drain_on || !at_max) && flags & CANDIDATE_EXCLUDED_FLAGS == 0 && shares_xp
+}
+
+/// The range test of `0x6F28B990` (CONFIRMED by Unicorn): a candidate is listed in range unless `v < d`, with `d` the
+/// squared distance of the normalised positions and `v = R * R` (the record's `+0x0C`, the `HeroExpRange` squared,
+/// with no division by 32). A tie is listed. NaN on either side is listed too: the x87 compare is unordered and the
+/// original rejects only the strictly-less case (`fcompp`, `test ah,5`, `jnp`).
+pub fn in_range(d: F32, v: F32) -> bool {
+    !arith::lt(v, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +843,54 @@ mod tests {
 
     fn f(v: f32) -> F32 {
         F32(v.to_bits())
+    }
+
+    #[test]
+    fn kill_amount_uses_the_victim_table_clamp_and_summon_factor() {
+        // Hero table: need, factor, grant (index 1 = 20, index 2 = 30). Unit table: 5, 6.
+        let t = XpTables::from_columns(vec![100, 200, 300], vec![F32::ZERO; 3], vec![10, 20, 30], vec![5, 6]);
+        let env = KillEnv {
+            max_unit: 2,
+            summon_factor: f(0.5),
+        };
+        let hero = |level: i32| KillVictim {
+            type_upper: true,
+            illusion: false,
+            summoned: false,
+            owner: 0,
+            level,
+            ability: None,
+        };
+        assert_eq!(kill_amount(&t, &hero(2), &env), 20);
+        assert_eq!(kill_amount(&t, &hero(9), &env), 30, "level clamps to MaxHeroLevel");
+        assert_eq!(kill_amount(&t, &hero(0), &env), 0, "a level below 1 gives nothing");
+        let overridden = KillVictim {
+            ability: Some((true, 1)),
+            ..hero(2)
+        };
+        assert_eq!(kill_amount(&t, &overridden, &env), 10, "the ability level override");
+        let not_answering = KillVictim {
+            ability: Some((false, 1)),
+            ..hero(2)
+        };
+        assert_eq!(kill_amount(&t, &not_answering, &env), 20, "an ability that does not answer is ignored");
+        let summoned = KillVictim {
+            summoned: true,
+            ..hero(2)
+        };
+        assert_eq!(kill_amount(&t, &summoned, &env), 10, "the summoned factor 0.5 on 20");
+        let unit = KillVictim {
+            type_upper: false,
+            level: 9,
+            ..hero(2)
+        };
+        assert_eq!(kill_amount(&t, &unit, &env), 6, "units use GrantNormalXP clamped to MaxUnitLevel");
+        let illusion = KillVictim {
+            illusion: true,
+            level: 1,
+            ..hero(2)
+        };
+        assert_eq!(kill_amount(&t, &illusion, &env), 5, "an illusion uses the unit table");
     }
 
     #[test]
@@ -696,5 +1016,33 @@ mod tests {
         let base = rebase(12, gain, 2, 40);
         assert_eq!(base, 37);
         assert_eq!(intelligence(base, gain, 2), 40);
+    }
+
+    #[test]
+    fn candidate_gate_follows_the_routine() {
+        // Drain on lets a maximum-level hero through; drain off rejects it.
+        assert!(is_candidate(true, true, 0, true));
+        assert!(!is_candidate(false, true, 0, true));
+        assert!(is_candidate(false, false, 0, true));
+        // The flags 0x40000100 exclude, any other bit does not (0x10 is the parent substitution, not an exclusion).
+        assert!(!is_candidate(true, false, 0x0000_0100, true));
+        assert!(!is_candidate(true, false, 0x4000_0000, true));
+        assert!(is_candidate(true, false, 0x0000_0010 | 0x0000_0020, true));
+        // The shared-experience bit is required.
+        assert!(!is_candidate(true, false, 0, false));
+    }
+
+    #[test]
+    fn in_range_rejects_only_strictly_less_v() {
+        let (one, two) = (f(1.0), f(2.0));
+        // d <= v is listed, including the tie.
+        assert!(in_range(one, two));
+        assert!(in_range(two, two));
+        // v < d is rejected.
+        assert!(!in_range(two, one));
+        // NaN on either side is listed (unordered compare).
+        let nan = F32::from_bits(0x7FC0_0000);
+        assert!(in_range(nan, one));
+        assert!(in_range(one, nan));
     }
 }
