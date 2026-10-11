@@ -97,7 +97,14 @@ fn library() -> AiLibrary {
 
 /// Builds the main VM (with the AI natives), the AI host over the same game, and the shared AI state.
 fn rig(main_src: &str, lib: AiLibrary) -> Rig {
+    rig_with(main_src, lib, |_| {})
+}
+
+/// Like [`rig`], but `setup` runs on the game before the main script starts. The main script starts
+/// at once (lockstep.md section 12.1), so state it reads at its start must be set here.
+fn rig_with(main_src: &str, lib: AiLibrary, setup: impl FnOnce(&Rc<RefCell<Game>>)) -> Rig {
     let game = Rc::new(RefCell::new(Game::new()));
+    setup(&game);
     let shared = ai::new_shared();
     let mut reg = NativeRegistry::with_builtins();
     register_main(&mut reg, &game, &shared);
@@ -309,18 +316,19 @@ endfunction
 "#;
     let mut lib = library();
     lib.add_script("count.ai", count_ai);
-    let mut r = rig(main, lib);
-    r.game.borrow_mut().unit_types_mut().insert(
-        HFOO,
-        UnitType {
-            name: "hfoo".to_string(),
-            max_life: F32::from_bits(0x42C8_0000),
-            gold_cost: 150,
-            wood_cost: 50,
-            ..Default::default()
-        },
-    );
-    // The unit type must exist before the main VM creates units: insert it, then run the first tick.
+    // The unit type must exist before the main script starts (it starts at once, in `rig_with`).
+    let mut r = rig_with(main, lib, |game| {
+        game.borrow_mut().unit_types_mut().insert(
+            HFOO,
+            UnitType {
+                name: "hfoo".to_string(),
+                max_life: F32::from_bits(0x42C8_0000),
+                gold_cost: 150,
+                wood_cost: 50,
+                ..Default::default()
+            },
+        );
+    });
     tick(&mut r);
     assert_eq!(ai_int(&r, 0, "own"), 2);
     assert_eq!(ai_int(&r, 0, "done"), 2);

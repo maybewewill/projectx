@@ -71,9 +71,10 @@ fn clock_after(k: usize) -> f32 {
     clock_at_tick(TICKS_PER_BATCH * k as u64)
 }
 
-/// The start time: Main runs in batch 1, at the boundary tick 20, so timers start from that clock.
+/// The start time: `start` runs Main at once, before any tick, so timers start from clock 0.0
+/// (lockstep.md section 12.1). Before this change Main waited for the first batch (tick 20).
 fn start() -> f32 {
-    clock_at_tick(TICKS_PER_BATCH)
+    clock_at_tick(0)
 }
 
 /// The first batch (1-based) whose end clock reaches `expiry`. That is the batch that fires it.
@@ -335,10 +336,9 @@ endfunction
 "#;
     let mut host = host_for(src);
     host.start("Main", &[]).unwrap();
-    // Main runs in step 1, after that step's timer pump. The zero-length timer is due at once, so
-    // it fires in step 2 (the first pump after it was started).
-    host.step();
+    // Main runs at once, at clock 0.0 (tick 0). The expiry is 0.0 + 0 = 0.0, so the first pump, at
+    // tick 1 (clock 0.005), pops it. Nothing fires before that tick.
     assert_eq!(int(&host, "gFired"), 0);
-    host.step();
+    host.step_ticks(1);
     assert_eq!(int(&host, "gFired"), 1);
 }

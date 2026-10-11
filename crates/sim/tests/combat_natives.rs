@@ -147,9 +147,10 @@ fn duel_host() -> ScriptHost {
     host
 }
 
-/// The steps of the hits in the duel (model values, pinned): the swing starts on the first step, the execute point
-/// is 0.5 s later, and each swing repeats one cooldown (1.0 s) after the last.
-const HIT_STEPS: [usize; 4] = [7, 17, 27, 37];
+/// The steps of the hits in the duel (model values, pinned): the duel is ordered at once at the end of the
+/// setup step (clock 0.1), so the first hit is 0.6 s after the order (one step earlier than when orders waited
+/// for the batch), and each swing repeats one cooldown (1.0 s) after the last.
+const HIT_STEPS: [usize; 4] = [6, 16, 26, 36];
 
 #[test]
 fn mutual_attack_hits_at_pinned_steps() {
@@ -230,7 +231,8 @@ fn soft_add(a: f32, b: f32) -> f32 {
 }
 
 /// The step (1-based, as the test counts them) in which the first scan after tick 80 acquires. The scan timer
-/// is armed at tick 20 (setup) with expiry clock(20) + 0.5, then re-armed every 0.5 s with the soft-float add.
+/// is armed at tick 0 (setup runs at once, lockstep.md section 12.1) with expiry clock(0) + 0.5, then re-armed
+/// every 0.5 s with the soft-float add.
 /// A timer fires at the first tick whose clock reaches its expiry. Step k ends at tick 20 * (k + 1).
 fn first_acquire_step() -> usize {
     let clock_at = |ticks: u64| {
@@ -241,7 +243,7 @@ fn first_acquire_step() -> usize {
         c.now()
     };
     let fires_at = |expiry: f32| (1u64..).find(|&t| clock_at(t) >= expiry).expect("reached");
-    let mut expiry = soft_add(clock_at(TICKS_PER_BATCH), 0.5);
+    let mut expiry = soft_add(clock_at(0), 0.5);
     let mut tick = fires_at(expiry);
     while tick <= 80 {
         expiry = soft_add(expiry, 0.5);
@@ -399,9 +401,10 @@ fn reaction_delay_draws_from_stream_nine() {
     let mut expected = before.clone();
     let u = expected.stream_mut(9).random_fraction(&table);
     let delay = arith::mul(u, f(0.5));
+    // `duel` runs at once, so the reaction is armed at the game time of `start`, before the step.
     host.start("duel", &[]).expect("duel");
-    host.step();
     let now = host.timers().now();
+    host.step();
     let reaction = host
         .game()
         .attack_view(ua)

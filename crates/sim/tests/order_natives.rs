@@ -489,14 +489,15 @@ fn straight_moves_arrive_with_model_positions() {
     }
     // The model's own output (UNVERIFIED against the original): the movement walk fires every 0.03 s of
     // agile clock (lockstep.md section 11.2), so a batch of 20 ticks holds three or four walks, each moving
-    // 8.1 world units (270 per second times 0.03). The orders are issued at the first batch boundary (tick
-    // 20), so the first recorded batch holds three walks (24.3). The last step is cut to the remaining
-    // distance, and the order completes on the fourth recorded step, when the unit is within the arrival
-    // radius (6.4 world units) of the goal.
-    let golden: [(u32, u32); 4] = [
-        (0x41C2_6605, 0x0000_0000),
+    // 8.1 world units (270 per second times 0.03). `Main` issues the order at once, at tick 0 (lockstep.md
+    // section 12.1), and the first batch (ticks 1..20) holds the walks at ticks 6, 12 and 18 (24.3), which
+    // run before the first recorded step. The recorded steps are batches 2, 3 and 4; each holds three walks,
+    // because the soft-float sum of the 0.03 period drifts (the walks of a batch are not always four). The
+    // order completes on the third recorded step, when the unit is within the arrival radius (6.4 world units)
+    // of the goal.
+    let golden: [(u32, u32); 3] = [
         (0x4242_660E, 0x0000_0000),
-        (0x42A1_FFC0, 0x0000_0000),
+        (0x4291_CC92, 0x0000_0000),
         (0x42C2_6619, 0x0000_0000),
     ];
     let bits: Vec<(u32, u32)> = positions

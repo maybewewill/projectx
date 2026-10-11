@@ -398,7 +398,8 @@ endfunction
     let k = unit_key(&host, "u1");
     assert!(!is_dead(&host, k));
     // The buff was applied at the queue time after the first step (0.1 s); the duration is 1.0 s.
-    let start = host.timers().now();
+    // Main ran at once at clock 0.0, so the timed life was applied at 0.0 (lockstep.md section 12.1).
+    let start = F32::ZERO;
     let expiry = arith::add(
         F32::from_bits(start.to_bits()),
         F32::from_bits(0x3F80_0000), // 1.0
@@ -458,7 +459,8 @@ endfunction
     host.start("main", &[]).expect("main starts");
     host.step();
     let k = unit_key(&host, "u1");
-    let start = host.timers().now();
+    // Main ran at once at clock 0.0, so the timed life was applied at 0.0 (lockstep.md section 12.1).
+    let start = F32::ZERO;
     let expiry0 = arith::add(
         F32::from_bits(start.to_bits()),
         F32::from_bits(0x4000_0000), // 2.0
@@ -535,14 +537,15 @@ function main takes nothing returns nothing
 endfunction
 "#,
     );
-    // The apply runs at the queue time 0.1 s; its zero-length timer is due at that time, so the next step fires it.
-    call(&mut host, "main", 1);
+    // The apply runs at once at clock 0.0. Its zero-length timer is due at that time, so the first
+    // pump (tick 1) fires it: the expiry goes through the queue, not directly.
+    host.start("main", &[]).expect("main starts");
     let k = unit_key(&host, "u1");
     assert!(
         !is_dead(&host, k),
         "the expiry goes through the queue, not directly"
     );
-    host.step();
+    host.step_ticks(1);
     assert!(is_dead(&host, k));
     assert!(host.game().buffs(k).is_empty());
 }

@@ -134,6 +134,8 @@ pub struct Engine {
     steps: u64,
     /// Game ticks run.
     ticks: u64,
+    /// `main` is queued for the first step (set at boot, started by the first [`Engine::step_ticks`]).
+    main_pending: bool,
     timers_fired: u64,
     notes: Vec<String>,
     combat: data::CombatSetup,
@@ -302,6 +304,7 @@ impl Engine {
             pathing,
             config_status: String::new(),
             main_status: String::new(),
+            main_pending: false,
             steps: 0,
             ticks: 0,
             timers_fired: 0,
@@ -311,7 +314,10 @@ impl Engine {
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
-        let _ = engine.start_main();
+        // `main` waits for the first step, when the host is set up (UNSURE: the real game starts it at
+        // game start). Starting it at boot would run it before the caller can add unit types to the game.
+        engine.main_pending = true;
+        engine.main_status = "queued for the first step".to_string();
         Ok(engine)
     }
 
@@ -323,12 +329,12 @@ impl Engine {
         result
     }
 
-    /// Queues `main` as a thread. It first runs on the next [`Engine::step`] (UNSURE: the real game
-    /// starts `main` at game start). Calling it twice runs `main` twice.
+    /// Starts `main` as a thread and runs it at once, until its first stop (lockstep.md section 12.1;
+    /// UNSURE: the real game starts `main` at game start). Calling it twice runs `main` twice.
     pub fn start_main(&mut self) -> Result<ThreadId, RunStatus> {
         let result = self.host.start("main", &[]);
         self.main_status = match &result {
-            Ok(id) => format!("queued as thread {}", id.0),
+            Ok(id) => format!("started as thread {}", id.0),
             Err(e) => format!("not started: {e:?}"),
         };
         result
@@ -346,6 +352,10 @@ impl Engine {
     /// host's batch work. A replay passes `TurnReport::game_ticks` here, after applying the turn's
     /// commands. Returns the number of queue entries of the main host that fired.
     pub fn step_ticks(&mut self, n: u64) -> usize {
+        if self.main_pending {
+            self.main_pending = false;
+            let _ = self.start_main();
+        }
         let mut fired = 0usize;
         let mut left = n;
         while left > 0 {
