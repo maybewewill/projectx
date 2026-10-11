@@ -269,13 +269,13 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~37%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~37.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~45% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~36% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~37% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
 | JASS VM + ~1000 natives | 12% | ~88% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,107 of 1,167 bound** (60 NotImplemented with a reason), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
