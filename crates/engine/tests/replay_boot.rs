@@ -54,6 +54,7 @@ fn inputs(map: Vec<u8>) -> Inputs {
         ai_common: None,
         ai_scripts: Vec::new(),
         game_archives: Vec::new(),
+        check_natives: false,
     }
 }
 

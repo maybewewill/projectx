@@ -210,7 +210,7 @@ Keywords the AST printer emits, all confirmed as strings in the decompile: `func
 ## 8. Real compile path, name rules, return analysis (lane J, 2026-10-11)
 
 Sections 1-7 were written from one decompile pass without the tables. This section is the result of running the
-**path the game really uses** in Unicorn (harness `tools/emu/jasscomp/realpath.py`) on ~4,100 probe programs and
+**path the game really uses** in Unicorn (harness `tools/emu/jasscomp/realpath.py`) on more than 5,000 probe programs and
 reading the node constructors and validators in IDA. It **corrects** three older claims: identifiers are
 **case-sensitive** (sections 1.6, 4 and `docs/spec/jass-bytecode.md` said case-insensitive), the "return bug" rule
 (which `return` statements are type-checked) is decoded in 8.6, and the entry `0x6F458900` does accept `native`

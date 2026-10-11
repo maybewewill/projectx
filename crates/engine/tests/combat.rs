@@ -70,6 +70,7 @@ fn inputs(map: Vec<u8>, game_archives: Vec<Vec<u8>>, game_dll: Option<Vec<u8>>) 
         ai_common: None,
         ai_scripts: Vec::new(),
         game_archives,
+        check_natives: false,
     }
 }
 

@@ -127,6 +127,11 @@ pub struct Inputs {
     /// (`Units\MiscData.txt`, `Units\MiscGame.txt`) and the unit rows (`Units\UnitBalance.slk`,
     /// `Units\UnitWeapons.slk`). Empty: the Misc values and unit rows are defaults and the damage stays the placeholder.
     pub game_archives: Vec<Vec<u8>>,
+    /// Check the `native` lines of the scripts against the 1.26a native table (`docs/spec/natives-1.26a.tsv`) like
+    /// the game does (jass-frontend.md 8.2): an unregistered name or a different signature rejects the whole script
+    /// set. Off by default because synthetic test scripts declare natives of their own; `w3boot` turns it on. The AI
+    /// scripts are checked against the common and AI tables.
+    pub check_natives: bool,
 }
 
 /// A booted map: the script host, the map info and the boot results.
@@ -260,7 +265,9 @@ impl Engine {
         // script has to name one of them with the same signature (docs/spec/jass-frontend.md).
         let check_opts = jass::check::CheckOptions {
             lenient_returns: false,
-            natives: Some(jass::check::NativeRegistry::from_tsv(NATIVE_TABLE, &["common"])),
+            natives: inputs
+                .check_natives
+                .then(|| jass::check::NativeRegistry::from_tsv(NATIVE_TABLE, &["common"])),
         };
         let module = jass::compile::compile_with(&programs, &check_opts).map_err(Error::Compile)?;
 
@@ -279,10 +286,12 @@ impl Engine {
             notes.push("no common.ai: AI VMs are built without it".to_string());
         }
         library.set_prelude(&inputs.common_j);
-        library.set_native_registry(jass::check::NativeRegistry::from_tsv(
-            NATIVE_TABLE,
-            &["common", "ai"],
-        ));
+        if inputs.check_natives {
+            library.set_native_registry(jass::check::NativeRegistry::from_tsv(
+                NATIVE_TABLE,
+                &["common", "ai"],
+            ));
+        }
         for (name, source) in &inputs.ai_scripts {
             library.add_script(name, source);
         }
