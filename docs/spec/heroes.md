@@ -346,6 +346,67 @@ candidate list order are not confirmed, so the candidate set and the distances w
   checks this). The original reads its killer through `0x6F4786B0` (section 8.3); which setter fills that context for a
   JASS kill is not traced (UNSURE). `UnitDamageTarget` is NotImplemented in the model, so it cannot pass its source yet.
 
+### 8.7 Pass 2: normaliser, distance, range, Misc flags (2026-10-11)
+
+This section supersedes the open items of 8.3 and 8.4 where they conflict. Harness: `tools/emu/hero_normaliser_emu.py`
+(`N` lines: normaliser; `R` lines: the real routine `0x6F28B990` with its normalised candidate), Rust check:
+`crates/sim/tests/kill_range_vectors.rs` (`KILL_RANGE_VECTORS=...`), model: `sim::heroes::{normalise, cell_term,
+kill_distance2, in_range}` (unit tests in `kill_position_tests`), Misc: `gamedata::misc::HeroMisc` (test
+`crates/gamedata/tests/misc_experience.rs`).
+
+**Normaliser `0x6F4743A0` (CONFIRMED: 2,000 Unicorn cases, 0 mismatches, bit for bit).** Chain: `0x6F4742F0` (lookup
+`0x6F03FA30` of the position reference, then the three steps below), `0x6F497460` / `0x6F4885A0` (grid choice and cell
+term), `0x6F483270` (grid choice by bit), `0x6F483E70` (cell term), `0x6F38B0B0` (factors), softfloat add/sub/mul/i2r.
+With `O` the unit, `W = [0x6FAB7368]` the world, `mgr = [0x6FAB73D8]` the grid manager:
+- Grid `G` = `mgr+0x14` when bit 31 of `O+0x14` is clear, else `mgr+0x68`.
+- Cell term: `v = snap(G+0x40 - O+0x70)`, where `snap` gives `+0.0` when `|x| < 1e-4` (strict; NaN kept). When
+  `G+0x44 != O+0x74` (integers): `v = v + G+0x48 * i2r(G+0x44 - O+0x74)`.
+- Cell position: `X = O+0x78 + O+0x80 * v`, `Y = O+0x7C + O+0x84 * v`. **Correction:** the earlier note had `-`; the
+  Unicorn runs show `+` (the `v` sign convention is the one above).
+- Output: `out.x = 32*X + W+0x6C`, `out.y = 32*Y + W+0x70`, where `32*` adds 5 to a non-zero exponent (exact).
+- The constant `1e-4` is at `0x6FAAE478` and is written by the start-up stub `0x6F84DC90` (`mov [0x6faae478], 0x38d1b717`);
+  the file image has 0 there. **Caveat:** the harness used to leave it at 0 (no snap). `tools/emu/emu.py` now writes it.
+  Any Unicorn probe of `0x6F483E70` (movement-2, 400 cases) that did not set it ran with a zero threshold; re-run it.
+- Operand order of the adds and muls does not change any result here (four variants, all equal on the vectors).
+
+**Candidate distance (CONFIRMED: 2,000 cases, `D` bit for bit).** `D = add(mul(dx,dx), mul(dy,dy))` with `dx = sub(cand.x,
+rec.x)`, `dy = sub(cand.y, rec.y)`, `rec` = the killer record's normalised dying position (`record[0..1]`), `cand` = the
+normalised candidate. The original has **no equal-point shortcut**: `arith::dist2` (the fused `0x6F6EF3B0`) has one, so
+`sim::heroes::kill_distance2` is a separate function. The sign of `dx` is irrelevant (squares).
+
+**Range test (CONFIRMED: 2,000 cases).** Listed iff `not (V < D)`, `V = R*R` (`heroes::in_range`). Counts: 1,002 listed,
+998 out, 393 ties (all listed), 89 NaN `V` (listed). Corrections: `D` is computed from the normalised positions above, and
+the range is in the same units (world units).
+
+**Mapping to the sim (NOT confirmed).** The normaliser needs `O+0x70..0x84` and the grid manager's `G+0x40..0x48`. The sim
+stores only world `x, y` per unit (`UnitObj`), so there is no normaliser input for a sim unit. A mapping
+`O+0x78 = (x - origin)/32` with a zero cell term would reproduce the output only if real units have that cell term
+zero, which is not established. So in-range decisions for real unit pairs are **not** confirmed.
+
+**AHer walk `0x6F46D0B0` (CORRECTED).** `holder = ECX`, `cat = [holder+0x6C]`, head `[cat+0x58]`, next `[node+8]`.
+Per node: skipped when `[node+0x20] != 0`; the reference `[node+0x54]` is looked up (`0x6F03FA30` with ECX = ref+0xC,
+EDX = ref+0x10); the unit must exist, have a tag other than `0x2B61676C`, and not be removed (`[unit+0x20] == 0`). The
+predicate runs; the walk **stops at the first non-zero predicate** and returns the OR (it is an "any" walk). The
+earlier text ("stops when it returns zero") was wrong.
+
+**'AHer' insertion order (NOT found).** The only direct writes of a `+0x58` head in `.text` (all forms) are six: `0x6F00EC95`,
+`0x6F00FDBE`, `0x6F02E29C`, `0x6F03EA4F`, `0x6F0513E9`, `0x6F051687`, all object constructors or initialisers. The
+category registration `0x6F2075F0` (`push 0x6FAB3AF0`, `0x6F025CE0`, then `0x6F4716D0` with ECX = `'AHer'` = `0x41486572`)
+was read; `0x6F4716D0` is a keyed registry (node lookup `0x6F001EC0` on `world+0xC`, element insert `0x6F471140` into
+`node+0x44`), and its element list was not identified. Consequences: heroes' membership of the list is open, and so is the
+walk order. The XP numbers do not depend on the order (each recipient's gain depends only on `F` and its own state); the
+order of level-up side effects does.
+
+**Misc flags (keys and addresses CONFIRMED; semantics LIKELY).** The loader `0x6F26E080` reads, through the integer
+reader `0x6F009F90` (table `0x6F875DE0`, default `0` pushed by the caller): `BuildingKillsGiveExp` (key `0x6F92F244`,
+stored at `0x6FAB4268`), `GlobalExperience` (key `0x6F92F25C`, stored at `0x6FA70E94`), `MaxLevelHeroesDrainExp` (key
+`0x6F92F270`, stored at `0x6FA70E98`). Absent gives `0` (CONFIRMED: the default argument), and the gates test the stored
+value against 0 (non-zero is on). `gamedata::misc::HeroMisc` has the three bools (absent = false).
+
+**Wiring (NOT done).** `sim::heroes::distribute_kill` is still not called from the death path: the sim has no normaliser
+inputs for units (above), and the 'AHer' membership and order are not confirmed. The death path is unchanged, so the
+sim gives no kill experience. Killer tracking (8.6) is unchanged.
+
 ## 9. Derived attribute bonuses
 
 Labels as above. Addresses are 1.26a VAs. Harness: `tools/emu/hero_bonus_emu.py` (the real readers run in Unicorn;

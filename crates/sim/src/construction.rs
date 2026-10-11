@@ -316,6 +316,42 @@ impl ConstructionTimers {
     }
 }
 
+/// The progress percent at which a building under construction is complete (`0x6F054690`: `p == 100` calls the
+/// completion, slot 205 `0x6F060020`, when the in-progress gate `+0x48` is not positive).
+pub const PROGRESS_COMPLETE: i32 = 100;
+
+/// Constant `0.1` (`0x6FAAE4A0`, runtime value 0x3DCCCCCD).
+const TENTH_BITS: u32 = 0x3DCC_CCCD;
+/// Constant `100.0` (`0x6FAAE574`, runtime value 0x42C80000).
+const HUNDRED_BITS: u32 = 0x42C8_0000;
+
+/// The life the in-progress percent setter writes (CONFIRMED in Unicorn, `tools/emu/construction_progress_emu.py`,
+/// 1,515 vectors in `tests/vectors/construction_progress.tsv`, 0 mismatches):
+/// `life = factor * ((I2R(p) / 100.0) + 0.1)` with the truncating soft-float ops, where `factor` is the owner's
+/// slot-0x130 answer (the handler multiplies it by the second operand, so the result is `factor * t3`).
+///
+/// The owner's slot-0x130 answer is read through the current agent's float (`0x6F4773E0`); its meaning as a life
+/// quantity is UNSURE, so `factor` is an input here. Progress `p` is the handler's integer argument; the driver
+/// that calls the handler is NOT found.
+pub fn percent_life(factor: F32, percent: i32, tables: &softfloat::Tables) -> F32 {
+    let t1 = softfloat::conv::i2r(percent);
+    let t2 = softfloat::arith::div(t1, F32(HUNDRED_BITS), tables);
+    let t3 = softfloat::arith::add(F32(TENTH_BITS), t2);
+    softfloat::arith::mul(factor, t3)
+}
+
+/// The value the base percent setter writes to the property at `this+0x7C` (`CAbilityBaseBuild` vf191 `0x6F0239B0`,
+/// the one CAbilityTrain also runs): `total * (100 - q) / 100` with `q = p` when `p` is below 100 as an unsigned
+/// value, else 100. So it is the **remaining** part of `total` (the stored value at `this+0x78`). CONFIRMED in
+/// Unicorn (`tools/emu/base_progress_emu.py`, 6,180 vectors in `tests/vectors/base_progress.tsv`, 0 mismatches).
+/// The meaning of the property (a timer or a modifier) and the driver of `p` are not known; see the spec section 12.7.
+pub fn remaining_after_percent(total: F32, percent: i32, tables: &softfloat::Tables) -> F32 {
+    let q = if (percent as u32) < 100 { percent as u32 } else { 100 };
+    let rest = softfloat::conv::i2r((100 - q) as i32);
+    let fraction = softfloat::arith::div(rest, F32(HUNDRED_BITS), tables);
+    softfloat::arith::mul(total, fraction)
+}
+
 /// Fraction of the maximum hit points a building has at `progress` (UNVERIFIED placeholder: the original's
 /// rule is not found; the value is linear from 0 to 1).
 pub fn hp_fraction(progress: f32) -> f32 {

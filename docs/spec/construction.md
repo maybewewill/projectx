@@ -17,6 +17,8 @@ RTTI names (`scratchpad/vtables.tsv`, `vfunc_names.tsv`), capstone listings, Uni
 | natives-pending.md section 1: `0x6F179000` (flags 0x101) and `0x6F1793E0` (0x102) are the construction start and finish | **Wrong.** They are the start and finish of an **upgrade in progress**: `CAbilityUpgradeInProgress` vf212 and vf206 (RTTI). The start body sets `this+0x98` to the unit's type and `this+0xA8` to the new type, and tests the instant flag `0x100` of `this+0x20`. Building construction is in `CAbilityBuild` and `CAbilityBuildInProgress` | RTTI names, decompile of `0x6F179000` and `0x6F1793E0` |
 | Task premise: the build timer is in `CAbilityBaseBuild` on the 0.1 s tick of economy-2 | **Not confirmed.** `0x6F045600` (vf205 of `CAbilityBuildInProgress`, 125 lines) is the in-progress tick that uses the 0.1 f constant `0x6FAAE4A0` and the aura-style life setters. Its link to the build timer is not shown. economy-4 already corrected the 0.1 s tick for training to the aura pulse | `0x6F045600`, `0x6F05FF50` decompile |
 | economy.md 7.2: refund rate in `0x6F031090` | Confirmed as read. The flag `0x400` rule is in the body | `0x6F031090` decompile |
+| Pass 1 (sections 5, 7, 11): the in-progress tick `0x6F045600` is "vf205 of CAbilityBuildInProgress", and `0x6F05FF50` is "vf205" | **Wrong names.** `0x6F05FF50` is **vf212** (the start: slot `0x350`); `0x6F060020` is **vf205** (the completion, slot `0x334`); `0x6F045600` is not a vtable entry: it is called by the start (vf212), by the percent setter (vf191, section 12) and by the resume (vf59). The tick updates the owner's life modifiers, it is not a timer | vtable index of `CAbilityBuildInProgress` (`vtables.tsv`, `vfunc_names.tsv`), asm of `0x6F05FF50`, `0x6F060020`, `0x6F054690`, `0x6F054760` |
+| Pass 1 (section 7): completion event = CONSTRUCT_FINISH 28 (LIKELY from common.j order) | **Not confirmed.** Completion calls `0x6F2983A0`, which fires the event key `0x80241` (CONFIRMED key, section 12.4). The JASS constant for that key is not in the upload | `0x6F2983A0` decompile, asm of `0x6F060020` |
 
 ## 1. Classes (CONFIRMED, RTTI)
 
@@ -101,7 +103,7 @@ key's value is in the user's MiscData (not in the image). `sim::construction::co
 with the rate as an input. `ConstructionDamageRefundPenalty` `0x6F0240A0`: pre-check `0x6F147B00`, then the
 penalty key (not traced further).
 
-## 5. Progress and HP growth (NOT FOUND)
+## 5. Progress and HP growth (PARTLY FOUND in pass 2, see section 12; the driver of the progress is NOT found)
 
 - The in-progress object `CAbilityBuildInProgress` has the tick `0x6F045600` (called from vf205 `0x6F05FF50`).
   Its body reads `this+0x78` (a float, LIKELY the progress), compares it with 0.0, multiplies with `0.1`
@@ -171,3 +173,79 @@ penalty key (not traced further).
 4. The placement validators (`0x6F0F7980`, `0x6F0E2490`) and the footprint size.
 5. The completion event ids and getters; the unit-level construct ids.
 6. Race differences (the virtual functions of the race classes).
+
+## 12. Pass 2 (2026-10-11): the percent setter, completion, and the open driver
+
+Scope of this pass: dynamic checks (Unicorn) of the in-progress percent handler, its completion branch and its
+tick gate, plus the completion event key. The timer that drives the progress was NOT found, so the build time
+in seconds still does not map to the progress (section 5 remains open for the timer).
+
+### 12.1 Class slots (CONFIRMED, RTTI names `vfunc_names.tsv`, index `vtables.tsv`)
+- `CAbilityBuildInProgress` vf212 `0x6F05FF50` = start (slot `0x350`): sets the owner's flag `0x2000000` on the unit
+  (`+0x5C`), calls `0x6F056190`, then the tick `0x6F045600`.
+- vf191 `0x6F054690` = **percent setter**, one integer argument `p` (slot `0x2FC`), section 12.2.
+- vf205 `0x6F060020` = **completion** (slot `0x334`), section 12.3.
+- vf59 `0x6F054760` = resume: `0x6F0485C0()`, then if flag `0x800` is clear and `0x6F022060()` is false the tick
+  runs and it returns; otherwise it calls the completion (slot 205). CONFIRMED structure (asm/decompile, not run).
+- vf3 `0x6F054650` = dispatch: `0xD01D0` pause (`0x6F045110(1,0)`), `0xD01D1` resume (`0x6F045110(0,1)`).
+
+### 12.2 The percent setter `0x6F054690(p)` (CONFIRMED in Unicorn, 1,515 vectors, 0 mismatches)
+Owner = `this+0x30` (fallback `0x6F472890`). With `x = I2R(p)`:
+1. `0x6F025BD0(p)` is called first (not read, its body is not part of the life law).
+2. `t2 = x / 100.0`, `t3 = 0.1 + t2` (soft-float ops `0x6F6EFE10`, `0x6F6EF000`; constants `0x6FAAE574` = 100.0,
+   `0x6FAAE4A0` = 0.1).
+3. The owner's slot `0x130` (`CUnit::vf76`, `0x6F28B080`) is called with the out pointer and returns a pointer to a
+   float `A`. The result is `life = A * t3` (soft MUL, `A` first). `A` is read through the current agent
+   (`0x6F4773E0` copies the agent float at `+0x84`); what that float is in game terms is UNSURE.
+4. The owner's slot `0x124` (`CUnit::vf73`, `0x6F28B1F0`, clamps at zero) is called with the life pointer.
+
+So the life written for progress `p` is `A * (0.1 + p/100)` (truncating soft-float). With the probe owner value
+`A = 1000.0`: p = 0 -> 100.0, p = 1 -> 109.99999, p = 50 -> 599.99994, p = 100 -> 1099.99988 (before the
+completion). The 0.1 start fraction is therefore a **10% start** of the stored value only if `A` is the maximum
+life; the clamp of the setter is not checked and `A` is not identified as the maximum life.
+Rust: `sim::construction::percent_life(factor, p, tables)`; vectors `crates/sim/tests/vectors/construction_progress.tsv`
+(factor bits, p, life bits, completion, tick), test `crates/sim/tests/construction_progress.rs` (needs `GAME_DLL`).
+
+### 12.3 Branches on p (CONFIRMED in Unicorn with the gate `+0x48` = 0 and 1)
+- The **tick gate** is `this+0x48` (a pause counter: `0x6F045110` changes it, the tick `0x6F045600` tests `< 1`).
+- `p != 100` and gate `<= 0`: the tick `0x6F045600` runs after the setter (Unicorn: tick called).
+- `p == 100` and gate `<= 0`: the completion (slot 205, `0x6F060020`) runs, no tick (Unicorn: completion called).
+- `p == 100` and gate `> 0`: the flag `0x800` is set (`+0x20`) and nothing else runs; the completion is deferred and
+  the resume (vf59) runs it when the gate clears (asm, not run).
+
+### 12.4 Completion `0x6F060020` (CONFIRMED structure, asm and decompile)
+- Owner flags `+0x5C` bit `0x2000000` cleared; two agent cancels (`0x6F477D30`); the owner's slot 59 read; then
+  `0x6F28D490`/`0x6F28D4B0` tests, and `0x6F28B740(owner)`, which calls `0x6F024F00` and `0x6F46D1B0` (the unit
+  list update, not read).
+- Event: `0x6F2983A0(unit)` tests for listeners on key **`0x80241`** (`0x6F62A580`), and if any exist fires
+  `0x80241` with the unit as trigger (`0x6F285E10`). This is the only caller of `0x6F2983A0`. So **completion fires
+  key `0x80241`**. It is a 0x80200 + 0x41 key; the common.j constant is not in the upload, so the JASS name is UNSURE.
+  The construct-finish id 28 of section 7 is NOT confirmed by this key.
+
+### 12.7 The base percent setter `CAbilityBaseBuild` vf191 `0x6F0239B0` (CONFIRMED in Unicorn, 6,180 vectors, 0 mismatches)
+- `CAbilityTrain` does not override slot 191, so the train runs this setter too (vtable index, section 12.1 method).
+- `0x6F0239B0(p)` (ECX = this, one stack argument, ret 4): `q = p` if `p` is below 100 as an **unsigned** value,
+  else `q = 100` (so negative `p` gives 100). `rest = I2R(100 - q)`, `f = rest / 100.0`, and the value
+  `this+0x78 * f` (soft MUL) is written through `0x6F477350` on the embedded object at `this+0x7C`.
+- Result: **the remaining part of the stored total**: `written = total * (100 - q) / 100` (truncating soft-float).
+  Probe with total 1000.0: p = 0 -> 1000, p = 1 -> 990, p = 25 -> 750, p = 99 -> 10, p = 100 -> 0, p = 150 -> 0.
+- Rust: `sim::construction::remaining_after_percent(total, p, tables)`; vectors `tests/vectors/base_progress.tsv`.
+- So `this+0x78` is a total (for a train, LIKELY the train time `bldtm` of the head; UNSURE) and `this+0x7C` holds the
+  remaining value. The object at `+0x7C` is a FloatMini-like property (the setter is the same as the one in
+  abilities-2 section 2), and its listeners are not traced; the timer or modifier that reads the remaining value is
+  the open link.
+
+### 12.5 What is still open (priority)
+0. **Who calls the percent setters** (vf191 of the build base and the construction override, both with `p` in 0..100)
+   and the object at `this+0x7C` (its listeners, which timer it arms).
+1. **Who calls the percent setter, and with which `p`**. The slot `0x2FC` calls found in the decompile belong to other
+   classes (buffs, abilities). A dynamic breakpoint on `0x6F054690` under Wine, with the call stack, is the way.
+2. The timer or message that advances `p` (the 0.1 s agile timer is the candidate, not confirmed).
+3. The meaning of the owner's slot-0x130 factor `A` (the agent `+0x84` float) and the setter's clamp.
+4. The JASS constant of key `0x80241` (`common.j`).
+5. Train: `CAbilityTrain` runs the base setter (section 12.7) with its own `+0x78` total; the driver is open (economy-4 section 9).
+
+### 12.6 Verification
+- `tools/emu/construction_progress_emu.py`: setter vectors (1,515: 9 + 6 factors × 101 values), gate probes
+  (completion at p = 100, tick at p = 37): 0 mismatches against `construction::percent_life`.
+- `crates/sim/tests/construction_progress.rs`: passes with `GAME_DLL` (1,515 vectors).
