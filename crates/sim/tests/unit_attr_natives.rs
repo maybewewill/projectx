@@ -539,7 +539,8 @@ fn support_tables_cover_the_work_list() {
         .chain(HERO_NATIVES.iter())
         .filter(|e| !matches!(e.support, Support::NotImplemented(_)))
         .count();
-    assert_eq!(implemented, 55);
+    // 55 + UnitResetCooldown (a no-op in the simulation, abilities-2.md section 1.2).
+    assert_eq!(implemented, 56);
 
     let host = host_for(
         r#"
