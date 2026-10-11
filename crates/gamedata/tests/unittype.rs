@@ -4,8 +4,9 @@
 
 use gamedata::slk::Slk;
 use gamedata::unittype::{
-    cell_int, cell_int_bits, cell_real, load_all, load_unit_type, unquote, UnitTypeData,
-    UnitTypeError, UnitTypeTables,
+    cell_int, cell_int_bits, cell_real, is_creep_candidate, is_neutral_building_candidate, load_all,
+    load_unit_type, race_enum, tileset_accepts, unquote, UnitTypeData, UnitTypeError,
+    UnitTypeTables, RACE_TABLE,
 };
 
 /// Builds a SYLK table from a header row and data rows. Numeric-looking cells are written as numbers, the rest as
@@ -341,4 +342,106 @@ fn load_all_skips_invalid_units_and_is_ordered() {
     let keys: Vec<&str> = all.keys().map(String::as_str).collect();
     // "hbad" has a UI row but no UnitData row, so it is skipped
     assert_eq!(keys, vec!["hfoo", "hmil"]);
+}
+
+#[test]
+fn race_enum_follows_the_builder_name_table() {
+    // Values read from the table at 0x6FA70FE8 (CONFIRMED); the names match regardless of case.
+    assert_eq!(race_enum("human"), 1);
+    assert_eq!(race_enum("orc"), 2);
+    assert_eq!(race_enum("undead"), 3);
+    assert_eq!(race_enum("nightelf"), 4);
+    assert_eq!(race_enum("demon"), 5);
+    assert_eq!(race_enum("other"), 7);
+    assert_eq!(race_enum("creeps"), 8);
+    assert_eq!(race_enum("commoner"), 9);
+    assert_eq!(race_enum("critters"), 10);
+    assert_eq!(race_enum("naga"), 11);
+    assert_eq!(race_enum("Creeps"), 8);
+    assert_eq!(race_enum("NIGHTELF"), 4);
+    // unknown names, the empty text and a name with a trailing space give 0 (the table's own "unknown" entry too)
+    assert_eq!(race_enum("unknown"), 0);
+    assert_eq!(race_enum(""), 0);
+    assert_eq!(race_enum("creeps "), 0);
+    assert_eq!(race_enum("elf"), 0);
+    assert_eq!(RACE_TABLE.len(), 11);
+    for (name, value) in RACE_TABLE {
+        assert_eq!(race_enum(name), *value, "{name}");
+    }
+}
+
+#[test]
+fn tileset_test_is_wildcard_or_membership() {
+    assert!(tileset_accepts("ABL", 0), "a map tileset of 0 skips the test");
+    assert!(tileset_accepts("*", b'L'));
+    assert!(tileset_accepts("ABL", b'B'));
+    assert!(!tileset_accepts("ABL", b'Z'));
+    assert!(!tileset_accepts("", b'A'));
+}
+
+#[test]
+fn creep_and_neutral_rules_on_synthetic_records() {
+    let creep = UnitTypeData {
+        code: "ncrp".to_owned(),
+        race_id: 8,
+        level: 2,
+        tilesets: "*".to_owned(),
+        ..UnitTypeData::default()
+    };
+    assert!(is_creep_candidate(&creep, -1, b'A'));
+    assert!(is_creep_candidate(&creep, 2, b'A'));
+    assert!(!is_creep_candidate(&creep, 3, b'A'), "level must match unless -1");
+    let upper = UnitTypeData { code: "Ncrp".to_owned(), ..creep.clone() };
+    assert!(!is_creep_candidate(&upper, -1, 0), "an uppercase first letter is excluded");
+    let bld = UnitTypeData { is_building: 1, ..creep.clone() };
+    assert!(!is_creep_candidate(&bld, -1, 0));
+    let special = UnitTypeData { special: 1, ..creep.clone() };
+    assert!(!is_creep_candidate(&special, -1, 0));
+    let limited = UnitTypeData { tilesets: "AB".to_owned(), ..creep.clone() };
+    assert!(!is_creep_candidate(&limited, -1, b'L'));
+    assert!(is_creep_candidate(&limited, -1, b'B'));
+
+    let neutral = UnitTypeData {
+        code: "ngol".to_owned(),
+        race_id: 7,
+        is_building: 1,
+        nb_random: 1,
+        tilesets: "*".to_owned(),
+        ..UnitTypeData::default()
+    };
+    assert!(is_neutral_building_candidate(&neutral, b'A'));
+    let hostile = UnitTypeData { hostile_pal: 1, ..neutral.clone() };
+    assert!(!is_neutral_building_candidate(&hostile, b'A'));
+    let no_random = UnitTypeData { nb_random: 0, ..neutral.clone() };
+    assert!(!is_neutral_building_candidate(&no_random, b'A'));
+    let creep_race = UnitTypeData { race_id: 8, ..neutral.clone() };
+    assert!(!is_neutral_building_candidate(&creep_race, b'A'));
+    let not_building = UnitTypeData { is_building: 0, ..neutral.clone() };
+    assert!(!is_neutral_building_candidate(&not_building, b'A'));
+}
+
+#[test]
+fn race_and_tilesets_are_read_from_the_tables() {
+    let ui = table(&["unitUIID"], &[&["ncrp"], &["nbld"]]);
+    let data = table(&["unitID", "race"], &[&["ncrp", "creeps"], &["nbld", "Other"]]);
+    let balance = table(
+        &["unitBalanceID", "level", "tilesets", "isbldg", "nbrandom"],
+        &[&["ncrp", "2", "ABL", "0", "0"], &["nbld", "1", "*", "1", "3"]],
+    );
+    let tables = UnitTypeTables {
+        abilities: None,
+        data: Some(&data),
+        balance: Some(&balance),
+        ui: Some(&ui),
+        weapons: None,
+    };
+    let creep = load_unit_type(&tables, "ncrp").expect("valid");
+    assert_eq!(creep.race, "creeps");
+    assert_eq!(creep.race_id, 8);
+    assert_eq!(creep.tilesets, "ABL");
+    assert!(is_creep_candidate(&creep, 2, b'L'));
+    let neutral = load_unit_type(&tables, "nbld").expect("valid");
+    assert_eq!(neutral.race_id, 7, "the race name is matched case-insensitively");
+    assert!(is_neutral_building_candidate(&neutral, b'Z'));
+    assert!(!is_creep_candidate(&neutral, -1, 0));
 }
