@@ -159,7 +159,7 @@ impl TerrainGpu {
         );
         let overlays = make(
             "terrain overlays",
-            "fs_textured",
+            "fs_blend",
             alpha,
             false,
             wgpu::CompareFunction::LessEqual,

@@ -9,6 +9,8 @@
 //! * [`web`]: wasm-bindgen entry points (wasm32 only).
 
 pub mod app;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod offscreen;
 pub mod model;
 pub mod renderer;
 pub mod scene;

@@ -42,6 +42,14 @@ fn fs_textured(input: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(texel.rgb, input.color.a);
 }
 
+// Blended layer: the texel's own alpha (transition mask) times the vertex weight.
+@fragment
+fn fs_blend(input: VertexOut) -> @location(0) vec4<f32> {
+    let atlas_uv = input.cell.xy + input.uv * input.cell.zw;
+    let texel = textureSampleLevel(atlas, atlas_sampler, atlas_uv, 0.0);
+    return vec4<f32>(texel.rgb, texel.a * input.color.a);
+}
+
 @fragment
 fn fs_flat(input: VertexOut) -> @location(0) vec4<f32> {
     return input.color;
