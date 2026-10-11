@@ -1,7 +1,7 @@
 # Vision: fog-of-war grid, writers, queries (Game.dll 1.26a)
 
-Status: pass 2 (2026-10-11). Written from disassembly and decompiled structure of the 1.26a `Game.dll`
-(SHA1 c5d8624b…). Tags: CONFIRMED = read from the code and/or checked in Unicorn; LIKELY = the reading is
+Status: pass 3 (2026-10-11, section 11.9 onwards). Written from disassembly and decompiled structure of the 1.26a
+`Game.dll` (SHA1 c5d8624b…). Tags: CONFIRMED = read from the code and/or checked in Unicorn; LIKELY = the reading is
 consistent with the code but not run; UNSURE = open. Addresses are image VAs.
 
 Verification (pass 1 and pass 2):
@@ -394,3 +394,97 @@ is in `+0x148 | +0x14C`. The fallback ignores the mask, so a revealed unit also 
 | Rust model: vision unit tests and integration tests | see the repository | pass |
 
 Reproduce: `GAME_DLL=<Game.dll> PYTHONPATH=<unicorn, pefile> python3 tools/emu/vision_grid_emu.py --cases 300 --radii 160 --wide`.
+
+## 11.9 Pass 3 (2026-10-11): unit cell, unit sight writer, centre function
+
+Harness: `tools/emu/vision_unit_emu.py` (centre and writer; runs on the JASS harness of `tools/emu/jasscomp`, which has
+the TIB, the Storm and CRT import models and the start-up initialisers), `tools/emu/vision_unit_diag.py` (one case,
+cell-by-cell map). Both are GAME_DLL-gated and write nothing from the original into the repository.
+
+### 11.9.1 The unit centre `0x6f474460` (CONFIRMED by Unicorn, 200 of 200)
+
+- Argument ECX = the unit's mover `unit+0x164` (the CUnit vtable slot `0xB8` is `lea eax,[ecx+0x164]; ret`,
+  `0x6f28b0e0`, CONFIRMED). The function reads the handle at mover `+8` (the unit's handle), resolves it with
+  `0x6f03fa30` (handle to object), and takes the unit's footprint rectangle at `unit+0x98`: `y0` at `+0x1c`, `x0` at
+  `+0x20`, `y1` at `+0x24`, `x1` at `+0x28` (pathing cells).
+- Fast path (both results `>= 0`): the output is `((x0 + x1) / 2, (y0 + y1) / 2)` in pathing cells, with the
+  truncating halves of the signed division (`cdq; sub; sar 1`). The output pointer is the stack argument (`ret 4`).
+- A negative half takes a slow path (`0x6f497460`, `0x6f38b0b0`, f2i) that was not run: UNSURE for off-map units.
+- The result is stored as two ints, so the centre is a pathing cell, not a fog cell.
+
+### 11.9.2 The unit fog cell (CONFIRMED structure, LIKELY for the footprint)
+
+- `0x6f409e00` (the unit writer) and the unit query path `0x6f285080` -> `0x6f3a38f0` both take the centre of 11.9.1
+  and shift it right by 2 (`sar 2`): a fog cell is 4 by 4 pathing cells = 128 world units, whatever the grid's own scale
+  (section 11.1, `scale = cells / range`). On a playable area that is not a multiple of 128 the unit cell and the point
+  cell (section 2.1) differ; both are what the original does (CONFIRMED structure).
+- The footprint rectangle of a unit is not decoded (who writes `unit+0x98` is open). The Rust model takes the unit's own
+  pathing cell as its footprint (LIKELY: a one-cell rectangle has the centre of that cell).
+
+### 11.9.3 The unit sight writer `0x6f409e00(unit, mask, arg3, arg4)` (partly decoded)
+
+Structure (CONFIRMED by disassembly):
+1. Gate: the low 12 bits of `mask` must be non-zero, otherwise the owner (`unit`'s vtable slot `0xEC`) is read and the
+   writer exits for owners `>= 12`. Bits 12 to 15 are written as well when the low bits are set (UNSURE meaning).
+2. The centre (11.9.1, then `>> 2`), the radius kind `k = u16 unit+0x10C` (`arg4 != 0` gives 4 instead), and the shape:
+   `k == 0` writes nothing; `k == 1` the 2x2 block, `k == 2` the block with the four arms (the circle of 0x6f3ba480 for
+   radii 1 and 2, CONFIRMED by reading); `k >= 3` the shape object of `0x6f409d00(grid+0x78, k, pitch)`, a cache indexed
+   by `k` whose builder `0x6f409120` makes a `(2k+1)^2` word block plus records.
+3. The writes: `msk &= ~mask` and `vis |= mask` (mode 4, visible), with a per-record flag from an elevation compare
+   (`grid+0x38` words against the unit level, `0x6f0128c0` or `0x6f00f600` for cliff data). So units can be blocked by
+   cliffs (UNSURE for the magnitude, CONFIRMED that the path exists: the helpers read `TerrainArt\CliffTypes`).
+4. For `k >= 3` the rows come from a span list at `grid+0x20` with count `grid+0x1C` (the layout of the span table of
+   `0x6f408fd0`: `2k+1` pairs of i32). With count 0 the writer covers two cells or none; with a large count and zero pairs
+   it covers nothing (CONFIRMED by Unicorn). Who builds this list per refresh is not decoded (UNSURE).
+
+Unicorn results (`tools/emu/vision_unit_emu.py`, `vision_unit_diag.py`):
+
+| Run | Cases | Result |
+|---|---|---|
+| centre `0x6f474460` (random rectangles) | 200 | 200/200 equal to `((x0+x1)/2, (y0+y1)/2)` |
+| writer, flat terrain, grid+0x1C = 0 | 183 | 146 differ from the circle of section 11.3 (the writer covers only the top part near edges) |
+| writer, grid+0x1C = 2k+1, grid+0x20 = span table of k | 92 | 72 differ from the circle |
+| writer, interior centre, span table, k = 6 | 1 | the centre is covered; rows below the centre are wider than the circle, and row `cy+k` is included (the original's row end is inclusive for the unit path, UNSURE) |
+
+So the circle of 0x6f3ba480 is **not** the unit sight shape for k >= 3. The Rust model keeps the circle as a stand-in.
+Zero masks with the low 12 bits clear changed 7 of 8 cases (the writer is not a no-op there).
+
+### 11.9.4 What the refresh writes, and does order matter (CONFIRMED by algebra and by the Rust tests)
+
+- The sight pass only writes visible mode: `vis |= m`, `msk &= ~m`. Two such writes commute (same bits, same mode), so the
+  order of the unit writers does not change the words. The modifiers (fogged or masked modes) are not commutative with
+  sight; the refresh applies modifiers first and units last, as before (LIKELY the original's order, section 11.5).
+- Rust test `sight_writes_only_set_visible_so_their_order_does_not_matter` (vision.rs).
+
+### 11.9.5 Unit visibility query (updated model)
+
+`IsUnitVisible` / `IsUnitFogged` / `IsUnitMasked` use the unit fog cell of 11.9.2 (`VisionGrid::unit_cell`), not the point
+mapping. On the default 128-unit grid the two agree; on other playable sizes they differ (tests in vision.rs).
+
+### 11.9.6 Time of day and night (partly decoded, UNSURE rule)
+
+- The time of day is float game state 2 (`GetFloatGameState(GAME_TIME_OF_DAY)` = `0x6f3bc310`): the slot is the 16-byte
+  record `game+8+16*2` = `game+0x28` (`0x6f427f40`, CONFIRMED). `SetFloatGameState` (`0x6f3bc2e0`) stores through
+  `0x6f477350`, which clamps the value against the slot's limits (`+0x78`, `+0x7C`, `+0x80`, `0x6f477180`, CONFIRMED
+  structure; the limits' values are not read).
+- `SuspendTimeOfDay(flag)` = `0x6f429920` / `0x6f427e70` toggles bit `0x6c` of the game object... (CONFIRMED structure:
+  `and [game+0x6c], ~flag`; when the bit set becomes zero the helper `0x6f429770` starts two agent timers and stores
+  them at `game+0x70` / `game+0x74`). Its timer message is `0x80262` (pushed at `0x6f4298a3`).
+- Message `0x80262` is case index 0 of the message switch of `0x6f42fc80` (`id - 0x80262` indexes a byte map at
+  `0x6f42fd18`, then a jump table at `0x6f42fcfc`); the handler is `0x6f42fc9f`, which stores **0.0** into the time-of-day
+  slot through `0x6f477350` (CONFIRMED by disassembly). So the message does not advance the clock by itself; the advance
+  is open (UNSURE: the rate per tick; the scale `GetTimeOfDayScale` (`0x6f3bc4b0`) reads the object at `game+0x5c`).
+- Night thresholds: none read yet. The Rust model keeps `night = t < 6 || t >= 18` and uses the night sight only when it
+  is above zero (UNSURE). The night sight is the unit type's `nsight` (`+0x190` of the type record, `sight` at `+0x18C`,
+  unit-types.md); its reader is not found (virtual getters `0x6f025d80`/`0x6f025d90` with no direct caller and no vtable
+  entry in the data sections found by search).
+
+### 11.9.7 Open items after pass 3
+
+1. The unit writer's row shape for k >= 3 (11.9.3): the span list at `grid+0x20` and its row loop; who builds it.
+2. The elevation / cliff compare and its level (11.9.3 step 3).
+3. The footprint rectangle `unit+0x98` (who writes it; 11.9.2).
+4. The unit radius kind `unit+0x10C`: the writer is not found (the copy at `0x6f02f990` and the constructors that zero
+   it are the only sites seen; the three values `+0x104..+0x10C` come from `0x6f4c2d30` on the creation object,
+   `0x6f053a58`-`0x6f053ae0`, UNSURE). Until then the Rust radius is `sight / 128` (UNSURE).
+5. Time of day advance and the night threshold (11.9.6).

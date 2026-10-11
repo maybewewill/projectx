@@ -16,10 +16,17 @@
 //! Storage is flat, as in the original: index `(row << shift) + col` with `1 << shift` the row pitch (the smallest
 //! power of two at least the width). The single-cell writer reads both coordinates as bytes, so its indices wrap
 //! modulo 256; the span and rectangle writers use full integers (both CONFIRMED by disassembly).
+//!
+//! Units. A unit's sight and its visibility query use the unit fog cell ([`VisionGrid::unit_cell`]): the pathing cell
+//! of the unit shifted right by 2, so 128 units per cell whatever the grid scale (CONFIRMED for the centre function by
+//! Unicorn, LIKELY for the footprint). The sight shape of a unit is the circle of [`VisionGrid::unit_sight_shape`]:
+//! a stand-in, because the original's shape for radii of 3 and up is not the circle (vision.md section 11.9).
 
 use std::collections::BTreeSet;
 
 use softfloat::{arith, conv, F32, Tables};
+
+use crate::pathing::grid::cell_coordinate;
 
 /// The fog states of the JASS constants (CONFIRMED: the values the grid lookup returns).
 pub const FOG_MASKED: i32 = 1;
@@ -38,6 +45,11 @@ pub const UNEXPLORED: u16 = 0xFFFF;
 
 /// `1/128` as a soft-float value: the default cell scale (the constructor's scale for a 128-unit cell).
 const DEFAULT_SCALE: F32 = F32::from_bits(0x3C00_0000);
+
+/// The unit path's radius scale: `1/128` (exact in binary, so the product is exact). The sight radius of a unit is
+/// `f2i(radius * 1/128)` cells here (UNSURE: the original reads the shape value `unit+0x10C`, whose writer is not
+/// decoded; a 128-unit fog cell is CONFIRMED for the unit path, see [`VisionGrid::unit_cell`]).
+pub const UNIT_CELL_SCALE: F32 = F32::from_bits(0x3C00_0000);
 
 /// Cell words of one grid cell: visible bits and mask bits, one bit per player slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,6 +308,16 @@ impl VisionGrid {
         table_state(self.mask_enabled, self.fog_enabled, w.vis, w.msk, 1u16 << (player & 15))
     }
 
+    /// The fog cell of a unit at the world point `(x, y)`, on the unit path (`0x6f409e00` and the unit query
+    /// `0x6f285080` -> `0x6f3a38f0`, vision.md section 11.9). The original takes the centre of the unit's footprint in
+    /// pathing cells (`0x6f474460`, CONFIRMED by Unicorn) and shifts it right by 2: a fog cell is 4 by 4 pathing cells
+    /// = 128 world units, whatever the grid's own scale. The footprint is taken as the unit's own pathing cell
+    /// (LIKELY: the footprint rectangle of a unit is not decoded). Not clamped: the writers and [`VisionGrid::state`]
+    /// clamp it.
+    pub fn unit_cell(&self, x: F32, y: F32) -> (i32, i32) {
+        (cell_coordinate(x, self.origin.0) >> 2, cell_coordinate(y, self.origin.1) >> 2)
+    }
+
     /// The state of the world point `(x, y)` for the player in slot `player`.
     pub fn state_at(&self, x: F32, y: F32, player: u32) -> i32 {
         self.state(self.cell_of_point(x, y), player)
@@ -392,12 +414,18 @@ impl VisionGrid {
     /// byte-wide cell writer (so they wrap, CONFIRMED). From 3 up the rows `[cy-R, min(cy+R, h))` each take the span of
     /// [`span_table`] (CONFIRMED by Unicorn, 300 circles including grids wider than 256 cells, 0 mismatches).
     pub fn circle_shape(&self, x: F32, y: F32, radius: F32) -> BTreeSet<usize> {
-        let mut out = BTreeSet::new();
         let r = conv::f2i(arith::mul(radius, self.scale.0));
+        let (cx, cy) = self.cell_of_point(x, y);
+        self.circle_shape_cells(cx, cy, r)
+    }
+
+    /// The sight circle of radius `r` cells around the cell `(cx, cy)`: the shapes of [`VisionGrid::circle_shape`]
+    /// after its mapping (`r <= 0` writes nothing).
+    pub fn circle_shape_cells(&self, cx: i32, cy: i32, r: i32) -> BTreeSet<usize> {
+        let mut out = BTreeSet::new();
         if r <= 0 {
             return out;
         }
-        let (cx, cy) = self.cell_of_point(x, y);
         if r <= 2 {
             self.rect_indices(cx - 1, cy - 1, cx + 1, cy + 1, &mut out);
             if r == 2 {
@@ -425,6 +453,21 @@ impl VisionGrid {
     pub fn write_circle(&mut self, mode: i32, mask: u16, x: F32, y: F32, radius: F32) {
         let cells = self.circle_shape(x, y, radius);
         self.write_indices(mode, mask, &cells);
+    }
+
+    /// The unit sight circle: the radius in cells is `f2i(radius * 1/128)` ([`UNIT_CELL_SCALE`], UNSURE) around the
+    /// unit's fog cell ([`VisionGrid::unit_cell`]). The original's row shape for radii of 3 and up is not the span table
+    /// of [`span_table`] (vision.md section 11.9, UNSURE): this is the stand-in shape until it is decoded.
+    pub fn unit_sight_shape(&self, x: F32, y: F32, radius: F32) -> BTreeSet<usize> {
+        let r = conv::f2i(arith::mul(radius, UNIT_CELL_SCALE));
+        let (cx, cy) = self.unit_cell(x, y);
+        self.circle_shape_cells(cx, cy, r)
+    }
+
+    /// Writes the unit sight circle of [`VisionGrid::unit_sight_shape`] in visible mode with the player mask.
+    pub fn write_unit_sight(&mut self, mask: u16, x: F32, y: F32, radius: F32) {
+        let cells = self.unit_sight_shape(x, y, radius);
+        self.write_indices(FOG_VISIBLE, mask, &cells);
     }
 }
 
@@ -595,5 +638,52 @@ mod tests {
         assert_eq!(pitch_for(3), (4, 2));
         assert_eq!(pitch_for(17), (32, 5));
         assert_eq!(pitch_for(256), (256, 8));
+    }
+
+    #[test]
+    fn unit_cells_are_128_units_whatever_the_grid_scale() {
+        // A 1000-unit playable width: 7 cells with scale 7/1000 (not 1/128). The unit path takes the pathing cell
+        // (x / 32) and shifts it by 2: x = 900 is pathing cell 28 and fog cell 7. The grid mapping of the point query
+        // gives floor(900 * 0.007) = 6, so the two differ on such maps (the original does both, vision.md section 11.9).
+        let g = VisionGrid::with_cells(7, 7, (F32::ZERO, F32::ZERO), (f(0.007), f(0.007)));
+        assert_eq!(g.unit_cell(f(900.0), f(900.0)), (7, 7));
+        assert_eq!(g.cell_of_point(f(900.0), f(900.0)), (6, 6));
+        // 128 units per cell, from the origin
+        assert_eq!(g.unit_cell(f(127.9), f(0.0)), (0, 0));
+        assert_eq!(g.unit_cell(f(128.0), f(0.0)), (1, 0));
+        assert_eq!(g.unit_cell(f(255.9), f(383.9)), (1, 2));
+    }
+
+    #[test]
+    fn unit_cell_is_relative_to_the_playable_minimum() {
+        // The pathing cells are counted from the playable minimum: a minimum of -640 moves the cell by five.
+        let g = VisionGrid::with_cells(8, 8, (f(-640.0), f(-640.0)), (f(0.0625), f(0.0625)));
+        assert_eq!(g.unit_cell(f(-640.0), f(-640.0)), (0, 0));
+        assert_eq!(g.unit_cell(f(-512.0), f(-512.0)), (1, 1));
+        assert_eq!(g.unit_cell(f(0.0), f(0.0)), (5, 5));
+    }
+
+    #[test]
+    fn unit_sight_radius_is_whole_128_unit_cells() {
+        let g = grid(16, 16);
+        // 512 units is 4 cells (the footman of the tests); the unit centre is the cell of (1000, 1000), cell 7.
+        assert_eq!(g.unit_sight_shape(f(1000.0), f(1000.0), f(512.0)), g.circle_shape_cells(7, 7, 4));
+        // 500 units is 3 cells (truncation), and a radius below 128 writes nothing
+        assert_eq!(g.unit_sight_shape(f(1000.0), f(1000.0), f(500.0)), g.circle_shape_cells(7, 7, 3));
+        assert!(g.unit_sight_shape(f(1000.0), f(1000.0), f(100.0)).is_empty());
+    }
+
+    #[test]
+    fn sight_writes_only_set_visible_so_their_order_does_not_matter() {
+        // Two visible writes with overlapping masks give the same words in either order (the sight pass of the refresh
+        // only ever writes FOG_VISIBLE; see vision.md section 11.10).
+        let mut a = grid(16, 16);
+        let mut b = grid(16, 16);
+        a.write_unit_sight(0b01, f(1000.0), f(1000.0), f(384.0));
+        a.write_unit_sight(0b10, f(1100.0), f(1000.0), f(256.0));
+        b.write_unit_sight(0b10, f(1100.0), f(1000.0), f(256.0));
+        b.write_unit_sight(0b01, f(1000.0), f(1000.0), f(384.0));
+        assert_eq!(a.vis, b.vis);
+        assert_eq!(a.msk, b.msk);
     }
 }
