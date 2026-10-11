@@ -342,6 +342,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (31)**: game-start seed (game-start.md rewritten): the setup `0x6F5C37A0` parses the player-0 start blob as exactly the w3g **0x19 GameStartRecord body** (n<16 slots × 9 bytes, u32 seed, mode, start spots; refused if n==0 or spots>n) and, when accepted, **S = the record's seed** (LIKELY that a replay's 0x19 body is the stored blob; loader not found). Refused + mode 5 → fold over per-slot X (X = bytes +0x26..+0x29 of the slot sub-record when its tag byte +0x25 == 8; Unicorn 300, 0 mismatches). Second site `0x6F5C0EE0` (flag 0x80000) seeds from the record seed without the fold. `w3g::start::parse_start_body`, `engine::game_start::setup_seed`.
+
 - **2026-10-11 (30)**: kill-XP numbers (heroes.md §8.2): amount `0x6F2A0230` (grant table by victim level, summoned factor), split `0x6F2A3190` (F = K/N once; in-range list else global list), engine `0x6F20B080` (handicap, upgrade bonus, factor walk across levels, floor(x+0.5)) — Unicorn 6,000 (agent) + 1,000 fresh (lead), 0 mismatches. Not wired yet: candidate selection units (normaliser `0x6F4743A0`), killer tracking (GetKillingUnit null). ~45.5%.
 
 - **2026-10-11 (29)**: player unit counters (player+0x2D0; GetPlayerUnitCount/StructureCount/TypedUnitCount bound; Unicorn 1,900 ops + 3,800 walks, lead 600+1,200 fresh, 0 mismatches) → 1,110/1,167 natives bound. ChooseRandomCreep/NPBuilding: draw `0x6F285320` + filters decoded, tileset/movement checks not → still pending. Hero derived bonuses (heroes.md §9): 8 Misc keys read, formulas Unicorn 14,000/14,000; attack bonus = primary × StrAttackBonus; current HP/mana on max change UNSURE; armor/regen/speed computed but not applied yet. ~45%.
