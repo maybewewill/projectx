@@ -224,6 +224,4 @@ fn damage_and_armor_type_tables_follow_the_spec_order() {
     assert_eq!(DamageType::Hero.row(), 6);
     assert_eq!(ArmorType::Small.column(), 0);
     assert_eq!(ArmorType::Unarmored.column(), 7);
-    assert!(DamageType::Pierce.is_physical());
-    assert!(!DamageType::Magic.is_physical());
 }

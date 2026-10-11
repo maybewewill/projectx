@@ -117,8 +117,10 @@ pub struct AttackType {
     /// Attack type row of the damage-type table: 0 Spells, 1 Normal, 2 Pierce, 3 Siege, 4 Magic, 5 Chaos, 6 Hero
     /// (binary order of the spec, section 7).
     pub damage_type: u8,
-    /// Whether the damage class is physical, so the armor factor applies (LIKELY, spec section 4 step 7).
-    pub physical: bool,
+    /// The damage class word of the attack record (`+0x14`). A basic attack is always `0x10`
+    /// ([`crate::damage::ATTACK_DAMAGE_CLASS`], CONFIRMED: the execute routine pushes the literal). The armor factor
+    /// applies to class `0x10` only. The default `0` is not a class of any attack; set it.
+    pub damage_class: u32,
 }
 
 /// The defense of a unit type: the armor value and the armor type column (spec section 4, `+0xE0` and `+0xE4`).

@@ -13,8 +13,9 @@
 //! Only weapon 1 is read: weapon 2 is not in the attack record the simulation holds (UNSURE, see `sim::combat`).
 //!
 //! The armor-type column order of [`ArmorType`] is CONFIRMED (section 2.2 of the spec). UNSURE: the column names of
-//! `dice1`/`sides1` as dice count and sides (the roll wrapper's argument order, spec section 3.3), and the physical
-//! attack types of [`DamageType::is_physical`] (see that function).
+//! `dice1`/`sides1` as dice count and sides (the roll wrapper's argument order, spec section 3.3). The armor factor
+//! does not depend on the attack type: a basic attack's damage class word is always `0x10` (CONFIRMED,
+//! `sim::damage::ATTACK_DAMAGE_CLASS`), so no physical set is read from the data.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -55,17 +56,6 @@ impl DamageType {
             "hero" => DamageType::Hero,
             _ => return None,
         })
-    }
-
-    /// Whether the armor factor applies to this attack type. CONFIRMED part: the target-side damage path
-    /// `0x6F2A40D0` applies the armor factor only when the damage class word (attack record +0x14) equals `0x10`.
-    /// UNSURE part: how a weapon's `atkType1` sets that class word. Until that is read, the set below is a
-    /// heuristic (Normal, Pierce, Siege and Hero physical; Spells, Magic and Chaos not).
-    pub fn is_physical(self) -> bool {
-        matches!(
-            self,
-            DamageType::Normal | DamageType::Pierce | DamageType::Siege | DamageType::Hero
-        )
     }
 }
 

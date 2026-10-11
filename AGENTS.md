@@ -338,6 +338,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (damage target side)**: `0x6F2A40D0` (target side of a hit) run in Unicorn against `sim::damage::target_side_amount`: 15,000 cases, 0 mismatches. Details in `docs/spec/attack-damage.md` section 11. A basic attack's class word is the literal 0x10 (natives use 1 << damage type). The status flag tests bit 7 of the low byte (not bit 31). The minimum-one rule is on the target side. A relation case replaces the amount with raw × 100. OPEN: no writer found for the damage-type row (+0x20) of a basic attack; the evasion consultation point is unknown.
 - **2026-10-11 (19)**: damage table layout, Misc reader (S2R, default 0.0) and attack/armor name tables taken from Game.dll (Unicorn 122/122, re-run by the lead). Lockstep pass 4. 714 tests. ~34.5%.
 
 - **2026-10-11 (damage tables)**: the Misc damage tables are read from the binary (attack-damage.md section 10). Reader default is `0.0` (not 1.0, and `DefenseArmor` 0.0, not 0.06). Attack-type names: unknown/empty/`melee` = Spells (0); armor names: unknown = Normal (4). Ethereal slot = attack row, with elements 5,0,1,2,3,4,6. `tools/emu/damage_table_emu.py`: 122 checks, 0 mismatches. Physical armor = damage class word `0x10` (compare confirmed; atkType to class mapping still open).

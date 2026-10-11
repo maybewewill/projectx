@@ -110,7 +110,7 @@ fn unit_rows_reach_the_combat_registries_without_the_game_dll() {
     assert_eq!((attack.dice, attack.sides, attack.dice_bonus), (2, 6, 3));
     assert_eq!(attack.cooldown.to_bits(), 1.35f32.to_bits());
     assert_eq!(attack.range.to_bits(), 60f32.to_bits());
-    assert!(attack.physical);
+    assert_eq!(attack.damage_class, 0x10, "a basic attack is class 0x10");
     let defense = game.defense_of_type(HFOO);
     assert_eq!(defense.armor.to_bits(), 2f32.to_bits());
     assert_eq!(defense.armor_type, 1, "medium is column 1");

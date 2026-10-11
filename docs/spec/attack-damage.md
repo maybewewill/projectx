@@ -347,3 +347,142 @@ Strings: `small` / `medium` / `large` / `fort` / `divine` / `unknown` at `0x6F92
 - `gamedata::combat`: attack-type names per 10.3 (empty or unknown = Spells); armor names per 10.4 (`unknown` = Normal).
 - `sim::damage`: `DamageMisc.ethereal_by_attack_type`, `SpecDamage::ethereal_factor`.
 - Tests: `crates/gamedata/tests/{misc,combat}.rs`, `crates/sim/tests/damage.rs`, `tools/emu/damage_table_emu.py`.
+
+## 11. Target side of one damage event: class word, ethereal, status, order (2026-10-11)
+
+Plain words; addresses are 1.26a. Tags as before. Verified by running the original routine `0x6F2A40D0` in Unicorn
+(`tools/emu/target_damage_emu.py`) against `sim::damage::target_side_amount`: **15,000 random cases (3,000 with seed
+20261011, 12,000 with seed 7; 7,579 of them with damage), 0 mismatches**. The routine runs with its real armor factor
+(`0x6F26D270`), damage-type lookup (`0x6F26D300`), softfloat helpers, status test (`0x6F26DE50`) and record constructor
+(`0x6F2556E0`). Stubbed: the target's ability lists (not walked, see 11.8), the HP change (`vf 0x128`), the invulnerability
+answer (`vf 0x11C`), and the Misc keys and player objects the routine reads (set per case).
+
+### 11.1 Damage class word (`+0x14`) of a basic attack: literal 0x10 (CONFIRMED)
+
+- `CAbilityAttack` execute `0x6F0CF660` builds the attack record at `0x6F0CF803`..`0x6F0CF834`. It calls `GetDamageAmount`
+  (`0x6F0C6940`, the amount goes to a buffer), then the record constructor `0x6F2556E0` (`ret 0x14`) with class argument
+  **the literal `0x10`** (`push 0x10` at `0x6F0CF81E`). The weapon's attack type is not an input of the class.
+- Record layout written by the constructor (CONFIRMED by disassembly): `+0x00` source unit, `+0x04` weapon field
+  `unit+0xE8+4w` (name UNSURE; the target never reads it), `+0x0C` flags (`0x100`, or `0x180` when the execute's flag
+  argument is set), `+0x10` amount, `+0x14` class, `+0x18` `0.0`, `+0x1C` 0, `+0x20` 0.
+- Native `UnitDamageTarget` (`0x6F3C8850`): class = `1 << damage type` (`shl eax, cl` at `0x6F3C88B5`, damage type below
+  25); flags `0x100` (attack argument) and `1` (ranged argument). The attack-type argument (arg 6) is stored only in a
+  local (`uStack_4`, `[esp+0x38]` at `0x6F3C88CF`) and is **not** passed to the target (CONFIRMED by disassembly).
+- So every basic attack has class `0x10` (the armor test passes) whatever its attack type. For natives the armor test
+  `== 0x10` is damage type 4 (LIKELY that this is DAMAGE_TYPE_NORMAL in common.j; not checked against common.j).
+- Code: `AttackType::damage_class` = `sim::damage::ATTACK_DAMAGE_CLASS` (0x10). The gamedata heuristic
+  `DamageType::is_physical` (Normal, Pierce, Siege, Hero) is removed; it had no basis in the binary.
+
+### 11.2 Damage-type row and ethereal slot (`+0x20`): NOT RESOLVED (UNSURE, the most important open item)
+
+- The target reads `+0x20` as the table row (`0x6F26D300`, EDX) and as the ethereal slot index (`0x6FAB42E4 + 4k`).
+- The constructor writes 0 there. The execute body writes nothing to the record's `+0x20` (the record is the stack slot
+  `apiStack_118`; its direct writes are the constructor's). Callbacks run between the constructor and the target call:
+  `0x6F2763A0` (slots `0x130`/`0x134` for categories `0x0B..0x19`) and `0x6F2764C0` (slot `0x154`). Their writes were not
+  found. The native drops its attack type (11.1).
+- Consequence: for a basic attack the row written by this path is 0 (Spells) unless a callback writes it. The model keeps
+  the weapon's attack type as the row (`weapon.damage_type`). That is UNVERIFIED and may be wrong. Needs a runtime
+  breakpoint on `0x6F2A40D0` (the value of `[R+0x20]` for a normal attack) or the writer.
+
+### 11.3 Ethereal rule (structure CONFIRMED, meanings LIKELY)
+
+Block `0x6F2A44F9`..`0x6F2A4548`, after the armor and table steps. The amount is multiplied by the ethereal slot when all
+three hold:
+
+- (a) **source condition**: the record's source is null, OR the Misc flag `EtherealDamageBonusAlly` (key string at
+  `0x6F88E420`, read by the boolean reader `0x6F009F90`, element 0) is nonzero, OR `0x6F285B00(source, target)` is nonzero.
+  That function is `not (the source owner's alliance mask has the target's player id)` (`0x6F3A3400`, mask `0x6F473170`).
+  So (a) reads "source is an enemy of the target (not allied)" (LIKELY).
+- (b) **target `+0x158` counter > 0** (signed compare, `cmp [ebp+0x158], 0; jle`).
+- (c) **slot is not 1.0**: slot `k` = `0x6FAB42E4 + 4k`, with `k` = the record's `+0x20` row (see 11.2).
+
+The multiply is softfloat `mul(amount, slot)`. `0x6F255800` writes the product to `+0x10` and the second copy to `+0x18`
+(`+0x18` times the slot, which stays 0 for basic attacks; CONFIRMED structure).
+
+### 11.4 Status flag (`1.4e-45`) (CONFIRMED)
+
+- `0x6F26DE50(T, 1)` returns 1 when `T+0x5C` has bit 16 and (bit 7 of the **low byte** is clear OR bit 27 is set). The sign
+  test is `test al, al; jns` (`0x6F26DE61`): it reads bit 7, not bit 31 (the earlier note about bit 57 was wrong). The caller
+  ANDs the result with bit 25 (`0x2000000`, `test edx, 0x2000000` at `0x6F2A40FE`). The int 1 is stored and read as the
+  float `1.4e-45`.
+- Effects: the armor step is skipped, and the damage-type column is 4 (not the target's armor type).
+- Code: `sim::damage::status_flag`.
+
+### 11.5 Order of the target side (CONFIRMED by disassembly and Unicorn)
+
+1. `T+0x5C & 0x100` (dead or untargetable): output 0.
+2. **Immunity gate.** Misc flag `MagicImmunesResistDamage` (key `0x6F88E2CC`, element 0) selects the test:
+   - flag off: gate = class is not one of `0x10, 0x20, 0x4000000, 0x400000`; the second test is off;
+   - flag on: gate = (row == 4) or `class & 0x033EE700`; second = (row in 1, 2, 3, 5, 6) or `class & 0x00C11830`. The two
+     masks are the start-up values of `0x6FA6F2CC` and `0x6FA6F2D0` (meaning UNSURE).
+   - If gate: output 0 when `T.vf 0x11C()` (invulnerable) is nonzero, or `T+0x15C > 0`.
+   - Else if second: output 0 when `T+0x158 > 0`.
+3. Record flags: `+0x0C & 0x4` or `& 0x10`: output 0. (The other flags only drive side effects in the target.)
+4. **Minimum-one value** `m = min(c, 1.0)`, where `c = raw`, except `c = 0` when `raw < 0` and the row is not 0. Taken
+   **before** the armor step (`0x6F2A43F5`..`0x6F2A4446`). This is the minimum-damage rule that section 7 says is absent:
+   it is in the target side, not in `GetDamageAmount` (which clamps only at 0).
+5. **Armor**, only when not status and class == `0x10`: `amount *= M`, `M = 1 - R`. For `A >= 0`: `R = K·A / (1 + K·A)` with
+   `K` = Misc `DefenseArmor` (element 0; `0x6F26D270` reads it through `0x6F009EE0`). For `A < 0`: `R = table[min(trunc(-A), 20)]`
+   (negative table). If `R >= 1`, `M = 0`.
+6. **Damage-type factor**: `amount *= T[row][column]` unless the factor is exactly 1.0; column = armor type (`T+0xE4`), or 4
+   with the status flag.
+7. **Ethereal** (11.3): `amount *= slot` when (a), (b), (c) hold.
+8. **Sent value** `s = (m < amount) ? amount : m` (ties keep `m`). CONFIRMED; the comparison is the x87 `fcom` at `0x6F2A4554`.
+9. **Zero test** on `amount` (record `+0x10`, after steps 5 to 7): zero gives output 0. The test is on `amount`, not `s`.
+10. **Relation case** (11.6): if the source is present and the relation flag is set:
+    - source flag clear, target flag set: **`s = raw × 100.0`**. The multipliers of steps 5 to 7 are lost. CONFIRMED by
+      Unicorn: the operand is the raw amount, not the product;
+    - source flag set, target flag clear: `s = 0`.
+11. Target `+0x20 & 0x8` with record flags lacking `0x20`: output 0.
+12. HP change: the routine calls `vf 0x128` of the target with the negated value and returns `-(result)`, so the output is
+    `s` (CONFIRMED pattern; the stub returns its argument).
+
+Code: `sim::damage::target_side_amount` (one function, the same order), used by `SpecDamage::roll` with the target's armor
+and type, the record flags `0x100`, the weapon's class, and zero counters, flags and alliance (see 11.8).
+
+### 11.6 Relation case (CONFIRMED structure, meanings UNSURE)
+
+- `0x6F4C34D0(13)` returns an object. The routine reads `object+0x10`, then its first dword, then that block's flag word
+  at `+4`; bit 1 (`0x2`) enables the relation case, and the source must be present. The roll wrapper also calls
+  `0x6F4C34D0(13)` (section 3.3), so this is a global table entry; its meaning is UNSURE.
+- Player flags: `0x6F2834E0(unit)` returns the unit's player object (through `vf 0xEC` and `0x6F3A1650`); its `+0x268` is the
+  flag tested for the source and the target.
+- Constant `0x6FAAE574` = 100.0 (start-up value; CONFIRMED value, UNSURE meaning).
+
+### 11.7 Evasion `CAbilityEvasion::EvadeAttack` (`0x6F08BD20`, slot `0x168` of the evasion class, vtable `0x6F89D628`)
+
+CONFIRMED body (disassembly):
+- returns 0 when the ability's `+0x3C` is > 0 (signed);
+- returns 0 when the ability's `vf 0x268(0)` is nonzero;
+- chance `c` = `0x6F02E9E0(&c, level)` with level = ability `+0x50` (the chance table is not decoded);
+- `r` = `0x6F2853D0(&r, stream 2)`: one step of **RNG stream 2** (combat), a real in `[0, 1)`;
+- evades **iff `c > r`** (x87 `fcom`, strict). An unordered compare (NaN) also evades, because `test ah,0x41` sees even parity;
+- on a hit it calls `0x6F052FB0(ability)` (effect not decoded) and returns 1, otherwise 0.
+
+NOT RESOLVED: which handler calls slot `0x168` (the offset occurs in several hundred instructions of `.text`), and where
+the call sits relative to the armor step (the handler passes 1 and 2 of the target routine are not in 11.5). The chance
+table and what the caller does with a 1 (probably zeroing the amount) are UNSURE. Not implemented in the model: there is no
+chance table and no consultation point. Only the comparison is confirmed.
+
+### 11.8 Corrections to earlier sections, and what is not covered
+
+- Section 4, steps 7 and 10.6: the class is `0x10` for basic attacks (11.1). The armor test is not an attack-type heuristic.
+- Section 7, "Minimum damage: No min-1 seen": true for `GetDamageAmount`, wrong for the target side (11.5 step 4).
+- Section 10.7: the ethereal conditions are (a) source null, the ally flag, or not allied; (b) `+0x158 > 0`; (c) slot != 1.0
+  (11.3). The status word of section 4 step 8 is 11.4.
+- Not covered by the Unicorn check: the handler passes 1 and 2 (abilities, evasion, critical strike, bash; the list walk is
+  stubbed, the masks at `+0x1DC`/`+0x1E0` and `+0x250`/`+0x254` are set to -1), the HP change itself, the record `+0x20`
+  origin (11.2), the meanings of the two masks and the relation object, and the evasion roll.
+
+### 11.9 Code and tests
+
+- `crates/sim/src/damage.rs`: `ATTACK_DAMAGE_CLASS`, `ATTACK_RECORD_FLAGS`, `CLASS_MASK_A/B`, `RELATION_CONSTANT_BITS`,
+  `DamageRules`, `TargetSide`, `status_flag`, `target_side_amount`. `SpecDamage` holds the Misc values and calls
+  `target_side_amount`; its counters and flags are zero, and `with_rules` sets the Misc flags.
+- `crates/sim/src/combat.rs`: `AttackType::physical` is replaced by `damage_class` (default 0, set it).
+- `crates/engine/src/data.rs` sets `damage_class` to `ATTACK_DAMAGE_CLASS`; `crates/gamedata/src/combat.rs` no longer has
+  `is_physical`.
+- `crates/sim/tests/target_damage.rs`: 9 synthetic tests (always run) and one vector test (`GAME_DLL` +
+  `TARGET_DAMAGE_VECTORS`, the output of `tools/emu/target_damage_emu.py`, kept outside the repository).
+- `tools/emu/target_damage_emu.py`: the Unicorn harness (per line: 21 inputs, 56 table cells, 7 ethereal slots, 21
+  negative-armor entries, the output and the value sent to the HP change).
