@@ -36,17 +36,25 @@
 //!   inserted, so the limit normally never stops the query. Reproduced as written; to be confirmed in the
 //!   harness (spec section 10, item 1).
 //! * Candidate source. The type and player queries walk the world unit list (CONFIRMED structure, spec
-//!   3.5). Here that is the arena order of unit objects, which is creation order (LIKELY). The area queries
-//!   use the same list, not the original's spatial cells (UNVERIFIED, spec 3.7 and 10 items 2 and 3). The
-//!   candidates are read once before the query starts (UNVERIFIED).
-//! * The area test is [`in_range`] and [`in_rect`] (UNVERIFIED: the original's arithmetic and compare
-//!   are not decoded, spec 3.7 and 3.8). Replace these two functions when the formula is known.
+//!   3.5), in arena order, which is creation order (LIKELY). The area queries walk a spatial index of
+//!   32-unit cells (CONFIRMED order, spec 1.3 and 1.5): cells x-major with y ascending, and each cell's
+//!   chain from its head. The chain order is UNSURE ([`LINK_AT_HEAD`], newest first, spec open item 2). The
+//!   index is rebuilt from the unit arena for each query (UNVERIFIED: the original keeps its entries
+//!   linked as units move). The box of the walk is the circle's bounding box or the rect (UNSURE, spec 1.6).
+//!   The candidates are read once before the query starts (UNVERIFIED).
+//! * Dedupe (spec 1.4): a per-query stamp on each unit ([`CellIndex::walk`]) so a unit is a candidate at
+//!   most once per query. Each unit is linked into the cell of its position only (UNVERIFIED: the original
+//!   may link a unit into every cell it spans).
+//! * The circle test is [`in_range`]: `D <= V` with cell units, CONFIRMED on the harness (spec 2.1). The
+//!   origin pairing is UNSURE (see [`in_range`]). The rect test is [`in_rect`]: an UNVERIFIED placeholder
+//!   (spec 3.7: the rect path is the box mode and may not test units one by one).
 //! * `DestroyGroup` (LIKELY): the members are released (the set's destructor frees its nodes, which hold
 //!   references), then the group's creation reference is released. UNSURE whether the original clears them.
 //! * Not implemented: `GroupEnumUnitsSelected` (its own snapshot of the player selection, spec 3.6) and the
 //!   order natives. The selection set is not modelled yet.
 
 use std::cell::RefCell;
+use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 
 use jass::vm::{NativeCtx, NativeRegistry, NativeResult, Value};
@@ -56,6 +64,7 @@ use super::game::{Game, GroupMember, GroupObj, HandleKind, ObjKey, Object, RectO
 use super::player::raw_at;
 use super::trigger::eval_boolexpr;
 use super::ScriptRuntime;
+use crate::pathing::{cell_coordinate, scale_by_1_32};
 
 /// The candidate query of an enumeration and the test it applies before the collector.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -374,14 +383,14 @@ fn run_enum(
         state.player = player;
         state.limit = limit;
         state.counter = 0;
-        world_units(&gm)
+        candidates_of(&gm, &query)
     };
     for unit in candidates {
         // Candidate level (spec 3.5 and 3.7): removed units are skipped, and the area test applies.
         let candidate = {
             let gm = game.borrow();
             let u = gm.unit(unit);
-            !u.removed && in_query(u.x, u.y, &query)
+            !u.removed && in_query(u.x, u.y, &query, grid_origin(&gm))
         };
         if !candidate {
             continue;
@@ -476,6 +485,126 @@ fn clear_members(gm: &mut Game, group: ObjKey) {
     }
 }
 
+/// Link order of a unit into its cell chain (UNSURE, spec 1.5 and open item 2). `true`: a new entry
+/// goes to the head, so a chain runs newest first (the spec's guess). `false`: creation order. Only
+/// [`CellIndex::link`] reads this.
+const LINK_AT_HEAD: bool = true;
+
+/// The spatial index of the area queries (spec 1.2 to 1.5). Units are bucketed by their cell, which is
+/// `(x - origin) / 32` floored, one key per (cell x, cell y). A `BTreeMap` keeps the keys ordered by x
+/// and then y, so a range walk visits the cells x-major, then y ascending (spec 1.3, CONFIRMED).
+///
+/// The index is built from the unit arena for each query (UNVERIFIED for the original's maintenance:
+/// it keeps its own entries linked as units move). A unit goes into the cell of its own position only;
+/// the original may link a unit into every cell it spans (spec 1.4), which the stamp below handles.
+struct CellIndex {
+    cells: BTreeMap<(i32, i32), VecDeque<ObjKey>>,
+}
+
+impl CellIndex {
+    /// Links every unit of the arena into the cell of its position, in creation order.
+    fn build(gm: &Game, origin: (F32, F32)) -> Self {
+        let mut index = CellIndex {
+            cells: BTreeMap::new(),
+        };
+        for unit in world_units(gm) {
+            let u = gm.unit(unit);
+            let cell = (
+                cell_coordinate(u.x, origin.0),
+                cell_coordinate(u.y, origin.1),
+            );
+            index.link(cell, unit);
+        }
+        index
+    }
+
+    /// Adds `unit` to the chain of `cell` at the head or the tail (see [`LINK_AT_HEAD`]).
+    fn link(&mut self, cell: (i32, i32), unit: ObjKey) {
+        let chain = self.cells.entry(cell).or_default();
+        if LINK_AT_HEAD {
+            chain.push_front(unit);
+        } else {
+            chain.push_back(unit);
+        }
+    }
+
+    /// The units of the cells `x0 <= x < x1` and `y0 <= y < y1`, in walk order: x ascending, then y
+    /// ascending, then each chain from its head. A unit already seen in this walk is skipped: `stamps`
+    /// holds, per unit, the id of the last walk that visited it, and `walk` sets it to `walk_id`.
+    fn walk(&self, bounds: CellBox, stamps: &mut [u32], walk_id: u32) -> Vec<ObjKey> {
+        let mut out = Vec::new();
+        let (x0, y0, x1, y1) = bounds;
+        if x0 >= x1 || y0 >= y1 {
+            return out;
+        }
+        for (_, chain) in self
+            .cells
+            .range((x0, i32::MIN)..(x1, i32::MIN))
+            .filter(|((_, y), _)| *y >= y0 && *y < y1)
+        {
+            for &unit in chain {
+                let slot = &mut stamps[unit.0 as usize];
+                if *slot != walk_id {
+                    *slot = walk_id;
+                    out.push(unit);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A box of cells as `(x0, y0, x1, y1)`, with the upper bounds exclusive.
+type CellBox = (i32, i32, i32, i32);
+
+/// The origin of the group grid: the playable area's minimum corner, or zero before a host sets the
+/// playable area (UNSURE: the original keeps the origin in its world object, spec 1.2).
+fn grid_origin(gm: &Game) -> (F32, F32) {
+    gm.playable()
+        .map_or((F32::ZERO, F32::ZERO), |p| (p.min_x, p.min_y))
+}
+
+/// The cell box of a world box `[lo_x, hi_x] x [lo_y, hi_y]`: each minimum is floored, and each maximum
+/// is floored and then increased by one (spec 1.6, UNSURE beyond the floor rule).
+fn cell_box(lo: (F32, F32), hi: (F32, F32), origin: (F32, F32)) -> CellBox {
+    (
+        cell_coordinate(lo.0, origin.0),
+        cell_coordinate(lo.1, origin.1),
+        cell_coordinate(hi.0, origin.0).saturating_add(1),
+        cell_coordinate(hi.1, origin.1).saturating_add(1),
+    )
+}
+
+/// The candidates of a query, in the order the collector sees them. The type and owner queries walk the
+/// world unit list in creation order (spec 3.5; UNVERIFIED). The area queries walk the cells of the
+/// query box (spec 1.3 and 1.5).
+fn candidates_of(gm: &Game, query: &Query) -> Vec<ObjKey> {
+    let origin = grid_origin(gm);
+    let bounds = match *query {
+        Query::World { .. } => return world_units(gm),
+        Query::Circle { x, y, radius } => {
+            // The box is the circle's bounding box. A negative radius gives the same gate (its
+            // square is used), so the box uses the magnitude too (UNSURE).
+            let r = F32::from_bits(radius.to_bits() & 0x7FFF_FFFF);
+            if r.to_bits() >= 0x4B80_0000 {
+                // Beyond 2^24 world units (and for NaN) the cell conversion wraps, so walk every
+                // cell (UNSURE: the original's behaviour here is not decoded).
+                (i32::MIN, i32::MIN, i32::MAX, i32::MAX)
+            } else {
+                cell_box(
+                    (arith::sub(x, r), arith::sub(y, r)),
+                    (arith::add(x, r), arith::add(y, r)),
+                    origin,
+                )
+            }
+        }
+        Query::Rect(r) => cell_box((r.min_x, r.min_y), (r.max_x, r.max_y), origin),
+    };
+    let index = CellIndex::build(gm, origin);
+    let mut stamps = vec![0u32; gm.object_count()];
+    index.walk(bounds, &mut stamps, 1)
+}
+
 /// The candidates of the world unit list, in arena (creation) order (UNVERIFIED for the order of
 /// the original's list, spec 10 item 4).
 fn world_units(gm: &Game) -> Vec<ObjKey> {
@@ -486,28 +615,45 @@ fn world_units(gm: &Game) -> Vec<ObjKey> {
 }
 
 /// Whether a unit at `(x, y)` passes the spatial part of `query` (always true for the world query).
-fn in_query(x: F32, y: F32, query: &Query) -> bool {
+fn in_query(x: F32, y: F32, query: &Query, origin: (F32, F32)) -> bool {
     match query {
         Query::World { .. } => true,
         Query::Circle {
             x: cx,
             y: cy,
             radius,
-        } => in_range(x, y, *cx, *cy, *radius),
+        } => in_range(x, y, *cx, *cy, *radius, origin),
         Query::Rect(r) => in_rect(x, y, r),
     }
 }
 
-/// The range test of the circle queries. UNVERIFIED: the original's formula is not decoded (spec 3.7 and
-/// 3.8). Here: squared distance <= squared radius, computed with softfloat in this order.
-fn in_range(x: F32, y: F32, cx: F32, cy: F32, radius: F32) -> bool {
-    let dx = arith::sub(x, cx);
-    let dy = arith::sub(y, cy);
-    let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
-    arith::le(d2, arith::mul(radius, radius))
+/// A world coordinate in cell units: `(v - origin) / 32`, with the subtract and the exact `/ 32` of the
+/// pathing grid (`scale_by_1_32`).
+fn cell_float(v: F32, origin: F32) -> F32 {
+    scale_by_1_32(arith::sub(v, origin))
 }
 
-/// The bounds test of the rect query. UNVERIFIED (spec 3.7): the edges are inclusive here.
+/// The range test of the circle queries (spec 2.1, CONFIRMED on 900 of 900 harness cases). A unit is
+/// inside when `D <= V`: `D` is the squared distance in cell units between the unit's cell point and the
+/// centre's cell point, through the fused routine [`arith::dist2`] (the unit's point first), and
+/// `V = (r / 32) * (r / 32)` through the multiply core. The bound is inclusive.
+///
+/// Origins (UNSURE): spec 2.1 subtracts `W+0x6C` from the centre's first coordinate and `W+0x70` from the
+/// second, while spec 1.2 names `W+0x70` as the x origin. The port uses one origin per axis (the playable
+/// minimum), which is the reading in which a unit at the centre has distance 0.
+fn in_range(x: F32, y: F32, cx: F32, cy: F32, radius: F32, origin: (F32, F32)) -> bool {
+    let d = arith::dist2(
+        cell_float(x, origin.0),
+        cell_float(y, origin.1),
+        cell_float(cx, origin.0),
+        cell_float(cy, origin.1),
+    );
+    let s = scale_by_1_32(radius);
+    arith::le(d, arith::mul(s, s))
+}
+
+/// The bounds test of the rect query. UNVERIFIED (spec 3.7): the edges are inclusive here, and the
+/// original may test only the cells of the box (its rect path is the box mode, not decoded).
 fn in_rect(x: F32, y: F32, r: &RectObj) -> bool {
     arith::le(r.min_x, x) && arith::le(x, r.max_x) && arith::le(r.min_y, y) && arith::le(y, r.max_y)
 }
@@ -553,5 +699,115 @@ fn string_arg(ctx: &NativeCtx<'_>, a: &[Value], i: usize) -> String {
     match a.get(i) {
         Some(Value::String(id)) => ctx.string(*id).to_string(),
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ORIGIN: (F32, F32) = (F32::ZERO, F32::ZERO);
+
+    fn bits(b: u32) -> F32 {
+        F32::from_bits(b)
+    }
+
+    /// Spec 2.1 boundary, centre (0, 0), radius 500.0. The bit patterns are the floats nearest to
+    /// the decimal values (500.0001 is 0x43FA0003).
+    #[test]
+    fn range_bound_is_inclusive_and_exact() {
+        let r = bits(0x43FA_0000); // 500.0
+        let z = F32::ZERO;
+        // Distance exactly 500.0 is accepted, and so is 499.0.
+        assert!(in_range(bits(0x43FA_0000), z, z, z, r, ORIGIN));
+        assert!(in_range(bits(0x43F9_8000), z, z, z, r, ORIGIN));
+        // 500.0001 is rejected.
+        assert!(!in_range(bits(0x43FA_0003), z, z, z, r, ORIGIN));
+        // 354 by 354 is at distance 500.63: rejected.
+        assert!(!in_range(
+            bits(0x43B1_0000),
+            bits(0x43B1_0000),
+            z,
+            z,
+            r,
+            ORIGIN
+        ));
+        // The centre itself is inside.
+        assert!(in_range(z, z, z, z, r, ORIGIN));
+    }
+
+    /// The gate is exact for a centre away from the origin as well (cell units are (v - o) / 32).
+    #[test]
+    fn range_bound_moves_with_the_centre() {
+        let r = bits(0x43FA_0000); // 500.0
+        let c = bits(0x43C8_0000); // 400.0
+                                   // A unit 500 to the right of the centre (x = 900) is on the boundary: accepted.
+        assert!(in_range(bits(0x4461_0000), c, c, c, r, ORIGIN));
+        // One float step further (900.0001 rounds to 0x44610003) is outside.
+        assert!(!in_range(bits(0x4461_0003), c, c, c, r, ORIGIN));
+    }
+
+    /// A unit linked into two cells is walked once per query.
+    #[test]
+    fn dedupe_stamp_walks_a_unit_once() {
+        let mut idx = CellIndex {
+            cells: BTreeMap::new(),
+        };
+        idx.link((0, 0), ObjKey(1));
+        idx.link((1, 0), ObjKey(1));
+        idx.link((1, 0), ObjKey(2));
+        let mut stamps = vec![0u32; 4];
+        let walk = idx.walk((0, 0, 2, 1), &mut stamps, 7);
+        assert_eq!(walk.len(), 2);
+        assert_eq!(walk.iter().filter(|k| k.0 == 1).count(), 1);
+        // The same query id sees every unit as already stamped; a new id walks them again.
+        assert!(idx.walk((0, 0, 2, 1), &mut stamps, 7).is_empty());
+        assert_eq!(idx.walk((0, 0, 2, 1), &mut stamps, 8).len(), 2);
+    }
+
+    /// Cells are visited x-major with y ascending, and each chain runs from its head.
+    #[test]
+    fn walk_order_is_x_major_then_y_then_chain_head_first() {
+        let mut idx = CellIndex {
+            cells: BTreeMap::new(),
+        };
+        // Units linked in creation order (1 first).
+        idx.link((0, 0), ObjKey(1));
+        idx.link((1, 0), ObjKey(2));
+        idx.link((0, 1), ObjKey(3));
+        idx.link((0, 0), ObjKey(4));
+        idx.link((-1, 2), ObjKey(5));
+        let mut stamps = vec![0u32; 8];
+        let walk = idx.walk((-1, 0, 2, 3), &mut stamps, 1);
+        // x = -1: (-1, 2) -> 5. x = 0: y = 0 chain 4 then 1 (newest first), then y = 1 -> 3.
+        // x = 1: y = 0 -> 2.
+        let expected = if LINK_AT_HEAD {
+            vec![ObjKey(5), ObjKey(4), ObjKey(1), ObjKey(3), ObjKey(2)]
+        } else {
+            vec![ObjKey(5), ObjKey(1), ObjKey(4), ObjKey(3), ObjKey(2)]
+        };
+        assert_eq!(walk, expected);
+    }
+
+    #[test]
+    fn walk_skips_cells_outside_the_box_and_empty_boxes() {
+        let mut idx = CellIndex {
+            cells: BTreeMap::new(),
+        };
+        idx.link((0, 0), ObjKey(1));
+        idx.link((5, 0), ObjKey(2));
+        idx.link((0, 9), ObjKey(3));
+        let mut stamps = vec![0u32; 4];
+        assert_eq!(idx.walk((0, 0, 1, 1), &mut stamps, 1), vec![ObjKey(1)]);
+        assert!(idx.walk((2, 0, 2, 5), &mut stamps, 2).is_empty());
+        assert!(idx.walk((3, 0, 1, 5), &mut stamps, 3).is_empty());
+    }
+
+    /// The box of a circle of radius 500 around the origin covers cells -16 to 15 (exclusive upper 16).
+    #[test]
+    fn circle_box_covers_the_bounding_square() {
+        let lo = (bits(0xC3FA_0000), bits(0xC3FA_0000)); // -500.0
+        let hi = (bits(0x43FA_0000), bits(0x43FA_0000)); // 500.0
+        assert_eq!(cell_box(lo, hi, ORIGIN), (-16, -16, 16, 16));
     }
 }

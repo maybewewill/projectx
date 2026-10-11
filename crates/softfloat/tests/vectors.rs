@@ -26,6 +26,7 @@ const NO_TABLE: &[&str] = &[
     "gt",
     "eq",
     "approx_eq",
+    "dist2",
 ];
 
 fn parse_hex(s: &str) -> u32 {
@@ -53,6 +54,7 @@ fn eval(name: &str, args: &[u32], tables: Option<&Tables>) -> Option<Result<u32,
         "gt" => arith::gt(a(0), a(1)) as u32,
         "eq" => arith::eq(a(0), a(1)) as u32,
         "approx_eq" => arith::approx_eq(a(0), a(1)) as u32,
+        "dist2" => arith::dist2(a(0), a(1), a(2), a(3)).0,
         "sqrt" => math::sqrt(a(0), t()).0,
         "sin" => math::sin(a(0), t()).0,
         "cos" => math::cos(a(0), t()).0,

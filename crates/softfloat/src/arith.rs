@@ -125,6 +125,35 @@ pub fn mul(a: F32, b: F32) -> F32 {
     }
 }
 
+/// Fused squared distance, `0x6F6EF3B0`: `(bx - ax)^2 + (by - ay)^2`, with the operands in the
+/// original's order: `(ax, ay)` is the point read through the first pointer (EDX), `(bx, by)`
+/// the one behind the stack argument.
+///
+/// The disassembly shows the following steps (same cores as the public helpers):
+/// - If both points are bit-identical (`ax == bx` and `ay == by` as patterns, so `+0` vs
+///   `-0` is not identical), the result is `+0` at once.
+/// - Each difference is the add core applied to `(ax ^ sign, bx)`, i.e. `sub(bx, ax)` with
+///   the zero-exponent rules of the add core.
+/// - Each square is the multiply core applied to the difference with itself (the sign is
+///   positive).
+/// - The two squares are summed with the add core (both non-negative).
+///
+/// Checked in Unicorn on 12,000 cases (`tools/emu/softfloat_vectors.py`, `dist2`): 0
+/// mismatches. The composition `mul(sub(bx, ax), ..)` with the same helpers also matches
+/// those cases; the reversed order `sub(ax, bx)` does not (about 12% of them differ). The
+/// function is kept as its own entry point because that operand order is part of the
+/// behaviour.
+pub fn dist2(ax: F32, ay: F32, bx: F32, by: F32) -> F32 {
+    if ax.0 == bx.0 && ay.0 == by.0 {
+        return F32::ZERO;
+    }
+    let dx = add_bits(ax.0 ^ SIGN, bx.0);
+    let dy = add_bits(ay.0 ^ SIGN, by.0);
+    let sx = mul(F32(dx), F32(dx));
+    let sy = mul(F32(dy), F32(dy));
+    F32(add_bits(sx.0, sy.0))
+}
+
 /// Real division, `0x6F6EFE10`: `a / b`.
 ///
 /// If the two operands have identical bits the result is `1.0` (so `x / x` is

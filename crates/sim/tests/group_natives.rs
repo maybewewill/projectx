@@ -309,8 +309,10 @@ endfunction
     run(&mut host);
     // Spec 3.3: the counter goes up only when an insert fails, and a fresh unit never fails. So the
     // limit of 1 never stops the query and all three units are inserted (LIKELY, to be checked).
+    // The three footmen share one 32-unit cell, whose chain is newest first (UNSURE, groups.rs
+    // LINK_AT_HEAD), so they come out as u3, u2, u1.
     assert_eq!(int(&host, "cnt"), 3);
-    assert_eq!(int(&host, "acc"), 123);
+    assert_eq!(int(&host, "acc"), 321);
 }
 
 #[test]
@@ -345,10 +347,11 @@ endfunction
     ));
     host.start("main", &[]).expect("start");
     run(&mut host);
-    // UNVERIFIED formula (squared distance, inclusive): u1 (d = 1) and u2 (d = 2) are inside, u3 is not.
-    // The filter only sees the candidates that pass the area test.
-    assert_eq!(int(&host, "calls"), 12);
-    assert_eq!(int(&host, "acc"), 12);
+    // Squared distance against squared radius, inclusive (spec 2.1): u1 (d = 1) and u2 (d = 2) are
+    // inside, u3 is not. The filter only sees the candidates that pass the area test. Same cell, so
+    // the chain order applies: u2 before u1.
+    assert_eq!(int(&host, "calls"), 21);
+    assert_eq!(int(&host, "acc"), 21);
 }
 
 #[test]
@@ -365,9 +368,39 @@ endfunction
     ));
     host.start("main", &[]).expect("start");
     run(&mut host);
-    // UNVERIFIED (spec 3.7): the edges are inclusive here. u2 (x = 2) and u3 (x = 3) are inside.
-    assert_eq!(int(&host, "acc"), 23);
+    // UNVERIFIED (spec 3.7): the edges are inclusive here. u2 (x = 2) and u3 (x = 3) are inside, and
+    // they share a cell, so u3 comes first (chain order, UNSURE).
+    assert_eq!(int(&host, "acc"), 32);
     assert_eq!(int(&host, "cnt"), 2);
+}
+
+#[test]
+fn range_candidates_come_in_cell_order_then_chain_order() {
+    let mut host = host_for(&script(
+        r#"
+function rec2 takes nothing returns nothing
+    set acc = acc * 100 + R2I(GetUnitX(GetEnumUnit()))
+    set cnt = cnt + 1
+endfunction
+
+function main takes nothing returns nothing
+    set u1 = CreateUnit(Player(0), 'hfoo', I2R(10), I2R(5), I2R(0))
+    set u2 = CreateUnit(Player(0), 'hfoo', I2R(40), I2R(0), I2R(0))
+    set u3 = CreateUnit(Player(0), 'hfoo', I2R(3), I2R(40), I2R(0))
+    set u4 = CreateUnit(Player(0), 'hfoo', I2R(20), I2R(20), I2R(0))
+    set g = CreateGroup()
+    call GroupEnumUnitsInRange(g, I2R(0), I2R(0), I2R(100), null)
+    call ForGroup(g, function rec2)
+endfunction
+"#,
+    ));
+    host.start("main", &[]).expect("start");
+    run(&mut host);
+    // Cells (32 units): u1 (0,0), u4 (0,0), u3 (0,1), u2 (1,0). Cells are x-major, then y.
+    // Inside cell (0,0) the chain is newest first (UNSURE): u4 (x = 20), then u1 (x = 10).
+    // Expected x sequence: 20, 10, 3, 40.
+    assert_eq!(int(&host, "cnt"), 4);
+    assert_eq!(int(&host, "acc"), 20_100_340);
 }
 
 #[test]
@@ -418,9 +451,9 @@ endfunction
     ));
     host.start("main", &[]).expect("start");
     run(&mut host);
-    // A removed unit is skipped at the candidate level, before the filter.
-    assert_eq!(int(&host, "calls"), 13);
-    assert_eq!(int(&host, "acc"), 13);
+    // A removed unit is skipped at the candidate level, before the filter. u3 then u1 (chain order).
+    assert_eq!(int(&host, "calls"), 31);
+    assert_eq!(int(&host, "acc"), 31);
 }
 
 #[test]

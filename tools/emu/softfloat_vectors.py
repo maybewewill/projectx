@@ -79,6 +79,9 @@ CMP_LT = 0x6F01FD80   # a < b (same as 0x6F00C110)
 CMP_LT2 = 0x6F00C110  # a < b
 CMP_EQ = 0x6F009AE0   # a == b (ordered)
 CMP_APPROX = 0x6F00C3F0  # |a - b| < 0.001
+# Fused squared distance of two points: ECX = result pointer, EDX = pointer to P (x, y),
+# [esp+4] = pointer to Q (x, y). Result = (Q.x-P.x)^2 + (Q.y-P.y)^2 with the fused rounding.
+DIST2 = 0x6F6EF3B0
 
 # Scratch memory inside the emulator (outside the image).
 SCR = 0x00200000
@@ -183,6 +186,14 @@ class Game:
         self.wr(OPA, a)
         return self.call(R2I, ecx=OPA) & 0xFFFFFFFF
 
+    def dist2(self, ax, ay, bx, by):
+        self.wr(OPA, ax)
+        self.wr(OPA + 4, ay)
+        self.wr(OPB, bx)
+        self.wr(OPB + 4, by)
+        self.call(DIST2, ecx=RES, edx=OPA, stack=[OPB])
+        return self.rd(RES)
+
     def cmp(self, fn, a, b):
         self.wr(OPA, a)
         self.wr(OPB, b)
@@ -277,6 +288,34 @@ def trig_inputs(rng, n):
     return out
 
 
+def dist2_inputs(rng, n):
+    """Two points (ax, ay, bx, by). Mixes ordinary magnitudes, cell-scale values (the
+    world coordinates divided by 32), exact repeats, cancellation (near) and specials."""
+    out = []
+    while len(out) < n:
+        r = rng.random()
+        if r < 0.3:
+            ax, ay = rand_bits(rng), rand_bits(rng)
+            bx, by = rand_bits(rng), rand_bits(rng)
+        elif r < 0.6:
+            # cell-scale points: centre and candidate within a few hundred cells
+            def cell():
+                v = rng.uniform(-1200.0, 1200.0) / 32.0
+                return struct.unpack("<I", struct.pack("<f", v))[0]
+            ax, ay, bx, by = cell(), cell(), cell(), cell()
+        elif r < 0.85:
+            ax, ay = rand_bits(rng), rand_bits(rng)
+            bx, by = near(rng, ax), near(rng, ay)
+        elif r < 0.93:
+            ax, ay = rand_bits(rng), rand_bits(rng)
+            bx, by = ax, ay if rng.random() < 0.5 else rand_bits(rng)
+        else:
+            ax, ay = rng.choice(SPECIAL), rng.choice(SPECIAL)
+            bx, by = rng.choice(SPECIAL), rng.choice(SPECIAL)
+        out.append((ax, ay, bx, by))
+    return out
+
+
 def int_inputs(rng, n):
     out = []
     while len(out) < n:
@@ -337,6 +376,9 @@ def build_cases(game, rng, n, which):
             gen = unary_inputs if name in ("sqrt", "exp", "ln", "trunc") else trig_inputs
             for (a,) in gen(rng, n):
                 add(name, (a,), lambda: game.unop(fn, a))
+    if "dist2" in which:
+        for a, b, c, d in dist2_inputs(rng, n):
+            add("dist2", (a, b, c, d), lambda: game.dist2(a, b, c, d))
     if "atan2" in which:
         for a, b in binary_inputs(rng, n):
             add("atan2", (a, b), lambda: game.binop(ATAN2, a, b))
@@ -352,7 +394,7 @@ def build_cases(game, rng, n, which):
 
 ALL = ["add", "sub", "mul", "div", "i2r", "f2i", "r2i", "lt", "le", "gt", "eq", "approx_eq",
        "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "ln", "pow", "trunc",
-       "floor_b", "ceil_b", "round_b"]
+       "floor_b", "ceil_b", "round_b", "dist2"]
 
 
 def write_embedded(cases, path, per_fn):
