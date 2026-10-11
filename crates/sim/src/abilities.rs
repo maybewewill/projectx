@@ -877,11 +877,20 @@ impl Cooldowns {
     }
 }
 
-/// The cast check: the cooldown first, then the mana (the order is UNSURE).
+/// The cost value the cast path hands to the unit-side check (CONFIRMED, `tools/emu/abilities4_emu.py`,
+/// docs/spec/abilities-4.md section 3): the level's integer `Cost` through the original I2R (24-bit
+/// mantissa truncation), plus the zero term of vtable slot 0x36C, by the soft add. A negative cost is
+/// **not** clamped on this path (`-5` gives `-5.0`).
+pub fn cast_cost_value(cost: i32) -> F32 {
+    arith::add(softfloat::conv::i2r(cost), F32(0))
+}
+
+/// The cast check: the cooldown first, then the mana (the order is UNSURE). The mana comparison is still
+/// a model (the original's x87 equality in `0x6F283C70` is not decoded); the cost value is confirmed.
 pub fn cast_check(cooldowns: &Cooldowns, base: u32, mana: f32, cost: i32) -> CastCheck {
     if !cooldowns.is_ready(base) {
         CastCheck::Cooling
-    } else if mana < cost.max(0) as f32 {
+    } else if mana < cast_cost_value(cost).to_f32() {
         CastCheck::NoMana
     } else {
         CastCheck::Ready
@@ -982,5 +991,35 @@ mod cooldown_tests {
         let c = Cooldowns::new();
         assert_eq!(cast_check(&c, A, 75.0, 75), CastCheck::Ready);
         assert_eq!(cast_check(&c, A, 74.9, 75), CastCheck::NoMana);
+    }
+}
+
+/// Unicorn vectors of the cast cost value (`tools/emu/abilities4_emu.py`, original `Game.dll` 1.26a):
+/// (Cost, bits of the float that reaches the unit check at `0x6F283C70`). Each equals the original's I2R.
+#[cfg(test)]
+mod cast_cost_vectors {
+    use super::cast_cost_value;
+
+    const VECTORS: &[(i32, u32)] = &[
+        (0, 0x0000_0000),
+        (1, 0x3F80_0000),
+        (75, 0x4296_0000),
+        (1_234_567, 0x4996_B438),
+        (-5, 0xC0A0_0000),
+        (16_777_219, 0x4B80_0001),
+        (2_147_483_647, 0x4EFF_FFFF),
+        (-2_147_483_648, 0xCF00_0000),
+    ];
+
+    #[test]
+    fn cast_cost_value_matches_original_vectors() {
+        for &(cost, bits) in VECTORS {
+            assert_eq!(cast_cost_value(cost).0, bits, "cost {cost}");
+        }
+    }
+
+    #[test]
+    fn negative_cost_is_not_clamped_on_the_cast_path() {
+        assert_eq!(cast_cost_value(-5).to_f32(), -5.0);
     }
 }
