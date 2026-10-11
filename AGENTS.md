@@ -258,8 +258,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~45% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~22% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
-| JASS VM + ~1000 natives | 12% | ~62% | parser/declarations/bytecode = original, VM on softfloat; natives ~700 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~25% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
+| JASS VM + ~1000 natives | 12% | ~62% | parser/declarations/bytecode = original, VM on softfloat; natives ~720 of 1291 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | 0% | |
@@ -302,6 +302,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `crates/sim/natives/region.rs`: **regions** = a set of 32-unit cells. Point → cell = f2i(floor(scale(v − origin))), **x origin = world+0x6C, y = +0x70** (Unicorn-checked; corrects groups-events-2 §1.2). A rect covers cells from floor(min) through the cell containing max, inclusive (120 Unicorn cases). Enter/leave only through SetUnitPosition(Loc) (not SetUnitX/Y), LIKELY; filters run before the triggers. Correction: 0x3D is TriggerRegisterUnitInRange (key 0x8023D), not region enter. Open: timing (the original defers through 0x80275), order across regions, grid bounds.
 - [x] `crates/sim/natives/item.rs`: **items** (~30 natives: CreateItem/RemoveItem/position/charges/owner/flags, inventory on the lowest free slot, powerups consumed, ChooseRandomItem(Ex) on stream 35, EnumItemsInRect). UnitDropItem* write an ItemOrder into a queue (no order system yet). UNSURE: candidate order for ChooseRandomItem (= registry order), the item enum walk order, GetFilterItem during the boolexpr, RemoveItem releasing the creation reference. No pickup/drop events.
 - [x] `crates/sim/natives/destructable.rs`: **destructables** (~25 natives). The id is allocated last; no RNG at creation (LIKELY); variation clamped to count-1 by an unsigned compare; scale clamped to [0.1, 10.0]; death = life >0→0, observers key **0x80259** (also fires on unit death); DestructableRestoreLife only when life ≤ 0. UNSURE: enum order, writing into the pathing map (hook), z from terrain, revive at life > 0.4.
+- [x] `crates/sim/orders.rs` + `natives/order.rs`: **order system** — per-unit lists, 500 limit, lock, replace/append, family+rank lookup, Issue*Order (~20 natives), ISSUED_ORDER events (38/39/40 → 75/76/77 at issue time, UNSURE), **unit movement per tick** (route through Search::dispatch or straight line; facing before the step; step = min(speed·0.1, remaining) — the ·0.1 is UNVERIFIED; arrival 0.2 cells). ScriptHost::step = timers → tick_orders → vm. Open: map pathing is not loaded into Game (the engine has to call set_pathing), build/neutral/group orders, attack-move combat, following a target, patrol, item drop at the destination. Facing for a move due east = 0.005 rad (softfloat acos near 1) — needs checking against the original.
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
