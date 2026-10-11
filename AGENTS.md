@@ -1,7 +1,7 @@
 # projectx — WC3 1.26a TFT engine rewrite in Rust (agent handoff)
 
 > A living document. **Every agent updates it at the end of a session**: the "Status", "Findings" and "Log" sections.
-> Last updated: 2026-10-10
+> Last updated: 2026-10-11
 
 ## 1. Goal
 
@@ -278,7 +278,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~50% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~41% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
-| JASS VM + ~1000 natives | 12% | ~88% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,107 of 1,167 bound** (60 NotImplemented with a reason), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
+| JASS VM + ~1000 natives | 12% | ~88% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,110 of 1,167 bound** (57 NotImplemented with a reason; the three player unit counts are now bound), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | ~9% | turn scheduler (time slots → steps), lockstep spec; 25 ms units confirmed, step listener open |
@@ -377,6 +377,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - **2026-10-11 (damage)**: negative-armor table ported from its start-up initialiser (`computed`, 22/22 vs Unicorn); dice +1 per die located in the roll wrapper `0x6F285350` (400/400 Unicorn, wrapper and GetDamageAmount). Spec: docs/spec/attack-damage.md sections 3.2–3.4, 5.1.
 - **2026-10-11 (15)**: attack cycle merged (combat.rs, placeholder damage). Progress recomputed from the table weights: ~32% (the 45.5% reported in chat was wrong). Merged: damage model (dice/armor/type table); the negative-armor table is computed by a static initializer (K=0.06 hard-coded).
 
+- **2026-10-11 (pending natives)**: the player unit counters are bit-exact against the original (Unicorn, 1,900 operations and 3,800 typed walks, 0 mismatches; `tools/emu/unit_counts_emu.py`). `GetPlayerUnitCount`, `GetPlayerStructureCount` and `GetPlayerTypedUnitCount` are bound (`crates/sim/src/unit_counts.rs`). Random creep/neutral picks: the draw is the shared `0x6F285320` (stream 0x20 / 0x22), the filters are read except the race enum values and two checks; world bounds still open. Details in `docs/spec/natives-pending.md`.
 - **2026-10-10 (14)**: `crates/softfloat`: the whole software float library is bit-exact (540k cases). 0x6FAAE4A0 = 0.1f (step 100 ms).
 - **2026-10-10 (13)**: specs game-loop (2 passes) and attack-damage (dice confirmed in Unicorn). RTTI→vtable map. Two agent launches were interrupted by the safety classifier → those tasks were dropped.
 - **2026-10-10 (12)**: `crates/sim` (RNG + softfloat add/sub/mul) bit-exact vs the original (re-ran it myself with GAME_DLL). Natives pass 2. Running: softfloat (full library), game-loop spec, attack/damage spec.
