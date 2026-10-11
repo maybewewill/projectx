@@ -3,11 +3,15 @@
 //! The replay is the test oracle for the engine rewrite: it holds the initial game setup,
 //! the RNG seed and every player command per lockstep tick.
 
+mod actions;
 mod blocks;
 mod game;
 mod header;
 mod reader;
 
+pub use actions::{
+    decode_actions, Action, AbilityHeader, AbilityPointObject, ObjectId, Point, NO_OBJECT,
+};
 pub use blocks::{Block, CommandBlock};
 pub use game::{decode_string, encode_string, GameInfo, GameSettings, PlayerRecord, Slot};
 pub use header::{Header, SubHeader, MAGIC};
@@ -44,6 +48,12 @@ pub enum Error {
     BadBlockLength { offset: usize, id: u8, len: usize },
     #[error("unknown block {id:#04x} at decompressed offset {offset:#x}")]
     UnknownBlock { offset: usize, id: u8 },
+    /// An action id the original's command switch does not handle (`0x6F550730`, default case).
+    #[error("unknown player action {id:#04x} at decompressed offset {offset:#x}")]
+    UnknownAction { offset: usize, id: u8 },
+    /// An action id the original applies that this decoder does not model yet.
+    #[error("unmodelled player action {id:#04x} at decompressed offset {offset:#x}")]
+    UnsupportedAction { offset: usize, id: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

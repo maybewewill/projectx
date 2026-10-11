@@ -26,8 +26,9 @@
 //!   Without an RNG table the delay is zero (UNVERIFIED: the engine always sets the table).
 //! * **Execute** (CONFIRMED order, LIKELY meaning): at the damage point the damage is rolled through the
 //!   [`DamageModel`] (before any phase switch, CONFIRMED order) and applied to a valid target. Instant attacks
-//!   (no missile speed, phase 1) apply at once. Missile attacks schedule [`AttackMsg::Impact`] after a PLACEHOLDER
-//!   delay of distance over missile speed, rounded to whole steps (UNSURE: the original's flight is not decoded).
+//!   (no missile speed, phase 1) apply at once. Missile attacks schedule [`AttackMsg::Impact`] after the flight time
+//!   of [`crate::missiles`] (distance over speed; the flight arithmetic itself is UNSURE), and the arrival gate of
+//!   [`crate::missiles::arrival`] (CONFIRMED by Unicorn) decides the damage.
 //! * **Acquisition scan** (`0xD01C1`, CONFIRMED period 0.5 s, UNSURE: the 1.0 s branch is not modelled, see
 //!   [`SCAN_PERIOD`]). An idle unit scans its acquire range with [`circle_candidates`], which is the cell-walk
 //!   order of the range query (CONFIRMED order, groups-events-2). The first candidate that is an enemy, alive, not
@@ -52,7 +53,8 @@ use crate::natives::game::{Game, ObjKey, Object, Payload};
 use crate::natives::{circle_candidates, dispatch_unit_death, set_life, ScriptRuntime};
 use crate::orders::{Order, OrderClass, ORDER_AIMOVE, ORDER_ATTACK};
 use crate::pathing::scale_by_1_32;
-use crate::timer::{TimerId, STEP_BITS};
+use crate::missiles;
+use crate::timer::TimerId;
 
 /// Message id of the reaction delay end (`0xD01AF`, CONFIRMED).
 pub const MSG_REACTION: u32 = 0x000D_01AF;
@@ -82,8 +84,6 @@ const NEG_PI: F32 = F32::from_bits(0xC049_0FDB);
 const TWO_PI: F32 = F32::from_bits(0x40C9_0FDB);
 /// 0.2 cells, the arrival distance of the mover (`orders.rs`, CONFIRMED value in movement.md).
 const ARRIVE_CELLS: F32 = F32::from_bits(0x3E4C_CCCD);
-/// One simulation step (0.1 s) as a soft float.
-const STEP: F32 = F32::from_bits(STEP_BITS);
 
 /// The weapon and body data of one unit type that the attack cycle needs.
 ///
@@ -531,7 +531,7 @@ impl Game {
                 None
             }
             AttackMsg::Execute => self.fire_execute(unit),
-            AttackMsg::Impact { target, damage } => self.apply_damage(target, damage),
+            AttackMsg::Impact { target, damage } => self.missile_arrive(unit, target, damage),
         }
     }
 
@@ -692,22 +692,28 @@ impl Game {
         }
     }
 
-    /// The impact delay of a missile: the distance over the speed, rounded to whole steps (PLACEHOLDER, UNSURE).
-    /// Zero without the tables (the square root and the division need them in the model).
+    /// The flight time of a missile: the distance over the speed (see [`crate::missiles::flight_seconds`], LIKELY in
+    /// form, UNSURE in value). Zero without the tables (the square root and the division need them).
     fn impact_delay(&self, attacker: ObjKey, target: ObjKey, speed: F32) -> F32 {
         let Some(tables) = self.order_tables() else {
             return F32::ZERO;
         };
-        if !arith::gt(speed, F32::ZERO) {
-            return F32::ZERO;
-        }
         let (a, b) = (self.unit(attacker), self.unit(target));
-        let dx = arith::sub(a.x, b.x);
-        let dy = arith::sub(a.y, b.y);
-        let distance = math::sqrt(arith::add(arith::mul(dx, dx), arith::mul(dy, dy)), tables);
-        let seconds = arith::div(distance, speed, tables);
-        let steps = math::round(arith::div(seconds, STEP, tables));
-        arith::mul(steps, STEP)
+        let distance = missiles::distance(arith::sub(a.x, b.x), arith::sub(a.y, b.y), tables);
+        missiles::flight_seconds(distance, speed, tables)
+    }
+
+    /// The arrival of a missile (slot 47, [`crate::missiles::arrival`]): the rolled damage goes through when the target
+    /// is still a live unit. The attacker may be dead or gone: the missile keeps its own target (CONFIRMED gate).
+    fn missile_arrive(&mut self, unit: ObjKey, target: ObjKey, damage: F32) -> Option<ObjKey> {
+        let present = self.target_valid(unit, target);
+        match missiles::arrival(missiles::GateInputs::plain(
+            missiles::FLAG_TARGET_BOUND,
+            present,
+        )) {
+            missiles::Arrival::Damage { .. } => self.apply_damage(target, damage),
+            missiles::Arrival::Blocked | missiles::Arrival::NoTarget => None,
+        }
     }
 
     /// Whether the swing predicate holds for `unit` and `target` with the attacker's weapon `ty`.
