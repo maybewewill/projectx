@@ -45,6 +45,9 @@ pub struct GameData {
     pub misc: MiscData,
     /// The unit type records, by unit code (valid units only: a `UnitUI` row and a `UnitData` row).
     pub unit_types: BTreeMap<String, UnitTypeData>,
+    /// The unit codes in `UnitUI.slk` row order (the order of the original's unit type list, see
+    /// `gamedata::unittype::load_all_ordered`).
+    pub unit_order: Vec<String>,
     /// The combat rows (weapon 1 and defense) built from the records.
     pub units: UnitCombatData,
     /// Whether `UnitBalance.slk` was found.
@@ -101,13 +104,15 @@ pub fn load(
     if ui.is_none() || data.is_none() {
         notes.push("UnitUI.slk or UnitData.slk missing: no unit types".to_string());
     }
-    let unit_types = unittype::load_all(&UnitTypeTables {
+    let ordered = unittype::load_all_ordered(&UnitTypeTables {
         data: data.as_ref(),
         balance: balance.as_ref(),
         ui: ui.as_ref(),
         weapons: weapons.as_ref(),
         abilities: abilities.as_ref(),
     });
+    let unit_order: Vec<String> = ordered.iter().map(|(code, _)| code.clone()).collect();
+    let unit_types: BTreeMap<String, UnitTypeData> = ordered.into_iter().collect();
     for slk in [balance.as_ref(), weapons.as_ref()].into_iter().flatten() {
         for row in slk.rows() {
             if !unit_types.contains_key(row.key()) {
@@ -130,6 +135,7 @@ pub fn load(
     Ok(GameData {
         misc,
         unit_types,
+        unit_order,
         units,
         has_balance: balance.is_some(),
         has_weapons: weapons.is_some(),
@@ -141,6 +147,12 @@ pub fn load(
 /// are all there.
 pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> CombatSetup {
     let mut unit_types = 0;
+    // The pick list of ChooseRandomCreep / ChooseRandomNPBuilding follows the UnitUI row order.
+    for code in &data.unit_order {
+        if let (Some(id), Some(ty)) = (rawcode(code), data.unit_types.get(code)) {
+            game.unit_types_mut().set_pick_record(id, pick_record(code, ty));
+        }
+    }
     for (code, ty) in &data.unit_types {
         let Some(id) = rawcode(code) else {
             continue;
@@ -451,5 +463,19 @@ fn read_slk(archives: &[&[u8]], name: &str, notes: &mut Vec<String>) -> Result<O
             notes.push(format!("{name}: {e}; treated as missing"));
             Ok(None)
         }
+    }
+}
+
+/// The fields the random creep and neutral building picks test (`sim::natives::PickRecord`).
+fn pick_record(code: &str, ty: &UnitTypeData) -> sim::natives::PickRecord {
+    sim::natives::PickRecord {
+        code_upper_first: code.as_bytes().first().is_some_and(u8::is_ascii_uppercase),
+        race: ty.race_id,
+        level: ty.level,
+        is_building: ty.is_building != 0,
+        special: ty.special,
+        hostile_pal: ty.hostile_pal,
+        nb_random: ty.nb_random,
+        tilesets: ty.tilesets.clone(),
     }
 }

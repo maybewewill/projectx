@@ -667,12 +667,20 @@ pub fn load_unit_type(
 /// Builds the records of all unit types: one per row of `UnitUI.slk` whose record is valid
 /// (see [`load_unit_type`]). The map is ordered by code, so the result does not depend on hash order.
 pub fn load_all(tables: &UnitTypeTables<'_>) -> BTreeMap<String, UnitTypeData> {
-    let mut out = BTreeMap::new();
+    load_all_ordered(tables).into_iter().collect()
+}
+
+/// The same records in the order the original inserts them into its global unit type list: the row order of
+/// `UnitUI.slk` (the builder loop `0x6F2A7C30` walks the rows from 0 and the list order is the insertion order,
+/// CONFIRMED by `tools/emu/unit_order_growth.py` across bucket growths). The random creep and neutral building picks
+/// index into that order.
+pub fn load_all_ordered(tables: &UnitTypeTables<'_>) -> Vec<(String, UnitTypeData)> {
+    let mut out: Vec<(String, UnitTypeData)> = Vec::new();
     if let Some(ui) = tables.ui {
         for row in ui.rows() {
             let code = row.key();
             if let Ok(unit) = load_unit_type(tables, code) {
-                out.insert(code.to_owned(), unit);
+                out.push((code.to_owned(), unit));
             }
         }
     }

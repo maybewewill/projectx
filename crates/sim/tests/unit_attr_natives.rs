@@ -525,7 +525,8 @@ endfunction
 /// them unbound.
 #[test]
 fn support_tables_cover_the_work_list() {
-    assert_eq!(UNIT_NATIVES.len() + HERO_NATIVES.len(), 123);
+    // 123 before the sleep/alarm natives moved to natives::melee_start (melee-start-natives.md).
+    assert_eq!(UNIT_NATIVES.len() + HERO_NATIVES.len(), 115);
     let mut names: Vec<&str> = UNIT_NATIVES
         .iter()
         .chain(HERO_NATIVES.iter())
@@ -533,7 +534,7 @@ fn support_tables_cover_the_work_list() {
         .collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 123, "no name appears twice");
+    assert_eq!(names.len(), 115, "no name appears twice");
     let implemented = UNIT_NATIVES
         .iter()
         .chain(HERO_NATIVES.iter())
@@ -551,7 +552,6 @@ fn support_tables_cover_the_work_list() {
         r#"
 native GetUnitName takes unit whichUnit returns string
 native SelectHeroSkill takes unit whichHero, integer abilcode returns nothing
-native UnitAddSleep takes unit whichUnit, boolean add returns nothing
 native GetUnitLevel takes unit whichUnit returns integer
 native GetHeroXP takes unit whichUnit returns integer
 function unused takes nothing returns nothing
@@ -559,7 +559,6 @@ function unused takes nothing returns nothing
     local unit u
     set s = GetUnitName(u)
     call SelectHeroSkill(u, 5)
-    call UnitAddSleep(u, true)
     set s = null
 endfunction
 function main takes nothing returns nothing
@@ -569,6 +568,5 @@ endfunction
     let unbound = host.vm().unbound_natives();
     assert!(unbound.contains(&"GetUnitName"));
     assert!(unbound.contains(&"SelectHeroSkill"));
-    assert!(unbound.contains(&"UnitAddSleep"));
     assert!(!unbound.contains(&"GetHeroXP"), "GetHeroXP is registered");
 }

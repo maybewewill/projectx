@@ -273,9 +273,13 @@ impl Engine {
             library.add_script(name, source);
         }
         let ai = AiHost::new(game, ai_shared, library, tables.clone());
+        let mut tileset = 0u8;
         let w3e_center = match archive.read("war3map.w3e") {
             Ok(data) => match w3map::Terrain::parse(&data) {
-                Ok(t) => Some(t.center),
+                Ok(t) => {
+                    tileset = t.main_tileset;
+                    Some(t.center)
+                }
                 Err(e) => {
                     notes.push(format!("war3map.w3e not used: {e}"));
                     None
@@ -289,6 +293,18 @@ impl Engine {
         let corner = map::map_corner(&info, w3e_center);
         let playable = playable_area(&info, corner);
         host.set_playable(Some(playable));
+        {
+            // The whole-map rectangle of GetWorldBounds: the map corner to the far corner point (natives/melee_start.rs).
+            let (tw, th) = map::map_tiles(&info);
+            let f = |v: f32| F32::from_bits(v.to_bits());
+            host.game_mut().set_world_bounds(Some(sim::natives::Playable {
+                min_x: f(corner.0),
+                min_y: f(corner.1),
+                max_x: f(corner.0 + tw as f32 * 128.0),
+                max_y: f(corner.1 + th as f32 * 128.0),
+            }));
+        }
+        host.game_mut().set_map_tileset(tileset);
         apply_players(&mut host.game_mut(), &info, &mut notes);
         let pathing = match &wpm {
             // The wpm grid covers the whole map, so its origin is the map corner.

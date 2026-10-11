@@ -453,10 +453,24 @@ pub(crate) fn create(
     let Some(owner) = gm.player_index_of_handle(owner_handle) else {
         return 0;
     };
+    build(gm, owner, type_id, x, y, face, true).map_or(0, |(_, id)| id)
+}
+
+/// The unit builder behind [`create`] (the original's `0x6F24F1F0`): builds a unit of `type_id` for player slot
+/// `owner` and returns its key and handle id. With `with_handle` false no handle is allocated (id 0): the original's
+/// builder never allocates one, the `CreateUnit` native does after it; `CreateBlightedGoldmine` calls the builder for
+/// its first mine without allocating (CONFIRMED, disassembly of `0x6F3CD630`). `None` for an unknown type.
+pub(crate) fn build(
+    gm: &mut Game,
+    owner: u32,
+    type_id: u32,
+    x: F32,
+    y: F32,
+    face: F32,
+    with_handle: bool,
+) -> Option<(ObjKey, u32)> {
     // TODO(gamedata): the registry is filled from SLK data by the engine (see `Game::unit_types`).
-    let Some(ty) = gm.unit_types().get(type_id).cloned() else {
-        return 0;
-    };
+    let ty = gm.unit_types().get(type_id).cloned()?;
     // The move and attack abilities of the type's order data go to their fixed slots, then the type's list
     // (CONFIRMED structure: the setup attaches them when the unit is built).
     let mut abilities = UnitAbilities::default();
@@ -517,11 +531,15 @@ pub(crate) fn create(
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
     // of units is UNSURE; 0 is used, as for the other handle types the scripts create on demand.
-    let (key, id) = gm.add_object(Object::Unit(unit), 0);
+    let (key, id) = if with_handle {
+        gm.add_object(Object::Unit(unit), 0)
+    } else {
+        (gm.add_object_unhandled(Object::Unit(unit)), 0)
+    };
     gm.place_new_unit(key, x, y);
     count_add_completed(gm, key);
     gm.combat_on_create(key);
-    id
+    Some((key, id))
 }
 
 /// The class word of a unit type in the player counters (see `unit_counts.rs`). A type that is not in the

@@ -21,9 +21,6 @@ const BUILD: &str =
 const SYNC: &str = "the multiplayer sync barriers and the wait-on-trigger threads (FUN_6f44b2f0, FUN_6f44b3a0, FUN_6f4482d0) are not read";
 /// Reason for the name lookups that need the object or localisation tables.
 const NAMES: &str = "the editor object tables and the localised string tables are not loaded (the lookups return names from them)";
-/// Reason for the guard position natives.
-const GUARD: &str =
-    "the guard position list of the AI (creep leash) is not modelled; the helpers are FUN_6f2e5410, FUN_6f2dcf00, FUN_6f2dcec0 (natives-pending.md section 5)";
 /// Reason for the player natives.
 const PLAYER: &str = "the player statistics and the slot removal read counters and unit flags that the model does not keep";
 /// Reason for `GetRescuer`: the firing site is known but is not modelled.
@@ -60,24 +57,9 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry { name: "GetAbilitySoundById", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "GetDestructableName", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "GetItemName", support: Support::NotImplemented(NAMES) },
-    NativeEntry { name: "RecycleGuardPosition", support: Support::NotImplemented(GUARD) },
-    NativeEntry { name: "RemoveAllGuardPositions", support: Support::NotImplemented(GUARD) },
-    NativeEntry { name: "RemoveGuardPosition", support: Support::NotImplemented(GUARD) },
     NativeEntry {
         name: "CreateCorpse",
         support: Support::NotImplemented("the corpse type is passed in registers the decompile does not show (FUN_6f24f1f0 is called without it), and the corpse flags 0x200 and 0x1000 are not modelled"),
-    },
-    NativeEntry {
-        name: "CreateBlightedGoldmine",
-        support: Support::NotImplemented("the goldmine type is set in registers the decompile does not show before the unit builder, and the mine's amount comes from its ability data"),
-    },
-    NativeEntry {
-        name: "ChooseRandomCreep",
-        support: Support::NotImplemented("the race enum (creeps = 8) and the candidate rules are confirmed (gamedata::unittype::is_creep_candidate, checked in Unicorn by tools/emu/random_pick_emu.py), and the draw is the shared one (stream 0x20, high32(r*n)). Not confirmed: the candidate ORDER (the walk follows the global unit-type list at 0x6FAB4468, whose insertion code does not match its head cell), and the Storm ordinal 571 behind the tileset test (assumed a character search). natives-pending.md section 3"),
-    },
-    NativeEntry {
-        name: "ChooseRandomNPBuilding",
-        support: Support::NotImplemented("the race enum (other = 7) and the candidate rules are confirmed (gamedata::unittype::is_neutral_building_candidate, checked in Unicorn by tools/emu/random_pick_emu.py), and the draw is the shared one (stream 0x22). Not confirmed: the candidate ORDER (same global unit-type list as the creep walk) and the Storm ordinal 571 behind the tileset test. natives-pending.md section 3"),
     },
     NativeEntry { name: "CripplePlayer", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "RemovePlayer", support: Support::NotImplemented(PLAYER) },
@@ -88,10 +70,6 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry { name: "GetRescuer", support: Support::NotImplemented(RESCUE) },
     NativeEntry { name: "GetSellingUnit", support: Support::NotImplemented(EVENT) },
     NativeEntry { name: "GetOrderTargetDestructable", support: Support::NotImplemented(EVENT) },
-    NativeEntry {
-        name: "GetWorldBounds",
-        support: Support::NotImplemented("disassembly confirms the four stores: a 16-byte copy of the terrain getter's result (0x6F73F500 on the global map object, via 0x6F00F560) goes into the new rect at +0x24, +0x28, +0x2C, +0x30, and the rect is allocated last. The getter computes the values from the terrain grid, which is not decoded, so the values are unknown (natives-pending.md section 2)"),
-    },
     NativeEntry {
         name: "Cheat",
         support: Support::NotImplemented("the cheat command runs the chat-command parser (FUN_6f7b0da0), which is not read"),

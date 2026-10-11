@@ -438,18 +438,6 @@ pub const NATIVES: &[NativeEntry] = &[
         ),
     },
     NativeEntry {
-        name: "UnitAddSleep",
-        support: Support::NotImplemented(
-            "N:sleep is an ability/buff effect; the buff system is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "UnitAddSleepPerm",
-        support: Support::NotImplemented(
-            "N:sleep is an ability/buff effect; the buff system is not modelled",
-        ),
-    },
-    NativeEntry {
         name: "UnitAddType",
         support: Support::NotImplemented(
             "N:type flag word mapping (FUN_6F3B2EB0) not recovered",
@@ -458,18 +446,6 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
         name: "UnitApplyTimedLife",
         support: Support::Likely,
-    },
-    NativeEntry {
-        name: "UnitCanSleep",
-        support: Support::NotImplemented(
-            "N:sleep is an ability/buff effect; the buff system is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "UnitCanSleepPerm",
-        support: Support::NotImplemented(
-            "N:sleep is an ability/buff effect; the buff system is not modelled",
-        ),
     },
     NativeEntry {
         name: "UnitCountBuffsEx",
@@ -486,24 +462,6 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
         name: "UnitDamageTarget",
         support: Support::Likely,
-    },
-    NativeEntry {
-        name: "UnitIgnoreAlarm",
-        support: Support::NotImplemented(
-            "N:AI alarm is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "UnitIgnoreAlarmToggled",
-        support: Support::NotImplemented(
-            "N:AI alarm is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "UnitIsSleeping",
-        support: Support::NotImplemented(
-            "N:sleep is an ability/buff effect; the buff system is not modelled",
-        ),
     },
     NativeEntry {
         name: "UnitMakeAbilityPermanent",
@@ -579,12 +537,6 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
         name: "UnitUseItemTarget",
         support: Support::Likely,
-    },
-    NativeEntry {
-        name: "UnitWakeUp",
-        support: Support::NotImplemented(
-            "N:sleep is an ability/buff effect; the buff system is not modelled",
-        ),
     },
 ];
 
