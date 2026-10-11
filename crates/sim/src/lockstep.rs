@@ -10,9 +10,12 @@
 //!   structure; the runtime value of `m` is UNSURE, default 1.
 //! * Each tick adds 5 to the counter `+0x1C70` (CONFIRMED). We read that as 5 ms of game time per
 //!   tick (LIKELY).
-//! * One simulation step is 100 ms of game time (LIKELY, the agile 0.1 s step).
-//!   So steps per 100 ms of turn time are 0.6 / 0.8 / 1.0 for slow / normal / fast at `m = 1`.
-//!   This replaces the earlier "one step per 100 ms of turn time" model, which section 7.5 rules out.
+//! * The speed factor stored by the game is `SPEED / 5` (`DAT_6F957640` = 5.0 in the image,
+//!   CONFIRMED, section 8), i.e. game ms per turn ms at 5 ms per tick (LIKELY).
+//! * "Steps" below are an accounting value, `game ms / 100`, not an engine event. The original
+//!   dispatches no 100 ms event (section 8.5, LIKELY); a 0.1 s period is an ordinary timer on the
+//!   agile clock. Steps per 100 ms of turn time are 0.6 / 0.8 / 1.0 for slow / normal / fast at
+//!   `m = 1`. This replaces the earlier "one step per 100 ms of turn time" model (section 7.5).
 //!
 //! Everything here is integer arithmetic. The wall-clock pacing of the original (the 4000 ms cap,
 //! the 200 ms freeze rule, the latency factor) is not modelled: replays run as fast as the caller
@@ -355,5 +358,33 @@ mod tests {
             .collect();
         let want: Vec<i32> = SPEED_TICKS.iter().map(|&v| v as i32).collect();
         assert_eq!(got, want);
+    }
+
+    /// The divisor `DAT_6F957640` of the speed factor (`0x6F53E890` stores `SPEED / DAT` at
+    /// +0x22AC) is the double 5.0 in the image (CONFIRMED, lockstep.md section 8). With 5 ms per
+    /// tick, that factor is game milliseconds per turn millisecond: `ticks * 5 / 25`.
+    #[test]
+    fn speed_factor_divisor_is_five_in_the_image() {
+        let Ok(path) = std::env::var("GAME_DLL") else {
+            return;
+        };
+        let file = std::fs::read(path).expect("GAME_DLL is readable");
+        let bytes = crate::pe::read_va(&file, 0x6F95_7640, 8).expect("divisor is in the image");
+        let mut raw = [0u8; 8];
+        raw.copy_from_slice(bytes);
+        assert_eq!(f64::from_le_bytes(raw), 5.0);
+    }
+
+    /// The speed factor is game milliseconds per turn millisecond: at 5 ms per tick and 25 ms per
+    /// unit it is `ticks / 5`, i.e. 0.6 / 0.8 / 1.0 (no speed-dependent per-tick increment needed).
+    #[test]
+    fn speed_factor_is_game_ms_per_turn_ms() {
+        for speed in [GameSpeed::Slow, GameSpeed::Normal, GameSpeed::Fast] {
+            let ticks = speed.ticks_per_unit();
+            let game_ms_per_unit = ticks * TICK_GAME_MS;
+            // factor = game_ms_per_unit / UNIT_MS, compared exactly as a ratio of integers.
+            assert_eq!(game_ms_per_unit * 5, ticks * 25);
+        }
+        assert_eq!(GameSpeed::Normal.ticks_per_unit() * TICK_GAME_MS, 20);
     }
 }
