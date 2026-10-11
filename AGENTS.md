@@ -337,6 +337,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (18)**: `gamedata::misc` (typed `[Misc]` over layers MiscData → MiscGame → map war3mapMisc, documented defaults), `gamedata::combat` (weapon 1 + def/defType per unit code), reals via S2R when the Game.dll tables are given, SLK raw token text kept. `engine::data` installs the attack/defense rows and **SpecDamage (NegativeArmorTable::computed) only when Game.dll tables, a [Misc] layer and unit data are all present**; otherwise PlaceholderDamage, reported in the boot report. Synthetic fixtures only. UNSURE: Misc/SLK readers really use S2R; defType column order (Small..None, OpenRealm order); physical attack types (Normal/Pierce/Siege/Hero); defaults DefenseArmor 0.06, DamageBonus 1.0, Ethereal 1.0 (7 entries, count UNSURE); collision not read; weapon 2 and Missilespeed not read; dmgpt/backSw seconds not converted to steps. 707 tests (with and without GAME_DLL), clippy clean.
 - **2026-10-11 (17)**: dice +1 (wrapper `0x6F285350`) and the negative-armor initializer bit-exact (re-checked by the lead: 400/400 + 400/400 + 22/22). Lockstep pass 3: tick chain to the timer pump found; `0x6F3A2EC0` = game-start init. 686 tests. ~33.5%. Running: Misc/unit data loading.
 
 - **2026-10-11 (damage)**: negative-armor table ported from its start-up initialiser (`computed`, 22/22 vs Unicorn); dice +1 per die located in the roll wrapper `0x6F285350` (400/400 Unicorn, wrapper and GetDamageAmount). Spec: docs/spec/attack-damage.md sections 3.2–3.4, 5.1.
