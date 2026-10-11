@@ -511,7 +511,6 @@ pub(crate) fn create(
         night_sight: ty.night_sight,
         revealed: 0,
         vision_extra: 0,
-        rescuable: [false; 16],
         abilities,
         buffs: Vec::new(),
         hero: is_hero_id(type_id).then(|| gm.new_hero(type_id)),

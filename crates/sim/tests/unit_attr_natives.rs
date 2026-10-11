@@ -543,8 +543,7 @@ fn support_tables_cover_the_work_list() {
     // (AddHeroXP, SetHeroXP, SetHeroLevel, UnitStripHeroLevel, UnitModifySkillPoints, GetHeroStr/Agi/Int,
     // SetHeroStr/Agi/Int, docs/spec/heroes.md).
     // Plus the three fog tests IsUnitVisible / IsUnitFogged / IsUnitMasked (vision.md section 7, LIKELY).
-    // Plus SetUnitRescuable (natives-lane-b.md).
-    assert_eq!(implemented, 71);
+    assert_eq!(implemented, 70);
 
     let host = host_for(
         r#"

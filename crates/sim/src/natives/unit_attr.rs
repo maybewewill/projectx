@@ -389,7 +389,9 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SetUnitRescuable",
-        support: Support::Confirmed,
+        support: Support::NotImplemented(
+            "N:per-player rescuable state is not modelled",
+        ),
     },
     NativeEntry {
         name: "SetUnitRescueRange",
@@ -484,13 +486,13 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
         name: "UnitDamagePoint",
         support: Support::NotImplemented(
-            "delay timer/radius enumeration path requires full decode from 0x6F3C8770",
+            "N:combat (attack-damage spec) is not modelled",
         ),
     },
     NativeEntry {
         name: "UnitDamageTarget",
         support: Support::NotImplemented(
-            "enum_at signature needs values array; Game API exposure needed for damage calc integration",
+            "N:combat (attack-damage spec) is not modelled",
         ),
     },
     NativeEntry {
@@ -1046,17 +1048,6 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             None => false,
         };
         NativeResult::Return(Value::Boolean(done))
-    });
-
-    let g = Rc::clone(game);
-    reg.register("SetUnitRescuable", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let (Some(k), Some(player)) = (unit_at(&gm, a, 0), gm.player_index_of_handle(handle_arg(a, 1))) {
-            if (player as usize) < 16 {
-                gm.unit_mut(k).rescuable[player as usize] = bool_arg(a, 2);
-            }
-        }
-        NativeResult::Return(Value::Null)
     });
 }
 
