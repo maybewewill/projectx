@@ -269,7 +269,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~36.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~37%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -337,6 +337,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (21)**: JASS threads now start immediately at the call site (`Vm::start_now`), the batch VM pass is removed; sleeps/timers/events resume in the pump at expiry; per-tick continuation of budget-exhausted threads (UNSURE). Movement step: the cap U+0x88 = unit type record +0x210 copied at creation (`0x6F29F3E0`), the step vector U+0x80/+0x84 writer and the speed→step conversion still unknown (movement-4.md) → the `speed·0.03` model has no support yet; needs a write-watch under Wine. 732 tests. ~37%.
 
 - **2026-10-11 (lockstep cadence, pass 7)**: unit movement is a repeating timer, not a batch: message 0x8026A is posted by a CAgentTimer whose timeout is the f32 `"0.03"` (S2R at 0x6F942DD8 → 0x6FAB7370, Unicorn 0x3CF5C290), so the walk `0x6F483300` runs every 0.03 s of agile clock in the timer pump (`Payload::Movement`, `MOVE_PERIOD_BITS`). Tick hook `0x6F470C70` drives four timer queues (queue A + world G1/G2/G3). AI ticks: 0xD01C2 timers 0.02 s one-shot / 1.0 s periodic (values confirmed), mapping UNSURE. JASS runs have no tick pass in the original (LIKELY). Per-call movement cap `unit+0x88` writer not found (UNSURE). lockstep.md section 11. Tests: `movement_cadence.rs` (4 new). Combat/JASS/AI batch of 20 ticks kept, UNSURE.
 - **2026-10-11 (damage target side)**: `0x6F2A40D0` (target side of a hit) run in Unicorn against `sim::damage::target_side_amount`: 15,000 cases, 0 mismatches. Details in `docs/spec/attack-damage.md` section 11. A basic attack's class word is the literal 0x10 (natives use 1 << damage type). The status flag tests bit 7 of the low byte (not bit 31). The minimum-one rule is on the target side. A relation case replaces the amount with raw × 100. OPEN: no writer found for the damage-type row (+0x20) of a basic attack; the evasion consultation point is unknown.
