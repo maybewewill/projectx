@@ -71,7 +71,7 @@ Slots as listed in vtables.tsv for class CAgentTimer (0x6F8784AC): slot 0 0x6F00
 2. Choose the dispatch queue: if the float argument is 0.0, use DAT_6FAB7368 +0x40 (queue A) and do not set timer flag 4; otherwise set timer flag bit 0x4 and use +0x44 (queue B, "(l)").
 3. Read the timeout as a binary32 float from the pointer argument.
 4. If the timeout is at or above the queue's +0x48 limit (float), replace it with 0.0 (DAT_6FAAE47C, which is 0.0 in the file image). The exact role of +0x48 is UNSURE (see section 4.3).
-5. Call 0x6F477F80, which clamps the timeout to a minimum of DAT_6FAAE478 (0.0 in the file image, so negative waits become 0), increments a sequence counter at the timer's +0x50, computes an absolute expiry, and builds a request node (0x6F477EF0). The node is pushed onto the queue with 0x6F46A030. Store the request at timer +0xC.
+5. Call 0x6F477F80, which clamps the timeout to a minimum of DAT_6FAAE478 (0.0 in the file image, but **1e-4 = 0x38D1B717 at runtime**, written by the start-up stub 0x6F84DC90; correction 2026-10-11: any timeout strictly below 1e-4, including 0 and negatives, becomes 1e-4; NaN keeps the keep-branch), increments a sequence counter at the timer's +0x50, computes an absolute expiry, and builds a request node (0x6F477EF0). The node is pushed onto the queue with 0x6F46A030. Store the request at timer +0xC.
 6. If the periodic flag is set, set timer flag bit 0x2 and request flag bit 0x1.
 
 Time unit: the timeout is a JASS real in seconds, and the absolute expiry is in seconds (float). There is no millisecond conversion anywhere on this path. LIKELY (the unit follows from the JASS real and the float clock below).
@@ -139,7 +139,7 @@ Ordering among threads that wake on the same step: by expiry, then by the sequen
 | Queue horizon | float at dispatch+0x48 | seconds | runtime value UNSURE | UNSURE |
 | Agile cursor | float global 0x6FAB7380 | seconds | pump via 0x6F46FFE0 loop | LIKELY |
 | Frame target | float global 0x6FAAE4A0 | seconds (LIKELY) | writers not found; read by 0x6F470C70 and 0x6F46FFE0 | UNSURE for writers |
-| Zero constant | float 0x6FAAE470 (also 0x6FAAE478, 0x6FAAE47C, 0x6FAAE594) | none | file image is 0.0 | CONFIRMED (file image) |
+| Zero constant | float 0x6FAAE470 (also 0x6FAAE47C, 0x6FAAE594) | none | file image is 0.0 | CONFIRMED (file image); **0x6FAAE478 is 1e-4 at runtime** (the timer minimum) |
 | Net step counter | int at CNetData+0x628 (from first pass) | steps (unit UNSURE) | net bracket 0x6F65C7D0 / 0x6F65C840 | CONFIRMED (from first pass) |
 | Wall clock | GetTickCount (import slot 0x6F86D230) | milliseconds | system | CONFIRMED |
 

@@ -64,12 +64,20 @@ impl AgileClock {
     }
 }
 
-/// Clamps a timeout the way the original does (spec 3.3, step 5): negative values
-/// become +0.0. NaN also becomes +0.0 (UNVERIFIED: the original's NaN behaviour is not
-/// in the spec; comparisons with NaN are false, so the clamp keeps NaN out of the heap).
+/// Minimum timeout: the clamp in `0x6F477F80` compares against the float at `0x6FAAE478`,
+/// which is 0.0 in the file but **1e-4** (0x38D1B717) after the start-up initialiser
+/// `0x6F84DC90` (runtime_consts). Corrects game-loop-2.md 3.3 step 5.
+pub const MIN_TIMEOUT_BITS: u32 = 0x38D1_B717;
+
+/// Clamps a timeout the way the original does (`0x6F477F80`, read in the disassembly):
+/// `fld t; fld min; fcompp; test ah,0x41; jne keep` — a timeout strictly below 1e-4
+/// (including zero and negatives) becomes exactly 1e-4; 1e-4 itself is kept.
+/// The original keeps NaN (unordered compare takes the keep branch); here NaN still
+/// becomes the minimum (UNVERIFIED: a NaN expiry's heap order is not modelled).
 fn clamp_timeout(t: f32) -> f32 {
-    if t.is_nan() || t <= 0.0 {
-        0.0
+    let min = f32::from_bits(MIN_TIMEOUT_BITS);
+    if t.is_nan() || t < min {
+        min
     } else {
         t
     }
@@ -180,7 +188,7 @@ impl<P: Clone> TimerQueue<P> {
 
     /// Starts a timer that fires `timeout_seconds` after the current time.
     ///
-    /// Negative timeouts (and NaN) are clamped to 0.0. For a periodic timer the same
+    /// Timeouts below 1e-4 (and NaN) are clamped to 1e-4 ([`MIN_TIMEOUT_BITS`]). For a periodic timer the same
     /// clamped value is the period. Returns the new timer's id.
     pub fn start(&mut self, timeout_seconds: f32, periodic: bool, payload: P) -> TimerId {
         let timeout = clamp_timeout(timeout_seconds);
@@ -409,9 +417,13 @@ mod tests {
 
     #[test]
     fn clamp_and_expiry_helpers() {
-        assert_eq!(clamp_timeout(-3.0), 0.0);
-        assert_eq!(clamp_timeout(-0.0).to_bits(), 0);
-        assert_eq!(clamp_timeout(f32::NAN), 0.0);
+        let min = f32::from_bits(MIN_TIMEOUT_BITS);
+        assert_eq!(clamp_timeout(-3.0).to_bits(), MIN_TIMEOUT_BITS);
+        assert_eq!(clamp_timeout(-0.0).to_bits(), MIN_TIMEOUT_BITS);
+        assert_eq!(clamp_timeout(0.0).to_bits(), MIN_TIMEOUT_BITS);
+        assert_eq!(clamp_timeout(f32::from_bits(MIN_TIMEOUT_BITS - 1)).to_bits(), MIN_TIMEOUT_BITS);
+        assert_eq!(clamp_timeout(min).to_bits(), MIN_TIMEOUT_BITS);
+        assert_eq!(clamp_timeout(f32::NAN).to_bits(), MIN_TIMEOUT_BITS);
         assert_eq!(clamp_timeout(0.5), 0.5);
         assert_eq!(expiry_for(1.0, f32::INFINITY), f32::INFINITY);
     }
