@@ -24,13 +24,15 @@
 //!   UNSURE, see above). A buff has its base code, its polarity and filter data ([`BuffPredicates`]) and, for timed
 //!   life, its duration state. The predicates of the codes the model knows are in [`buff_predicates`]; the counting
 //!   and removal rules are in [`BuffSelect`] and are the spec's (CONFIRMED rules, LIKELY meaning of the filters).
-//! * **Timed life** (`UnitApplyTimedLife`, `UnitPauseTimedLife`): the buff gets a duration timer on the game's timer
-//!   queue. Expiry kills the unit through the same path as `KillUnit` (see `natives/ability.rs`). The expiry-to-death
-//!   link is UNSURE: the spec only says that a unit death is the expected result.
+//! * **Timed life** (`UnitApplyTimedLife`, `UnitPauseTimedLife`): a duration strictly above `0.0` starts a one-shot
+//!   expiry timer (message `0xD01C4`, queue A; CONFIRMED by Unicorn, `docs/spec/abilities-2.md`). Other durations start
+//!   none. Expiry removes the buff (CONFIRMED path). The unit's death after the removal is still modelled as `KillUnit`
+//!   (`natives/ability.rs`); the route from the removal to the death in the original is UNSURE (abilities-2.md section 3.3).
 //!
-//! Not modelled: cooldowns, the level records (`+0x4C`, 0x68 bytes), stacking of buffs (UNSURE: the model adds a new
-//! entry each time), the supply and food adjustment of timed life, the removal notifications (slot 106), the buff
-//! classes beyond the predicates above, and the periodic buff effects.
+//! Not modelled: ability cooldowns (storage and countdown not found, `docs/spec/abilities-2.md` section 1), the level
+//! records (`+0x4C`, 0x68 bytes), the supply and food adjustment of timed life, the removal notifications (slot 106),
+//! the buff classes beyond the predicates above, and the periodic buff effects. Stacking: each application adds an
+//! entry (the creator does not search for an existing buff, CONFIRMED read; no refresh rule found).
 
 use std::collections::BTreeMap;
 use std::ops::Index;
@@ -442,6 +444,17 @@ impl BuffSelect {
     }
 }
 
+/// Message id of the timed life expiry timer (`0xD01C4`, CONFIRMED: the timer started by slot 211 of the timed life
+/// class at `0x6F0D30D0`, and the message on which its handler `0x6F0D3130` removes the buff).
+pub const TIMED_LIFE_EXPIRY: u32 = 0xD01C4;
+
+/// Whether a timed life buff with duration `duration` starts its expiry timer (CONFIRMED by Unicorn, see
+/// `docs/spec/abilities-2.md` section 2.1): only a duration strictly greater than `0.0` does. Zero, negative zero,
+/// negative values and NaN start no timer, so the buff has no expiry until it is removed some other way.
+pub fn timed_life_starts_timer(duration: F32) -> bool {
+    duration.to_f32() > 0.0
+}
+
 /// The state of a timed life buff's duration.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TimedLifeState {
@@ -449,6 +462,8 @@ pub enum TimedLifeState {
     Running(TimerId),
     /// Paused, with the time that was left (softfloat seconds).
     Paused(F32),
+    /// No timer was started, because the duration was not greater than zero. The buff has no expiry.
+    Unlimited,
 }
 
 /// A buff on a unit.
@@ -507,16 +522,25 @@ impl Game {
     /// stacking). Returns the serial.
     pub(crate) fn apply_timed_life(&mut self, k: ObjKey, base: u32, duration: F32) -> u32 {
         let serial = self.next_buff_serial();
-        let timer = self.timers.start(
-            duration.to_f32(),
-            false,
-            Payload::TimedLife { unit: k, serial },
-        );
+        // The creator allocates a new buff object each time: the default creator (`0x6F07B240`) does not search the
+        // unit's list for an existing buff of the same code (CONFIRMED read), so a second application adds an entry.
+        let timed_life = if timed_life_starts_timer(duration) {
+            // One-shot agent timer with message 0xD01C4 on queue A (CONFIRMED: `0x6F477A80` passes repeat 0 and
+            // queue 0 to the timer holder's start slot).
+            let timer = self.timers.start(
+                duration.to_f32(),
+                false,
+                Payload::TimedLife { unit: k, serial },
+            );
+            TimedLifeState::Running(timer)
+        } else {
+            TimedLifeState::Unlimited
+        };
         self.unit_mut(k).buffs.push(Buff {
             serial,
             base,
             predicates: buff_predicates(base),
-            timed_life: Some(TimedLifeState::Running(timer)),
+            timed_life: Some(timed_life),
         });
         serial
     }
@@ -593,6 +617,34 @@ mod tests {
 
     fn ab(max: Option<i32>) -> Ability {
         Ability::new(code(b"AHbz"), Some(AbilityType { max_level: max }))
+    }
+
+    /// The duration branch of the original's timed life apply (`0x6F0D4CB0`), run in Unicorn
+    /// (`tools/emu/abilities2_emu.py`, 25 cases with flag 0 and 1): the expiry timer starts for a duration above
+    /// zero only. Each row is (duration f32 bits, starts timer).
+    #[test]
+    fn timed_life_timer_follows_the_original_duration_branch() {
+        let vectors: &[(u32, bool)] = &[
+            (0x3F80_0000, true),          // 1.0
+            (0x3F00_0000, true),          // 0.5
+            (1e-38_f32.to_bits(), true),  // 1e-38 (a denormal in f32)
+            (0x0000_0001, true),          // smallest positive denormal
+            (0x0000_0000, false),         // 0.0
+            (0x8000_0000, false),         // -0.0
+            (0xBF80_0000, false),         // -1.0
+            (0xFF80_0000, false),         // -inf
+            (0x7F80_0000, true),          // +inf
+            (0x7FC0_0000, false),         // NaN
+            (3.4e38_f32.to_bits(), true), // 3.4e38
+        ];
+        for &(bits, want) in vectors {
+            assert_eq!(
+                timed_life_starts_timer(F32::from_bits(bits)),
+                want,
+                "duration bits {bits:#010x}"
+            );
+        }
+        assert_eq!(TIMED_LIFE_EXPIRY, 0xD01C4);
     }
 
     #[test]

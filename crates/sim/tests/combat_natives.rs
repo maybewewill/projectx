@@ -472,6 +472,47 @@ fn missile_damage_lands_after_the_flight_time() {
     assert_eq!(impact, execute + 10, "impact after the 1.0 s flight");
 }
 
+/// A missile whose target is removed in flight deals no damage: the arrival gate needs a live target (missiles.rs).
+#[test]
+fn missile_into_a_target_removed_in_flight_deals_nothing() {
+    if tables().is_none() {
+        return;
+    }
+    let mut host = host_for(DUEL);
+    host.start("setup", &[]).expect("setup");
+    host.step();
+    let (ua, ub) = (unit_key(&host, "ua"), unit_key(&host, "ub"));
+    host.game_mut().set_attack_type(
+        FOOTMAN,
+        AttackType {
+            missile_speed: Some(f(100.0)),
+            ..weapon()
+        },
+    );
+    host.start("attack_one", &[]).expect("order");
+    let mut was_pending = false;
+    let mut in_flight = false;
+    for _ in 1..=40 {
+        host.step();
+        let pending = host
+            .game()
+            .attack_view(ua)
+            .is_some_and(|v| v.execute_expiry.is_some());
+        if was_pending && !pending {
+            // The missile is in the air: the target leaves the game before it lands.
+            host.game_mut().unit_mut(ub).removed = true;
+            in_flight = true;
+            break;
+        }
+        was_pending = pending;
+    }
+    assert!(in_flight, "the execute point passed");
+    for _ in 0..40 {
+        host.step();
+    }
+    assert_eq!(life(&host, ub), 100.0, "a removed target takes no missile damage");
+}
+
 /// An attack-move unit scans on its way and attacks the first enemy it finds (needs the tables for the walk).
 #[test]
 fn attack_move_takes_the_first_enemy_it_finds() {
