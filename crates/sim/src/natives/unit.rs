@@ -533,6 +533,7 @@ pub(crate) fn build(
         vision_extra: 0,
         abilities,
         buffs: Vec::new(),
+        bonuses: crate::auras::StatBonuses::default(),
         hero: is_hero_id(type_id).then(|| gm.new_hero(type_id)),
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
@@ -558,6 +559,7 @@ pub(crate) fn build(
     count_add_completed(gm, key);
     gm.food_apply_creation(key);
     gm.combat_on_create(key);
+    gm.sync_auras(key);
     Some((key, id))
 }
 

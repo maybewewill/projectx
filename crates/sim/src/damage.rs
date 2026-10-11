@@ -531,7 +531,10 @@ impl SpecDamage {
         // The hero attack bonus (`docs/spec/heroes.md`, section 10) is added to the dice bonus as an integer. The
         // conversion of the stored real (truncation) is UNSURE.
         let hero = conv::r2i(game.unit(attacker).hero_attack);
-        let bonus = weapon.dice_bonus.saturating_add(hero);
+        let bonus = weapon
+            .dice_bonus
+            .saturating_add(hero)
+            .saturating_add(game.unit(attacker).bonuses.damage);
         let (table, streams) = game.rng_parts()?;
         let total = roll_total(
             streams.stream_mut(COMBAT_STREAM),

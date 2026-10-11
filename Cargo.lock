@@ -858,6 +858,7 @@ name = "mdx"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "mpq",
  "thiserror 2.0.21",
 ]
 

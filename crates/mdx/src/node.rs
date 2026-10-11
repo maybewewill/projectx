@@ -38,11 +38,13 @@ pub struct Bone {
 pub(crate) fn parse_bones(p: &mut Reader) -> Result<Vec<Bone>, Error> {
     let mut out = Vec::new();
     while !p.is_empty() {
+        // A bone is a node record (inclusive size, header, tracks) followed by the two geoset ids OUTSIDE it: the size of
+        // the node does not cover them (found on the real models, where the old whole-bone size rule broke every BONE).
         let mut rec = p.record("bone")?;
         let mut node = read_header(&mut rec)?;
-        let geoset_id = rec.i32()?;
-        let geoset_anim_id = rec.i32()?;
         read_tracks(&mut rec, &mut node)?;
+        let geoset_id = p.i32()?;
+        let geoset_anim_id = p.i32()?;
         out.push(Bone {
             node,
             geoset_id,

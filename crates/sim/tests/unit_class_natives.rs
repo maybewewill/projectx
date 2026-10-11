@@ -172,6 +172,7 @@ endfunction
             base: u32::from_be_bytes(*b"BSTN"),
             predicates: BuffPredicates::default(),
             timed_life: None,
+            ..Default::default()
         });
         let u = g.unit(k).clone();
         assert!(sim::natives::unit_attr::is_unit_type(&g, &u, 11));

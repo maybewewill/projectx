@@ -101,7 +101,7 @@ fn sample_parts() -> Vec<Vec<u8>> {
         b"TEXS",
         W::default()
             .u32(0)
-            .fixed("Textures\\white.blp", 260)
+            .fixed("Textures\\white.blp", 256)
             .u32(0)
             .u32(1),
     );
@@ -179,8 +179,6 @@ fn sample_parts() -> Vec<Vec<u8>> {
             .i32(0)
             .i32(-1)
             .u32(0x100)
-            .i32(-1)
-            .i32(-1)
             .append(track(
                 b"KGTR",
                 1,
@@ -192,15 +190,15 @@ fn sample_parts() -> Vec<Vec<u8>> {
                     .u32(10)
                     .floats(&[1.0, 2.0, 3.0]),
             )),
-    );
+    )
+    .i32(-1)
+    .i32(-1);
     let bone1 = record(
         W::default()
             .fixed("Arm", 80)
             .i32(1)
             .i32(0)
             .u32(0x100)
-            .i32(-1)
-            .i32(-1)
             .append(track(
                 b"KGTR",
                 2,
@@ -212,7 +210,9 @@ fn sample_parts() -> Vec<Vec<u8>> {
                     .u32(10)
                     .floats(&[1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
             )),
-    );
+    )
+    .i32(-1)
+    .i32(-1);
     let bones = chunk(b"BONE", W::default().append(bone0).append(bone1));
 
     let helpers = chunk(
@@ -422,10 +422,10 @@ fn rejects_invalid_interpolation_and_huge_count() {
                 .i32(0)
                 .i32(-1)
                 .u32(0)
-                .i32(-1)
-                .i32(-1)
                 .append(track(b"KGTR", 9, -1, 0, W::default())),
-        )),
+        ))
+        .i32(-1)
+        .i32(-1),
     );
     let mut file = vec![b"MDLX".to_vec()];
     file.push(chunk(b"VERS", W::default().u32(800)).into_vec());

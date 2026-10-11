@@ -355,12 +355,12 @@ fn parse_glbs(p: &mut Reader) -> Result<Vec<u32>, Error> {
 }
 
 fn parse_texs(p: &mut Reader) -> Result<Vec<Texture>, Error> {
-    check_multiple(p, 272, "TEXS")?;
+    check_multiple(p, 268, "TEXS")?;
     let mut out = Vec::new();
     while !p.is_empty() {
         out.push(Texture {
             replaceable_id: p.u32()?,
-            path: p.fixed_str(260)?,
+            path: p.fixed_str(256)?,
             unknown: p.u32()?,
             flags: p.u32()?,
         });
