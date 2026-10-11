@@ -9,6 +9,7 @@ pub mod misc;
 pub mod profile;
 pub mod real;
 pub mod slk;
+pub mod unittype;
 
 pub use combat::{ArmorType, DamageType, Defense, UnitCombat, UnitCombatData, Weapon};
 pub use misc::MiscData;

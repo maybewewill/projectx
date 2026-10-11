@@ -140,3 +140,30 @@ So a float write to `+0x88` is not, by itself, a unit cap writer.
   helpers it would use are already checked (softfloat, docs/spec/softfloat.md).
 - No change to the movement golden values in tests came from this pass; the only test changes are the start-timing ones
   in lockstep.md section 12.5.
+
+---
+
+## 9. Correction (2026-10-11, unit-type pass): the type value at +0x210 is not a speed cap
+
+Source: `docs/spec/unit-types.md` (the record builder and the column map). CONFIRMED by decompile and disassembly.
+
+1. **`FUN_6F29C830` returns the type record at `+0x210`, and that record field is `impactZ`** (the impact height of the
+   unit's weapon, column `impactZ` of `Units\UnitWeapons.slk`, read through the accessor at `0x6F260940` with
+   `lea eax, [ecx+0x644]`). It is not a move speed and not a per-walk cap.
+2. The creation code copies `+0x200..+0x208` (launch offset x, y, z) to the object at `+0x7C`, `+0x80`, `+0x84`, and
+   `+0x210` (impact Z) to `+0x88`. So the values written into `U+0x80/+0x84/+0x88` at creation are launch offsets and
+   an impact height.
+3. Consequences for this document:
+   - Section 3 (the cap `unit+0x88` = type `+0x210`) is **withdrawn**. `+0x88` holds the impact Z.
+   - Section 1 reads `U+0x80/+0x84` as the walk vector. If `U` is the unit object, the first walk would use the launch
+     offset as its vector, which is implausible. Either `U` is another object (the mover sub-object at `unit+0x164`,
+     the question of open item 4), or section 1 is wrong. This must be settled before the walk step is modelled.
+   - Section 6 (the model in `orders.rs`) keeps the `speed * 0.03` placeholder. Nothing found here supports or
+     replaces it.
+4. **The formula requested for the per-walk step is not determined.** No formula is written here. What is known about
+   the inputs: the per-type speed values are `spd`, `minSpd` and `maxSpd` (record `+0x1D4`, `+0x1D8`, `+0x1DC`, column
+   of `UnitBalance.slk`), copied without arithmetic or clamping at load time (CONFIRMED). How they reach the mover is
+   open.
+5. Next step (open items, in order): find the writer of the mover's walk vector and check whether it is seeded from
+   `spd` through the speed chain of section 4 (`0x6F26DE00`, `0x6F202F30`, `0x6F201D50`), or dynamically under Wine
+   with the user's data: break on writes to the mover's vector during a walk, and read `spd` of that unit.
