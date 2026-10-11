@@ -101,7 +101,7 @@ fn sample_parts() -> Vec<Vec<u8>> {
         b"TEXS",
         W::default()
             .u32(0)
-            .fixed("Textures\\white.blp", 260)
+            .fixed("Textures\\white.blp", 256)
             .u32(0)
             .u32(1),
     );

@@ -92,6 +92,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
+        if args.iter().any(|a| a == "--objects-png") {
+            viewer::scene_objects::cli(&args)?;
+            return Ok(());
+        }
         if let [flag, path] = args.as_slice() {
             if flag == "--map" {
                 let terrain = TerrainScene::from_map(&std::fs::read(path)?)?;

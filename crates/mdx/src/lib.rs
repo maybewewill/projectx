@@ -169,7 +169,8 @@ impl Sequence {
 pub struct Texture {
     /// 0 for a file path. Non-zero values are replaceable textures (team color, glow, ...).
     pub replaceable_id: u32,
-    /// Path of the BLP file (260-byte field, NUL-terminated).
+    /// Path of the BLP file (256-byte field, NUL-terminated). Records are 268 bytes: checked on
+    /// real 1.26a models (Buildings, Units), where every TEXS chunk divides by 268 and not 272.
     pub path: String,
     /// Field after the path. Always 0 in the files we know of (**uncertain**: may be padding).
     pub unknown: u32,
@@ -355,12 +356,12 @@ fn parse_glbs(p: &mut Reader) -> Result<Vec<u32>, Error> {
 }
 
 fn parse_texs(p: &mut Reader) -> Result<Vec<Texture>, Error> {
-    check_multiple(p, 272, "TEXS")?;
+    check_multiple(p, 268, "TEXS")?;
     let mut out = Vec::new();
     while !p.is_empty() {
         out.push(Texture {
             replaceable_id: p.u32()?,
-            path: p.fixed_str(260)?,
+            path: p.fixed_str(256)?,
             unknown: p.u32()?,
             flags: p.u32()?,
         });
