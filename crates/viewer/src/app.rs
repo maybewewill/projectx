@@ -10,6 +10,12 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+use mdx::glam::Vec3;
+use mdx::BillboardCamera;
+use winit::keyboard::{Key, NamedKey};
+
+use crate::model::gpu::ModelGpu;
+use crate::model::{Clock, Command, ModelAsset, ModelView};
 use crate::renderer::Renderer;
 use crate::scene::{OrbitCamera, Scene};
 
@@ -21,6 +27,36 @@ pub fn run(scene: Scene) -> Result<(), winit::error::EventLoopError> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     run_app(event_loop, App::new(scene))
+}
+
+/// Opens a window showing an animated model, starting on the sequence named `initial` (or
+/// "Stand"). Keys: space or `p` pause, `[` and `]` step, `s` `w` `a` `d` pick stand, walk,
+/// attack and death.
+pub fn run_model(
+    asset: ModelAsset,
+    initial: Option<&str>,
+) -> Result<(), winit::error::EventLoopError> {
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let mut app = App::new(Scene::builtin_cube());
+    app.set_model(asset, initial);
+    run_app(event_loop, app)
+}
+
+/// An animated model on screen, with the GPU objects once a device exists.
+struct ModelState {
+    view: ModelView,
+    gpu: Option<ModelGpu>,
+    clock: Clock,
+}
+
+/// Text of a key press, for the viewer's key bindings.
+fn key_text(key: &Key) -> Option<&str> {
+    match key {
+        Key::Named(NamedKey::Space) => Some(" "),
+        Key::Character(text) => Some(text.as_str()),
+        _ => None,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,6 +81,8 @@ struct App {
     renderer: Rc<RefCell<Option<Renderer>>>,
     dragging: bool,
     last_cursor: Option<(f64, f64)>,
+    /// Set by `run_model`: the animated model replaces the static scene.
+    model: Option<ModelState>,
 }
 
 impl App {
@@ -59,6 +97,62 @@ impl App {
             renderer: Rc::new(RefCell::new(None)),
             dragging: false,
             last_cursor: None,
+            model: None,
+        }
+    }
+
+    fn set_model(&mut self, asset: ModelAsset, initial: Option<&str>) {
+        self.camera = OrbitCamera::fit(&asset.bounds, self.aspect);
+        self.model = Some(ModelState {
+            view: ModelView::new(asset, initial),
+            gpu: None,
+            clock: Clock::default(),
+        });
+    }
+
+    fn model_frame(&mut self) {
+        let slot = self.renderer.borrow();
+        let Some(renderer) = slot.as_ref() else {
+            return;
+        };
+        let Some(state) = self.model.as_mut() else {
+            return;
+        };
+        if state.gpu.is_none() {
+            state.gpu = Some(ModelGpu::new(
+                renderer.device(),
+                renderer.queue(),
+                renderer.format(),
+                &state.view.asset,
+            ));
+        }
+        let forward = self.camera.target - self.camera.eye();
+        let billboard = BillboardCamera::from_view(forward, Vec3::Z);
+        let dt = state.clock.tick();
+        let frame = state.view.frame(dt, billboard.as_ref());
+        if let Some(gpu) = &state.gpu {
+            renderer.render_model(gpu, self.camera.view_projection(), &frame);
+        }
+    }
+
+    fn set_model_title(&self) {
+        if let (Some(window), Some(state)) = (&self.window, &self.model) {
+            window.set_title(&format!("projectx viewer - {}", state.view.name()));
+        }
+    }
+
+    fn key(&mut self, key: &Key) {
+        let Some(text) = key_text(key) else {
+            return;
+        };
+        let Some(command) = Command::from_key(&text.to_ascii_lowercase()) else {
+            return;
+        };
+        let Some(state) = self.model.as_mut() else {
+            return;
+        };
+        if state.view.apply(command) {
+            self.set_model_title();
         }
     }
 
@@ -98,6 +192,10 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         if let Some(scene) = crate::web::take_pending_scene() {
             self.set_scene(scene);
+        }
+        if self.model.is_some() {
+            self.model_frame();
+            return;
         }
         let mut slot = self.renderer.borrow_mut();
         let Some(renderer) = slot.as_mut() else {
@@ -172,6 +270,11 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => (p.y / PIXELS_PER_LINE) as f32,
                 };
                 self.camera.zoom(lines);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    self.key(&event.logical_key);
+                }
             }
             WindowEvent::RedrawRequested => self.frame(),
             _ => {}

@@ -13,18 +13,29 @@
 //! and anything unknown) are kept as [`RawChunk`] with their tag.
 
 mod anim;
+mod eval;
+mod geoanim;
 mod geoset;
 mod material;
 mod node;
 mod reader;
+mod skeleton;
+pub mod skin;
 
 pub use anim::{Interpolation, Key, Track};
+pub use eval::{track_time, Keyable};
+pub use geoanim::GeosetAnim;
 pub use geoset::{Geoset, Primitive, PRIMITIVE_TRIANGLES};
 pub use material::{Layer, Material};
 pub use node::{Bone, Node};
+pub use skeleton::{
+    billboard_basis, BillboardCamera, GeosetPose, LayerPose, NodePose, Pose, Skeleton,
+    SkeletonError, BILLBOARD, BILLBOARD_LOCK_X, BILLBOARD_LOCK_Y, BILLBOARD_LOCK_Z,
+};
 
 use anim::put;
 use reader::Reader;
+pub use glam;
 
 /// A four-character chunk tag.
 pub type Tag = [u8; 4];
@@ -130,6 +141,27 @@ impl Sequence {
     pub fn is_looping(&self) -> bool {
         self.flags & 1 == 0
     }
+
+    /// Length of the sequence in milliseconds.
+    pub fn duration(&self) -> u32 {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// Absolute time (ms, the same clock as the keys) reached `elapsed_ms` after the start.
+    /// Looping sequences wrap; others stop at the end.
+    pub fn time_at(&self, elapsed_ms: f32) -> u32 {
+        let len = self.duration();
+        if len == 0 {
+            return self.start;
+        }
+        let elapsed = elapsed_ms.max(0.0);
+        let offset = if self.is_looping() {
+            elapsed % len as f32
+        } else {
+            elapsed.min(len as f32)
+        };
+        self.start + offset.floor() as u32
+    }
 }
 
 /// One entry of TEXS.
@@ -169,6 +201,8 @@ pub struct Model {
     pub helpers: Vec<Node>,
     /// PIVT: pivot point per object id.
     pub pivots: Vec<[f32; 3]>,
+    /// GEOA: geoset animations (alpha and color per geoset), in file order.
+    pub geoset_anims: Vec<GeosetAnim>,
     /// Chunks that are not parsed, in file order.
     pub unknown_chunks: Vec<RawChunk>,
 }
@@ -195,6 +229,7 @@ impl Model {
         let mut bones = None;
         let mut helpers = None;
         let mut pivots = None;
+        let mut geoset_anims = None;
         let mut unknown_chunks = Vec::new();
 
         while !r.is_empty() {
@@ -222,6 +257,11 @@ impl Model {
                 b"BONE" => put(&mut bones, &tag, node::parse_bones(&mut p)?)?,
                 b"HELP" => put(&mut helpers, &tag, node::parse_helpers(&mut p)?)?,
                 b"PIVT" => put(&mut pivots, &tag, parse_pivt(&mut p)?)?,
+                b"GEOA" => put(
+                    &mut geoset_anims,
+                    &tag,
+                    geoanim::parse_all(&mut p)?,
+                )?,
                 _ => unknown_chunks.push(RawChunk {
                     tag,
                     data: payload.to_vec(),
@@ -244,8 +284,23 @@ impl Model {
             bones: bones.unwrap_or_default(),
             helpers: helpers.unwrap_or_default(),
             pivots: pivots.unwrap_or_default(),
+            geoset_anims: geoset_anims.unwrap_or_default(),
             unknown_chunks,
         })
+    }
+}
+
+impl Model {
+    /// Index of a sequence by name. An exact match (ignoring case) wins; otherwise the first
+    /// sequence whose name starts with `query` (so "stand" finds "Stand - 1").
+    pub fn find_sequence(&self, query: &str) -> Option<usize> {
+        let q = query.trim().to_ascii_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        let names = self.sequences.iter().map(|s| s.name.to_ascii_lowercase());
+        let exact = self.sequences.iter().position(|s| s.name.eq_ignore_ascii_case(&q));
+        exact.or_else(|| names.into_iter().position(|n| n.starts_with(&q)))
     }
 }
 

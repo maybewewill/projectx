@@ -227,6 +227,75 @@ impl Renderer {
         })
     }
 
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Color format of the surface, for pipelines that draw into it.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    /// Draws one animated model frame: clears color and depth, then records the model's draws.
+    /// `model.prepare` must not be called elsewhere for the same frame.
+    pub fn render_model(
+        &self,
+        model: &crate::model::gpu::ModelGpu,
+        view_proj: Mat4,
+        frame: &crate::model::ModelFrame,
+    ) {
+        model.prepare(&self.queue, view_proj, frame);
+        let surface_frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+            _ => return,
+        };
+        let view = surface_frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("model frame"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("model draws"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            model.draw(&mut pass, frame);
+        }
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(surface_frame);
+    }
+
     /// Replaces the GPU meshes and texture with those of `scene`.
     pub fn upload_scene(&mut self, scene: &Scene) {
         let texture_view = self.upload_texture(&scene.texture);

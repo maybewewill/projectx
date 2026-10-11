@@ -34,8 +34,14 @@ crates/
   blp/        BLP1 textures → RGBA8 (paletted + JPEG), builds for wasm32   [v0.1, Haiku agent]
   gamedata/   SLK tables + profile .txt (INI), merging layers, deterministic BTreeMap [v0.1, Haiku agent]
   w3map/      map files: w3e terrain, w3i info (v25), doo doodads (v8/11), shd, wpm [v0.1, Haiku agent]
-  mdx/        MDX v800 models: SEQS/GLBS/TEXS/MTLS/GEOS/BONE/HELP/PIVT + tracks; other chunks raw [v0.1, Haiku agent]
-  viewer/     MDX/BLP viewer on wgpu 30 + winit 0.30, native + wasm32 (WebGPU/WebGL2) [v0.1, Haiku agent; never actually drawn]
+  mdx/        MDX v800 models: SEQS/GLBS/TEXS/MTLS/GEOS/GEOA/BONE/HELP/PIVT + tracks; other chunks raw [v0.1, Haiku agent]
+              + animation [v0.2, presentation, layouts unverified]: eval.rs (KGTR/KGRT/KGSC/KATV/KMTA/KMTF/KGAO/KGAC sampling, global
+              sequences, linear/Hermite/Bezier, slerp/squad), skeleton.rs (pivots, world/skin matrices, billboards, pose per sequence
+              time), skin.rs (MTGC/MATS/GNDX matrix-group averaging, GPU-free reference)
+  viewer/     MDX/BLP viewer on wgpu 30 + winit 0.30, native + wasm32 (WebGPU/WebGL2). Static-cube/terrain path (scene.rs, renderer.rs)
+              plus animated models [v0.2]: model/asset.rs (textures per TEXS, skin palette layout deduped), model/playback.rs
+              (sequence picker, pause, keys), model/draw.rs (palette, sorted draws, blend modes), model/gpu.rs + skinned.wgsl (bones in a
+              uniform array, per-draw params by dynamic offset). Not drawn yet: no GPU in the build environment. Animated mode is native only (`viewer [--seq NAME] [--texture-dir DIR] model.mdx [texture.blp]`).
   engine/     map boot: MPQ → w3i → players/playable area → common.j+blizzard.j+war3map.j → config/main → step(); CLI `w3boot` (report incl. missing natives) [v0.1]
   inject/     i686-pc-windows DLL: hooks Game.dll functions with Rust versions
               (incremental replacement inside the running original, OpenRCT2 approach) [todo]
@@ -355,6 +361,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (mdx/viewer animation, presentation)**: `crates/mdx` now evaluates animation (eval.rs, skeleton.rs, skin.rs, geoanim.rs; GEOA parsed). Frame convention: local = T(pivot − parent pivot)·T(t)·R·S, skin = world·T(−pivot) (identity at rest). Hermite tangents are per-segment slopes (not time scaled), Bezier tangents are absolute controls, Hermite/Bezier rotations use squad; GEOA layout, billboard flags and the GNDX→matrix-group rule are from public notes, UNVERIFIED on real files. 27 new mdx tests, all hand-computed known answers. `crates/viewer` gained `model/` (asset, playback, draw list, wgpu path with bones as a uniform palette of averaged matrix groups, blend modes per filter, team color/glow placeholders, sequence keys). Native CLI `viewer [--seq NAME] [--texture-dir DIR] model.mdx [texture.blp]`. The GPU path is not run (no GPU here); CPU parts are unit-tested. No MDX reference code was ported (OpenRealm was not reachable from this session), so THIRD_PARTY_NOTICES.md is unchanged.
 - **2026-10-11 (abilities pass 5)**: `docs/spec/abilities-4.md` section 8 onwards, Unicorn (`tools/emu/abilities4_emu.py`, 11 checks, 0 failures). Concrete classes by slot 7 (code getter): AHtb = `CAbilityThunderBolt` (vtable `0x6F8F56DC`), AHhb = `CAbilityHolyBolt` (`0x6F8B1B4C`), Aslo = `CAbilitySlow` (`0x6F92280C`). The factory `ptr_ctor` column is a typed lookup (cast by code), not a class constructor. Cast path traced: slot `0x338` (`0x6F054880`) to `0x340` to `0x378` (cast start, events). Cost pre-check (slot `0x370` = `0x6F029080`) hands `add(I2R(Cost), 0.0)` to the unit check `0x6F283C70`: CONFIRMED, now `abilities::cast_cost_value` (no negative clamp). The unit check's comparison (x87 equality, agile at unit+0xB8) is NOT decoded: the run stops in the agile getter (object not built). Still NOT FOUND: payment, cooldown, Dur vs HeroDur.
 - **2026-10-11 (abilities pass 4)**: `docs/spec/abilities-4.md`, static only (no Unicorn run, no Rust change). Cool getter has one reader, `CAbilityReplenish::vf187`, so spell cooldowns are not read there. Order entry of a spell confirmed: message switch `0x6F074C60`, order id = `0xD0028 + ability+0xAC` (`0x6F037860`), forwarder `0x6F022980` to the concrete class slot `0x338`. The `Cost`-reading predicate `0x6F052990` does not compare mana. Mana is an agile property (`0x6F477350`). Still NOT FOUND: cooldown countdown, mana payment, Dur vs HeroDur. Next: the concrete spell class (constructor chain of `0x6F21A280`), its slot `0x338`.
 
