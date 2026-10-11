@@ -189,6 +189,14 @@ tools/
 - Buffs: 1.26a has UnitHasBuffsEx/UnitCountBuffsEx/UnitRemoveBuffs/UnitRemoveBuffsEx; count with both flags false = everything, remove with both false = nothing. CBuff apply = slot 199→200. UnitApplyTimedLife: 7 special ids (BUan, BFig, BEfn, Bhwd, Bplg, Brai, BHwe), otherwise BTLF; pause = slots 58/59 (LIKELY). SetUnitInvulnerable → CUnit::vf42 `0x6F07B4A0` → add/remove **'Avul'**.
 - Not found: buff stacking and duration timers, timed-life expiry → death, cooldown storage and countdown.
 
+### 4.3s Attack cycle (spec: docs/spec/attack-cycle.md, pass 1)
+- CAbilityAttack (vtable `0x6F8B252C`) is message driven: slot 3 `0x6F0D16E0`; order 0xD000F → start `0x6F0CC090`, timer 0xD01B1 → execute `0x6F0CF660`. Swing gate `0x6F0CD350`: cooldown ≤ 0 → range `0x6F4766E0` (floor 32.0, ε 0.001) → facing vs Misc AttackHalfAngle `0x6F476580`. Reaction delay `0x6F0CB340`: RNG real × Misc ReactionDelay (stream UNSURE). Execute: **the damage roll happens before** the phase switch; phase 1 instant, 2–8 missiles (CMissile `0x6F89147C`, impact slot 45, movement slot 47). UnitDamageTarget `0x6F3C8850` → target slot 0x120 = `0x6F2A40D0`.
+- Not found: the idle target acquisition driver (the acquire range lives at attack+0x244), missile arithmetic, JASS ids for the damaged/attacked events.
+- ✅ (lead) SetUnitAcquireRange `0x6F26D620`: no attack ability (+0x1E8) → nothing; otherwise stores if `50.0 < v` per the x87 compare (NaN is stored, ≤ 50 is ignored). Our code is fixed accordingly.
+
+### 4.3t Economy (spec: docs/spec/economy.md, pass 1, partial)
+- Gold/lumber ×10, cap 10,000,000 raw; changes go through `0x6F416A00/0x6F416A40` → `0x6F4167D0`. Upkeep: MiscData UpkeepUsage/UpkeepGoldTax/UpkeepLumberTax (fallback gold 0/0.30/0.60, lumber 0, thresholds 40/70/10000…); **where the tax is applied to income is not found**. Food used player+0x90, cap = min(+0x80, +0xA0, FoodCeiling (90/100)). Type food +0x5C/+0x60, cost +0x20/+0x24. Train queue CAbilityQueue `0x6F05DF60`: **capacity 7**. Cancel refund `0x6F062320`: cost × Train/Research/ReviveRefundRate. Research completion `0x6F059400` (event 0x80261). Not worked out: the harvest cycle, the nearest town hall, trees, training ticks, construction.
+
 ### 4.3c Handles (spec: docs/spec/handles-2.md) ✅ checked in Unicorn (21/21, `tools/emu/handle_alloc_emu.py`)
 - GetHandleId `0x6F3B2D00` = identity. **Base 0x100000**, new id = 0x100000 + table size (allocator `0x6F430C80`); freed ids go on a **LIFO stack** (push `0x6F3A3D20`) → the most recently freed one is reused.
 - Entry is 12 bytes: refcount, agent smart pointer, flag. Created with count 1; release `0x6F42DD40` → when it reaches 0 the id goes on the free stack. Hashtable saves AddRef the id (it stays reserved). Agent death (event 0x80267, `0x6F42DD80`) releases the creation reference (LIKELY).

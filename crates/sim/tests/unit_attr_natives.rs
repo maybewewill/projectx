@@ -9,6 +9,7 @@ use jass::vm::NativeRegistry;
 use sim::natives::game::{AbilityType, UnitType};
 use sim::natives::hero::NATIVES as HERO_NATIVES;
 use sim::natives::unit_attr::{Support, NATIVES as UNIT_NATIVES};
+use sim::orders::{AbilityKind, TypeOrderData};
 use sim::ScriptHost;
 use softfloat::F32;
 
@@ -258,9 +259,20 @@ function main takes nothing returns nothing
     call SetUnitAcquireRange(u1, I2R(51))
     set r3 = GetUnitAcquireRange(u1)
     set r4 = GetUnitAcquireRange(nul)
+    set u2 = CreateUnit(Player(0), 'Hpal', I2R(0), I2R(0), I2R(0))
+    call SetUnitAcquireRange(u2, I2R(500))
+    set r5 = GetUnitAcquireRange(u2)
 endfunction
 "
     ));
+    // 0x6F26D620 acts only on units with the attack ability (unit+0x1E8): the footman has it, the
+    // hero type here does not.
+    host.game_mut().set_type_orders(
+        FOOTMAN,
+        TypeOrderData {
+            abilities: vec![AbilityKind::Attack],
+        },
+    );
     run(&mut host);
     assert_eq!(
         real_bits(&host, "r1"),
@@ -270,6 +282,11 @@ endfunction
     assert_eq!(real_bits(&host, "r2"), 0x4416_0000, "50 is not above 50");
     assert_eq!(real_bits(&host, "r3"), 0x424C_0000, "51 is stored");
     assert_eq!(real_bits(&host, "r4"), 0, "a null unit reads 0.0");
+    assert_eq!(
+        real_bits(&host, "r5"),
+        0,
+        "no attack ability: the setter does nothing"
+    );
 }
 
 #[test]

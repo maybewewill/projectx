@@ -829,7 +829,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         if let Some(k) = unit_at(&gm, a, 0) {
             let r = real_at(a, 1);
-            if arith::gt(r, ACQUIRE_RANGE_MIN) {
+            // 0x6F26D620: nothing happens without the attack ability (unit+0x1E8). Otherwise the
+            // value is stored when the x87 compare `50.0 < r` sets C0, which an unordered (NaN)
+            // compare also does, so NaN is stored and values <= 50.0 are ignored (disassembly).
+            let has_attack = gm.unit(k).abilities.contains(crate::abilities::ATTACK);
+            if has_attack && (r.to_f32().is_nan() || r.to_f32() > ACQUIRE_RANGE_MIN.to_f32()) {
                 gm.unit_mut(k).acquire_range = r;
             }
         }
