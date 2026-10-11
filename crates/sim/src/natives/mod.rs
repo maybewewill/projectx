@@ -30,6 +30,7 @@ mod group;
 mod hashtable;
 pub mod hero;
 pub mod item;
+pub mod lane_e;
 mod location;
 pub mod misc;
 pub mod object;
@@ -74,6 +75,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
     timer::register(reg, game);
     trigger::register(reg, game);
+    lane_e::register_sleeping(reg, game);
     register_world(reg, game);
 }
 
@@ -108,4 +110,5 @@ pub fn register_world(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     economy::register(reg, game);
     object::register(reg, game);
     animation::register(reg, game);
+    lane_e::register(reg, game);
 }

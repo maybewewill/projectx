@@ -700,6 +700,7 @@ impl Game {
     /// [`crate::lockstep::MOVE_PERIOD_BITS`] = 0.03 s of agile clock (lockstep.md section 11.2-11.3).
     pub fn tick_movement(&mut self) {
         self.movement_calls += 1;
+        self.tick_turns();
         let Some(tables) = self.orders.tables.take() else {
             return;
         };

@@ -188,6 +188,13 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 
     let g = Rc::clone(game);
+    reg.register("GroupEnumUnitsSelected", move |ctx, a| {
+        let key = ctx.thread_key();
+        enum_selected(&g, ctx, key, a);
+        NativeResult::Return(Value::Null)
+    });
+
+    let g = Rc::clone(game);
     reg.register("GroupEnumUnitsInRange", move |ctx, a| {
         let key = ctx.thread_key();
         let query = Query::Circle {
@@ -306,6 +313,39 @@ fn enum_of_player(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, key: u32, a:
             player: Some(player),
         };
         run_enum(game, rt, key, group, query, boolexpr_at(game, a, 2), 0);
+    }
+}
+
+/// `GroupEnumUnitsSelected(group, player, filter)` (0x6F3CE590, LIKELY): the group and the player must resolve; the
+/// group is cleared, then the player's selected units are visited in selection order. A unit that is no longer live is
+/// skipped; each remaining unit is the filter unit for the boolexpr, and a null filter or a true result adds it.
+fn enum_selected(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, key: u32, a: &[Value]) {
+    let target = {
+        let gm = game.borrow();
+        let player = gm.player_index_of_handle(handle_arg(a, 1));
+        group_at(&gm, a, 0).zip(player)
+    };
+    let Some((group, player)) = target else { return };
+    let filter = boolexpr_at(game, a, 2);
+    let units: Vec<ObjKey> = {
+        let mut gm = game.borrow_mut();
+        clear_members(&mut gm, group);
+        gm.lane.selections.get(&(player as u8)).cloned().unwrap_or_default()
+    };
+    for unit in units {
+        if game.borrow().unit(unit).removed {
+            continue;
+        }
+        let id = game.borrow_mut().handle_or_create(unit);
+        game.borrow_mut().push_filter_unit(id);
+        let passed = match filter {
+            None => true,
+            Some(b) => eval_boolexpr(game, rt, b, key),
+        };
+        game.borrow_mut().pop_filter_unit();
+        if passed {
+            insert(&mut game.borrow_mut(), group, unit);
+        }
     }
 }
 

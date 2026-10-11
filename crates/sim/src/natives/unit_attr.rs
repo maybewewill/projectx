@@ -312,48 +312,12 @@ pub const NATIVES: &[NativeEntry] = &[
         support: Support::Likely,
     },
     NativeEntry {
-        name: "SetUnitAnimation",
-        support: Support::NotImplemented(
-            "N:animation system is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "SetUnitAnimationByIndex",
-        support: Support::NotImplemented(
-            "N:animation system is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "SetUnitAnimationWithRarity",
-        support: Support::NotImplemented(
-            "N:animation system is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "SetUnitBlendTime",
-        support: Support::NotImplemented(
-            "N:animation blend is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "SetUnitColor",
-        support: Support::NotImplemented(
-            "N:player colour and visuals are not modelled",
-        ),
-    },
-    NativeEntry {
         name: "SetUnitCreepGuard",
         support: Support::Confirmed,
     },
     NativeEntry {
         name: "SetUnitExploded",
         support: Support::Confirmed,
-    },
-    NativeEntry {
-        name: "SetUnitFacingTimed",
-        support: Support::NotImplemented(
-            "N:timed turn is the turn system (movement agent)",
-        ),
     },
     NativeEntry {
         name: "SetUnitFlyHeight",
@@ -434,12 +398,6 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
         name: "UnitAddAbility",
         support: Support::Likely,
-    },
-    NativeEntry {
-        name: "UnitAddIndicator",
-        support: Support::NotImplemented(
-            "N:indicator visual is not modelled",
-        ),
     },
     NativeEntry {
         name: "UnitAddSleep",
@@ -562,12 +520,6 @@ pub const NATIVES: &[NativeEntry] = &[
         name: "UnitSetUsesAltIcon",
         support: Support::NotImplemented(
             "N:the icon state is not modelled",
-        ),
-    },
-    NativeEntry {
-        name: "UnitShareVision",
-        support: Support::NotImplemented(
-            "N:vision and fog are not modelled",
         ),
     },
     NativeEntry {

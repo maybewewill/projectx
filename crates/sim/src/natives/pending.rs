@@ -12,8 +12,6 @@ use super::unit_attr::{NativeEntry, Support};
 
 /// Reason for the shop stock natives.
 const STOCK: &str = "shop stock lists (the per-shop arrays of the unit object and the default lists that FUN_6f46d1b0 fills) and the slot counts are not modelled";
-/// Reason for the local selection natives.
-const SELECTION: &str = "selection is local interface state (the local player object's selection set, guarded by its interface flag at +0x34); the simulation has no interface object";
 /// Reason for the neutral order natives.
 const NEUTRAL: &str = "the neutral order helpers (FUN_6f3b2ef0, FUN_6f3b2f30, FUN_6f3b3090) take the unit, the order and the issuing player in registers the decompile does not show";
 /// Reason for the build order natives.
@@ -26,8 +24,6 @@ const NAMES: &str = "the editor object tables and the localised string tables ar
 /// Reason for the guard position natives.
 const GUARD: &str =
     "the guard position list of the AI (creep leash) is not modelled; the helpers are FUN_6f2e5410, FUN_6f2dcf00, FUN_6f2dcec0 (natives-pending.md section 5)";
-/// Reason for the player natives.
-const PLAYER: &str = "the player statistics and the slot removal read counters and unit flags that the model does not keep";
 /// Reason for the event response getters whose payload is not produced.
 const EVENT: &str = "the event that carries this payload has no firing site in the model (see event.rs), so the getter has nothing to read";
 
@@ -44,10 +40,6 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry { name: "SetItemTypeSlots", support: Support::NotImplemented(STOCK) },
     NativeEntry { name: "SetAllItemTypeSlots", support: Support::NotImplemented(STOCK) },
     NativeEntry { name: "SetAllUnitTypeSlots", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "ClearSelection", support: Support::NotImplemented(SELECTION) },
-    NativeEntry { name: "SelectUnit", support: Support::NotImplemented(SELECTION) },
-    NativeEntry { name: "SyncSelections", support: Support::NotImplemented(SELECTION) },
-    NativeEntry { name: "GroupEnumUnitsSelected", support: Support::NotImplemented(SELECTION) },
     NativeEntry { name: "IssueNeutralImmediateOrder", support: Support::NotImplemented(NEUTRAL) },
     NativeEntry { name: "IssueNeutralImmediateOrderById", support: Support::NotImplemented(NEUTRAL) },
     NativeEntry { name: "IssueNeutralPointOrder", support: Support::NotImplemented(NEUTRAL) },
@@ -59,16 +51,10 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry { name: "TriggerSyncReady", support: Support::NotImplemented(SYNC) },
     NativeEntry { name: "TriggerSyncStart", support: Support::NotImplemented(SYNC) },
     NativeEntry { name: "TriggerExecuteWait", support: Support::NotImplemented(SYNC) },
-    NativeEntry { name: "TriggerWaitForSound", support: Support::NotImplemented(SYNC) },
     NativeEntry { name: "AbilityId", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "AbilityId2String", support: Support::NotImplemented(NAMES) },
-    NativeEntry { name: "GetObjectName", support: Support::NotImplemented(NAMES) },
-    NativeEntry { name: "GetLocalizedString", support: Support::NotImplemented(NAMES) },
-    NativeEntry { name: "GetLocalizedHotkey", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "GetAbilityEffect", support: Support::NotImplemented(NAMES) },
-    NativeEntry { name: "GetAbilityEffectById", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "GetAbilitySound", support: Support::NotImplemented(NAMES) },
-    NativeEntry { name: "GetAbilitySoundById", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "GetDestructableName", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "GetItemName", support: Support::NotImplemented(NAMES) },
     NativeEntry { name: "RecycleGuardPosition", support: Support::NotImplemented(GUARD) },
@@ -90,11 +76,6 @@ pub const NATIVES: &[NativeEntry] = &[
         name: "ChooseRandomNPBuilding",
         support: Support::NotImplemented("the race enum (other = 7) and the candidate rules are confirmed (gamedata::unittype::is_neutral_building_candidate, checked in Unicorn by tools/emu/random_pick_emu.py), and the draw is the shared one (stream 0x22). Not confirmed: the candidate ORDER (same global unit-type list as the creep walk) and the Storm ordinal 571 behind the tileset test. natives-pending.md section 3"),
     },
-    NativeEntry { name: "CripplePlayer", support: Support::NotImplemented(PLAYER) },
-    NativeEntry { name: "RemovePlayer", support: Support::NotImplemented(PLAYER) },
-    NativeEntry { name: "SetPlayerUnitsOwner", support: Support::NotImplemented(PLAYER) },
-    NativeEntry { name: "CachePlayerHeroData", support: Support::NotImplemented(PLAYER) },
-    NativeEntry { name: "GetPlayerScore", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "GetWinningPlayer", support: Support::NotImplemented(EVENT) },
     NativeEntry { name: "GetRescuer", support: Support::NotImplemented(EVENT) },
     NativeEntry { name: "GetSellingUnit", support: Support::NotImplemented(EVENT) },
@@ -106,9 +87,5 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
         name: "Cheat",
         support: Support::NotImplemented("the cheat command runs the chat-command parser (FUN_6f7b0da0), which is not read"),
-    },
-    NativeEntry {
-        name: "ChangeLevel",
-        support: Support::NotImplemented("it switches the campaign level through the campaign loader (FUN_6f3a4c70), which is not modelled"),
     },
 ];

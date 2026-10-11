@@ -322,6 +322,14 @@ impl Engine {
         let game_refs: Vec<&[u8]> = inputs.game_archives.iter().map(Vec::as_slice).collect();
         let game_data = data::load(&game_refs, &archive, tables.as_ref())?;
         notes.extend(game_data.notes.iter().cloned());
+        match archive.read("war3map.wts") {
+            Ok(bytes) => {
+                let strings = sim::natives::lane_e::parse_wts(&String::from_utf8_lossy(&bytes));
+                notes.push(format!("war3map.wts: {} map strings", strings.len()));
+                host.game_mut().lane.map_strings = strings;
+            }
+            Err(_) => notes.push("no war3map.wts: TRIGSTR_nnn names stay unresolved".to_string()),
+        }
         let combat = data::install(&mut host.game_mut(), &game_data, tables.as_ref());
         let economy = data::install_economy(&mut host.game_mut(), &game_data.misc);
 
@@ -496,8 +504,8 @@ impl Engine {
             })
             .collect();
         Report {
-            map_name: self.info.name.clone(),
-            author: self.info.author.clone(),
+            map_name: resolve_map_text(&game, &self.info.name),
+            author: resolve_map_text(&game, &self.info.author),
             playable_width: self.info.playable_width,
             playable_height: self.info.playable_height,
             players,
@@ -686,5 +694,14 @@ impl fmt::Display for Report {
             writeln!(f, "note: {note}")?;
         }
         Ok(())
+    }
+}
+
+/// A map text after `TRIGSTR_nnn` substitution from `war3map.wts` (the text itself when it is no reference or the map
+/// has no such string).
+fn resolve_map_text(game: &sim::natives::Game, text: &str) -> String {
+    match game.lane.resolve_text(text) {
+        Some(t) if !(t.is_empty() && text.starts_with("TRIGSTR_")) => t,
+        _ => text.to_string(),
     }
 }
