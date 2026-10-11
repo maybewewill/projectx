@@ -22,6 +22,7 @@ mod group;
 mod hashtable;
 mod item;
 mod location;
+mod order;
 mod player;
 pub mod presentation;
 mod region;
@@ -68,4 +69,5 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     group::register(reg, game);
     item::register(reg, game);
     destructable::register(reg, game);
+    order::register(reg, game);
 }

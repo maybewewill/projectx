@@ -297,7 +297,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             if let Object::Trigger(tr) = g.borrow_mut().object_mut(t) {
                 tr.evals = tr.evals.wrapping_add(1);
             }
-            execute(&g, t, None, None, ctx);
+            execute(&g, t, None, None, None, ctx);
         }
         NativeResult::Return(Value::Null)
     });
@@ -353,6 +353,19 @@ pub(super) fn fire_with_unit(
     event: Option<ObjKey>,
     unit: Option<ObjKey>,
 ) -> bool {
+    fire_with_order(game, rt, t, event, unit, None)
+}
+
+/// [`fire_with_unit`] for an order event: `order` is the index of the issued-order record that
+/// `GetIssuedOrderId` reads in the trigger's threads.
+pub(super) fn fire_with_order(
+    game: &RefCell<Game>,
+    rt: &mut dyn ScriptRuntime,
+    t: ObjKey,
+    event: Option<ObjKey>,
+    unit: Option<ObjKey>,
+    order: Option<u32>,
+) -> bool {
     let enabled = {
         let mut gm = game.borrow_mut();
         if !gm.is_alive(t) {
@@ -371,9 +384,10 @@ pub(super) fn fire_with_unit(
         trigger: t,
         event,
         unit,
+        order,
     });
     if eval_conditions(game, rt, t, key) {
-        execute(game, t, event, unit, rt);
+        execute(game, t, event, unit, order, rt);
         true
     } else {
         false
@@ -406,6 +420,7 @@ fn execute(
     t: ObjKey,
     event: Option<ObjKey>,
     unit: Option<ObjKey>,
+    order: Option<u32>,
     rt: &mut dyn ScriptRuntime,
 ) {
     let (chain, key) = {
@@ -425,6 +440,7 @@ fn execute(
             trigger: t,
             event,
             unit,
+            order,
         });
         (codes, key)
     };
@@ -511,6 +527,7 @@ fn ctx_key(game: &RefCell<Game>, t: ObjKey, event: Option<ObjKey>) -> u32 {
         trigger: t,
         event,
         unit: None,
+        order: None,
     })
 }
 

@@ -16,6 +16,7 @@
 pub mod handles;
 pub mod hashmap;
 pub mod natives;
+pub mod orders;
 pub mod pathing;
 pub mod rng;
 pub mod script;

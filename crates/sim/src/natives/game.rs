@@ -45,6 +45,8 @@ pub enum Ctx {
         trigger: ObjKey,
         event: Option<ObjKey>,
         unit: Option<ObjKey>,
+        /// Index of the issued-order record of an order event (`GetIssuedOrderId`), if any.
+        order: Option<u32>,
     },
     /// A timer handler started at the timer's expiry.
     Timer(ObjKey),
@@ -892,6 +894,8 @@ pub struct Game {
     enum_destructables: Vec<u32>,
     /// Destructable handles of the running `GetFilterDestructable` scopes, innermost last.
     filter_destructables: Vec<u32>,
+    /// The order system: unit order lists, the issued-order records and the mover (see `orders.rs`).
+    pub(crate) orders: crate::orders::OrderSystem,
 }
 
 impl Default for Game {
@@ -933,6 +937,7 @@ impl Game {
             destructable_types: DestructableTypes::new(),
             enum_destructables: Vec::new(),
             filter_destructables: Vec::new(),
+            orders: crate::orders::OrderSystem::new(),
         }
     }
 
