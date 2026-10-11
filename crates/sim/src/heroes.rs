@@ -333,6 +333,91 @@ pub fn rebase(base: i32, gain: F32, counter: i32, new: i32) -> i32 {
     base.wrapping_add(new.wrapping_sub(current))
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Derived attribute bonuses (docs/spec/heroes.md, section 9). Each reader is `value = f(total) * key`, with the
+// attribute total of the matching core (CONFIRMED by Unicorn, `tools/emu/hero_bonus_emu.py`).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// The primary attribute total (`+0xCC`), chosen as the reader `0x6F207F40` does: `1` strength (core `0x6F0DB300`),
+/// `2` intelligence (`0x6F0DB3A0`), anything else agility (`0x6F0DB350`). CONFIRMED by the three cores in Unicorn.
+pub fn primary_total(primary: i32, str_total: i32, agi_total: i32, int_total: i32) -> i32 {
+    match primary {
+        1 => str_total,
+        2 => int_total,
+        _ => agi_total,
+    }
+}
+
+/// The eight Misc reals of the derived bonuses (`gamedata::misc::AttrBonusMisc`, copied by the engine; `sim` does not
+/// depend on `gamedata`). Absent keys are `0.0` (the reader's default).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BonusRates {
+    pub str_hit_point: F32,
+    pub str_regen: F32,
+    pub str_attack: F32,
+    pub agi_defense_base: F32,
+    pub agi_defense: F32,
+    pub agi_move: F32,
+    pub agi_attack_speed: F32,
+    pub int_mana: F32,
+}
+
+/// The derived bonuses of a hero for the current attributes (section 9). The values are the readers' results; the
+/// hit-point and mana values are the ones the setters send to the unit (see [`max_life_delta`]).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DerivedBonuses {
+    /// Maximum life bonus: `I2R(str) * StrHitPointBonus * factor` (reader `0x6F208060`; the factor is the real at
+    /// the reader's second pointer, `*(global + 0x29C)` per the setter `0x6F20A160`, value UNSURE).
+    pub hit_points: F32,
+    /// Life regeneration bonus: `I2R(str) * StrRegenBonus` (reader `0x6F2080F0`).
+    pub regen: F32,
+    /// Attack damage bonus: `I2R(primary) * StrAttackBonus` (reader `0x6F207F40`).
+    pub attack: F32,
+    /// Armor bonus: `AgiDefenseBase + I2R(agi) * AgiDefenseBonus` (reader `0x6F207FB0`).
+    pub armor: F32,
+    /// Movement speed bonus: `I2R(agi) * AgiMoveBonus` (reader `0x6F208170`).
+    pub move_speed: F32,
+    /// Attack speed bonus: `I2R(agi) * AgiAttackSpeedBonus` (reader `0x6F2081F0`).
+    pub attack_speed: F32,
+    /// Maximum mana bonus: `I2R(int) * IntManaBonus` (reader `0x6F208270`).
+    pub mana: F32,
+}
+
+/// `I2R(total) * per`, the shape of every reader except the armor base and the hit points.
+fn scaled(total: i32, per: F32) -> F32 {
+    arith::mul(conv::i2r(total), per)
+}
+
+/// The derived bonuses of `h` for `misc` and the hit-point factor (see [`DerivedBonuses::hit_points`]).
+pub fn derived_bonuses(h: &HeroObj, rates: &BonusRates, factor: F32) -> DerivedBonuses {
+    let counter = h.level - 1;
+    let str_total = attribute(h.str_base, h.str_plus, counter);
+    let agi_total = attribute(h.agi_base, h.agi_plus, counter);
+    let int_total = intelligence(h.int_base, h.int_plus, counter);
+    let primary = primary_total(h.primary, str_total, agi_total, int_total);
+    DerivedBonuses {
+        hit_points: arith::mul(scaled(str_total, rates.str_hit_point), factor),
+        regen: scaled(str_total, rates.str_regen),
+        attack: scaled(primary, rates.str_attack),
+        armor: arith::add(rates.agi_defense_base, scaled(agi_total, rates.agi_defense)),
+        move_speed: scaled(agi_total, rates.agi_move),
+        attack_speed: scaled(agi_total, rates.agi_attack_speed),
+        mana: scaled(int_total, rates.int_mana),
+    }
+}
+
+/// The change of the maximum life that a strength change causes: the difference of the hit-point bonus before and
+/// after the attribute change (the setter sends `new - old` to the life sink, `0x6F209000`, CONFIRMED arithmetic shape;
+/// the stored old value is LIKELY the previous bonus, UNSURE).
+pub fn max_life_delta(before: &DerivedBonuses, after: &DerivedBonuses) -> F32 {
+    arith::sub(after.hit_points, before.hit_points)
+}
+
+/// The change of the maximum mana an intelligence change causes (`0x6F209210` path, same shape as [`max_life_delta`]).
+pub fn max_mana_delta(before: &DerivedBonuses, after: &DerivedBonuses) -> F32 {
+    arith::sub(after.mana, before.mana)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
