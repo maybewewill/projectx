@@ -1,21 +1,31 @@
-//! Game data for the simulation: the `[Misc]` constants, the weapon-1 and defense rows of the unit types, and the
-//! damage model that they select (`docs/spec/attack-damage.md`).
+//! Game data for the simulation: the `[Misc]` constants, the unit type records (`gamedata::unittype`), the combat
+//! rows built from them, and the damage model that they select (`docs/spec/attack-damage.md`).
 //!
 //! Sources, all read at boot from the user's own files (nothing is committed):
 //! - the game archives, in the order given (`War3.mpq`, then `War3x.mpq`; a later archive overrides an earlier one):
-//!   `Units\MiscData.txt`, `Units\MiscGame.txt`, `Units\UnitBalance.slk`, `Units\UnitWeapons.slk`;
+//!   `Units\MiscData.txt`, `Units\MiscGame.txt`, and the four unit tables `Units\UnitUI.slk`, `Units\UnitData.slk`,
+//!   `Units\UnitBalance.slk`, `Units\UnitWeapons.slk` (read once, by `gamedata::unittype`);
 //! - the map: `war3mapMisc.txt`, the last Misc layer.
 //!
 //! The damage model is [`sim::damage::SpecDamage`] only when all three hold: the Game.dll tables are given (they give
-//! the negative-armor table and the S2R reals), some `[Misc]` layer is present, and some unit balance or weapon file
-//! is present. Otherwise the game keeps [`sim::combat::PlaceholderDamage`], and the boot report says why.
+//! the negative-armor table), some `[Misc]` layer is present, and some unit balance or weapon file is present.
+//! Otherwise the game keeps [`sim::combat::PlaceholderDamage`], and the boot report says why.
+//!
+//! What the simulation's unit registry takes from the records (`sim::natives::game::UnitType`): hit points and mana,
+//! move speed, turn speed, prop window, fly height (`moveHeight`), acquire range (after the sight rule), point value,
+//! food, gold and lumber cost, and the display name. Not filled yet (no record field or no simulation field):
+//! `inventory_size` and `abilities`. Weapon 2 is not in the simulation's attack record (one per type).
 
-use gamedata::combat::{self, rawcode};
+use std::collections::BTreeMap;
+
+use gamedata::combat::{self, rawcode, UnitCombatData};
 use gamedata::misc::MiscData;
+use gamedata::unittype::{self, UnitTypeData, UnitTypeTables};
 use gamedata::{Profile, Slk};
 use mpq::Archive;
 use sim::combat::{AttackType, CombatMisc, Defense};
 use sim::damage::{DamageMisc, DamageTypeTable, NegativeArmorTable, SpecDamage};
+use sim::natives::game::UnitType;
 use sim::Game;
 use softfloat::{Tables, F32};
 
@@ -25,18 +35,16 @@ use crate::Error;
 pub const MISC_FILES: [&str; 2] = ["Units\\MiscData.txt", "Units\\MiscGame.txt"];
 /// The map's Misc file: the last layer.
 pub const MAP_MISC_FILE: &str = "war3mapMisc.txt";
-/// The unit balance table (`def`, `defType`).
-pub const UNIT_BALANCE_FILE: &str = "Units\\UnitBalance.slk";
-/// The unit weapon table (weapon 1).
-pub const UNIT_WEAPONS_FILE: &str = "Units\\UnitWeapons.slk";
 
 /// What was read at boot.
 #[derive(Debug, Clone)]
 pub struct GameData {
     /// The Misc constants (defaults where no layer sets a key).
     pub misc: MiscData,
-    /// The combat rows of the unit types.
-    pub units: combat::UnitCombatData,
+    /// The unit type records, by unit code (valid units only: a `UnitUI` row and a `UnitData` row).
+    pub unit_types: BTreeMap<String, UnitTypeData>,
+    /// The combat rows (weapon 1 and defense) built from the records.
+    pub units: UnitCombatData,
     /// Whether `UnitBalance.slk` was found.
     pub has_balance: bool,
     /// Whether `UnitWeapons.slk` was found.
@@ -50,7 +58,7 @@ pub struct GameData {
 pub struct CombatSetup {
     /// The damage model in use: `SpecDamage`, or `PlaceholderDamage` with the reasons it was not installed.
     pub damage_model: String,
-    /// The unit types whose rows were installed (with a valid raw code).
+    /// The unit types whose records were installed (with a valid raw code).
     pub unit_types: usize,
 }
 
@@ -83,11 +91,32 @@ pub fn load(
     let misc = MiscData::from_layers(&refs, tables);
     notes.extend(misc.notes.iter().map(|n| format!("Misc {n}")));
 
-    let balance = read_slk(archives, UNIT_BALANCE_FILE, &mut notes)?;
-    let weapons = read_slk(archives, UNIT_WEAPONS_FILE, &mut notes)?;
-    let units = combat::load(balance.as_ref(), weapons.as_ref(), tables);
+    let ui = read_slk(archives, unittype::UNIT_UI_FILE, &mut notes)?;
+    let data = read_slk(archives, unittype::UNIT_DATA_FILE, &mut notes)?;
+    let balance = read_slk(archives, unittype::UNIT_BALANCE_FILE, &mut notes)?;
+    let weapons = read_slk(archives, unittype::UNIT_WEAPONS_FILE, &mut notes)?;
+    if ui.is_none() || data.is_none() {
+        notes.push("UnitUI.slk or UnitData.slk missing: no unit types".to_string());
+    }
+    let unit_types = unittype::load_all(&UnitTypeTables {
+        data: data.as_ref(),
+        balance: balance.as_ref(),
+        ui: ui.as_ref(),
+        weapons: weapons.as_ref(),
+    });
+    for slk in [balance.as_ref(), weapons.as_ref()].into_iter().flatten() {
+        for row in slk.rows() {
+            if !unit_types.contains_key(row.key()) {
+                notes.push(format!(
+                    "unit row {:?} has no valid unit record (UnitUI and UnitData); skipped",
+                    row.key()
+                ));
+            }
+        }
+    }
+    let units = combat::from_units(&unit_types);
     notes.extend(units.notes.iter().cloned());
-    for (code, _) in units.iter() {
+    for code in unit_types.keys() {
         if rawcode(code).is_none() {
             notes.push(format!(
                 "unit row {code:?} is not a four-character code; skipped"
@@ -96,6 +125,7 @@ pub fn load(
     }
     Ok(GameData {
         misc,
+        unit_types,
         units,
         has_balance: balance.is_some(),
         has_weapons: weapons.is_some(),
@@ -103,14 +133,21 @@ pub fn load(
     })
 }
 
-/// Installs the unit rows and the Misc values into `game`, and the damage model when its inputs are all there.
+/// Installs the unit types, the combat rows and the Misc values into `game`, and the damage model when its inputs
+/// are all there.
 pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> CombatSetup {
     let mut unit_types = 0;
-    for (code, row) in data.units.iter() {
+    for (code, ty) in &data.unit_types {
         let Some(id) = rawcode(code) else {
             continue;
         };
         unit_types += 1;
+        game.unit_types_mut().insert(id, sim_unit_type(ty));
+    }
+    for (code, row) in data.units.iter() {
+        let Some(id) = rawcode(code) else {
+            continue;
+        };
         if let Some(w) = row.weapon {
             game.set_attack_type(id, attack_type(&w));
         }
@@ -160,8 +197,35 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
     }
 }
 
+/// The simulation's unit type registry entry of a unit record. Every field is a direct copy of the record's value
+/// (no load-time rule beyond the acquire rule already applied by `gamedata::unittype`).
+fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
+    UnitType {
+        name: ty.name.clone(),
+        max_life: soft(ty.hp),
+        max_mana: soft(ty.mana_max),
+        start_mana: soft(ty.mana0),
+        // TODO(gamedata): `UnitInventorySize` is not in the record reader yet.
+        inventory_size: 0,
+        move_speed: soft(ty.speed),
+        turn_speed: soft(ty.turn_rate),
+        prop_window: soft(ty.prop_win),
+        // The record's `moveHeight` is the default fly height (`docs/spec/unit-types.md` section 4.3).
+        fly_height: soft(ty.move_height),
+        acquire_range: soft(ty.acquire),
+        point_value: ty.points,
+        food_used: ty.food_used,
+        food_made: ty.food_made,
+        // TODO(gamedata): the type's ability list is not in the record reader yet.
+        abilities: Vec::new(),
+        gold_cost: ty.gold_cost,
+        wood_cost: ty.lumber_cost,
+    }
+}
+
 /// The attack record of a weapon row. The placeholder damage (used only without [`SpecDamage`]) is the flat bonus
-/// `dmgplus1`; the collision size is not read yet (0, a TODO of the combat spec).
+/// `dmgplus1`. The collision size is not filled: the record's `collision` (`UnitBalance`) and the attack record's
+/// collision (`sim::combat`) are not confirmed to be the same value or unit (UNSURE), so it stays 0.
 fn attack_type(w: &combat::Weapon) -> AttackType {
     AttackType {
         cooldown: w.cooldown,
@@ -177,6 +241,11 @@ fn attack_type(w: &combat::Weapon) -> AttackType {
         damage_type: w.damage_type.row() as u8,
         damage_class: sim::damage::ATTACK_DAMAGE_CLASS,
     }
+}
+
+/// The `f32` of a record value as the soft float the simulation uses (same bits).
+fn soft(x: f32) -> F32 {
+    F32::from_bits(x.to_bits())
 }
 
 /// Reads the last archive's copy of `name`, if any archive has it.

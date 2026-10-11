@@ -10,8 +10,10 @@
 //! - a missing `UnitBalance` row or `UnitWeapons` row gives defaults for that part (see [`load_unit_type`]);
 //! - integer cells: text starting with an apostrophe is a four-character raw code (packed big-endian); any
 //!   other text is read as C `strtol(text, NULL, 0)` (decimal, `0x` hex, leading-zero octal, optional sign);
-//! - real cells: the longest leading decimal number of the text, parsed as `f64` and rounded to `f32` (LIKELY, see
-//!   the spec: the original calls an imported text-to-double routine and stores a single-precision result);
+//! - real cells: C `atof` of the text (leading white space, optional sign, digits, fraction, exponent; anything
+//!   after the number is ignored; no number gives 0.0), correctly rounded to `f64` and then rounded to `f32`
+//!   (LIKELY: the original calls an imported text-to-double routine, Storm ordinal 574, and stores a single
+//!   precision result; Storm.dll is not available to check it. See [`crate::real::atof_f32`]);
 //! - text cells: the text with one pair of surrounding quotes removed;
 //! - one load-time rule: when the `Acquire` value is below 1.0 the acquire range becomes `Sight` (CONFIRMED).
 //!
@@ -20,6 +22,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::real::atof_f32;
 use crate::slk::Slk;
 
 /// `Units\UnitData.slk` (the unit flags and the list of columns of the unit type).
@@ -117,6 +120,14 @@ pub struct UnitTypeData {
     pub code: String,
     /// The raw code (four characters packed big-endian), when the code has four characters.
     pub rawcode: Option<u32>,
+    /// The `name` column of `UnitUI.slk` (text; empty when the cell is missing). UNSURE: which name the original's
+    /// name lookup uses (`CreateUnitByName`); this column is the editor's display name.
+    pub name: String,
+    /// Whether the unit has a row in `UnitBalance.slk`. Without it the balance fields are zero (see
+    /// [`load_unit_type`]).
+    pub has_balance_row: bool,
+    /// Whether the unit has a row in `UnitWeapons.slk`. Without it there is no weapon.
+    pub has_weapons_row: bool,
 
     // UnitData.slk
     /// `canSleep` (integer).
@@ -373,53 +384,10 @@ pub fn cell_int(text: &str) -> i32 {
     cell_int_bits(text) as i32
 }
 
-/// The longest prefix of `text` (after leading spaces) that is a plain decimal real: an optional sign, digits with
-/// an optional point, and an optional exponent. Used like C `atof`, which ignores what follows the number.
-fn leading_decimal(text: &str) -> &str {
-    let t = text.trim_start();
-    let b = t.as_bytes();
-    let mut i = 0;
-    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
-        i += 1;
-    }
-    let mut digits = 0;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-        digits += 1;
-    }
-    if i < b.len() && b[i] == b'.' {
-        i += 1;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-            digits += 1;
-        }
-    }
-    if digits == 0 {
-        return "";
-    }
-    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
-        let mut j = i + 1;
-        if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
-            j += 1;
-        }
-        let start = j;
-        while j < b.len() && b[j].is_ascii_digit() {
-            j += 1;
-        }
-        if j > start {
-            i = j;
-        }
-    }
-    &t[..i]
-}
-
-/// The real value of a real cell (see the module documentation). Text without a number gives `0.0`.
+/// The real value of a real cell: C `atof` of the text, rounded to `f32` (see [`crate::real::atof_f32`], LIKELY).
+/// Text without a number prefix gives `0.0`, as `atof` does.
 pub fn cell_real(text: &str) -> f32 {
-    let t = leading_decimal(text);
-    match t.parse::<f64>() {
-        Ok(v) => v as f32,
-        Err(_) => 0.0,
-    }
+    atof_f32(text).unwrap_or(0.0)
 }
 
 /// The raw text of a cell with its quotes removed, or `None` when the cell is empty or missing.
@@ -533,6 +501,9 @@ pub fn load_unit_type(
     let mut out = UnitTypeData {
         code: code.to_owned(),
         rawcode: rawcode_of(code),
+        name: ui.text("name"),
+        has_balance_row: balance_ok,
+        has_weapons_row: weapons_ok,
         can_sleep: data.int("canSleep"),
         can_flee: data.int("canFlee"),
         cargo_size: data.int("cargoSize"),

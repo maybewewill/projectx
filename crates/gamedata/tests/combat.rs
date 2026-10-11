@@ -1,6 +1,10 @@
-//! Unit combat rows from synthetic SLK tables. Nothing here comes from the game.
+//! Unit combat rows from synthetic SLK tables, built through the single unit-record reader
+//! (`unittype::load_all` -> `combat::from_units`). Nothing here comes from the game.
 
-use gamedata::combat::{self, ArmorType, DamageType};
+use std::collections::BTreeMap;
+
+use gamedata::combat::{self, ArmorType, DamageType, UnitCombatData};
+use gamedata::unittype::{load_all, UnitTypeData, UnitTypeTables};
 use gamedata::Slk;
 
 /// Builds SYLK text: the first row is the header, `rows` are `(key, cells)` where each cell is the raw `K` token
@@ -25,6 +29,43 @@ fn sylk(columns: &[&str], rows: &[(&str, Vec<Option<&str>>)]) -> Slk {
     }
     s.push_str("E\n");
     Slk::parse(&s).expect("fixture parses")
+}
+
+/// A `UnitUI` table with one row per key (the rows are the unit types; a unit needs this row to be valid).
+fn ui_fixture(keys: &[&str]) -> Slk {
+    let rows: Vec<(&str, Vec<Option<&str>>)> = keys
+        .iter()
+        .map(|k| (*k, vec![Some("\"Name\"")]))
+        .collect();
+    sylk(&["name"], &rows)
+}
+
+/// A `UnitData` table with one row per key.
+fn data_fixture(keys: &[&str]) -> Slk {
+    let rows: Vec<(&str, Vec<Option<&str>>)> = keys
+        .iter()
+        .map(|k| (*k, vec![Some("0")]))
+        .collect();
+    sylk(&["canSleep"], &rows)
+}
+
+const KEYS: &[&str] = &["hfoo", "hbow", "hbad", "htow", "hnone", "hemp", "hcool"];
+
+/// The unit records of the fixtures, through the single reader.
+fn units(balance: Option<&Slk>, weapons: Option<&Slk>) -> BTreeMap<String, UnitTypeData> {
+    let ui = ui_fixture(KEYS);
+    let data = data_fixture(KEYS);
+    load_all(&UnitTypeTables {
+        data: Some(&data),
+        balance,
+        ui: Some(&ui),
+        weapons,
+    })
+}
+
+/// The combat rows built from the fixtures.
+fn combat_of(balance: Option<&Slk>, weapons: Option<&Slk>) -> UnitCombatData {
+    combat::from_units(&units(balance, weapons))
 }
 
 #[test]
@@ -73,11 +114,28 @@ fn weapon_fixture() -> Slk {
                     Some("-1"),
                     Some("4"),
                     Some("1.5"),
-                    Some("x"),
+                    Some("\"x\""),
                     None,
                     None,
                     None,
                     Some("\"Plasma\""),
+                ],
+            ),
+            (
+                "hemp",
+                vec![Some("1"), Some("4"), None, None, None, None, None, Some("\"\"")],
+            ),
+            (
+                "hcool",
+                vec![
+                    Some("1"),
+                    Some("4"),
+                    None,
+                    Some("\"1.5x\""),
+                    None,
+                    None,
+                    None,
+                    Some("\"chaos\""),
                 ],
             ),
         ],
@@ -99,7 +157,7 @@ fn balance_fixture() -> Slk {
 fn weapon_and_defense_rows_are_read_by_column_name() {
     let weapons = weapon_fixture();
     let balance = balance_fixture();
-    let data = combat::load(Some(&balance), Some(&weapons), None);
+    let data = combat_of(Some(&balance), Some(&weapons));
 
     let foo = data.get("hfoo").expect("hfoo has rows");
     let w = foo.weapon.expect("hfoo has a weapon");
@@ -118,7 +176,7 @@ fn weapon_and_defense_rows_are_read_by_column_name() {
 fn a_type_with_only_a_balance_row_has_no_weapon_and_the_names_are_case_insensitive() {
     let weapons = weapon_fixture();
     let balance = balance_fixture();
-    let data = combat::load(Some(&balance), Some(&weapons), None);
+    let data = combat_of(Some(&balance), Some(&weapons));
 
     let tower = data.get("htow").expect("htow has rows");
     assert_eq!(tower.weapon, None);
@@ -131,7 +189,7 @@ fn a_type_with_only_a_balance_row_has_no_weapon_and_the_names_are_case_insensiti
 #[test]
 fn a_type_with_only_a_weapon_row_has_no_defense_and_missing_cells_default() {
     let weapons = weapon_fixture();
-    let data = combat::load(None, Some(&weapons), None);
+    let data = combat_of(None, Some(&weapons));
 
     let bow = data.get("hbow").expect("hbow has rows");
     assert_eq!(bow.defense, None);
@@ -151,9 +209,9 @@ fn a_type_with_only_a_weapon_row_has_no_defense_and_missing_cells_default() {
 }
 
 #[test]
-fn malformed_cells_take_defaults_and_are_noted() {
+fn malformed_cells_take_defaults_and_unknown_names_are_noted() {
     let weapons = weapon_fixture();
-    let data = combat::load(None, Some(&weapons), None);
+    let data = combat_of(None, Some(&weapons));
 
     let bad = data
         .get("hbad")
@@ -168,23 +226,54 @@ fn malformed_cells_take_defaults_and_are_noted() {
     assert_eq!(
         bad.cooldown.to_bits(),
         0f32.to_bits(),
-        "malformed real becomes 0.0"
+        "a real cell without a number is 0.0 (atof)"
     );
-    assert_eq!(bad.dmg_plus, 0, "a real in an integer cell is 0");
+    assert_eq!(bad.dmg_plus, 1, "an integer cell reads like strtol: 1.5 -> 1");
     let text = data.notes.join("\n");
     assert!(text.contains("negative dice"), "{text}");
-    assert!(text.contains("hbad.cool1"), "{text}");
+    assert!(text.contains("hbad.atkType1"), "{text}");
     assert!(text.contains("Plasma"), "{text}");
+    assert!(!text.contains("cool1"), "no note for a real cell: {text}");
+}
+
+#[test]
+fn real_cells_follow_the_atof_model() {
+    // "1.5x" -> the leading number 1.5 (atof stops at the first invalid character).
+    let weapons = weapon_fixture();
+    let data = combat_of(None, Some(&weapons));
+    let w = data
+        .get("hcool")
+        .and_then(|u| u.weapon)
+        .expect("hcool weapon");
+    assert_eq!(w.cooldown.to_bits(), 1.5f32.to_bits());
+    assert_eq!(w.damage_type, DamageType::Chaos);
 }
 
 #[test]
 fn a_missing_file_gives_no_rows_for_it() {
-    let data = combat::load(None, None, None);
+    let data = combat_of(None, None);
     assert!(data.is_empty());
     let balance = balance_fixture();
-    let only_defense = combat::load(Some(&balance), None, None);
+    let only_defense = combat_of(Some(&balance), None);
     assert_eq!(only_defense.len(), 3);
     assert!(only_defense.iter().all(|(_, u)| u.weapon.is_none()));
+}
+
+#[test]
+fn a_unit_without_a_ui_row_has_no_combat_row() {
+    // The record rule: no UnitUI row, no unit type (the same rule the simulation's records follow).
+    let weapons = weapon_fixture();
+    let data_table = data_fixture(&["hfoo"]);
+    let ui_table = ui_fixture(&["hfoo"]);
+    let records = load_all(&UnitTypeTables {
+        data: Some(&data_table),
+        balance: None,
+        ui: Some(&ui_table),
+        weapons: Some(&weapons),
+    });
+    let data = combat::from_units(&records);
+    assert_eq!(data.len(), 1);
+    assert!(data.get("hbow").is_none());
 }
 
 #[test]
@@ -207,14 +296,15 @@ fn attack_and_armor_names_follow_the_binary_readers() {
 
 #[test]
 fn an_empty_attack_type_cell_is_spells_and_is_not_noted() {
-    let weapons = sylk(
-        &["dice1", "sides1", "atkType1"],
-        &[("hemp", vec![Some("1"), Some("4"), Some("\"\"")])],
-    );
-    let data = combat::load(None, Some(&weapons), None);
+    let weapons = weapon_fixture();
+    let data = combat_of(None, Some(&weapons));
     let w = data.get("hemp").and_then(|u| u.weapon).expect("weapon");
     assert_eq!(w.damage_type, DamageType::Spells);
-    assert!(data.notes.is_empty(), "{:?}", data.notes);
+    assert!(
+        data.notes.iter().all(|n| !n.contains("hemp")),
+        "{:?}",
+        data.notes
+    );
 }
 
 #[test]

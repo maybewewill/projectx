@@ -35,8 +35,12 @@ fn map_with(extra: &[(&str, Vec<u8>)]) -> Vec<u8> {
 const MISC: &str =
     "[Misc]\nDefenseArmor=0.05\nDamageBonusNormal=1,1,1,1,1,1,1,1\nReactionDelay=0.3\n";
 const BALANCE: &str = "ID;PWXL;N;E\n\
-C;X1;Y1;K\"unitID\"\nC;X2;Y1;K\"def\"\nC;X3;Y1;K\"defType\"\n\
-C;X1;Y2;K\"hfoo\"\nC;X2;Y2;K2\nC;X3;Y2;K\"medium\"\nE\n";
+C;X1;Y1;K\"unitID\"\nC;X2;Y1;K\"def\"\nC;X3;Y1;K\"defType\"\nC;X4;Y1;K\"HP\"\nC;X5;Y1;K\"spd\"\nC;X6;Y1;K\"goldcost\"\n\
+C;X1;Y2;K\"hfoo\"\nC;X2;Y2;K2\nC;X3;Y2;K\"medium\"\nC;X4;Y2;K420\nC;X5;Y2;K\"270.5\"\nC;X6;Y2;K135\nE\n";
+const UI: &str = "ID;PWXL;N;E\n\
+C;X1;Y1;K\"unitUIID\"\nC;X2;Y1;K\"name\"\nC;X1;Y2;K\"hfoo\"\nC;X2;Y2;K\"Footman\"\nE\n";
+const DATA: &str = "ID;PWXL;N;E\n\
+C;X1;Y1;K\"unitID\"\nC;X2;Y1;K\"canSleep\"\nC;X1;Y2;K\"hfoo\"\nC;X2;Y2;K0\nE\n";
 const WEAPONS: &str = "ID;PWXL;N;E\n\
 C;X1;Y1;K\"unitID\"\nC;X2;Y1;K\"dice1\"\nC;X3;Y1;K\"sides1\"\nC;X4;Y1;K\"dmgplus1\"\n\
 C;X5;Y1;K\"cool1\"\nC;X6;Y1;K\"rangeN1\"\nC;X7;Y1;K\"atkType1\"\n\
@@ -47,6 +51,8 @@ fn game_archive() -> Vec<u8> {
     mpq(
         &[
             ("Units\\MiscData.txt", MISC.as_bytes().to_vec()),
+            ("Units\\UnitUI.slk", UI.as_bytes().to_vec()),
+            ("Units\\UnitData.slk", DATA.as_bytes().to_vec()),
             ("Units\\UnitBalance.slk", BALANCE.as_bytes().to_vec()),
             ("Units\\UnitWeapons.slk", WEAPONS.as_bytes().to_vec()),
         ],
@@ -86,6 +92,22 @@ fn without_game_archives_the_placeholder_stays_and_the_report_says_why() {
     assert!(report
         .to_string()
         .contains("damage model: PlaceholderDamage"));
+}
+
+/// The unit registry gets the record values: hit points, move speed (`atof` of "270.5"), gold cost, the name and
+/// the acquire rule (no weapon row: acquire becomes sight, which is 0 here, so the value is 0).
+#[test]
+fn the_unit_registry_is_filled_from_the_unit_records() {
+    let mut engine = Engine::boot(inputs(map_with(&[]), vec![game_archive()], None)).expect("boot");
+    let host = engine.host_mut();
+    let game = host.game_mut();
+    let ty = game.unit_types().get(HFOO).expect("hfoo is registered");
+    assert_eq!(ty.name, "Footman");
+    assert_eq!(ty.max_life.to_bits(), 420f32.to_bits());
+    assert_eq!(ty.move_speed.to_bits(), 270.5f32.to_bits());
+    assert_eq!(ty.gold_cost, 135);
+    assert_eq!(ty.acquire_range.to_bits(), 0f32.to_bits());
+    assert_eq!(game.unit_types().len(), 1);
 }
 
 #[test]

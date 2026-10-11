@@ -1,28 +1,30 @@
 //! Unit combat rows: weapon 1 and the defense of each unit type (`docs/spec/attack-damage.md`, sections 2 and 3.4).
 //!
-//! Sources: `Units\UnitWeapons.slk` (weapon 1: `dice1`, `sides1`, `dmgplus1`, `cool1`, `dmgpt1`, `backSw1`,
-//! `rangeN1`, `atkType1`) and `Units\UnitBalance.slk` (defense: `def`, `defType`). Row keys are the unit raw codes
-//! (see [`rawcode`]). Units without a weapon row, or without a defense row, get `None` for that part.
+//! This module reads nothing itself. The rows come from [`crate::unittype`] (the single reader of the unit SLK
+//! tables, `Units\UnitUI.slk`, `UnitData.slk`, `UnitBalance.slk`, `UnitWeapons.slk`): see [`from_units`]. A unit
+//! type is a row here when its record is valid (see [`crate::unittype::load_unit_type`]) and it has a weapon row
+//! or a balance row.
 //!
-//! Defaults for a missing cell (no note): integers 0, reals 0.0, `defType` = Normal, `atkType1` = Spells.
-//! The attack-type default is the binary's own: its string-to-type reader (`0x6F262B00`) returns 0 (Spells) for an
-//! empty string and for any name it does not know (CONFIRMED by the disassembly, `docs/spec/attack-damage.md`
-//! section 2.1). The armor reader (`0x6F262C10`) returns 4 (Normal) for the same cases.
-//! A malformed cell (not an integer, not a real) takes 0 and adds a note; an unknown non-empty type name takes the
-//! same default as the binary and adds a note.
-//! Only weapon 1 is read: weapon 2 is not in the attack record the simulation holds (UNSURE, see `sim::combat`).
+//! - Weapon 1 is read from the record's weapon slot 1 (`dice1`, `sides1`, `dmgplus1`, `cool1`, `dmgpt1`, `backSw1`,
+//!   `rangeN1`, `atkType1`). A unit without a `UnitWeapons` row has no weapon.
+//! - Defense is read from the balance record (`def`, `defType`). A unit without a `UnitBalance` row has no defense.
+//! - Weapon 2 is in the record but not here: the simulation's attack record holds one weapon per unit type (UNSURE
+//!   how the original picks between two weapons; see `sim::combat`).
+//!
+//! Notes are kept for the two names the binary's readers do not know: an unknown `atkType` takes Spells (0) and an
+//! unknown `defType` takes Normal (4), as the binary does (`0x6F262B00` / `0x6F262C10`, CONFIRMED by the disassembly,
+//! `docs/spec/attack-damage.md` section 2.1), and a negative dice count or sides count takes 0.
 //!
 //! The armor-type column order of [`ArmorType`] is CONFIRMED (section 2.2 of the spec). UNSURE: the column names of
 //! `dice1`/`sides1` as dice count and sides (the roll wrapper's argument order, spec section 3.3). The armor factor
 //! does not depend on the attack type: a basic attack's damage class word is always `0x10` (CONFIRMED,
 //! `sim::damage::ATTACK_DAMAGE_CLASS`), so no physical set is read from the data.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use softfloat::{Tables, F32};
+use softfloat::F32;
 
-use crate::real::{parse_int, parse_real, scalar};
-use crate::Slk;
+use crate::unittype::UnitTypeData;
 
 /// The attack-type rows of the damage-type table, in the binary order of the spec (section 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +144,7 @@ pub struct UnitCombat {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UnitCombatData {
     units: BTreeMap<String, UnitCombat>,
-    /// Malformed cells, one line each.
+    /// Unknown names and negative counts, one line each.
     pub notes: Vec<String>,
 }
 
@@ -178,121 +180,72 @@ pub fn rawcode(code: &str) -> Option<u32> {
     Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// Reads the combat rows. `balance` is `Units\UnitBalance.slk` and `weapons` is `Units\UnitWeapons.slk`; a missing
-/// file is `None`. `tables` selects the S2R real parser (see [`crate::real`]).
-pub fn load(
-    balance: Option<&Slk>,
-    weapons: Option<&Slk>,
-    tables: Option<&Tables>,
-) -> UnitCombatData {
-    let mut keys: BTreeSet<String> = BTreeSet::new();
-    for slk in [balance, weapons].into_iter().flatten() {
-        keys.extend(slk.rows().map(|row| row.key().to_owned()));
-    }
+/// Builds the combat rows from the unit type records (see [`crate::unittype::load_all`]).
+pub fn from_units(units: &BTreeMap<String, UnitTypeData>) -> UnitCombatData {
     let mut out = UnitCombatData::default();
-    for key in keys {
-        let weapon = weapons.and_then(|slk| weapon_of(slk, &key, tables, &mut out.notes));
-        let defense = balance.and_then(|slk| defense_of(slk, &key, tables, &mut out.notes));
+    for (code, ty) in units {
+        let weapon = weapon_of(code, ty, &mut out.notes);
+        let defense = defense_of(code, ty, &mut out.notes);
         if weapon.is_some() || defense.is_some() {
-            out.units.insert(key, UnitCombat { weapon, defense });
+            out.units.insert(code.clone(), UnitCombat { weapon, defense });
         }
     }
     out
 }
 
-fn weapon_of(
-    slk: &Slk,
-    key: &str,
-    tables: Option<&Tables>,
-    notes: &mut Vec<String>,
-) -> Option<Weapon> {
-    let present = ["dice1", "sides1", "dmgplus1"]
-        .iter()
-        .any(|col| slk.raw(key, col).is_some());
-    if !present {
+/// The `f32` of a record value as the soft float the simulation uses (same bits).
+fn soft(x: f32) -> F32 {
+    F32::from_bits(x.to_bits())
+}
+
+fn weapon_of(code: &str, ty: &UnitTypeData, notes: &mut Vec<String>) -> Option<Weapon> {
+    if !ty.has_weapons_row {
         return None;
     }
-    let dice = int_cell(slk, key, "dice1", notes);
-    let sides = int_cell(slk, key, "sides1", notes);
-    if dice < 0 || sides < 0 {
-        notes.push(format!("{key}: negative dice or sides; 0 used"));
+    let slot = &ty.weapons[0];
+    if slot.dice < 0 || slot.sides < 0 {
+        notes.push(format!("{code}: negative dice or sides; 0 used"));
     }
-    let damage_type = match slk.raw(key, "atkType1") {
-        None => DamageType::Spells,
-        Some(raw) if scalar(raw).is_empty() => DamageType::Spells,
-        Some(raw) => DamageType::from_name(scalar(raw)).unwrap_or_else(|| {
+    let damage_type = if slot.atk_type.is_empty() {
+        DamageType::Spells
+    } else {
+        DamageType::from_name(&slot.atk_type).unwrap_or_else(|| {
             notes.push(format!(
-                "{key}.atkType1: {:?} unknown; Spells (0) used, as the binary does",
-                scalar(raw)
+                "{code}.atkType1: {:?} unknown; Spells (0) used, as the binary does",
+                slot.atk_type
             ));
             DamageType::Spells
-        }),
+        })
     };
     Some(Weapon {
-        dice: u32::try_from(dice).unwrap_or(0),
-        sides: u32::try_from(sides).unwrap_or(0),
-        dmg_plus: int_cell(slk, key, "dmgplus1", notes),
-        cooldown: real_cell(slk, key, "cool1", tables, notes),
-        damage_point: real_cell(slk, key, "dmgpt1", tables, notes),
-        backswing: real_cell(slk, key, "backSw1", tables, notes),
-        range: real_cell(slk, key, "rangeN1", tables, notes),
+        dice: u32::try_from(slot.dice).unwrap_or(0),
+        sides: u32::try_from(slot.sides).unwrap_or(0),
+        dmg_plus: slot.dmg_plus,
+        cooldown: soft(slot.cool),
+        damage_point: soft(slot.dmg_pt),
+        backswing: soft(slot.back_swing),
+        range: soft(slot.range),
         damage_type,
     })
 }
 
-fn defense_of(
-    slk: &Slk,
-    key: &str,
-    tables: Option<&Tables>,
-    notes: &mut Vec<String>,
-) -> Option<Defense> {
-    if slk.raw(key, "def").is_none() && slk.raw(key, "defType").is_none() {
+fn defense_of(code: &str, ty: &UnitTypeData, notes: &mut Vec<String>) -> Option<Defense> {
+    if !ty.has_balance_row {
         return None;
     }
-    let armor_type = match slk.raw(key, "defType") {
-        None => ArmorType::Normal,
-        Some(raw) => ArmorType::from_name(scalar(raw)).unwrap_or_else(|| {
+    let armor_type = if ty.armor_type.is_empty() {
+        ArmorType::Normal
+    } else {
+        ArmorType::from_name(&ty.armor_type).unwrap_or_else(|| {
             notes.push(format!(
-                "{key}.defType: {:?} unknown; Normal used",
-                scalar(raw)
+                "{code}.defType: {:?} unknown; Normal used",
+                ty.armor_type
             ));
             ArmorType::Normal
-        }),
+        })
     };
     Some(Defense {
-        armor: real_cell(slk, key, "def", tables, notes),
+        armor: soft(ty.armor),
         armor_type,
     })
-}
-
-fn int_cell(slk: &Slk, key: &str, column: &str, notes: &mut Vec<String>) -> i32 {
-    match slk.raw(key, column) {
-        None => 0,
-        Some(raw) => parse_int(raw).unwrap_or_else(|| {
-            notes.push(format!(
-                "{key}.{column}: {:?} is not an integer; 0 used",
-                scalar(raw)
-            ));
-            0
-        }),
-    }
-}
-
-fn real_cell(
-    slk: &Slk,
-    key: &str,
-    column: &str,
-    tables: Option<&Tables>,
-    notes: &mut Vec<String>,
-) -> F32 {
-    match slk.raw(key, column) {
-        None => F32::ZERO,
-        Some(raw) => parse_real(raw, tables).unwrap_or_else(|| {
-            notes.push(format!(
-                "{key}.{column}: {:?} is not a real; 0 used",
-                scalar(raw)
-            ));
-            F32::ZERO
-        }),
-    }
 }

@@ -277,6 +277,11 @@ between fields.)
   (the implementation here takes the leading decimal number, which is what `atof` does), its handling of hexadecimal
   and special values, and whether it rounds the decimal correctly. Storm.dll is not available, so this part is not
   checked.
+  **Implemented model (2026-10-11, LIKELY)**: C `atof` of the text (strtod prefix in the C locale: leading white space,
+  optional sign, digits, optional fraction, optional exponent with digits; the rest is ignored; no number gives 0.0),
+  correctly rounded to f64, then rounded to f32 (`gamedata::real::atof_f32`). Hexadecimal floats, `inf` and `nan` are
+  not accepted (UNSURE); an overflowing prefix gives infinity (UNSURE). Both `gamedata::unittype` and
+  `gamedata::combat` (through `unittype`) use it. Misc keeps S2R.
 - The S2R soft-float routine (`0x6F6F0520`, `docs/spec/softfloat.md`) is used by other paths (JASS literals, some
   natives). It is **not** on the cell path. (The gamedata crate's `real.rs` and `combat.rs` use S2R; this table
   says the unit cells do not. The difference matters for the last bit of some values.)
