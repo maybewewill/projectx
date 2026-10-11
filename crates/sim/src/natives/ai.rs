@@ -137,11 +137,11 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "GetUpgradeGoldCost", sig: "(I)I", addr: 0x6F2D_D2A0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body is base + increment * (level - 1) from the upgrade tables (FUN_6f2b0260); the sim holds no upgrade cost records" },
     AiNative { name: "GetUpgradeWoodCost", sig: "(I)I", addr: 0x6F2D_D2C0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body is base + increment * (level - 1) from the upgrade tables (FUN_6f2b0280); the sim holds no upgrade cost records" },
     AiNative { name: "GetEnemyPower", sig: "()I", addr: 0x6F2D_C150, level: Level::Confirmed, implemented: true, note: "body is 'return 0': always 0" },
-    AiNative { name: "GetMinesOwned", sig: "()I", addr: 0x6F2D_DFD0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: counts the mines of the AI's towns (FUN_6f2d11a0 over the four town slots); the town and mine model is not in the sim" },
-    AiNative { name: "GetGoldOwned", sig: "()I", addr: 0x6F2D_E000, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body sums a value over the AI's town slots (FUN_6f2d1210), not the player's gold state; the town model is not in the sim" },
-    AiNative { name: "TownWithMine", sig: "()I", addr: 0x6F2D_E030, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "TownHasMine", sig: "(I)B", addr: 0x6F2D_E060, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "TownHasHall", sig: "(I)B", addr: 0x6F2D_E0A0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
+    AiNative { name: "GetMinesOwned", sig: "()I", addr: 0x6F2D_DFD0, level: Level::Likely, implemented: true, note: "counts the live mine references of the four town slots' sites (FUN_6f2d11a0); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
+    AiNative { name: "GetGoldOwned", sig: "()I", addr: 0x6F2D_E000, level: Level::Likely, implemented: true, note: "sums the remaining gold ('Agmb' +0x6C) of those mines (FUN_6f2d1210), not the player's gold; body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
+    AiNative { name: "TownWithMine", sig: "()I", addr: 0x6F2D_E030, level: Level::Likely, implemented: true, note: "first slot whose first mine is live and, for human/orc, whose hall is live; night elf needs an entangled mine; -1 when none (FUN_6f2d5380); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
+    AiNative { name: "TownHasMine", sig: "(I)B", addr: 0x6F2D_E060, level: Level::Likely, implemented: true, note: "either mine reference of the slot's site is live; slot above 3 or empty gives false (FUN_6f2d12b0); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
+    AiNative { name: "TownHasHall", sig: "(I)B", addr: 0x6F2D_E0A0, level: Level::Likely, implemented: true, note: "the slot's hall reference is live; slot above 3 or empty gives false (FUN_6f2d1310); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
     AiNative { name: "GetNextExpansion", sig: "()I", addr: 0x6F2E_2BC0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
     AiNative { name: "GetExpansionPeon", sig: "()Hunit;", addr: 0x6F2D_D530, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
     AiNative { name: "GetEnemyExpansion", sig: "()Hunit;", addr: 0x6F2D_D4F0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
@@ -176,13 +176,13 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "CaptainIsHome", sig: "()B", addr: 0x6F2D_D870, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the captain group's home state (FUN_6f2d1080) is not modelled" },
     AiNative { name: "CaptainRetreating", sig: "()B", addr: 0x6F2D_D830, level: Level::Likely, implemented: true, note: "captain record bit 0x2 (CONFIRMED mask); no engine writer is modelled, so false" },
     AiNative { name: "CaptainIsFull", sig: "()B", addr: 0x6F2D_DB10, level: Level::Likely, implemented: true, note: "captain record bit 0x1 (CONFIRMED mask); no engine writer is modelled, so false" },
-    AiNative { name: "CaptainIsEmpty", sig: "()B", addr: 0x6F2D_DB50, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the captain group size record (+0xBC) is not modelled" },
-    AiNative { name: "CaptainGroupSize", sig: "()I", addr: 0x6F2D_DB90, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the captain group size record (+0xBC) is not modelled" },
+    AiNative { name: "CaptainIsEmpty", sig: "()B", addr: 0x6F2D_DB50, level: Level::Unsure, implemented: true, note: "true when the captain record's group size (+0xBC) is 0 (CONFIRMED body, FUN_6f2ddb50); the size is a field of AiControl that nothing in the sim writes, so it is 0 (UNSURE: no writer found)" },
+    AiNative { name: "CaptainGroupSize", sig: "()I", addr: 0x6F2D_DB90, level: Level::Unsure, implemented: true, note: "the captain record's group size (+0xBC) (CONFIRMED body, FUN_6f2ddb90); AiControl::captain_group_size, 0 unless a host sets it (UNSURE: no writer found)" },
     AiNative { name: "CaptainReadiness", sig: "()I", addr: 0x6F2D_DA40, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: readiness is computed by the captain group (FUN_6f2e91a0) from its units; not modelled" },
     AiNative { name: "CaptainReadinessHP", sig: "()I", addr: 0x6F2D_DA90, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: captain group readiness (FUN_6f2e91a0), not modelled" },
     AiNative { name: "CaptainReadinessMa", sig: "()I", addr: 0x6F2D_DAD0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: captain group readiness (FUN_6f2e91a0), not modelled" },
-    AiNative { name: "CaptainInCombat", sig: "(B)B", addr: 0x6F2D_D8A0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the captain combat state (FUN_6f2d0ff0) is not modelled" },
-    AiNative { name: "TownThreatened", sig: "()B", addr: 0x6F2D_D8E0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the town threat masks of the AI state (+0x164, +0x168) are not modelled" },
+    AiNative { name: "CaptainInCombat", sig: "(B)B", addr: 0x6F2D_D8A0, level: Level::Unsure, implemented: true, note: "true when either enemy reference of the captain (+0x114, +0x120) resolves (CONFIRMED body, FUN_6f2d0a00); the flag picks the attack (true) or defense captain; AiControl::captain_in_combat, false unless a host sets it (UNSURE: no combat tracking)" },
+    AiNative { name: "TownThreatened", sig: "()B", addr: 0x6F2D_D8E0, level: Level::Unsure, implemented: true, note: "true when the player record's threat reference (+0x164) resolves (CONFIRMED body, FUN_6f2dd8e0); AiControl::town_threatened, false unless a host sets it (UNSURE: no threat scan)" },
     AiNative { name: "CaptainAtGoal", sig: "()B", addr: 0x6F2D_D930, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the captain's goal point (FUN_6f2d1090) is not modelled" },
     AiNative { name: "CreepsOnMap", sig: "()B", addr: 0x6F2D_C0F0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: scans the units through a callback (not decoded), which needs the creep and ignore rules" },
     AiNative { name: "RemoveInjuries", sig: "()V", addr: 0x6F2D_DDA0, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
@@ -295,6 +295,79 @@ fn count_units(gm: &Game, owner: u32, type_id: u32) -> i32 {
     n
 }
 
+/// The player controller value of a computer slot (the engine's `map::CONTROL_COMPUTER`).
+const CONTROLLER_COMPUTER: u32 = 1;
+
+/// Registers the objects created since the last call with the town model (see `ai_towns`): every gold mine, and the
+/// town halls and haunted mines of players that run an AI (started, or a computer slot).
+fn sync_towns(env: &Env) {
+    let gm = env.game.borrow();
+    let mut sh = env.shared.borrow_mut();
+    let from = sh.towns.scanned();
+    let total = gm.object_count();
+    if from >= total {
+        return;
+    }
+    let ai_players: std::collections::BTreeSet<u32> = (0..PLAYER_SLOTS as u32)
+        .filter(|&p| sh.is_active(p) || gm.player(p).controller == CONTROLLER_COMPUTER)
+        .collect();
+    let mut units = Vec::new();
+    for i in from..total {
+        let k = ObjKey(i as u32);
+        if let Object::Unit(u) = gm.object(k) {
+            if u.removed {
+                continue;
+            }
+            let ty = u.type_id;
+            let is_mine = gm.mines.contains_key(&k)
+                || ty == crate::ai_towns::GOLD_MINE
+                || ty == crate::ai_towns::HAUNTED_MINE
+                || ty == crate::ai_towns::ENTANGLED_MINE;
+            units.push(crate::ai_towns::UnitInfo {
+                key: k,
+                type_id: ty,
+                owner: u.owner,
+                x: f32::from_bits(u.x.to_bits()),
+                y: f32::from_bits(u.y.to_bits()),
+                class_flags: u.class_flags,
+                is_mine,
+            });
+        }
+    }
+    let live = |k: ObjKey| matches!(gm.object(k), Object::Unit(u) if !u.removed);
+    sh.towns.register(&units, &ai_players, &live);
+    sh.towns.set_scanned(total);
+}
+
+/// The five town natives on the model.
+fn town_call(name: &'static str, env: &Env, a: &[Value]) -> NativeResult {
+    sync_towns(env);
+    let gm = env.game.borrow();
+    let sh = env.shared.borrow();
+    let live = |k: ObjKey| matches!(gm.object(k), Object::Unit(u) if !u.removed);
+    let p = env.player;
+    let v = match name {
+        "GetMinesOwned" => Value::Integer(sh.towns.mines_owned(p, &live)),
+        "GetGoldOwned" => Value::Integer(
+            sh.towns
+                .gold_owned(p, &live, &|k| gm.resource_amount(k).unwrap_or(0)),
+        ),
+        "TownWithMine" => {
+            let ty = |k: ObjKey| match gm.object(k) {
+                Object::Unit(u) => u.type_id,
+                _ => 0,
+            };
+            let building = |k: ObjKey| {
+                matches!(gm.object(k), Object::Unit(u) if u.count_state == crate::unit_counts::REGISTERED_IN_PROGRESS)
+            };
+            Value::Integer(sh.towns.town_with_mine(p, gm.player(p).race, &live, &ty, &building))
+        }
+        "TownHasMine" => Value::Boolean(sh.towns.town_has_mine(p, i64::from(int_arg(a, 0)), &live)),
+        _ => Value::Boolean(sh.towns.town_has_hall(p, i64::from(int_arg(a, 0)), &live)),
+    };
+    NativeResult::Return(v)
+}
+
 /// Records a call in the command log and returns `ret` as the call's value.
 fn log(
     env: &Env,
@@ -380,6 +453,31 @@ fn ai_call(
         // Debug and display output: recorded, no game effect (the bodies are empty).
         "DebugS" | "DebugFI" | "DebugUnitID" | "DebugBreak" | "DisplayText" | "DisplayTextI"
         | "DisplayTextII" | "DisplayTextIII" => Some(log(env, ctx, name, a, Value::Null)),
+
+        // Captain and threat records (AiControl fields; nothing in the sim writes them yet).
+        "CaptainIsEmpty" => {
+            let sh = env.shared.borrow();
+            ret(Value::Boolean(sh.control(env.player).map_or(0, |c| c.captain_group_size) == 0))
+        }
+        "CaptainGroupSize" => {
+            let sh = env.shared.borrow();
+            ret(Value::Integer(sh.control(env.player).map_or(0, |c| c.captain_group_size)))
+        }
+        "CaptainInCombat" => {
+            let sh = env.shared.borrow();
+            let attack = bool_arg(a, 0);
+            let c = sh.control(env.player).is_some_and(|c| c.captain_in_combat[usize::from(attack)]);
+            ret(Value::Boolean(c))
+        }
+        "TownThreatened" => {
+            let sh = env.shared.borrow();
+            ret(Value::Boolean(sh.control(env.player).is_some_and(|c| c.town_threatened)))
+        }
+
+        // AI towns (ai_towns.rs): the registration is lazy, in object order.
+        "GetMinesOwned" | "GetGoldOwned" | "TownWithMine" | "TownHasMine" | "TownHasHall" => {
+            Some(town_call(name, env, a))
+        }
 
         // Unit and player queries on the game's state.
         "GetUnitCount" | "GetUnitCountDone" => {
@@ -754,12 +852,12 @@ mod tests {
         // The 36 rows not bound yet, each blocked by a subsystem the AI model does not hold (docs/spec/ai-natives.md
         // sections 2 and 5). A change here must come with a change of that document.
         let unbound: Vec<&str> = AI_NATIVES.iter().filter(|r| !r.implemented).map(|r| r.name).collect();
-        assert_eq!(unbound.len(), 36);
+        assert_eq!(unbound.len(), 27);
         for row in AI_NATIVES.iter().filter(|r| !r.implemented) {
             assert_eq!(row.level, Level::Unsure, "{} is unbound but not UNSURE", row.name);
             assert!(row.note.starts_with("NOT IMPLEMENTED"), "{} has no reason", row.name);
         }
-        for name in ["GetHeroId", "GetGoldOwned", "CreepsOnMap", "UnitInvis", "GetUpgradeGoldCost", "SetExpansion"] {
+        for name in ["GetHeroId", "GetExpansionX", "CreepsOnMap", "UnitInvis", "GetUpgradeGoldCost", "SetExpansion"] {
             assert!(unbound.contains(&name), "{name} should be unbound");
         }
     }

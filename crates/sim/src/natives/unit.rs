@@ -543,9 +543,17 @@ pub(crate) fn build(
         (gm.add_object_unhandled(Object::Unit(unit)), 0)
     };
     gm.place_new_unit(key, x, y);
+    // A gold mine unit owns its resource node from creation (its mine ability holds the amount), so
+    // `SetResourceAmount` works on it. The amount comes from the ability data when the host loaded it;
+    // without that data a known mine type still gets a node with amount 0 (UNSURE).
     let start_amount = ty.abilities.iter().find_map(|id| gm.ability_resource.get(id).copied());
     if let Some(amount) = start_amount {
         gm.add_resource_node(key, amount);
+    } else if matches!(
+        type_id,
+        crate::ai_towns::GOLD_MINE | crate::ai_towns::HAUNTED_MINE | crate::ai_towns::ENTANGLED_MINE
+    ) {
+        gm.mines.entry(key).or_default();
     }
     count_add_completed(gm, key);
     gm.food_apply_creation(key);

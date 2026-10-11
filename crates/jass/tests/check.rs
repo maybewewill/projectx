@@ -721,3 +721,26 @@ fn global_initializer_does_not_see_native_declared_below() {
     let src = "globals\n    integer g = Later()\nendglobals\nnative Later takes nothing returns integer\n";
     expect_err(&run(src), "undefined function 'Later'");
 }
+
+#[test]
+fn a_native_may_share_its_name_with_a_global() {
+    // Retail `common.ai`: `native Sleep` and `constant integer SLEEP` (UNSURE: the original's native path could not
+    // be probed; see `Ctx::declare_native`).
+    let src = "native Sleep takes real s returns nothing\nglobals\nconstant integer SLEEP = 5\nendglobals\n";
+    assert!(run(src).is_empty());
+    let src = "globals\nconstant integer SLEEP = 5\nendglobals\nnative Sleep takes real s returns nothing\n";
+    assert!(run(src).is_empty());
+}
+
+#[test]
+fn a_function_may_share_its_name_with_a_constant_global_but_not_a_plain_one() {
+    // Retail `undead.ai`: `function undead_mine` next to `constant integer UNDEAD_MINE` of `common.ai`.
+    let src = "globals\nconstant integer UNDEAD_MINE = 5\nendglobals\nfunction undead_mine takes nothing returns nothing\nendfunction\n";
+    assert!(run(src).is_empty());
+    // The emulated original rejects a function that reuses the name of a plain global (harness o17, o20, q05).
+    let src = "globals\ninteger Gx = 5\nendglobals\nfunction gx takes nothing returns nothing\nendfunction\n";
+    expect_err(&run(src), "duplicate function or native 'gx'");
+    // Two natives of one name stay an error.
+    let src = "native A takes nothing returns nothing\nnative a takes nothing returns nothing\n";
+    expect_err(&run(src), "duplicate function or native 'a'");
+}

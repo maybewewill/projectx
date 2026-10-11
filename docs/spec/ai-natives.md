@@ -7,21 +7,21 @@ LIKELY (the mechanism is read, a detail is inferred), UNSURE (not fully decoded,
 
 Behaviour is written in plain words. The bodies were read in a Ghidra decompile kept outside the repo.
 
-## 1. Counts (2026-10-11)
+## 1. Counts (2026-10-11, after lane G)
 
 | | Count |
 |---|---|
 | AI natives in table `ai` | 124 |
-| Bound (`implemented: true`) | 88 |
-| Not bound (`implemented: false`, logged and return the default) | 36 |
-| Level UNSURE in total | 43 (36 unbound + 7 bound) |
-| Level CONFIRMED / LIKELY (all bound rows, 128 rows incl. the 4 main natives) | 43 / 42 |
-| Raised to CONFIRMED by a Unicorn run in this pass | 0 (see section 4) |
+| Bound (`implemented: true`) | 97 |
+| Not bound (`implemented: false`, logged and return the default) | 27 |
+| Level UNSURE in total | 38 (27 unbound + 11 bound: the 7 older ones, 4 captain/threat idle values) |
+| Level CONFIRMED / LIKELY (all bound rows, 128 rows incl. the 4 main natives) | 43 / 47 |
+| Raised to CONFIRMED by a Unicorn run | 0 as a row label; the bodies of 5 town natives are Unicorn-checked (section 6) |
 
-The 36 unbound natives are pinned by a test (`unbound_ai_natives_are_pinned`). A change in the list has to change
-that test on purpose.
+The 27 unbound natives are pinned by a test (`unbound_ai_natives_are_pinned`). A change in the list has to change
+that test on purpose. Lane G bound 9: the five town natives (section 6) and four captain/threat reads (6.4).
 
-## 2. The 36 unbound natives and what they need
+## 2. The unbound natives and what they need (written for the 36 of the first pass; 9 are bound now, see section 6)
 
 Every body first takes the AI state of the calling player (`FUN_6f4786b0`, the agent of the player's AI), and then
 calls one of the routines below. The "needs" column names the state or subsystem that the model does not hold.
@@ -141,3 +141,85 @@ These are bound, but their bodies are not fully decoded:
    and the callbacks' helpers. This unlocks CreepsOnMap, GetBuilding, IgnoredUnits and IsTowered together.
 4. Upgrade cost records (2.7): load the upgrade cost data in `gamedata` (outside the AI files).
 5. Hero records (2.6) and the vision per-player record (2.5) once the hero and vision models are exact.
+
+## 6. Lane G: running melee AIs, and the town model (2026-10-11)
+
+### 6.1 What `w3boot` does now
+`w3boot --computer SLOT[:human|orc|undead|nightelf] [--ai-log N]` makes a slot a computer player before the first
+step (the player's raw controller and race are set on the game; `main` runs at the first step and the melee start
+calls `StartMeleeAI`). On `(2)Circumvention.w3x` with real `common.ai` and the four race scripts, for 12,000 steps
+(20 game minutes), all four races start (`human.ai`, `orc.ai`, `undead.ai`, `elf.ai`), 0 aborted threads, 0 AI natives
+called but not implemented. The peon thread (`peon_assignment`, `HarvestGold(TownWithMine(),..)`), the build loop
+(`SetProduce`, ...) and `PlayGame`'s `SleepForever` run. The AI does not progress past that: its orders
+(`HarvestGold`, `SetBuildUnit`, ...) are only logged, nothing builds or trains, so the later paths (expansions,
+attack waves, hero logic) are not reached yet. That is the next blocker, not a missing native.
+
+Two compiler fixes were needed before any race script even started (`BuildFailed` events):
+* `common.ai` has `native Sleep` and `constant integer SLEEP` (same name, case-insensitive): a native may now share a
+  name with a global (`Ctx::declare_native`).
+* `undead.ai` has `function undead_mine` and `common.ai` has `constant integer UNDEAD_MINE`: a function may now share
+  a name with a *constant* global. UNSURE: the emulated original compiler (`tools/emu/jasscomp`, entry `0x6F458900`
+  with the AI caller's arguments) rejects both pairs, but it also rejects every `native` line (the native registry
+  of that harness is not set up), so its answer is not decisive; the retail scripts do run in the retail game, which
+  is the evidence used. A function that reuses the name of a *plain* global stays an error (harness o17, o20, q05).
+
+### 6.2 The town model (`crates/sim/src/ai_towns.rs`)
+CONFIRMED structure (decompile of `0x6F2D11A0`, `0x6F2D1210`, `0x6F2D1310`, `0x6F2D12B0`, `0x6F2D5330`, `0x6F2D5380`,
+`0x6F2DEC10`, `0x6F2D0C00`):
+* One map-wide list of **town sites** (array `0x6FAB4E90`, count `0x6FAB4E74`). A site record holds a hall reference
+  at `+0x48`, mine references at `+0x54` and `+0x60`. A reference is an (id, tag) pair; it resolves when the agent
+  exists and its removed flag is clear (a dead unit still resolves).
+* Each AI state has four **town slots** at `+0x1B8` (empty = -1, else a site index). All helpers reject a slot index
+  above 3 first.
+* Adding a site to an AI (`0x6F2D5330`): the slot already holding the site, else the first empty slot, else nothing
+  (returns 4).
+* A gold mine is a unit with the ability `Agmb` (code `0x6F082470` returns); its amount is that ability's `+0x6C`.
+* `GetMinesOwned` = live mine references over the four slots' sites (a site in two slots counts twice).
+  `GetGoldOwned` = the sum of the `Agmb` amounts of the same mines (not the player's gold). `TownHasHall(i)` = the
+  slot's hall resolves. `TownHasMine(i)` = either mine reference of the slot's site resolves.
+  `TownWithMine` = the first slot whose first mine resolves and: human/orc (player race 1, 2): the hall resolves and
+  its unit word `+0x5C` bit `0x2000000` (structure under construction) is clear; night elf (4): the mine is not under
+  construction and its type is `egol`; any other race: the mine is not under construction. -1 when none.
+* Unicorn check (`tools/emu/ai_towns_emu.py`, vectors `crates/sim/tests/vectors/ai_towns_seed1.tsv`, replayed by
+  `crates/sim/tests/ai_towns_vectors.rs`): the six real bodies on 300 random synthetic states, **6,426 checks, 0
+  mismatches** (mines 300, gold 300, with-mine 300, hall 2,100, mine 2,100, add-slot 1,326). Stubs: the reference
+  resolver `0x6F4786B0` and the ability finder `0x6F0787D0`; everything else is the real code. The emulator caught
+  one error of mine on the way: the entangled mine is `egol`, not `emol`.
+
+UNSURE, and used by the model instead of the original's rule:
+* **When** units are registered. The original registers a gold mine when the unit enters play (`0x6F2E52F0`,
+  `0x6F284B40`) and the AI's own halls through its unit handler (`0x6F2DBB90`), plus a start site from the AI's start
+  location (`0x6F2DA810`) and a start peon (`0x6F2D7710`). The model registers lazily, in object order, the first time
+  a town native runs: every mine unit (a unit with a resource node, or type `ngol`, `ugol`, `egol`), and the town
+  halls (class bit `0x40`) and haunted mines of players that run an AI (started, or a computer slot). Order of
+  creation decides slot 0 (the first hall).
+* **Which site** a unit joins. The original asks the path-cost routine `0x6F4758D0` (limit 80 for the hall search in
+  `0x6F2DF170`, 150 and 5000 elsewhere) and takes the cheapest below the limit; the model takes the nearest site
+  within `SITE_RADIUS` = 1024 world units (straight line), else makes a new site.
+* The sim creates a resource node (amount 0) for every mine-type unit at creation, so `SetResourceAmount` works on
+  it; nothing in the sim did that before (the engine's map loader did not register nodes, so `GetResourceAmount`
+  and the new gold sum were 0 on real maps). The default amount of a fresh mine is not read from the ability data.
+* Night elf: a plain `ngol` is never an entangled mine, and the sim has no entangle, so `TownWithMine` is -1 for the
+  elf until a mine converts.
+
+### 6.3 Still unbound (27) and why
+* Expansion, 8: `GetNextExpansion` (`0x6F2E10D0`), `GetExpansionX/Y`, `GetExpansionPeon`, `GetExpansionFoe`,
+  `GetEnemyExpansion`, `SetExpansion`, `GetTownUnitCount`. They rank candidate sites by path cost
+  (`0x6F4758D0` → `0x6F475560`), with side effects on cached fields (`+0x19C` of the AI state), and `GetExpansionFoe`
+  runs the group builder `0x6F2A3270` with a callback. Not isolable without the path-cost routine on a live map.
+* Group-builder scans, 5: `CreepsOnMap`, `GetBuilding`, `IgnoredUnits`, `IsTowered`, `GetCreepCamp`.
+* Captain: `CaptainReadiness`, `CaptainReadinessHP`, `CaptainReadinessMa` (soft-float readiness over the group's
+  units, `0x6F2E91A0`: needs the group), `CaptainIsHome`, `CaptainAtGoal` (captain position against home/goal).
+* Records: `GetHeroId`, `GetHeroLevelAI`, `GetUnitBuildTime`, `GetUpgradeGoldCost`, `GetUpgradeWoodCost`,
+  `WaitGetEnemyBase`, `GetEnemyBase`, `GetMegaTarget`, `UnitInvis`.
+Scripts that call them (grep over the five retail scripts): `CaptainReadiness` 2, `GetCreepCamp` 2, `GetExpansionFoe`
+2, `GetHeroId`, `GetEnemyExpansion`, `GetMegaTarget`, `IgnoredUnits` 1 each, all in `common.ai`. None was reached in a
+20-minute run, because the AI builds nothing yet (6.1).
+
+### 6.4 The four idle reads
+`CaptainIsEmpty` / `CaptainGroupSize` read the captain record's group size at `+0xBC` (CONFIRMED bodies `0x6F2DDB50`,
+`0x6F2DDB90`); `CaptainInCombat(attack)` is true when either of the two enemy references of the attack (true) or
+defense captain (`0x6F2D0A00`: `+0x114`, `+0x120`) resolves; `TownThreatened` is true when the player record's
+reference at `+0x164` resolves (`0x6F2DD8E0`). The sim has no writer for these fields (no captain groups, no combat
+tracking, no threat scan), so they read the fields of `AiControl` (`captain_group_size`, `captain_in_combat`,
+`town_threatened`), which are idle (0, false, false) unless a host sets them. UNSURE.
