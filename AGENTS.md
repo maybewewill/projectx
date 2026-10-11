@@ -1,7 +1,7 @@
 # projectx — WC3 1.26a TFT engine rewrite in Rust (agent handoff)
 
 > A living document. **Every agent updates it at the end of a session**: the "Status", "Findings" and "Log" sections.
-> Last updated: 2026-10-10
+> Last updated: 2026-10-11
 
 ## 1. Goal
 
@@ -271,14 +271,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~44%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~45.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~50% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~41% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
-| JASS VM + ~1000 natives | 12% | ~88% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,107 of 1,167 bound** (60 NotImplemented with a reason), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
+| JASS VM + ~1000 natives | 12% | ~89% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,110 of 1,167 bound** (57 NotImplemented with a reason; the three player unit counts are now bound), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | ~9% | turn scheduler (time slots → steps), lockstep spec; 25 ms units confirmed, step listener open |
@@ -342,6 +342,11 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (30)**: kill-XP numbers (heroes.md §8.2): amount `0x6F2A0230` (grant table by victim level, summoned factor), split `0x6F2A3190` (F = K/N once; in-range list else global list), engine `0x6F20B080` (handicap, upgrade bonus, factor walk across levels, floor(x+0.5)) — Unicorn 6,000 (agent) + 1,000 fresh (lead), 0 mismatches. Not wired yet: candidate selection units (normaliser `0x6F4743A0`), killer tracking (GetKillingUnit null). ~45.5%.
+
+- **2026-10-11 (29)**: player unit counters (player+0x2D0; GetPlayerUnitCount/StructureCount/TypedUnitCount bound; Unicorn 1,900 ops + 3,800 walks, lead 600+1,200 fresh, 0 mismatches) → 1,110/1,167 natives bound. ChooseRandomCreep/NPBuilding: draw `0x6F285320` + filters decoded, tileset/movement checks not → still pending. Hero derived bonuses (heroes.md §9): 8 Misc keys read, formulas Unicorn 14,000/14,000; attack bonus = primary × StrAttackBonus; current HP/mana on max change UNSURE; armor/regen/speed computed but not applied yet. ~45%.
+
+- **2026-10-11 (kill XP)**: the kill XP split is decoded and checked in Unicorn (`tools/emu/hero_kill_xp_emu.py`, 3,000 + 300 cases per mode, 0 mismatches; `crates/sim/tests/kill_xp_vectors.rs`): amount `0x6F2A0230`, split `F = K / N` in `0x6F2A3190`, engine `0x6F20B080` (handicap, upgrade bonus, level walk for owners >= 12, shared tail). Candidate selection is structure-only (`docs/spec/heroes.md` 8.3; the position normaliser `0x6F4743A0` is open). Misc flags at `0x6FA70E94/98/0x6FAB4268` are loaded at runtime by `0x6F26E1xx`. Not wired into the death path (no killer in the sim).
 - **2026-10-11 (28) game start seed**: `docs/spec/game-start.md`. CONFIRMED (Unicorn, 300/300 each): setup `0x6F5C37A0` seeds G and the streams with S = `0x77617233` if settings flag `0x8000` (settings+0x38), else the fold S; fold step `S := rotl(S ^ X, 3)` at `0x6F5C3A4C`. NOT found: the per-player X (the reader blob of `0x6F545A00`); whether the replay record seed is S. `sim::rng::{slot_fold_step, slot_fold, game_start_seed}`; `engine::game_start`, `w3boot --replay`. The count-XOR claim in rng.md 4.1 is wrong (the count is an allocation size).
 - **2026-10-11 (27)**: vision/fog (vision.md, `sim::vision`): grid at [0x6FAB65F4]+0x34, two 16-bit player masks per cell (visible / unexplored), state table `0x6f00e7a0`, cell/span/rect writers incl. the original's quirks (rect end-exclusive, span writes pairwise past its ends) — Unicorn 4×1,000, 0 mismatches (lead re-ran). Open: grid size/origin/scale (1/128 assumed), circle span expansion for R ≥ 3, unit sight sources, refresh counter. Acquisition reads no vision at one call level.
 - **2026-10-11 (26)**: boot now registers type orders (moves accepted on booted maps); replay orders fire ISSUED_ORDER; replay object pair → agent: the lookup table `0x6F4428B0` found, its producer not (sim uses an UNSURE handle-id model). Training (economy-4.md): **correction** — the 0.1 s 0xD01C1 tick is CBuffAuraRegenLife's aura pulse, not training; CAbilityTrain completion = 0xD01C4; queue shift `0x6F1652A0` Unicorn 3,000/3,000; progress timer NOT found (TrainQueue uses bldtm, UNSURE). Pending natives: findings spec natives-pending.md (0 implemented; each blocked on missing state). ~43.5%.
@@ -387,6 +392,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - **2026-10-11 (damage)**: negative-armor table ported from its start-up initialiser (`computed`, 22/22 vs Unicorn); dice +1 per die located in the roll wrapper `0x6F285350` (400/400 Unicorn, wrapper and GetDamageAmount). Spec: docs/spec/attack-damage.md sections 3.2–3.4, 5.1.
 - **2026-10-11 (15)**: attack cycle merged (combat.rs, placeholder damage). Progress recomputed from the table weights: ~32% (the 45.5% reported in chat was wrong). Merged: damage model (dice/armor/type table); the negative-armor table is computed by a static initializer (K=0.06 hard-coded).
 
+- **2026-10-11 (pending natives)**: the player unit counters are bit-exact against the original (Unicorn, 1,900 operations and 3,800 typed walks, 0 mismatches; `tools/emu/unit_counts_emu.py`). `GetPlayerUnitCount`, `GetPlayerStructureCount` and `GetPlayerTypedUnitCount` are bound (`crates/sim/src/unit_counts.rs`). Random creep/neutral picks: the draw is the shared `0x6F285320` (stream 0x20 / 0x22), the filters are read except the race enum values and two checks; world bounds still open. Details in `docs/spec/natives-pending.md`.
 - **2026-10-10 (14)**: `crates/softfloat`: the whole software float library is bit-exact (540k cases). 0x6FAAE4A0 = 0.1f (step 100 ms).
 - **2026-10-10 (13)**: specs game-loop (2 passes) and attack-damage (dice confirmed in Unicorn). RTTI→vtable map. Two agent launches were interrupted by the safety classifier → those tasks were dropped.
 - **2026-10-10 (12)**: `crates/sim` (RNG + softfloat add/sub/mul) bit-exact vs the original (re-ran it myself with GAME_DLL). Natives pass 2. Running: softfloat (full library), game-loop spec, attack/damage spec.

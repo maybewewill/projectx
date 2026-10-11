@@ -305,7 +305,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
                     if from == new_owner {
                         None
                     } else {
-                        gm.unit_mut(k).owner = new_owner;
+                        count_move_owner(&mut gm, k, new_owner);
                         gm.push_unit_event(UnitEvent::OwnerChanged {
                             unit: k,
                             from,
@@ -493,6 +493,7 @@ pub(crate) fn create(
         vertex_color: 0xFFFF_FFFF,
         user_data: 0,
         creep_guard: false,
+        count_state: 0,
         exploded: false,
         illusion: false,
         loaded: false,
@@ -503,12 +504,79 @@ pub(crate) fn create(
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
     // of units is UNSURE; 0 is used, as for the other handle types the scripts create on demand.
     let (key, id) = gm.add_object(Object::Unit(unit), 0);
+    count_add_completed(gm, key);
     gm.combat_on_create(key);
     id
 }
 
+/// The class word of a unit type in the player counters (see `unit_counts.rs`). A type that is not in the
+/// registry gets 0: the original does not count such a type either.
+fn count_class(gm: &Game, type_id: u32) -> u32 {
+    if gm.unit_types().get(type_id).is_none() {
+        return 0;
+    }
+    crate::unit_counts::class_of(gm.unit_types().is_building(type_id))
+}
+
+/// Adds a new completed unit to its owner's counters (the registration of a created unit, flag 0x10).
+fn count_add_completed(gm: &mut Game, k: ObjKey) {
+    let (owner, type_id) = {
+        let u = gm.unit(k);
+        (u.owner, u.type_id)
+    };
+    let class = count_class(gm, type_id);
+    if let Some(p) = gm.player_mut(owner) {
+        p.counts.add_completed(type_id, class, false);
+    }
+    gm.unit_mut(k).count_state = crate::unit_counts::REGISTERED_COMPLETED;
+}
+
+/// Takes the unit out of its owner's counters (removal: the in-progress entry if registered as one, else the
+/// completed entry). The original's removal path does the same (`0x6F29D320`).
+fn count_unregister(gm: &mut Game, k: ObjKey) {
+    let (owner, type_id, state) = {
+        let u = gm.unit(k);
+        (u.owner, u.type_id, u.count_state)
+    };
+    let class = count_class(gm, type_id);
+    if let Some(p) = gm.player_mut(owner) {
+        if state & crate::unit_counts::REGISTERED_IN_PROGRESS != 0 {
+            p.counts.remove_in_progress(type_id, class, false);
+        } else if state & crate::unit_counts::REGISTERED_COMPLETED != 0 {
+            p.counts.remove_completed(type_id, class);
+        }
+    }
+    gm.unit_mut(k).count_state = 0;
+}
+
+/// Moves the registration of a unit to another owner (`SetUnitOwner`, the owner change of `0x6F2A4BE0`): the
+/// old owner loses the entry the unit has, the new owner gets the same kind of entry (in progress or completed).
+fn count_move_owner(gm: &mut Game, k: ObjKey, to: u32) {
+    let (from, type_id, state) = {
+        let u = gm.unit(k);
+        (u.owner, u.type_id, u.count_state)
+    };
+    let class = count_class(gm, type_id);
+    if let Some(p) = gm.player_mut(from) {
+        if state & crate::unit_counts::REGISTERED_IN_PROGRESS != 0 {
+            p.counts.remove_in_progress(type_id, class, false);
+        } else if state & crate::unit_counts::REGISTERED_COMPLETED != 0 {
+            p.counts.remove_completed(type_id, class);
+        }
+    }
+    if let Some(p) = gm.player_mut(to) {
+        if state & crate::unit_counts::REGISTERED_IN_PROGRESS != 0 {
+            p.counts.begin_in_progress(type_id, class, false);
+        } else if state & crate::unit_counts::REGISTERED_COMPLETED != 0 {
+            p.counts.add_completed(type_id, class, false);
+        }
+    }
+    gm.unit_mut(k).owner = to;
+}
+
 /// Removes the unit (the body of `RemoveUnit`, see the module notes).
 fn remove(gm: &mut Game, k: ObjKey) {
+    count_unregister(gm, k);
     gm.unit_mut(k).removed = true;
     gm.push_unit_event(UnitEvent::Removed(k));
     for id in REMOVE_SEQUENCE {

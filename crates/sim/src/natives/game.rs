@@ -428,6 +428,21 @@ pub struct UnitType {
 pub struct UnitTypes {
     by_id: BTreeMap<u32, UnitType>,
     by_name: BTreeMap<String, u32>,
+    /// Types with the `isbldg` column set (LIKELY: counted as structures, see `unit_counts.rs`). A side table so that
+    /// [`UnitType`] keeps its fields. Filled by the host.
+    buildings: BTreeSet<u32>,
+    /// The typed-count lists of each type: (first list, upgrade list). UNSURE: the data columns (see
+    /// `unit_counts::TypeLinks`). Filled by the host.
+    count_links: BTreeMap<u32, (Vec<u32>, Vec<u32>)>,
+}
+
+impl crate::unit_counts::TypeLinks for UnitTypes {
+    fn children(&self, type_id: u32) -> &[u32] {
+        self.count_links.get(&type_id).map(|l| l.0.as_slice()).unwrap_or(&[])
+    }
+    fn upgrades(&self, type_id: u32) -> &[u32] {
+        self.count_links.get(&type_id).map(|l| l.1.as_slice()).unwrap_or(&[])
+    }
 }
 
 impl UnitTypes {
@@ -444,6 +459,25 @@ impl UnitTypes {
         }
         self.by_name.insert(ty.name.clone(), id);
         self.by_id.insert(id, ty)
+    }
+
+    /// Sets whether type `id` is a building (the `isbldg` column). Counted in the structure pair of the counters.
+    pub fn set_building(&mut self, id: u32, is_building: bool) {
+        if is_building {
+            self.buildings.insert(id);
+        } else {
+            self.buildings.remove(&id);
+        }
+    }
+
+    /// Whether type `id` is a building (false for an unknown type).
+    pub fn is_building(&self, id: u32) -> bool {
+        self.buildings.contains(&id)
+    }
+
+    /// Sets the typed-count lists of type `id`: `children` (the first list) and `upgrades` (the second list).
+    pub fn set_count_links(&mut self, id: u32, children: Vec<u32>, upgrades: Vec<u32>) {
+        self.count_links.insert(id, (children, upgrades));
     }
 
     /// The type with raw id `id`.
@@ -517,6 +551,9 @@ pub struct UnitObj {
     pub user_data: i32,
     /// Creep guard flag (`SetUnitCreepGuard`, object `+0x60` bit 2).
     pub creep_guard: bool,
+    /// What the unit adds to the owner's counters: 0, `REGISTERED_IN_PROGRESS` or `REGISTERED_COMPLETED`
+    /// (`unit+0x64` bits 0x8 and 0x10 in the original; see `unit_counts.rs`).
+    pub count_state: u32,
     /// Exploded flag (`SetUnitExploded`, object `+0x5C` bit 13).
     pub exploded: bool,
     /// Illusion flag (object `+0x5C` bit 30). Read by `IsUnitIllusion`; no native sets it yet.
@@ -552,6 +589,9 @@ pub struct HeroObj {
     /// its per-level gain (`+0xDC`, real), see `crate::heroes::intelligence` (`docs/spec/heroes.md`, section 6).
     pub int_base: i32,
     pub int_plus: softfloat::F32,
+    /// The primary attribute (`+0xCC`): `1` strength, `2` intelligence, otherwise agility. Read by the attack bonus
+    /// (`crate::heroes::primary_total`). The source in the unit record is UNSURE; the default is agility.
+    pub primary: i32,
 }
 
 impl Default for HeroObj {
@@ -567,6 +607,7 @@ impl Default for HeroObj {
             agi_plus: softfloat::F32::ZERO,
             int_base: 0,
             int_plus: softfloat::F32::ZERO,
+            primary: 0,
         }
     }
 }
@@ -864,6 +905,8 @@ pub struct PlayerObj {
     /// The stored state words (see `natives/player.rs` for the scaling of gold and lumber). Entries 1 (gold) and 2
     /// (lumber) are not used: those live in `Game::economy`.
     pub states: [i32; PLAYER_STATES],
+    /// The unit counters of this player (the counter object at `player+0x2D0`, see `unit_counts.rs`).
+    pub counts: crate::unit_counts::PlayerCounts,
 }
 
 impl PlayerObj {
@@ -884,6 +927,7 @@ impl PlayerObj {
             observer: false,
             alliances,
             states: [0; PLAYER_STATES],
+            counts: crate::unit_counts::PlayerCounts::new(),
         }
     }
 }
@@ -1134,6 +1178,9 @@ pub struct Game {
     /// The hero experience tables built from the Misc values (see `crate::heroes`). Empty until the engine sets them,
     /// in which case the heroes have no thresholds (`MaxHeroLevel` 0).
     pub(crate) hero_xp: crate::heroes::XpTables,
+    /// The derived attribute bonus rates (`[Misc]`, see `crate::heroes::derived_bonuses`). All zero until the engine
+    /// sets them, so the attributes have no derived effect.
+    pub(crate) hero_rates: crate::heroes::BonusRates,
     /// Hero attributes of each hero type (base and per-level gain), copied into a new hero (see `heroes`).
     pub(crate) hero_attributes: BTreeMap<u32, crate::heroes::HeroAttributes>,
 }
@@ -1193,6 +1240,7 @@ impl Game {
             economy_constants: crate::economy::EconomyConstants::default(),
             combat: crate::combat::CombatSystem::default(),
             hero_xp: crate::heroes::XpTables::default(),
+            hero_rates: crate::heroes::BonusRates::default(),
             hero_attributes: BTreeMap::new(),
         }
     }
@@ -1364,6 +1412,16 @@ impl Game {
     /// Installs the hero experience tables (built by `crate::heroes::build` from the Misc values).
     pub fn set_hero_xp(&mut self, tables: crate::heroes::XpTables) {
         self.hero_xp = tables;
+    }
+
+    /// Installs the derived attribute bonus rates (`[Misc]`, see `crate::heroes::derived_bonuses`).
+    pub fn set_hero_rates(&mut self, rates: crate::heroes::BonusRates) {
+        self.hero_rates = rates;
+    }
+
+    /// The derived attribute bonus rates in force.
+    pub fn hero_rates(&self) -> &crate::heroes::BonusRates {
+        &self.hero_rates
     }
 
     /// Sets the hero attributes of a hero type (the engine fills them from the unit records).

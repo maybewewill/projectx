@@ -37,7 +37,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jass::vm::{NativeRegistry, NativeResult, Value};
+use jass::vm::{NativeCtx, NativeRegistry, NativeResult, Value};
 
 use super::game::{Game, PlayerObj, ALLIANCE_TYPES, PLAYER_STATES};
 
@@ -54,6 +54,7 @@ const GOLD_LUMBER_MAX: u32 = 0x0098_9680;
 
 /// Registers the player natives on `reg`, bound to `game`.
 pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
+    register_counts(reg, game);
     let g = Rc::clone(game);
     reg.register("Player", move |_, a| {
         let mut gm = g.borrow_mut();
@@ -390,6 +391,67 @@ pub(super) fn state_load(state: u32, stored: i32) -> i32 {
         16 => (stored as u32 / 10) as i32,
         _ => stored,
     }
+}
+
+/// Registers the unit count natives (`GetPlayerUnitCount`, `GetPlayerStructureCount`,
+/// `GetPlayerTypedUnitCount`) on the counters of `unit_counts.rs` (docs/spec/natives-pending.md section 1).
+fn register_counts(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
+    let g = Rc::clone(game);
+    reg.register("GetPlayerUnitCount", move |_, a| {
+        let gm = g.borrow();
+        let n = match count_player(&gm, a) {
+            Some(p) => gm.player(p).counts.unit_count(bool_at(a, 1)),
+            None => 0,
+        };
+        NativeResult::Return(Value::Integer(n))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetPlayerStructureCount", move |_, a| {
+        let gm = g.borrow();
+        let n = match count_player(&gm, a) {
+            Some(p) => gm.player(p).counts.structure_count(bool_at(a, 1)),
+            None => 0,
+        };
+        NativeResult::Return(Value::Integer(n))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetPlayerTypedUnitCount", move |ctx, a| {
+        let gm = g.borrow();
+        let n = match count_player(&gm, a) {
+            Some(p) => match count_type(ctx, &gm, a, 1) {
+                Some(t) => gm.player(p).counts.typed_count(gm.unit_types(), t, bool_at(a, 2), bool_at(a, 3)),
+                None => 0,
+            },
+            None => 0,
+        };
+        NativeResult::Return(Value::Integer(n))
+    });
+}
+
+/// The player index of the handle in argument 0, if it names a player.
+fn count_player(gm: &Game, a: &[Value]) -> Option<u32> {
+    let id = a.first().and_then(|v| v.as_handle())?;
+    gm.player_index_of_handle(id)
+}
+
+/// The unit type of a string argument. A four-character string is taken as a raw code when that type is
+/// registered; otherwise the string is looked up as a type name. UNSURE: the original's string conversion
+/// (the call `0x6F4C4630` reads the converted value from the native call frame; its text rule is not read).
+fn count_type(ctx: &NativeCtx<'_>, gm: &Game, a: &[Value], i: usize) -> Option<u32> {
+    let name = match a.get(i) {
+        Some(Value::String(id)) => ctx.string(*id).to_string(),
+        _ => return None,
+    };
+    let bytes = name.as_bytes();
+    if bytes.len() == 4 {
+        let raw = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        if gm.unit_types().get(raw).is_some() {
+            return Some(raw);
+        }
+    }
+    gm.unit_types().id_by_name(&name)
 }
 
 #[cfg(test)]

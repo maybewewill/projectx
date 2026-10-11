@@ -175,6 +175,9 @@ pub struct UnitTypeData {
     pub buff_radius: f32,
     /// `buffType` (text, the buff type name).
     pub buff_type: String,
+    /// `race` (text, the race name of `UnitData`; the random pick walks read its enum value at record `+0x1C0`,
+    /// the enum names are not decoded, see docs/spec/natives-pending.md section 3).
+    pub race: String,
     /// `movetp` (text, the movement type name).
     pub move_type: String,
 
@@ -537,6 +540,7 @@ pub fn load_unit_type(
         buff_radius: data.real("buffRadius"),
         buff_type: data.text("buffType"),
         move_type: data.text("movetp"),
+        race: data.text("race"),
         fog_radius: ui.real("fogRad"),
         scale_bull: ui.int("scaleBull"),
         blend: ui.real("blend"),
