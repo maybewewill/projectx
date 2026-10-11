@@ -18,6 +18,7 @@ pub mod ai;
 pub mod combat;
 pub mod handles;
 pub mod hashmap;
+pub mod lockstep;
 pub mod natives;
 pub mod orders;
 pub mod pathing;
