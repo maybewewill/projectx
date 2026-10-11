@@ -2,8 +2,8 @@
 //! the last test which reads `GAME_DLL` when it is set. No table contents are stored in the repository.
 
 use sim::damage::{
-    armor_factor, dice_sum, DamageTableError, DamageTypeTable, NegativeArmorTable, ARMOR_TYPE_COLS,
-    ATTACK_TYPE_ROWS, MAX_DICE, NEG_ARMOR_LEN,
+    armor_factor, dice_sum, roll_total, DamageTableError, DamageTypeTable, NegativeArmorTable,
+    ARMOR_TYPE_COLS, ATTACK_TYPE_ROWS, MAX_DICE, NEG_ARMOR_LEN,
 };
 use sim::rng::{Rng, RngTable};
 use softfloat::{arith, Tables, F32};
@@ -132,6 +132,40 @@ fn dice_sum_draws_one_step_per_die_and_stays_in_range() {
     );
 }
 
+/// The roll wrapper adds one per die and the bonus once; the Unicorn run of the original confirms this (400 + 400
+/// cases, `tools/emu/test_damage_roll.py`).
+#[test]
+fn roll_total_adds_one_per_die_and_the_bonus() {
+    let table = identity_table();
+    let mut a = Rng::seeded(0x0BAD_F00D);
+    let mut b = a;
+    let total = roll_total(&mut a, &table, 4, 6, -2).unwrap();
+    let mut manual = 0i32;
+    for _ in 0..4 {
+        let r = u64::from(b.next_u32(&table));
+        manual += ((r * 6) >> 32) as i32 + 1;
+    }
+    assert_eq!(total, manual - 2);
+    assert_eq!(a, b);
+    // Each die is in 1..=sides, so four 6-sided dice with no bonus lie in 4..=24.
+    let mut c = Rng::seeded(99);
+    for _ in 0..200 {
+        let t = roll_total(&mut c, &table, 4, 6, 0).unwrap();
+        assert!((4..=24).contains(&t), "{t}");
+    }
+}
+
+#[test]
+fn roll_total_with_no_dice_draws_nothing_and_drops_the_bonus() {
+    let table = identity_table();
+    let mut s = Rng::seeded(5);
+    let before = s;
+    assert_eq!(roll_total(&mut s, &table, 0, 6, 9), Some(0));
+    assert_eq!(roll_total(&mut s, &table, -3, 6, 9), Some(0));
+    assert_eq!(s, before);
+    assert_eq!(roll_total(&mut s, &table, MAX_DICE as i32 + 1, 6, 0), None);
+}
+
 #[test]
 fn dice_sum_zero_dice_draws_nothing_and_large_counts_are_refused() {
     let table = identity_table();
@@ -143,8 +177,9 @@ fn dice_sum_zero_dice_draws_nothing_and_large_counts_are_refused() {
     assert_eq!(s, before, "a refused roll draws nothing");
 }
 
-/// With the 1.26a `Game.dll`: the negative table is read when the image has it (skipped otherwise), and the armor
-/// factor of armor 10 with the stock K = 0.06 is 1/(1 + 0.6). The K is a test input, not the Misc value.
+/// The computed table needs the real DIV reciprocal table, so it is only checked with `GAME_DLL` set.
+/// With the 1.26a `Game.dll`: the armor factor of armor 10 with the stock K = 0.06 (a test input, not the Misc value)
+/// is 1/(1 + 0.6), and the negative table comes from [`NegativeArmorTable::computed`], not from BSS.
 #[test]
 fn game_dll_positive_armor_factor_is_sane() {
     let Some(path) = std::env::var_os("GAME_DLL") else {
@@ -152,15 +187,70 @@ fn game_dll_positive_armor_factor_is_sane() {
         return;
     };
     let dll = std::fs::read(path).expect("read GAME_DLL");
-    let table = match NegativeArmorTable::from_game_dll(&dll) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("skipped: {e}");
-            return;
-        }
-    };
     let tables = Tables::from_game_dll(&dll).expect("lookup tables in GAME_DLL");
+    let table = NegativeArmorTable::computed(&tables);
     let v = armor_factor(f(10.0), f(0.06), &table, &tables).to_f32();
     assert!(v > 0.0 && v <= 1.0, "factor {v}");
     assert!((v - 0.625).abs() < 1e-3, "1/(1+0.6) = 0.625, got {v}");
+    // Entry 0 is +0 and the table is strictly decreasing from there.
+    let bits = table.to_bits();
+    assert_eq!(bits[0], 0);
+    for pair in bits.windows(2) {
+        assert!(f32::from_bits(pair[1]) < f32::from_bits(pair[0]));
+    }
+}
+
+/// Bit-exact check of the computed table against the start-up values of the original.
+/// The reference is a TSV made by `tools/emu/neg_armor_vectors.py` (Unicorn run of the user's `Game.dll`), kept
+/// outside the repository and named by `NEG_ARMOR_VECTORS` (plus `GAME_DLL` for the lookup tables). The 22 rows are
+/// the 21 entries and the -99999.0 sentinel at 0x6FAB4354; the sentinel is not part of the table and is only checked
+/// for presence.
+#[test]
+fn computed_table_matches_the_original_start_up_values() {
+    let (Some(dll_path), Some(vec_path)) = (
+        std::env::var_os("GAME_DLL"),
+        std::env::var_os("NEG_ARMOR_VECTORS"),
+    ) else {
+        eprintln!("skipped: GAME_DLL and NEG_ARMOR_VECTORS not both set");
+        return;
+    };
+    let dll = std::fs::read(dll_path).expect("read GAME_DLL");
+    let tables = Tables::from_game_dll(&dll).expect("lookup tables in GAME_DLL");
+    let text = std::fs::read_to_string(vec_path).expect("read NEG_ARMOR_VECTORS");
+    let mut reference = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let mut cols = line.split('\t');
+        let va = u32::from_str_radix(cols.next().unwrap().trim_start_matches("0x"), 16).unwrap();
+        let bits = u32::from_str_radix(cols.next().unwrap().trim_start_matches("0x"), 16).unwrap();
+        reference.push((va, bits));
+    }
+    assert_eq!(
+        reference.len(),
+        NEG_ARMOR_LEN + 1,
+        "21 entries plus the sentinel"
+    );
+    let computed = NegativeArmorTable::computed(&tables).to_bits();
+    for (i, got) in computed.iter().enumerate() {
+        let (va, want) = reference[i];
+        assert_eq!(va, 0x6FAB_4300 + 4 * i as u32);
+        assert_eq!(
+            *got, want,
+            "entry {i} at {va:#x}: computed {got:#010x}, original {want:#010x}"
+        );
+    }
+    let (sentinel_va, sentinel) = reference[NEG_ARMOR_LEN];
+    assert_eq!(sentinel_va, 0x6FAB_4354);
+    assert_eq!(sentinel, (-99999.0f32).to_bits());
+}
+
+/// Without `GAME_DLL`: a table built from bit patterns keeps them unchanged (the constructor used by the computed path
+/// and by the file reader).
+#[test]
+fn negative_table_from_bits_round_trips() {
+    let mut bits = [0u32; NEG_ARMOR_LEN];
+    for (i, b) in bits.iter_mut().enumerate().skip(1) {
+        *b = f(-(i as f32) * 0.05).to_bits();
+    }
+    let table = NegativeArmorTable::from_bits(bits).unwrap();
+    assert_eq!(table.to_bits(), bits);
 }

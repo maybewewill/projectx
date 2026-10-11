@@ -1,8 +1,8 @@
 //! The damage of one attack execute (`docs/spec/attack-damage.md`, sections 3 to 5).
 //!
 //! Pipeline implemented here, in the spec's order:
-//! 1. Raw amount: the dice of the weapon on RNG stream 2 plus the flat bonus, clamped at zero, converted to a real
-//!    with the integer-to-real helper.
+//! 1. Raw amount: the roll of the weapon on RNG stream 2 (each die `1..=sides`, see [`roll_total`]) plus the flat
+//!    bonus, clamped at zero, converted to a real with the integer-to-real helper.
 //! 2. Armor factor, physical damage only: `M = 1 - R`, where for armor `A >= 0`, `R = (K A) / (1 + K A)` (so
 //!    `M = 1 / (1 + K A)`), and for `A < 0` `R` comes from a 21-entry table indexed by `min(trunc(-A), 20)`.
 //! 3. Attack type times armor type factor from the 7 x 8 damage-type table.
@@ -11,9 +11,11 @@
 //! (its lookup key is UNSURE), the relation factor, the miss/critical rolls, and the Gaussian dice path above 16
 //! dice (its constants are UNSURE; [`SpecDamage`] falls back to the weapon's placeholder value there).
 //!
-//! The 21-entry negative-armor table at `0x6FAB4300` is read from the user's `Game.dll` and refused when it is all
-//! zeros (the AGENTS notes say it is filled at start-up, which a file read cannot see). The 7 x 8 damage-type table
-//! is NOT in `Game.dll`: the original builds it from the Misc data (`0x6F26D300`), so the host passes it in.
+//! The 21-entry negative-armor table at `0x6FAB4300` is in BSS: its values are written by a start-up initialiser
+//! (`0x6F85A4C0`, see `docs/spec/attack-damage.md` section 5.1), so a file read cannot see them.
+//! [`NegativeArmorTable::computed`] re-runs that initialiser's arithmetic with the softfloat helpers.
+//! [`NegativeArmorTable::from_game_dll`] refuses the all-zero file image. The 7 x 8 damage-type table is NOT in
+//! `Game.dll`: the original builds it from the Misc data (`0x6F26D300`), so the host passes it in.
 //! Nothing here embeds table contents.
 
 use softfloat::{arith, conv, Tables, F32};
@@ -79,7 +81,37 @@ impl std::fmt::Debug for NegativeArmorTable {
     }
 }
 
+/// The denominator of the negative-armor table: the initialiser divides by `I2R(100000)`.
+pub const NEG_ARMOR_SCALE: i32 = 100_000;
+/// The per-level decay of the negative-armor table (`0.94` per armor point, the value the initialiser's
+/// integers encode).
+pub const NEG_ARMOR_DECAY: f64 = 0.94;
+
 impl NegativeArmorTable {
+    /// The table as the start-up initialiser of `Game.dll` builds it (`docs/spec/attack-damage.md` section 5.1).
+    ///
+    /// Entry `n` is `DIV(I2R(k_n), I2R(100000))` with `k_n = -trunc(100000 * (1 - 0.94^n))` computed in `f64`
+    /// (`k_0 = 0`). The 21 integers are the ones in the original's code (checked in Unicorn; their fractional parts
+    /// stay at least 0.01 away from an integer, so the `f64` rounding cannot change them). The division is the
+    /// softfloat DIV, so the stored values are the original's (not correctly rounded) quotients.
+    pub fn computed(tables: &Tables) -> Self {
+        let scale = conv::i2r(NEG_ARMOR_SCALE);
+        let mut decay = 1.0f64; // 0.94^n, by repeated multiplication (IEEE, deterministic)
+        let mut out = [F32::ZERO; NEG_ARMOR_LEN];
+        for slot in out.iter_mut() {
+            let exact = f64::from(NEG_ARMOR_SCALE) * (1.0 - decay);
+            let k = -(exact.trunc() as i32);
+            *slot = arith::div(conv::i2r(k), scale, tables);
+            decay *= NEG_ARMOR_DECAY;
+        }
+        NegativeArmorTable(out)
+    }
+
+    /// The 21 entry bit patterns, in table order.
+    pub fn to_bits(&self) -> [u32; NEG_ARMOR_LEN] {
+        self.0.map(|v| v.to_bits())
+    }
+
     /// Wraps the 21 entry bit patterns. Used by tests and by callers that cache the values.
     pub fn from_bits(bits: [u32; NEG_ARMOR_LEN]) -> Result<Self, DamageTableError> {
         if bits.iter().all(|&b| b == 0) {
@@ -145,9 +177,9 @@ pub fn armor_factor(a: F32, k: F32, negative: &NegativeArmorTable, tables: &Tabl
     arith::sub(F32::ONE, r)
 }
 
-/// The dice sum of `count` dice with `sides` sides (spec section 3.1): one step of `stream` per die, each die
-/// `floor(r * sides / 2^32)`, so values run `0..sides-1` (CONFIRMED by emulation of the sampler; whether the caller
-/// adds one per die is UNSURE). `None` above [`MAX_DICE`] dice, where the spec's Gaussian path is not known.
+/// The sampler `0x6F26CAD0`: the sum of `count` dice with `sides` sides (spec section 3.1). One step of `stream` per
+/// die, each die `floor(r * sides / 2^32)`, so values run `0..sides-1` (CONFIRMED by emulation). The caller adds one
+/// per die, see [`roll_total`]. `None` above [`MAX_DICE`] dice, where the spec's Gaussian path is not known.
 pub fn dice_sum(stream: &mut Rng, table: &RngTable, count: u32, sides: u32) -> Option<u32> {
     if count > MAX_DICE {
         return None;
@@ -158,6 +190,24 @@ pub fn dice_sum(stream: &mut Rng, table: &RngTable, count: u32, sides: u32) -> O
         sum += (r * u64::from(sides)) >> 32;
     }
     Some(sum as u32)
+}
+
+/// The roll wrapper `0x6F285350` (CONFIRMED by disassembly, 400/400 in Unicorn with the damage path): `count` dice of
+/// `sides` sides, each die `1..=sides` (the sampler's `0..sides-1` plus one per die), plus `bonus`, as a wrapping
+/// int32. `count <= 0` returns `0` and draws nothing: the flat bonus is dropped on that path too. `None` above
+/// [`MAX_DICE`] dice (Gaussian path, not implemented).
+pub fn roll_total(
+    stream: &mut Rng,
+    table: &RngTable,
+    count: i32,
+    sides: u32,
+    bonus: i32,
+) -> Option<i32> {
+    if count <= 0 {
+        return Some(0);
+    }
+    let sum = dice_sum(stream, table, count as u32, sides)?;
+    Some((sum as i32).wrapping_add(count).wrapping_add(bonus))
 }
 
 /// The spec damage model: dice on stream 2, then armor and the damage-type table.
@@ -180,20 +230,19 @@ impl SpecDamage {
         }
     }
 
-    /// The raw amount of one execute: dice plus bonus, clamped at zero (spec section 3.4). The bonus is added to the
-    /// integer sum before conversion (the position of the bonus is UNSURE). `None` without an RNG table or above
-    /// [`MAX_DICE`] dice.
+    /// The raw amount of one execute (`CAbilityAttack::GetDamageAmount`, CONFIRMED by disassembly): the roll on
+    /// combat stream 2 ([`roll_total`]), then clamped at zero before the armor step. The bonus is an integer added
+    /// to the dice total before the I2R conversion. `None` without an RNG table or above [`MAX_DICE`] dice.
     fn raw(&self, game: &mut Game, weapon: &AttackType) -> Option<F32> {
         let (table, streams) = game.rng_parts()?;
-        let sum = dice_sum(
+        let total = roll_total(
             streams.stream_mut(COMBAT_STREAM),
             table,
-            weapon.dice,
+            i32::try_from(weapon.dice).ok()?,
             weapon.sides,
+            weapon.dice_bonus,
         )?;
-        let total = i64::from(sum) + i64::from(weapon.dice_bonus);
-        let clamped = total.clamp(0, i64::from(i32::MAX)) as i32;
-        Some(conv::i2r(clamped))
+        Some(conv::i2r(total.max(0)))
     }
 }
 

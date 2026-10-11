@@ -109,9 +109,10 @@ pub struct AttackType {
     pub missile_speed: Option<F32>,
     /// Number of dice of the damage roll (`docs/spec/attack-damage.md` 3.4). Zero rolls no dice.
     pub dice: u32,
-    /// Sides of each die. Each die gives `0..sides-1` (the sampler, CONFIRMED; the +1 question is UNSURE).
+    /// Sides of each die. Each die gives `1..=sides` (the sampler's `0..sides-1` plus one, CONFIRMED by disassembly
+    /// of the roll wrapper).
     pub sides: u32,
-    /// Flat bonus added to the dice sum (`dmgplus`).
+    /// Flat bonus added to the dice total (`dmgplus`; the bonus is dropped when `dice` is zero, CONFIRMED).
     pub dice_bonus: i32,
     /// Attack type row of the damage-type table: 0 Spells, 1 Normal, 2 Pierce, 3 Siege, 4 Magic, 5 Chaos, 6 Hero
     /// (binary order of the spec, section 7).
