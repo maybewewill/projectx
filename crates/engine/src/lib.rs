@@ -146,6 +146,8 @@ pub struct Engine {
     ticks: u64,
     /// `main` is queued for the first step (set at boot, started by the first [`Engine::step_ticks`]).
     main_pending: bool,
+    /// The clock row the AI VMs' sleep times are in (see [`Engine::step_ticks`]).
+    ai_row: u32,
     timers_fired: u64,
     notes: Vec<String>,
     combat: data::CombatSetup,
@@ -385,6 +387,7 @@ impl Engine {
             config_status: String::new(),
             main_status: String::new(),
             main_pending: false,
+            ai_row: 0,
             steps: 0,
             ticks: 0,
             timers_fired: 0,
@@ -445,6 +448,11 @@ impl Engine {
             fired += self.host.step_ticks(k);
             left -= k;
             if self.host.at_batch_boundary() {
+                // A clock restart (300 s, lockstep.md section 14) moved the main VM's sleeps; the AI VMs follow.
+                while self.ai_row < self.host.clock().row() {
+                    self.ai.rebase_sleeps(F32::from_bits(sim::timer::HORIZON_BITS));
+                    self.ai_row += 1;
+                }
                 let now = F32::from_bits(self.host.clock().now().to_bits());
                 self.ai.step(now);
                 self.steps += 1;
@@ -558,7 +566,7 @@ impl Engine {
             steps: self.steps,
             ticks: self.ticks,
             timers_fired: self.timers_fired,
-            game_time: self.host.clock().now(),
+            game_time: self.host.clock().absolute(),
             pathing: self.pathing.clone(),
             combat: self.combat.clone(),
             economy: self.economy.clone(),

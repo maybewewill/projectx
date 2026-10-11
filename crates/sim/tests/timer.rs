@@ -505,3 +505,66 @@ fn fired_timers_do_not_give_runnable_threads_extra_slices() {
     let spin_sleeping: Vec<i32> = sleeping.iter().map(|&(_, spin)| spin).collect();
     assert_eq!(spin_waking, spin_sleeping);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The 300 s clock restart (docs/spec/lockstep.md section 14)
+// ---------------------------------------------------------------------------------------------
+
+const WAKE_SCRIPT: &str = r#"
+globals
+    integer gWake = 0
+endglobals
+
+native TriggerSleepAction takes real t returns nothing
+
+function Main takes nothing returns nothing
+    loop
+        call TriggerSleepAction(100.0)
+        set gWake = gWake + 1
+    endloop
+endfunction
+"#;
+
+const LONG_SLEEP_SCRIPT: &str = r#"
+globals
+    integer gDone = 0
+endglobals
+
+native TriggerSleepAction takes real t returns nothing
+
+function Main takes nothing returns nothing
+    call TriggerSleepAction(1000.0)
+    set gDone = 1
+endfunction
+"#;
+
+#[test]
+fn sleeping_thread_keeps_waking_every_100_seconds_across_clock_restarts() {
+    // 150,000 ticks pass two restarts of the agile clock. A sleep started before a restart is shifted with the queue
+    // (both the timer expiry and the thread's wake time lose 300.0); without the shift the wake would be 300 s late.
+    let mut host = host_for(WAKE_SCRIPT);
+    host.start("Main", &[]).expect("start");
+    host.step_ticks(150_000);
+    assert_eq!(host.clock().row(), 2);
+    assert!(host.misfires().is_empty(), "{:?}", host.misfires());
+    let seconds = host.clock().elapsed_seconds();
+    assert!((700.0..760.0).contains(&seconds), "{seconds}");
+    assert_eq!(host.vm().global("gWake"), Some(Value::Integer(7)), "wakes at 100, 200, ... 700 s of game time");
+}
+
+#[test]
+fn sleep_of_1000_seconds_wakes_at_299_999() {
+    // The agent timer a sleep starts cannot hold 300.0 or more: the start cuts the timeout to horizon - 0.001
+    // (Unicorn-checked on 0x6F477FF0). So the thread wakes after 299.999 s, before the first restart.
+    let mut host = host_for(LONG_SLEEP_SCRIPT);
+    host.start("Main", &[]).expect("start");
+    let mut ticks = 0u64;
+    while host.vm().global("gDone") != Some(Value::Integer(1)) {
+        host.step_ticks(1);
+        ticks += 1;
+        assert!(ticks < 200_000, "never woke");
+    }
+    assert_eq!(host.clock().row(), 0);
+    let now = host.clock().now();
+    assert!((299.999..300.0).contains(&now), "{now}");
+}

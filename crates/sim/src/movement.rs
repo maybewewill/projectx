@@ -46,10 +46,10 @@ pub(crate) struct MoverRt {
 }
 
 impl MoverRt {
-    fn new(now: F32) -> Self {
+    fn new(now: F32, row: i32) -> Self {
         MoverRt {
             snap_t: now,
-            snap_row: 0,
+            snap_row: row,
             vx: F32::ZERO,
             vy: F32::ZERO,
             cap: F32::ZERO,
@@ -76,13 +76,26 @@ impl Game {
         self.game_time
     }
 
-    /// Sets the game time and refreshes the cached world position of every unit in motion. Called by the host
-    /// before each timer callback and when a tick ends (`script.rs`).
+    /// The clock row (restart count) of [`Game::game_time`].
+    pub fn game_row(&self) -> i32 {
+        self.game_row
+    }
+
+    /// Sets the game time within the current row; see [`Game::set_game_clock`].
     pub fn set_game_time(&mut self, t: F32) {
-        if self.game_time == t {
+        let row = self.game_row;
+        self.set_game_clock(t, row);
+    }
+
+    /// Sets the game time and the clock row and refreshes the cached world position of every unit in motion. Called by
+    /// the host before each timer callback and when a tick ends (`script.rs`); the row changes when the agile clock
+    /// restarts at 300 s (lockstep.md section 14).
+    pub fn set_game_clock(&mut self, t: F32, row: i32) {
+        if self.game_time == t && self.game_row == row {
             return;
         }
         self.game_time = t;
+        self.game_row = row;
         let moving: Vec<ObjKey> = self
             .movers
             .iter()
@@ -98,7 +111,7 @@ impl Game {
     pub(crate) fn layer(&self) -> GridCell {
         GridCell {
             origin: self.game_time,
-            row: 0,
+            row: self.game_row,
             scale: LAYER_HORIZON,
         }
     }
@@ -110,7 +123,7 @@ impl Game {
             .movers
             .get(&unit)
             .copied()
-            .unwrap_or_else(|| MoverRt::new(self.game_time));
+            .unwrap_or_else(|| MoverRt::new(self.game_time, self.game_row));
         Kin {
             snap_t: rt.snap_t,
             snap_row: rt.snap_row,
@@ -128,8 +141,8 @@ impl Game {
 
     /// Writes a [`Kin`] back to the unit and its mover, and refreshes the cached world position.
     pub(crate) fn commit_kin(&mut self, unit: ObjKey, kin: &Kin) {
-        let now = self.game_time;
-        let rt = self.movers.entry(unit).or_insert_with(|| MoverRt::new(now));
+        let (now, row) = (self.game_time, self.game_row);
+        let rt = self.movers.entry(unit).or_insert_with(|| MoverRt::new(now, row));
         rt.snap_t = kin.snap_t;
         rt.snap_row = kin.snap_row;
         rt.vx = kin.vx;
@@ -219,7 +232,7 @@ impl Game {
             .movers
             .get(&unit)
             .copied()
-            .unwrap_or_else(|| MoverRt::new(self.game_time));
+            .unwrap_or_else(|| MoverRt::new(self.game_time, self.game_row));
         mover::Pilot {
             steer: mover::SteerParams {
                 accel: rt.accel,

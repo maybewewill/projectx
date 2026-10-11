@@ -30,7 +30,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use jass::vm::{clamp_sleep, NativeRegistry, NativeResult, Value};
+use jass::vm::{NativeRegistry, NativeResult, Value};
 use softfloat::{arith, conv, F32};
 
 use super::game::{Game, HandleKind, ObjKey, Object, Payload};
@@ -458,7 +458,7 @@ pub fn register_sleeping(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SyncSelections", move |ctx, _| {
         // The mirror realise of slots 0..11 changes no simulation state (CONFIRMED); the native then behaves as
         // TriggerSleepAction(0.0): wait state 1 with the real 0.0 (0x6F44B2F0).
-        let seconds = clamp_sleep(F32::ZERO);
+        let seconds = crate::timer::sleep_seconds(F32::ZERO);
         let wake = ctx.wake_time(seconds);
         g.borrow_mut().timers.start_at(wake.to_f32(), Payload::Sleep(ctx.thread()));
         NativeResult::Sleep(seconds)

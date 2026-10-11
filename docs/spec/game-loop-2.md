@@ -67,6 +67,8 @@ Minimum wait: no minimum is applied on this path. The timer path (section 3) cla
 Slots as listed in vtables.tsv for class CAgentTimer (0x6F8784AC): slot 0 0x6F00C060 (base), slot 1 0x6F041940, slot 2 0x6F477FF0 (Start), slot 3 0x6F477D70 (Stop/cancel), slot 4 0x6F4776B0 and slot 5 0x6F4776E0 (get timeout value), slot 6 0x6F4779F0 (get something from the request), slot 7 0x6F4775D0 (get elapsed), slot 8 0x6F477A30 (save), slot 9 0x6F478380 (load / restore). CAgentTimerExtended has the same layout with different targets.
 
 ### 3.3 CAgentTimer::Start (0x6F477FF0), CONFIRMED
+
+> 2026-10-11: the start also cuts a timeout of 300.0 or more to 299.999 and the queue clock restarts at 300 s; see lockstep.md section 14.
 1. If the timer already has a request at +0xC, cancel it (0x6F477D30 marks the old request with flag 0x10000 and drops it).
 2. Choose the dispatch queue: if the float argument is 0.0, use DAT_6FAB7368 +0x40 (queue A) and do not set timer flag 4; otherwise set timer flag bit 0x4 and use +0x44 (queue B, "(l)").
 3. Read the timeout as a binary32 float from the pointer argument.

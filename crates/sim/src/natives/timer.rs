@@ -16,7 +16,8 @@
 //!   raw (CONFIRMED by the store through the object's slot 1), the handler is registered, then message
 //!   0x80204 starts the agent timer (0x6F477FF0). A running timer is cancelled first (0x6F477D30 marks
 //!   the old request cancelled). The expiry is `queue_now + clamp(timeout)`, where the clamp turns
-//!   negative values into 0 (0x6F477F80, CONFIRMED). The periodic flag re-arms the timer with the same
+//!   values below 1e-4 into 1e-4 and values from 300.0 up into 299.999 (0x6F477FF0/0x6F477F80, Unicorn-checked,
+//!   lockstep.md section 14). The periodic flag re-arms the timer with the same
 //!   clamped timeout as the period (LIKELY). The queue's FIFO tie-break is the global insertion order
 //!   (UNSURE; the per-timer counter at +0x50 might be the tie-break key, see game-loop-2 3.4).
 //! * `TimerGetTimeout` (0x6F3C13E0): the stored raw timeout. CONFIRMED.
@@ -224,11 +225,10 @@ fn remaining(gm: &Game, t: &TimerObj) -> F32 {
 fn elapsed(gm: &Game, t: &TimerObj) -> F32 {
     let rem = remaining(gm, t);
     if t.active.is_some() {
-        let timeout = if arith::lt(t.timeout, F32::ZERO) {
-            F32::ZERO
-        } else {
-            t.timeout
-        };
+        // The queue element holds the clamped timeout (`elem + 8`: at least 1e-4, below the 300 s horizon;
+        // `crate::timer::clamp_timeout`), and the getter subtracts the remaining time from that (Unicorn-checked,
+        // `tools/emu/agile_clock_emu.py`).
+        let timeout = F32::from_bits(crate::timer::clamp_timeout(t.timeout.to_f32()).to_bits());
         arith::sub(timeout, rem)
     } else {
         arith::sub(t.timeout, t.paused_remaining)
