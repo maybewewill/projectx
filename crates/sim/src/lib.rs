@@ -35,6 +35,7 @@ pub mod shop;
 pub mod sync;
 pub mod timer;
 pub mod unit_counts;
+pub mod unitclass;
 pub mod unit_position;
 pub mod vision;
 

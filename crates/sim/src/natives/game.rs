@@ -443,6 +443,16 @@ pub struct UnitType {
     pub sight: F32,
     /// Night sight radius (record `+0x190`, UnitBalance `nsight`). 0 when not filled.
     pub night_sight: F32,
+    /// Classification bits (record `+0x1C8`, UnitBalance `type`), copied to the unit's `+0x248` at creation.
+    pub classification: u32,
+    /// Movement type bits (record `+0x1A8`, `movetp`), copied to the unit's `+0x1FC` at creation.
+    pub movement: u32,
+    /// `weapsOn` (bit 0 weapon 1, bit 1 weapon 2).
+    pub weapons_on: u32,
+    /// `weapTp` enum per weapon (record `+0xF8`).
+    pub weapon_kind: [u32; 2],
+    /// Target flag word per weapon (record `+0xA0`).
+    pub weapon_targs: [u32; 2],
 }
 
 /// The unit type registry, keyed by the raw type id (the four-character code as an integer).
@@ -650,6 +660,15 @@ pub struct UnitObj {
     pub vision_extra: u16,
     /// Loaded flag (object `+0x5C` bit 4). Read by `IsUnitLoaded`; no transport system sets it yet.
     pub loaded: bool,
+    /// The classification word (object `+0x248`): the type's `type` bits at creation, changed by `UnitAddType` /
+    /// `UnitRemoveType`. Read by `IsUnitType` (see `crate::unitclass`).
+    pub class_flags: u32,
+    /// Alternate icon flag (object `+0x280` bit 0x200, `UnitSetUsesAltIcon`); presentation only.
+    pub alt_icon: bool,
+    /// Ethereal counter (object `+0x158`): `IsUnitType(ETHEREAL)` is `> 0`. No writer in the model yet.
+    pub ethereal: i32,
+    /// Magic immunity counter (object `+0x15C`): `IsUnitType(MAGIC_IMMUNE)` is `> 0`. No writer in the model yet.
+    pub magic_immune: i32,
     /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
     pub abilities: UnitAbilities,
     /// The unit's buffs in the order they were added (see [`crate::abilities`]).

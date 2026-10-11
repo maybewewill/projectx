@@ -545,7 +545,8 @@ fn support_tables_cover_the_work_list() {
     // Plus the three fog tests IsUnitVisible / IsUnitFogged / IsUnitMasked (vision.md section 7, LIKELY).
     // Plus SetUnitTypeSlots (shop stock, shop-stock.md).
     // Plus UnitDamageTarget, UnitDamagePoint, UnitUseItem, UnitUseItemPoint, UnitUseItemTarget, SetUnitRescuable.
-    assert_eq!(implemented, 77);
+    // Plus IsUnitType, IsUnitIdType, UnitAddType, UnitRemoveType, IsUnitInTransport, UnitSetUsesAltIcon (unit-classification.md).
+    assert_eq!(implemented, 83);
 
     let host = host_for(
         r#"

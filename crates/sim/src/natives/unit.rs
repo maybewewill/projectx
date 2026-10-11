@@ -41,8 +41,8 @@
 //!   accounting is not modelled (no food state yet).
 //! * `ShowUnit` and `PauseUnit` store their flags. The original's show path (list enumeration, spec 6.10)
 //!   and the meaning of the pause (spec 6.11) are not modelled yet (UNSURE).
-//! * Unit events for triggers (death only) are in `unit_event.rs`. `IsUnitType` is not implemented (its
-//!   jump table is not recovered, spec 5).
+//! * Unit events for triggers (death only) are in `unit_event.rs`. `IsUnitType` and the other
+//!   classification natives are in `unit_attr.rs` (`docs/spec/unit-classification.md`).
 //! * Position (UNSURE): the stored x and y are the raw values. The original derives them from the mover
 //!   and applies a placement adjustment for creation (spec 3.2 step 3, 5.1). `SetUnitPosition` calls the
 //!   full move path in the original. Here it stores the values and then runs the region enter and leave
@@ -521,6 +521,10 @@ pub(crate) fn build(
         hero_attack_speed: softfloat::F32::ZERO,
         hero_attack: softfloat::F32::ZERO,
         loaded: false,
+        class_flags: ty.classification,
+        alt_icon: false,
+        ethereal: 0,
+        magic_immune: 0,
         sight: ty.sight,
         night_sight: ty.night_sight,
         revealed: 0,
