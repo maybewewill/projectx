@@ -27,6 +27,8 @@ native UnitStripHeroLevel takes unit whichHero, integer howMany returns boolean
 native UnitModifySkillPoints takes unit whichHero, integer skillPointDelta returns boolean
 native GetHeroStr takes unit whichHero, boolean includeBonuses returns integer
 native SetHeroStr takes unit whichHero, integer newStr, boolean permanent returns nothing
+native GetHeroInt takes unit whichHero, boolean includeBonuses returns integer
+native SetHeroInt takes unit whichHero, integer newInt, boolean permanent returns nothing
 "#;
 
 const HERO: u32 = 0x4870_616C; // 'Hpal'
@@ -77,6 +79,14 @@ endfunction
 function set_str30 takes nothing returns nothing
     call SetHeroStr(h1, 30, true)
 endfunction
+
+function read_int takes nothing returns nothing
+    set r1 = GetHeroInt(h1, true)
+endfunction
+
+function set_int40 takes nothing returns nothing
+    call SetHeroInt(h1, 40, true)
+endfunction
 "#;
 
 fn host() -> ScriptHost {
@@ -100,6 +110,8 @@ fn host() -> ScriptHost {
             HeroAttributes {
                 str_base: 20,
                 str_plus: F32::from_bits(2.5f32.to_bits()),
+                int_base: 12,
+                int_plus: F32::from_bits(1.5f32.to_bits()),
                 ..HeroAttributes::default()
             },
         );
@@ -176,4 +188,17 @@ fn strength_uses_the_base_and_the_gain_and_the_setter_moves_the_base() {
     call(&mut host, "set_str30");
     call(&mut host, "read_str");
     assert_eq!(int(&host, "r1"), 30);
+}
+
+#[test]
+fn intelligence_uses_the_base_and_the_gain_and_the_setter_moves_the_base() {
+    let mut host = host();
+    call(&mut host, "main");
+    call(&mut host, "add450");
+    // Level 3, counter 2: base 12 + trunc(1.5 * 2) = 15.
+    call(&mut host, "read_int");
+    assert_eq!(int(&host, "r1"), 15);
+    call(&mut host, "set_int40");
+    call(&mut host, "read_int");
+    assert_eq!(int(&host, "r1"), 40);
 }

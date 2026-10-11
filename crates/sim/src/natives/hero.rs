@@ -14,7 +14,8 @@
 //! * Skill points: `UnitModifySkillPoints` and the level-up gain; the cap by the learnable ability levels is not
 //!   applied because the five hero ability slots are not modelled (`crate::heroes`).
 //! * Attributes: `GetHeroStr` / `GetHeroAgi` = base + trunc(gain * (level - 1)); item bonuses are not modelled and
-//!   count as 0. `GetHeroInt` / `SetHeroInt` are not implemented (see [`NATIVES`]).
+//!   count as 0. `GetHeroInt` / `SetHeroInt` = base + trunc(gain * level counter), the base being the counter behind
+//!   hero+0x7C (`docs/spec/heroes.md`, section 6); the item part counts as 0.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -43,9 +44,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "GetHeroInt",
-        support: Support::NotImplemented(
-            "N:the intelligence getter adds the level counter of the unit object (not the hero's) to a gain term; which field is its base is not settled (heroes.md section 4)",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "GetHeroLevel",
@@ -93,9 +92,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SetHeroInt",
-        support: Support::NotImplemented(
-            "N:the setter moves the intelligence base, which depends on the open question of GetHeroInt",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetHeroLevel",
@@ -217,6 +214,20 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let gm = g.borrow();
         let v = hero_of(&gm, a).map_or(0, |h| heroes::attribute(h.agi_base, h.agi_plus, h.level - 1));
         NativeResult::Return(Value::Integer(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetHeroInt", move |_, a| {
+        let gm = g.borrow();
+        let v = hero_of(&gm, a).map_or(0, |h| heroes::intelligence(h.int_base, h.int_plus, h.level - 1));
+        NativeResult::Return(Value::Integer(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SetHeroInt", move |_, a| {
+        let value = int_arg(a, 1);
+        with_hero_only(&g, a, |h| h.int_base = heroes::rebase(h.int_base, h.int_plus, h.level - 1, value));
+        NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);

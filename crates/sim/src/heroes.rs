@@ -19,14 +19,17 @@ const FACTOR_DIVISOR: F32 = F32(0x42C8_0000);
 /// `0.5` (start-up constant `0x6FAAE4D0`): the rounding term added before the experience gain is truncated.
 const HALF: F32 = F32(0x3F00_0000);
 
-/// The attributes of a hero type: base strength and agility and their per-level gains (the unit record columns
-/// `STR`, `AGI`, `STRplus`, `AGIplus`). Intelligence is not modelled (see `natives/hero.rs`).
+/// The attributes of a hero type: base strength, agility and intelligence and their per-level gains (the unit record
+/// columns `STR`, `AGI`, `INT`, `STRplus`, `AGIplus`, `INTplus`). The intelligence base is the counter behind the
+/// reference at hero+0x7C, written from unit record `+0x28` at creation (`docs/spec/heroes.md`, section 6).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HeroAttributes {
     pub str_base: i32,
     pub str_plus: F32,
     pub agi_base: i32,
     pub agi_plus: F32,
+    pub int_base: i32,
+    pub int_plus: F32,
 }
 
 /// The inputs of the experience builder, as the Misc reader returns them (`gamedata::misc::HeroMisc`).
@@ -316,8 +319,15 @@ pub fn attribute(base: i32, gain: F32, counter: i32) -> i32 {
     base.wrapping_add(conv::f2i(arith::mul(gain, conv::i2r(counter))))
 }
 
+/// The intelligence value (`0x6F0DB3A0`, Unicorn-checked by `tools/emu/hero_int_emu.py`): the same form as
+/// [`attribute`], `base + trunc(gain * level counter)`, with the base read from the counter behind hero+0x7C.
+pub fn intelligence(base: i32, gain: F32, counter: i32) -> i32 {
+    attribute(base, gain, counter)
+}
+
 /// The base that makes [`attribute`] read `new` (`SetHeroStr` / `SetHeroAgi`: the base moves by the difference to
-/// the current value without items, CONFIRMED by the setters `0x6F277950`, `0x6F2779B0`).
+/// the current value without items, CONFIRMED by the setters `0x6F277950`, `0x6F2779B0`). `SetHeroInt` uses the same
+/// rule (`0x6F277980`, which adds the difference to the base counter through `0x6F20A260`).
 pub fn rebase(base: i32, gain: F32, counter: i32, new: i32) -> i32 {
     let current = attribute(base, gain, counter);
     base.wrapping_add(new.wrapping_sub(current))
@@ -449,5 +459,16 @@ mod tests {
         assert_eq!(attribute(20, f(2.5), 3), 27);
         let base = rebase(20, f(2.5), 3, 30);
         assert_eq!(attribute(base, f(2.5), 3), 30);
+    }
+
+    #[test]
+    fn intelligence_is_base_plus_gain_times_counter_and_rebases() {
+        let gain = F32::from_bits(1.5f32.to_bits());
+        assert_eq!(intelligence(12, gain, 2), 15);
+        assert_eq!(intelligence(-3, F32::from_bits(1000.0f32.to_bits()), 17), 16997);
+        // SetHeroInt(40) at counter 2: the base moves by 40 - 15 = 25.
+        let base = rebase(12, gain, 2, 40);
+        assert_eq!(base, 37);
+        assert_eq!(intelligence(base, gain, 2), 40);
     }
 }
