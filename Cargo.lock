@@ -454,6 +454,9 @@ dependencies = [
 [[package]]
 name = "fdf"
 version = "0.1.0"
+dependencies = [
+ "mpq",
+]
 
 [[package]]
 name = "find-msvc-tools"

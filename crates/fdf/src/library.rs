@@ -29,6 +29,7 @@ pub enum LibraryError {
         error: ParseError,
     },
     UnknownFrame(String),
+    UnknownBlock(String),
     /// `INHERITS` names a frame that is not defined as a top-level frame.
     UnknownParent {
         frame: String,
@@ -47,6 +48,7 @@ impl fmt::Display for LibraryError {
             }
             LibraryError::Parse { path, error } => write!(f, "{path}: {error}"),
             LibraryError::UnknownFrame(n) => write!(f, "no frame named \"{n}\""),
+            LibraryError::UnknownBlock(n) => write!(f, "no Texture or String named \"{n}\""),
             LibraryError::UnknownParent { frame, parent } => {
                 write!(f, "frame \"{frame}\" inherits from unknown \"{parent}\"")
             }
@@ -65,6 +67,8 @@ impl std::error::Error for LibraryError {}
 pub struct Library {
     /// Top-level frames by lower-case name.
     frames: BTreeMap<String, Frame>,
+    /// Top-level Texture and String templates by lower-case name.
+    blocks: BTreeMap<String, Block>,
     /// StringList entries by lower-case key. Later definitions win.
     strings: BTreeMap<String, String>,
     /// Lower-case paths already loaded (each file loads once).
@@ -153,6 +157,18 @@ impl Library {
                         ));
                     }
                 }
+                TopItem::Block(b) => {
+                    let Some(name) = b.name.clone() else {
+                        self.warnings
+                            .push(format!("unnamed top-level block in {origin} ignored"));
+                        continue;
+                    };
+                    if self.blocks.insert(name.to_ascii_lowercase(), b).is_some() {
+                        self.warnings.push(format!(
+                            "Texture or String \"{name}\" defined twice; last definition wins"
+                        ));
+                    }
+                }
             }
         }
         Ok(())
@@ -203,6 +219,51 @@ impl Library {
         value.to_string()
     }
 
+    /// Names of all top-level Texture and String templates, lower-case.
+    pub fn block_names(&self) -> impl Iterator<Item = &str> {
+        self.blocks.keys().map(String::as_str)
+    }
+
+    /// The top-level Texture or String template with `INHERITS` applied.
+    pub fn block(&self, name: &str) -> Result<Block, LibraryError> {
+        let key = name.to_ascii_lowercase();
+        let raw = self
+            .blocks
+            .get(&key)
+            .ok_or_else(|| LibraryError::UnknownBlock(name.to_string()))?;
+        self.resolve_block(raw, &mut vec![key])
+    }
+
+    /// Applies a block's `INHERITS` (properties merge as for frames). Blocks
+    /// have no children, so `WITHCHILDREN` has no effect.
+    fn resolve_block(&self, b: &Block, stack: &mut Vec<String>) -> Result<Block, LibraryError> {
+        let Some(inh) = &b.inherits else {
+            return Ok(b.clone());
+        };
+        let key = inh.parent.to_ascii_lowercase();
+        if stack.contains(&key) {
+            let mut path = stack.clone();
+            path.push(key);
+            return Err(LibraryError::InheritCycle(path));
+        }
+        let parent_raw = self
+            .blocks
+            .get(&key)
+            .ok_or_else(|| LibraryError::UnknownParent {
+                frame: b.name.clone().unwrap_or_default(),
+                parent: inh.parent.clone(),
+            })?;
+        stack.push(key);
+        let parent = self.resolve_block(parent_raw, stack);
+        stack.pop();
+        let parent = parent?;
+        Ok(Block {
+            props: merge_props(&parent.props, &b.props),
+            inherits: None,
+            ..b.clone()
+        })
+    }
+
     /// The top-level frame with inheritance applied to it and to every
     /// nested frame.
     pub fn resolve(&self, name: &str) -> Result<Frame, LibraryError> {
@@ -223,7 +284,7 @@ impl Library {
                     stack.pop();
                     Child::Frame(flat?)
                 }
-                Child::Block(b) => Child::Block(b.clone()),
+                Child::Block(b) => Child::Block(self.resolve_block(b, &mut Vec::new())?),
             });
         }
         let mut out = Frame {

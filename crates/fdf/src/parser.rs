@@ -138,6 +138,11 @@ pub fn parse(src: &str) -> Result<Document, ParseError> {
                     p.skip_comma();
                     items.push(TopItem::Frame(f));
                 }
+                "TEXTURE" | "STRING" => {
+                    let b = p.parse_block(None)?;
+                    p.skip_comma();
+                    items.push(TopItem::Block(b));
+                }
                 _ => {
                     return Err(ParseError::at(
                         t.span,
@@ -286,22 +291,7 @@ impl Parser {
         let head = self.bump().ok_or_else(|| self.unexpected_eof("Frame"))?;
         let (kind, _) = self.expect_name("frame type")?;
         let (name, _) = self.expect_name("frame name")?;
-        let mut inherits = None;
-        if matches!(self.peek().map(|t| &t.tok), Some(Tok::Ident(w)) if w.eq_ignore_ascii_case("INHERITS"))
-        {
-            self.bump();
-            let mut with_children = false;
-            if matches!(self.peek().map(|t| &t.tok), Some(Tok::Ident(w)) if w.eq_ignore_ascii_case("WITHCHILDREN"))
-            {
-                self.bump();
-                with_children = true;
-            }
-            let (parent, _) = self.expect_name("INHERITS parent name")?;
-            inherits = Some(Inherits {
-                parent,
-                with_children,
-            });
-        }
+        let inherits = self.parse_inherits()?;
         self.expect_tok(Tok::LBrace, "'{' opening a Frame")?;
         let members = self.parse_members(None)?;
         self.expect_tok(Tok::RBrace, "'}' closing a Frame")?;
@@ -314,6 +304,72 @@ impl Parser {
             layer,
             span: head.span,
         })
+    }
+
+    /// Parses `Texture|String [NAME] [INHERITS [WITHCHILDREN] NAME] { props }`.
+    fn parse_block(&mut self, layer: Option<String>) -> Result<Block, ParseError> {
+        let head = self
+            .bump()
+            .ok_or_else(|| self.unexpected_eof("Texture or String"))?;
+        let kind = match &head.tok {
+            Tok::Ident(w) if w.eq_ignore_ascii_case("TEXTURE") => BlockKind::Texture,
+            _ => BlockKind::String,
+        };
+        let name = match self.peek().map(|t| &t.tok) {
+            Some(Tok::Str(s)) => {
+                let s = s.clone();
+                self.bump();
+                Some(s)
+            }
+            Some(Tok::Ident(s)) if !s.eq_ignore_ascii_case("INHERITS") => {
+                let s = s.clone();
+                self.bump();
+                Some(s)
+            }
+            _ => None,
+        };
+        let inherits = self.parse_inherits()?;
+        self.expect_tok(Tok::LBrace, "'{' opening a Texture or String")?;
+        let inner = self.parse_members(None)?;
+        self.expect_tok(Tok::RBrace, "'}' closing a Texture or String")?;
+        if let Some(c) = inner.children.first() {
+            let span = match c {
+                Child::Frame(f) => f.span,
+                Child::Block(b) => b.span,
+            };
+            return Err(ParseError::at(
+                span,
+                "only properties are allowed in a Texture or String",
+            ));
+        }
+        Ok(Block {
+            kind,
+            name,
+            inherits,
+            props: inner.props,
+            layer,
+            span: head.span,
+        })
+    }
+
+    /// Optional `INHERITS [WITHCHILDREN] NAME`.
+    fn parse_inherits(&mut self) -> Result<Option<Inherits>, ParseError> {
+        if !matches!(self.peek().map(|t| &t.tok), Some(Tok::Ident(w)) if w.eq_ignore_ascii_case("INHERITS"))
+        {
+            return Ok(None);
+        }
+        self.bump();
+        let mut with_children = false;
+        if matches!(self.peek().map(|t| &t.tok), Some(Tok::Ident(w)) if w.eq_ignore_ascii_case("WITHCHILDREN"))
+        {
+            self.bump();
+            with_children = true;
+        }
+        let (parent, _) = self.expect_name("INHERITS parent name")?;
+        Ok(Some(Inherits {
+            parent,
+            with_children,
+        }))
     }
 
     fn parse_members(&mut self, layer: Option<&str>) -> Result<Members, ParseError> {
@@ -350,40 +406,8 @@ impl Parser {
                         m.children.extend(inner.children);
                     }
                     "TEXTURE" | "STRING" => {
-                        self.bump();
-                        let kind = if word.eq_ignore_ascii_case("TEXTURE") {
-                            BlockKind::Texture
-                        } else {
-                            BlockKind::String
-                        };
-                        let name = match self.peek().map(|t| &t.tok) {
-                            Some(Tok::Str(s) | Tok::Ident(s)) => {
-                                let s = s.clone();
-                                self.bump();
-                                Some(s)
-                            }
-                            _ => None,
-                        };
-                        self.expect_tok(Tok::LBrace, "'{' opening a Texture or String")?;
-                        let inner = self.parse_members(None)?;
-                        self.expect_tok(Tok::RBrace, "'}' closing a Texture or String")?;
-                        if let Some(c) = inner.children.first() {
-                            let span = match c {
-                                Child::Frame(f) => f.span,
-                                Child::Block(b) => b.span,
-                            };
-                            return Err(ParseError::at(
-                                span,
-                                "only properties are allowed in a Texture or String",
-                            ));
-                        }
-                        m.children.push(Child::Block(Block {
-                            kind,
-                            name,
-                            props: inner.props,
-                            layer: layer.map(str::to_string),
-                            span: t.span,
-                        }));
+                        let b = self.parse_block(layer.map(str::to_string))?;
+                        m.children.push(Child::Block(b));
                     }
                     _ => {
                         let p = self.parse_property()?;
