@@ -58,30 +58,109 @@ not check the sizes beyond the inflate result, and does not check the checksum (
 
 The max block size is a field of the reader object (`param_1[0xE]`); its value is not traced (UNSURE).
 
-## 3. Open: the game-info records (UNSURE, the main gap)
+## 3. The leading records of the body (CONFIRMED reader order; layout UNCONFIRMED, conflicts with `GameInfo`)
 
-The decompressed body starts with the game-info records (host record, game name, empty string, encoded
-settings, slot count, game type, language, `0x16` player records). Our parser (`w3g::game::parse_game_info`)
-reads them in that order (CONFIRMED against the public layout and our synthetic tests, not against the
-original). **The machine code that reads these records from the decompressed body was not located.** The
-searches that did not lead there: the `0x16`/`0x19` switch cases (`0x6F54CD40` is the Battle.net event
-switch; `0x6F3012E0` is an error-string table), and the callers of the container parser `0x6F5BE740`
-(`0x6F3A49E0`, `0x6F3AF8D0`, `0x6F443860`, `0x6F58AC20`, `0x6F4061F0`; these are game-setup and UI callers).
+**Result.** The game setup builder `0x6F443860` reads the decompressed body from its stream object `G`
+(its ECX) from byte 0, **positionally**. No record id is compared in this path: there is no `0x16`
+loop and the `0x19` id byte is not read (the `0x19` payload is read as a `u16` length plus bytes).
+Body position at the start is 0 (LIKELY: `G`'s vtable slot `+0x1C`, called before the read, resets it).
 
-What was found on the way:
+The order of reads, for build `B` (`B` = the value `0x6F534A40` returns, which is `G+0x238`):
 
-- `0x6F443860` (setup builder, CONFIRMED structure): calls `0x6F4434D0` (validation), `0x6F535410` (opens the
-  file and reads the body through `0x6F535050`), `0x6F534A40` (returns a value `B`), then branches on `B`:
-  - `B < 0x11DC`: a 7-byte source record per slot (UNSURE: the copies read 9 bytes per record, overlapping;
-    decompile may be mistyped), 9-byte output records, AI strength byte `+7` = 1 and handicap byte `+8` = 100
-    (CONFIRMED defaults);
-  - otherwise: an 8-byte source record per slot, handicap `+8` = 100 (CONFIRMED), AI strength `+7` copied
-    from the source (CONFIRMED).
-  `B` is LIKELY the replay build number (the branch constants 6000, 6058 and 0x17AA are build-like). The
-  9-byte slot record layout is therefore build-dependent; `w3g` derives the size from the record length
-  (7, 8 or 9), which covers the same cases.
-- `0x6F443860` then calls `0x6F5BE710` and `0x6F5BE740` (the container parse) and sets game `+0x400 = 1`
-  only when **both** return non-zero (CONFIRMED). So a refused container also blocks the setup flag.
+| # | read | how | lands in |
+|---|---|---|---|
+| 1 | NUL-terminated string, max 2047 bytes | `0x6F309A00`, dst `G+0x418` | string handle at `G+0x420` (via `0x6F4C5CF0`, interned; empty = no store) |
+| 2 | same, **only if `B >= 0x178B`** | `0x6F309A00`, dst `G+0x424` | handle at `G+0x42C` |
+| 3 | 184-byte block | `0x6F6521B0`, dst = stack `esp+0xDC` (not in `G`) | see below |
+| 4 | `u16` length (max 128) + bytes | `0x6F443720`, dst = stack `esp+0x58` | the **start blob** (`0x19` payload) |
+| 5 | two dwords | `0x6F4C2D30` | `G+0x430`, `G+0x434` |
+| 6 | 20 raw bytes, **only if `B >= 0x17AA`** | `0x6F650770` (→ `0x6F4C3420`, read N bytes) | `G+0x438..+0x44B` |
+| 7 | two dwords | `0x6F4C2D30` | `G+0x404`, `G+0x408` |
+| 8 | NUL-terminated string, max 2047 | `0x6F309A00`, dst `G+0x40C` | handle at `G+0x414` |
+
+Then `0x6F5BE710` / `0x6F5BE740` validate the container at `G+0x3EC` (blob) and the game flag `G+0x400`
+is set only when both succeed (CONFIRMED). For `B < 0x1770` the container is also parsed from the blob
+(7- or 8-byte source records, see below); for `B >= 0x1770` the blob is only stored.
+
+**The 184-byte block (step 3, `0x6F6521B0`, CONFIRMED):** cstr <= 32 at `+0x00`, cstr <= 16 at `+0x20`,
+cstr <= 128 at `+0x30` (the encoded stat string: it has no zero bytes, so NUL termination is consistent),
+dword at `+0xB0`, dword at `+0xB4`. The block lives on the setup's stack. Its three strings are
+not stored in `G`; the setup later passes the block as EDX to `0x6F5BE710`, which ignores EDX (CONFIRMED),
+so the stat string is **not consumed by this function** (the consumer is not in `0x6F443860`; open).
+`+0xB0` is the stack dword the `B < 0x11DC` branch uses as its record count (UNSURE which record).
+
+**`B`:** `0x6F534A40` = `[ECX+0x238]`, written by the block reader `0x6F535050` from a header field (CONFIRMED
+that `G+0x238` is stored there; the header field is LIKELY the build dword at header `+0x38`; the low
+16 bits are the build and the high 16 are the flags; whether the setup uses the whole dword is UNSURE.
+Multiplayer replays have flag `0x8000`, so the whole-dword reading would put them all in the `>= 0x1770`
+branch; this needs the real file to settle).
+
+**Primitives (CONFIRMED by disassembly):**
+- `0x6F4C2B30(pos, n)`: fails when `pos + n > limit` and sets `pos = limit + 1`; otherwise maps the chunk
+  (vtable slot 2 when the range is outside the mapped chunk; not needed for one chunk).
+- `0x6F4C2E10(dst, max)`: NUL-terminated read; copies at most `max` bytes including the NUL. No NUL within
+  `max` bytes → `pos = limit + 1`. dst[0] = 0 on failure.
+- `0x6F4C2FD0(dst, n)`: exact read (the `u16` blob reader uses it through `0x6F443720`; the length check
+  `<= 0x80` is in `0x6F443720`).
+- `0x6F4C2C10/C70/D30`: exact byte/word/dword reads; a short read fails as above.
+
+**Model and emulator (CONFIRMED, `tools/emu/replay_leading_emu.py`).** The emulator runs the reads above
+in the same order on a synthetic body placed in one chunk of `G` (the `0x6F4C5CF0` string store is hooked
+to record the bytes; `memcpy` through the IAT is hooked; `Storm` ordinal 465 is only on error paths).
+Python `model_read` implements the same semantics. **400 random bodies (builds 5999, 6000, 6040, 6059,
+including failing reads), 0 mismatches in landings, position and error flag** (`--cases 400 --seed 11`;
+300 with seed 7 also 0).
+
+### 3.1 Comparison with `crates/w3g` (the disagreement)
+
+`crates/w3g::GameInfo` reads: `u32`, host record (`0x00`, pid, name, extra), game name, empty string,
+settings string, `u32` slots, `u32` type, `u32` language, `0x16` player records, then `0x19`. The
+original's reader (above) reads: string, string (build >= 6027), 3 strings and 2 dwords (the block), the
+blob, 2 dwords, 20 bytes (build >= 6058), 2 dwords, a string. The two layouts are different.
+
+Case: the body `crates/w3g/tests/synthetic.rs` writes, as build 6059. The original stops inside the start
+blob with `pos = 142`, `limit = 141` (the first string reads `\x10\x01`, the second is empty, the block's
+strings are garbage). `crates/w3g/tests/leading.rs::the_gameinfo_layout_is_refused_by_the_original_reader`
+asserts the refusal. The `GameInfo` parser accepts the same bytes (its own test).
+
+**Conclusion.** Either the real 1.26a body is the layout the original reads, and `GameInfo` (and the
+synthetic replays built on it) is wrong for real files, or the setup builder is not the replay loader for
+these files. Both readings are open until a real `.w3g` (1.26a) is parsed. The `0x19` payload itself
+(count byte, slot records, seed, mode, start spots) matches the container reader (section 4 of
+game-start.md), so the blob parse is the least uncertain part.
+
+### 3.2 Rust port
+
+`crates/w3g/src/leading.rs`: `read_leading(body, build) -> Result<Leading, LeadingError>` follows the
+order above (same error rules). Tests: `crates/w3g/tests/leading.rs` (24 Unicorn vectors in
+`tests/leading_vectors.rs`, generated by `tools/emu/embed_leading_vectors.py`) and unit tests in the module.
+`GameInfo` is **not** changed: the disagreement is not resolved, so replacing its layout would be a guess.
+
+### 3.3 Other fields (CONFIRMED layout or structure, consumers open)
+
+- `0x6F655880` / `0x6F655910` (container with 7 or 8-byte source records, used for `B < 0x11DC` and
+  otherwise, reached only through the `B < 0x1770` branch): count byte `< 16`, records, dword seed, byte at
+  `+0x10`, byte at `+0x11`. The setup copies each source record into a 9-byte record with status 1 at byte 7 and
+  handicap **100** at byte 8 (CONFIRMED defaults in that branch). So a replay of build < 6000 has handicap 100
+  for every slot regardless of the record.
+- `B >= 0x1770`: no container parse in the setup; the container is validated from the blob and handicap
+  is not read here. Handicap per slot: **not applied** (no confirmed source for builds 6000 and later).
+- Game speed, visibility, observers, teams-together, lock-teams, full-shared-control, random-hero,
+  random-races: no consumer found in `0x6F443860`. The stat string (block step 3) is not read after the
+  block parse in this function. The consumers must be in a later reader of `G` or of the game object
+  (not located). The fixed-seed bit `0x8000` of game settings `+0x38` is still confirmed only for the seed
+  tail (game-start.md section 2); whether the replay's stat-string flags are the same word is UNSURE.
+- Map checksum, map path, host name: the first two strings of the body and the stat string are the only
+  candidates (their mapping to the stat fields is open). Not applied.
+
+### 3.4 What the engine applies
+
+`Engine::boot_from_replay` is **unchanged**. Nothing new is confirmed as a field the engine does not already
+use: game speed and visibility have no located consumer, handicap for builds >= 6000 is not read here, and
+the blob/slot records are the container layout already used (`crates/engine/src/replay_setup.rs`). The open
+disagreement (section 3.1) is the first thing to settle on a real replay.
+
+---
 
 ## 4. Stat string (the encoded settings): encoder CONFIRMED, decoder = its inverse
 
@@ -154,9 +233,7 @@ Not applied (gaps, each a note or a documented field):
 
 ## 7. Open items (in order of value)
 
-1. Find the code that reads the game-info records from the decompressed body (section 3). Route: the
-   callers of `0x6F535050` (the block reader) and of `0x6F535410`; the function that calls `0x6F5BE740`
-   with the body in its stream, and the writer of player object 0's `+0x1F4` blob (game-start.md 8.2).
+1. **Settle the leading layout (section 3.1)** on a real 1.26a replay: parse the body with `w3g::leading::read_leading` (or the Unicorn reader) and compare with `GameInfo`. Until then, `GameInfo` is UNCONFIRMED and so is every field read from it.
 2. Decode the flags word: find the consumers of the decoded settings object (`game +0x30`, flag word `+0x38`)
    and map speed, visibility, teams and fixed seed bits. Check one replay byte-by-byte if available.
 3. Confirm `FUN_6f534470` as CRC-32 (Unicorn: run it on a known header) and then enforce the header and
@@ -166,11 +243,8 @@ Not applied (gaps, each a note or a documented field):
 
 ## 8. Tests
 
+- `crates/w3g/src/leading.rs` (unit, 4 tests) and `crates/w3g/tests/leading.rs` (24 Unicorn vectors in `tests/leading_vectors.rs`, plus the GameInfo-layout refusal case).
 - `crates/w3g`: `header_size_must_match_the_version` (header.rs); the existing header, block and record tests.
-- `crates/engine/src/replay_setup.rs` (unit, 7 tests): race bits, record seed vs fixed-seed bit, local
-  player, refusals (no slots, start spots above slots), slot application (names, races, teams, controllers,
-  empty slots), random race keeps the map value.
-- `crates/engine/tests/replay_boot.rs` (integration, 4 tests): a synthetic map and a synthetic replay boot
-  through `Engine::boot_from_replay`; slots replace the map players in the report; the fixed-seed bit; a
-  refused record is an error; garbage is a replay error.
-- Workspace: `cargo test --workspace` passes without and with `GAME_DLL`; clippy `-D warnings` is clean.
+- `crates/engine/src/replay_setup.rs` (unit, 7 tests) and `crates/engine/tests/replay_boot.rs` (integration, 4 tests), unchanged.
+- Emulator: `tools/emu/replay_leading_emu.py` (400 random bodies, 0 mismatches), `tools/emu/embed_leading_vectors.py` (writes the Rust vectors).
+- Workspace: `cargo test --workspace` with and without `GAME_DLL`; clippy `-D warnings`.
