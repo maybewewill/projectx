@@ -39,10 +39,12 @@ pub enum Payload {
 /// The timer or trigger that a script thread runs for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Ctx {
-    /// A trigger's condition or action chain, with the event that started it (if any).
+    /// A trigger's condition or action chain, with the event that started it (if any) and the unit
+    /// of a unit event (`GetTriggerUnit`, `GetDyingUnit`), if any.
     Trigger {
         trigger: ObjKey,
         event: Option<ObjKey>,
+        unit: Option<ObjKey>,
     },
     /// A timer handler started at the timer's expiry.
     Timer(ObjKey),
@@ -157,6 +159,12 @@ pub enum EventSource {
     Timer(Option<TimerId>),
     /// `TriggerRegisterTimerExpireEvent`: fires when this timer handle expires.
     Expire(ObjKey),
+    /// `TriggerRegisterUnitEvent`: fires for the unit whose observer table holds it. `key` is the
+    /// registration key (event id + 0x80200).
+    UnitEvent { key: u32 },
+    /// `TriggerRegisterPlayerUnitEvent`: fires for units of player slot `player`. `key` is the
+    /// registration key (event id + 0x80200).
+    PlayerUnitEvent { key: u32, player: u32 },
 }
 
 /// A trigger event (`event` in JASS).
@@ -184,6 +192,8 @@ pub enum HandleKind {
     Force,
     /// A unit (see [`UnitObj`]).
     Unit,
+    /// A unit group (see [`GroupObj`]).
+    Group,
     /// Presentation handle types (see `presentation.rs`): camera setups, sounds, effects, quests,
     /// quest items, multiboards and their items, leaderboards, dialogs, buttons and timer dialogs.
     CameraSetup,
@@ -468,6 +478,43 @@ impl PlayerObj {
     }
 }
 
+/// A reference held by a group: the unit and the handle id whose reference the group owns (so the id
+/// stays reserved while the unit is in the group, see `natives/group.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupMember {
+    pub unit: ObjKey,
+    pub id: u32,
+}
+
+/// A unit group (`group` in JASS): the members in insertion order, plus the query state the
+/// `GroupEnum*` collector reads (see `natives/group.rs`, spec section 3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GroupObj {
+    /// Members in insertion order, without duplicates. Removed units stay here as ghosts until the
+    /// group is cleared or enumerated.
+    pub members: Vec<GroupMember>,
+    /// The filter boolexpr of the running enumeration, or `None`.
+    pub filter: Option<ObjKey>,
+    /// Unit type filter of the running enumeration (`None` for any type).
+    pub type_id: Option<u32>,
+    /// Owner filter of the running enumeration (`None` for any player).
+    pub player: Option<u32>,
+    /// Limit of the running enumeration. 0 means no limit (the non-counted natives use 0).
+    pub limit: u32,
+    /// Counter of the running enumeration (spec `groups-events.md` 3.3: it counts failed inserts).
+    pub counter: u32,
+}
+
+/// One entry of an observer table: the trigger listening for a unit or player-unit event key, the
+/// event object it registered, and the optional filter boolexpr (player-unit events).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Observer {
+    pub key: u32,
+    pub trigger: ObjKey,
+    pub event: ObjKey,
+    pub filter: Option<ObjKey>,
+}
+
 /// A force (`force` in JASS): a set of player slots, one bit per slot (bit `i` = `Player(i)`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ForceObj {
@@ -495,6 +542,8 @@ pub enum Object {
     Force(ForceObj),
     /// A unit.
     Unit(UnitObj),
+    /// A unit group.
+    Group(GroupObj),
     /// A presentation object with a handle (see `presentation.rs`).
     Pres(PresObj),
 }
@@ -516,6 +565,7 @@ impl Object {
             Object::Player(_) => HandleKind::Player,
             Object::Force(_) => HandleKind::Force,
             Object::Unit(_) => HandleKind::Unit,
+            Object::Group(_) => HandleKind::Group,
             Object::Pres(p) => p.handle_kind(),
         }
     }
@@ -554,6 +604,13 @@ pub struct Game {
     unit_types: UnitTypes,
     /// Unit events in the order they were produced, until the host takes them (see [`UnitEvent`]).
     unit_events: Vec<UnitEvent>,
+    /// The observer table of each agent (a unit, or a player slot for player-unit events), keyed by
+    /// the agent's arena key. Each list is in registration order, oldest first.
+    observers: BTreeMap<ObjKey, Vec<Observer>>,
+    /// Unit handles of the running `GetEnumUnit` scopes (group callbacks), innermost last.
+    enum_units: Vec<u32>,
+    /// Unit handles of the running `GetFilterUnit` scopes, innermost last.
+    filter_units: Vec<u32>,
 }
 
 impl Default for Game {
@@ -584,6 +641,9 @@ impl Game {
             pres: PresentationState::default(),
             unit_types: UnitTypes::new(),
             unit_events: Vec::new(),
+            observers: BTreeMap::new(),
+            enum_units: Vec::new(),
+            filter_units: Vec::new(),
         }
     }
 
@@ -633,6 +693,75 @@ impl Game {
     /// Appends a unit event to the queue.
     pub(crate) fn push_unit_event(&mut self, event: UnitEvent) {
         self.unit_events.push(event);
+    }
+
+    /// The group object behind `key`. Panics if `key` is not a group.
+    pub fn group(&self, key: ObjKey) -> &GroupObj {
+        match self.object(key) {
+            Object::Group(g) => g,
+            _ => panic!("not a group"),
+        }
+    }
+
+    /// Mutable access to the group object behind `key`. Panics if `key` is not a group.
+    pub fn group_mut(&mut self, key: ObjKey) -> &mut GroupObj {
+        match self.object_mut(key) {
+            Object::Group(g) => g,
+            _ => panic!("not a group"),
+        }
+    }
+
+    /// The unit handle that `GetEnumUnit` returns: the innermost running group callback, or 0.
+    pub fn enum_unit(&self) -> u32 {
+        self.enum_units.last().copied().unwrap_or(0)
+    }
+
+    /// The unit handle that `GetFilterUnit` returns: the innermost running filter call, or 0.
+    pub fn filter_unit(&self) -> u32 {
+        self.filter_units.last().copied().unwrap_or(0)
+    }
+
+    /// Opens a `GetEnumUnit` scope with unit handle `id`. Pair with [`Game::pop_enum_unit`].
+    pub fn push_enum_unit(&mut self, id: u32) {
+        self.enum_units.push(id);
+    }
+
+    /// Closes the innermost `GetEnumUnit` scope.
+    pub fn pop_enum_unit(&mut self) {
+        self.enum_units.pop();
+    }
+
+    /// Opens a `GetFilterUnit` scope with unit handle `id`. Pair with [`Game::pop_filter_unit`].
+    pub fn push_filter_unit(&mut self, id: u32) {
+        self.filter_units.push(id);
+    }
+
+    /// Closes the innermost `GetFilterUnit` scope.
+    pub fn pop_filter_unit(&mut self) {
+        self.filter_units.pop();
+    }
+
+    /// The handle id of object `key`: its live id, or a new one (flag 0) when it has none. This is the
+    /// original's object-to-handle conversion (spec `groups-events.md` 2.7).
+    pub fn handle_or_create(&mut self, key: ObjKey) -> u32 {
+        self.handles.create(key, 0)
+    }
+
+    /// The observer table of `agent` (oldest first). Empty when the agent has none.
+    pub fn observers(&self, agent: ObjKey) -> &[Observer] {
+        self.observers.get(&agent).map_or(&[], Vec::as_slice)
+    }
+
+    /// Mutable access to the observer table of `agent`, created on demand.
+    pub fn observers_mut(&mut self, agent: ObjKey) -> &mut Vec<Observer> {
+        self.observers.entry(agent).or_default()
+    }
+
+    /// Removes every observer entry that belongs to trigger `t` (used when the trigger is destroyed).
+    pub fn forget_observers_of(&mut self, t: ObjKey) {
+        for list in self.observers.values_mut() {
+            list.retain(|o| o.trigger != t);
+        }
     }
 
     /// The presentation state: the event log that a renderer reads, the camera and the pools.

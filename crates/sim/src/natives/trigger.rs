@@ -297,7 +297,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             if let Object::Trigger(tr) = g.borrow_mut().object_mut(t) {
                 tr.evals = tr.evals.wrapping_add(1);
             }
-            execute(&g, t, None, ctx);
+            execute(&g, t, None, None, ctx);
         }
         NativeResult::Return(Value::Null)
     });
@@ -340,23 +340,43 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 /// Runs the event path of trigger `t` (see the module notes): evaluation count, enable check,
 /// conditions, execution count and the action chain. `event` is the event that fired, if any.
 pub fn fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, t: ObjKey, event: Option<ObjKey>) {
+    fire_with_unit(game, rt, t, event, None);
+}
+
+/// [`fire`] for an event that has a unit (a unit or player-unit event, see `natives/unit_event.rs`).
+/// Returns whether the conditions passed and the actions were started (LIKELY the result of the
+/// original's trigger execute entry, UNSURE).
+pub(super) fn fire_with_unit(
+    game: &RefCell<Game>,
+    rt: &mut dyn ScriptRuntime,
+    t: ObjKey,
+    event: Option<ObjKey>,
+    unit: Option<ObjKey>,
+) -> bool {
     let enabled = {
         let mut gm = game.borrow_mut();
         if !gm.is_alive(t) {
-            return;
+            return false;
         }
         let Object::Trigger(tr) = gm.object_mut(t) else {
-            return;
+            return false;
         };
         tr.evals = tr.evals.wrapping_add(1);
         tr.enabled
     };
     if !enabled {
-        return;
+        return false;
     }
-    let key = ctx_key(game, t, event);
+    let key = game.borrow_mut().context_key(Ctx::Trigger {
+        trigger: t,
+        event,
+        unit,
+    });
     if eval_conditions(game, rt, t, key) {
-        execute(game, t, event, rt);
+        execute(game, t, event, unit, rt);
+        true
+    } else {
+        false
     }
 }
 
@@ -381,7 +401,13 @@ fn eval_conditions(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, t: ObjKey, 
 }
 
 /// Runs the actions of trigger `t` as one chain and counts an execution.
-fn execute(game: &RefCell<Game>, t: ObjKey, event: Option<ObjKey>, rt: &mut dyn ScriptRuntime) {
+fn execute(
+    game: &RefCell<Game>,
+    t: ObjKey,
+    event: Option<ObjKey>,
+    unit: Option<ObjKey>,
+    rt: &mut dyn ScriptRuntime,
+) {
     let (chain, key) = {
         let mut gm = game.borrow_mut();
         let codes: Vec<u32> = trigger_ref(&gm, t)
@@ -395,7 +421,11 @@ fn execute(game: &RefCell<Game>, t: ObjKey, event: Option<ObjKey>, rt: &mut dyn 
         if let Object::Trigger(tr) = gm.object_mut(t) {
             tr.execs = tr.execs.wrapping_add(1);
         }
-        let key = gm.context_key(Ctx::Trigger { trigger: t, event });
+        let key = gm.context_key(Ctx::Trigger {
+            trigger: t,
+            event,
+            unit,
+        });
         (codes, key)
     };
     if !chain.is_empty() {
@@ -453,9 +483,11 @@ fn destroy(gm: &mut Game, t: ObjKey) {
                     tm.listeners.retain(|&(trig, _)| trig != t);
                 }
             }
+            EventSource::UnitEvent { .. } | EventSource::PlayerUnitEvent { .. } => {}
         }
         gm.kill(ev);
     }
+    gm.forget_observers_of(t);
     // Expire listeners are stored on the timer, so every timer is searched.
     for i in 0..gm.object_count() {
         let key = ObjKey(i as u32);
@@ -471,8 +503,11 @@ fn destroy(gm: &mut Game, t: ObjKey) {
 
 /// The context key for trigger `t` (with `event`), interned in `game`.
 fn ctx_key(game: &RefCell<Game>, t: ObjKey, event: Option<ObjKey>) -> u32 {
-    game.borrow_mut()
-        .context_key(Ctx::Trigger { trigger: t, event })
+    game.borrow_mut().context_key(Ctx::Trigger {
+        trigger: t,
+        event,
+        unit: None,
+    })
 }
 
 /// Adds a new boolexpr object with a handle (flag 0) and returns its id.

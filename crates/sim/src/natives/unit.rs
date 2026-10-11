@@ -23,8 +23,9 @@
 //! * Life (CONFIRMED, spec 6.5 and 6.7). `SetLife` clamps: a value `<= 0.0` (including -0.0) is stored as
 //!   `+0.0`. Then it fires event `0xD01E6` on the unit. `KillUnit`, `SetWidgetLife` and `SetUnitState`
 //!   state 0 all use it. A change to zero of a unit that was alive also records a death
-//!   ([`UnitEvent::Death`]); the spec leaves open whether the original detects death in the `0xD01E6`
-//!   handler (UNSURE).
+//!   ([`UnitEvent::Death`]) and runs the death trigger dispatch of `unit_event.rs` (player-unit key
+//!   `0x80214`, then unit key `0x80235`). The spec leaves open whether the original detects death in the
+//!   `0xD01E6` handler (UNSURE).
 //! * Mana (CONFIRMED, spec 6.7): `SetUnitState` state 2 stores the value as it is, with no clamp and no
 //!   event. States 1 and 3 (max life, max mana) are ignored, and the getters return the stored maxima.
 //!   Any other state reads 0.0 and writes nothing.
@@ -40,10 +41,8 @@
 //!   accounting is not modelled (no food state yet).
 //! * `ShowUnit` and `PauseUnit` store their flags. The original's show path (list enumeration, spec 6.10)
 //!   and the meaning of the pause (spec 6.11) are not modelled yet (UNSURE).
-//! * TODO(triggers): `TriggerRegisterUnitEvent` / `TriggerRegisterPlayerUnitEvent` for death are not
-//!   wired. The unit events are recorded in [`Game`] (see [`UnitEvent`]), and the trigger path needs an
-//!   event object for unit events first. `IsUnitType` is not implemented (its jump table is not recovered,
-//!   spec 5).
+//! * Unit events for triggers (death only) are in `unit_event.rs`. `IsUnitType` is not implemented (its
+//!   jump table is not recovered, spec 5).
 //! * Position (UNSURE): the stored x and y are the raw values. The original derives them from the mover
 //!   and applies a placement adjustment for creation (spec 3.2 step 3, 5.1). `SetUnitPosition` calls the
 //!   full move path in the original; here it only stores the values, with no move trigger yet.
@@ -56,6 +55,7 @@ use softfloat::{arith, F32};
 
 use super::game::{Game, LocationObj, ObjKey, Object, UnitEvent, UnitObj};
 use super::player::raw_at;
+use super::unit_event;
 
 /// `SetLife`'s event: the life changed (CONFIRMED value `0xD01E6`).
 pub const EVENT_LIFE_CHANGED: u32 = 0x000D_01E6;
@@ -161,10 +161,13 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 
     let g = Rc::clone(game);
-    reg.register("KillUnit", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let Some(k) = unit_at(&gm, a, 0) {
-            set_life(&mut gm, k, F32::ZERO);
+    reg.register("KillUnit", move |ctx, a| {
+        let died = {
+            let mut gm = g.borrow_mut();
+            unit_at(&gm, a, 0).filter(|&k| set_life(&mut gm, k, F32::ZERO))
+        };
+        if let Some(k) = died {
+            unit_event::dispatch_unit_death(&g, ctx, k);
         }
         NativeResult::Return(Value::Null)
     });
@@ -310,10 +313,14 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 
     let g = Rc::clone(game);
-    reg.register("SetUnitState", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let Some(k) = unit_at(&gm, a, 0) {
-            set_state(&mut gm, k, raw_at(a, 1) as u32, real_at(a, 2));
+    reg.register("SetUnitState", move |ctx, a| {
+        let died = {
+            let mut gm = g.borrow_mut();
+            unit_at(&gm, a, 0)
+                .filter(|&k| set_state(&mut gm, k, raw_at(a, 1) as u32, real_at(a, 2)))
+        };
+        if let Some(k) = died {
+            unit_event::dispatch_unit_death(&g, ctx, k);
         }
         NativeResult::Return(Value::Null)
     });
@@ -326,10 +333,13 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 
     let g = Rc::clone(game);
-    reg.register("SetWidgetLife", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let Some(k) = unit_at(&gm, a, 0) {
-            set_life(&mut gm, k, real_at(a, 1));
+    reg.register("SetWidgetLife", move |ctx, a| {
+        let died = {
+            let mut gm = g.borrow_mut();
+            unit_at(&gm, a, 0).filter(|&k| set_life(&mut gm, k, real_at(a, 1)))
+        };
+        if let Some(k) = died {
+            unit_event::dispatch_unit_death(&g, ctx, k);
         }
         NativeResult::Return(Value::Null)
     });
@@ -425,8 +435,9 @@ fn remove(gm: &mut Game, k: ObjKey) {
 }
 
 /// `SetLife` (CONFIRMED, spec 6.5): a value at or below zero is stored as `+0.0`, then the life-changed
-/// event fires. A change to zero of a unit that was alive also records its death.
-fn set_life(gm: &mut Game, k: ObjKey, value: F32) {
+/// event fires. A change to zero of a unit that was alive also records its death. Returns `true` when that
+/// death happened, so the native can run the death dispatch (see `unit_event.rs`).
+fn set_life(gm: &mut Game, k: ObjKey, value: F32) -> bool {
     let stored = if value.to_f32() <= 0.0 {
         F32::ZERO
     } else {
@@ -449,15 +460,19 @@ fn set_life(gm: &mut Game, k: ObjKey, value: F32) {
     if newly_dead {
         gm.push_unit_event(UnitEvent::Death(k));
     }
+    newly_dead
 }
 
 /// `SetUnitState` (CONFIRMED, spec 6.7): life goes through [`set_life`], mana is stored as given, and
-/// the maxima and unknown states are ignored.
-fn set_state(gm: &mut Game, k: ObjKey, state: u32, value: F32) {
+/// the maxima and unknown states are ignored. Returns `true` when the unit died.
+fn set_state(gm: &mut Game, k: ObjKey, state: u32, value: F32) -> bool {
     match state {
         STATE_LIFE => set_life(gm, k, value),
-        STATE_MANA => gm.unit_mut(k).mana = value,
-        _ => {}
+        STATE_MANA => {
+            gm.unit_mut(k).mana = value;
+            false
+        }
+        _ => false,
     }
 }
 

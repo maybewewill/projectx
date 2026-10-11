@@ -17,6 +17,7 @@ use softfloat::F32;
 mod force;
 pub mod game;
 mod gamecache;
+mod group;
 mod hashtable;
 mod location;
 mod player;
@@ -25,6 +26,7 @@ mod rng;
 mod timer;
 mod trigger;
 mod unit;
+mod unit_event;
 
 pub use game::{
     Ctx, Game, HandleKind, ObjKey, Payload, Playable, ScriptRuntime, UnitEvent, UnitObj, UnitType,
@@ -58,4 +60,6 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     rng::register(reg, game);
     presentation::register(reg, game);
     unit::register(reg, game);
+    unit_event::register(reg, game);
+    group::register(reg, game);
 }
