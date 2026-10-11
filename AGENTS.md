@@ -269,7 +269,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~31.5%** of the 1:1 rewrite.
+**Overall: ~32%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -334,6 +334,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (15)**: attack cycle merged (combat.rs, placeholder damage). Progress recomputed from the table weights: ~32% (the 45.5% reported in chat was wrong). Running: real damage formula (dice/armor/types).
 
 - **2026-10-10 (14)**: `crates/softfloat`: the whole software float library is bit-exact (540k cases). 0x6FAAE4A0 = 0.1f (step 100 ms).
 - **2026-10-10 (13)**: specs game-loop (2 passes) and attack-damage (dice confirmed in Unicorn). RTTI→vtable map. Two agent launches were interrupted by the safety classifier → those tasks were dropped.
