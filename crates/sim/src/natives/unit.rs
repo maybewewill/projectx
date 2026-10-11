@@ -45,7 +45,8 @@
 //!   jump table is not recovered, spec 5).
 //! * Position (UNSURE): the stored x and y are the raw values. The original derives them from the mover
 //!   and applies a placement adjustment for creation (spec 3.2 step 3, 5.1). `SetUnitPosition` calls the
-//!   full move path in the original; here it only stores the values, with no move trigger yet.
+//!   full move path in the original. Here it stores the values and then runs the region enter and leave
+//!   check of `region.rs` (LIKELY the original's move path; `SetUnitX` and `SetUnitY` do not run it).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -55,6 +56,7 @@ use softfloat::{arith, F32};
 
 use super::game::{Game, LocationObj, ObjKey, Object, UnitEvent, UnitObj};
 use super::player::raw_at;
+use super::region;
 use super::unit_event;
 
 /// `SetLife`'s event: the life changed (CONFIRMED value `0xD01E6`).
@@ -219,20 +221,30 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         NativeResult::Return(Value::Null)
     });
 
+    // The move path: region enter and leave are detected here (LIKELY, see `region.rs`), not in SetUnitX/Y.
     let g = Rc::clone(game);
-    reg.register("SetUnitPosition", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let Some(k) = unit_at(&gm, a, 0) {
-            set_position(&mut gm, k, real_at(a, 1), real_at(a, 2));
+    reg.register("SetUnitPosition", move |ctx, a| {
+        let moved = {
+            let mut gm = g.borrow_mut();
+            unit_at(&gm, a, 0).map(|k| (k, set_position(&mut gm, k, real_at(a, 1), real_at(a, 2))))
+        };
+        if let Some((k, from)) = moved {
+            region::unit_moved(&g, ctx, k, from);
         }
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
-    reg.register("SetUnitPositionLoc", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let (Some(k), Some(loc)) = (unit_at(&gm, a, 0), loc_at(&gm, a, 1)) {
-            set_position(&mut gm, k, loc.x, loc.y);
+    reg.register("SetUnitPositionLoc", move |ctx, a| {
+        let moved = {
+            let mut gm = g.borrow_mut();
+            match (unit_at(&gm, a, 0), loc_at(&gm, a, 1)) {
+                (Some(k), Some(loc)) => Some((k, set_position(&mut gm, k, loc.x, loc.y))),
+                _ => None,
+            }
+        };
+        if let Some((k, from)) = moved {
+            region::unit_moved(&g, ctx, k, from);
         }
         NativeResult::Return(Value::Null)
     });
@@ -476,11 +488,14 @@ fn set_state(gm: &mut Game, k: ObjKey, state: u32, value: F32) -> bool {
     }
 }
 
-/// Stores a position as given (see the module notes on the position model).
-fn set_position(gm: &mut Game, k: ObjKey, x: F32, y: F32) {
+/// Stores a position as given (see the module notes on the position model). Returns the position it
+/// replaces, so the move path can detect region crossings.
+fn set_position(gm: &mut Game, k: ObjKey, x: F32, y: F32) -> (F32, F32) {
     let u = gm.unit_mut(k);
+    let from = (u.x, u.y);
     u.x = x;
     u.y = y;
+    from
 }
 
 /// The unit in argument `i`, if it is a live unit.

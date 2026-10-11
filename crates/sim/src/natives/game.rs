@@ -11,7 +11,7 @@
 //! event the thread runs for), so natives such as `GetTriggeringTrigger` can answer per thread.
 //! Keys are interned in creation order (1, 2, ...), so the same `Ctx` always gets the same key.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jass::vm::{RunStatus, ThreadId, Value};
 use softfloat::F32;
@@ -165,6 +165,9 @@ pub enum EventSource {
     /// `TriggerRegisterPlayerUnitEvent`: fires for units of player slot `player`. `key` is the
     /// registration key (event id + 0x80200).
     PlayerUnitEvent { key: u32, player: u32 },
+    /// `TriggerRegisterEnterRegion` / `TriggerRegisterLeaveRegion`: fires for a unit that crosses the
+    /// edge of `region`. `key` is the registration key (`0x80205` enter, `0x80206` leave).
+    RegionEvent { key: u32, region: ObjKey },
 }
 
 /// A trigger event (`event` in JASS).
@@ -186,6 +189,8 @@ pub enum HandleKind {
     Action,
     Location,
     Rect,
+    /// A region (see [`RegionObj`]).
+    Region,
     Hashtable,
     GameCache,
     Player,
@@ -224,6 +229,13 @@ pub struct RectObj {
     pub min_y: F32,
     pub max_x: F32,
     pub max_y: F32,
+}
+
+/// A `region` handle: the set of 32-unit cells it covers (see `natives/region.rs`). A cell is
+/// `(x, y)` relative to the playable area's origin; a cell in the set is inside the region.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegionObj {
+    pub cells: BTreeSet<(i32, i32)>,
 }
 
 /// A unit type as the simulation needs it: the template values that a new unit starts with.
@@ -532,6 +544,8 @@ pub enum Object {
     Event(Event),
     Location(LocationObj),
     Rect(RectObj),
+    /// A region (see [`RegionObj`]).
+    Region(RegionObj),
     /// A hashtable: saved values keyed by (parent, child) integers.
     Hashtable(super::hashtable::HashtableObj),
     /// A game cache: saved values keyed by (mission, key) strings.
@@ -560,6 +574,7 @@ impl Object {
             Object::Event(_) => HandleKind::Event,
             Object::Location(_) => HandleKind::Location,
             Object::Rect(_) => HandleKind::Rect,
+            Object::Region(_) => HandleKind::Region,
             Object::Hashtable(_) => HandleKind::Hashtable,
             Object::GameCache(_) => HandleKind::GameCache,
             Object::Player(_) => HandleKind::Player,
@@ -762,6 +777,12 @@ impl Game {
         for list in self.observers.values_mut() {
             list.retain(|o| o.trigger != t);
         }
+    }
+
+    /// The agents that have an observer table, in key (creation) order. A region's enter and leave
+    /// registrations live in its own table, so this is the list the region hook scans.
+    pub fn observer_agents(&self) -> Vec<ObjKey> {
+        self.observers.keys().copied().collect()
     }
 
     /// The presentation state: the event log that a renderer reads, the camera and the pools.

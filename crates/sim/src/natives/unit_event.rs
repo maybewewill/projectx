@@ -154,7 +154,7 @@ pub(crate) fn dispatch_unit_death(game: &RefCell<Game>, rt: &mut dyn ScriptRunti
 
 /// Fires the entries of `agent`'s table whose key is `key`, oldest first. Returns the OR of the results of
 /// the fired triggers (see [`fire_with_unit`]).
-fn fire_observers(
+pub(crate) fn fire_observers(
     game: &RefCell<Game>,
     rt: &mut dyn ScriptRuntime,
     agent: ObjKey,
@@ -181,7 +181,7 @@ fn fire_observers(
 }
 
 /// The filter of a player-unit event, run with `GetFilterUnit` set to the unit (UNVERIFIED, see the notes).
-fn filter_passes(
+pub(crate) fn filter_passes(
     game: &RefCell<Game>,
     rt: &mut dyn ScriptRuntime,
     b: ObjKey,
@@ -203,7 +203,7 @@ fn filter_passes(
 /// Adds an observer entry for `trigger` on `agent`'s table under `key`, with a new event object. An
 /// existing entry for the same key and trigger keeps its place and takes the new payload (spec 7.2). Returns
 /// the event's handle id.
-fn register_observer(
+pub(crate) fn register_observer(
     gm: &mut Game,
     agent: ObjKey,
     key: u32,
@@ -245,15 +245,15 @@ fn player_unit_event_accepted(id: u32) -> bool {
 }
 
 /// The event id of the running dispatch (the key without its base), if the thread runs an event that has one.
-fn current_event_id(gm: &Game, thread: u32) -> Option<u32> {
+pub(crate) fn current_event_id(gm: &Game, thread: u32) -> Option<u32> {
     let Some(Ctx::Trigger { event: Some(e), .. }) = gm.context(thread) else {
         return None;
     };
     match gm.object(e) {
         Object::Event(ev) => match ev.source {
-            EventSource::UnitEvent { key } | EventSource::PlayerUnitEvent { key, .. } => {
-                key.checked_sub(KEY_BASE)
-            }
+            EventSource::UnitEvent { key }
+            | EventSource::PlayerUnitEvent { key, .. }
+            | EventSource::RegionEvent { key, .. } => key.checked_sub(KEY_BASE),
             _ => None,
         },
         _ => None,
@@ -261,7 +261,7 @@ fn current_event_id(gm: &Game, thread: u32) -> Option<u32> {
 }
 
 /// The handle of the unit of the thread's dispatch (0 when it has none or the unit has no handle).
-fn trigger_unit_handle(gm: &Game, thread: u32) -> u32 {
+pub(crate) fn trigger_unit_handle(gm: &Game, thread: u32) -> u32 {
     match gm.context(thread) {
         Some(Ctx::Trigger { unit: Some(u), .. }) => gm.handle_of(u),
         _ => 0,
