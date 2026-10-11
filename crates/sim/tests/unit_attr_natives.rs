@@ -539,9 +539,10 @@ fn support_tables_cover_the_work_list() {
         .chain(HERO_NATIVES.iter())
         .filter(|e| !matches!(e.support, Support::NotImplemented(_)))
         .count();
-    // 55 before the hero progression pass; it implements nine more hero natives (AddHeroXP, SetHeroXP, SetHeroLevel,
-    // UnitStripHeroLevel, UnitModifySkillPoints, GetHeroStr/Agi, SetHeroStr/Agi), see docs/spec/heroes.md.
-    assert_eq!(implemented, 64);
+    // 56 with UnitResetCooldown (a no-op in the simulation, abilities-2.md section 1.2), plus nine hero natives
+    // (AddHeroXP, SetHeroXP, SetHeroLevel, UnitStripHeroLevel, UnitModifySkillPoints, GetHeroStr/Agi,
+    // SetHeroStr/Agi, docs/spec/heroes.md).
+    assert_eq!(implemented, 65);
 
     let host = host_for(
         r#"
