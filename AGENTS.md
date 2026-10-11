@@ -271,7 +271,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~42.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~43.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -341,6 +341,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (26)**: boot now registers type orders (moves accepted on booted maps); replay orders fire ISSUED_ORDER; replay object pair → agent: the lookup table `0x6F4428B0` found, its producer not (sim uses an UNSURE handle-id model). Training (economy-4.md): **correction** — the 0.1 s 0xD01C1 tick is CBuffAuraRegenLife's aura pulse, not training; CAbilityTrain completion = 0xD01C4; queue shift `0x6F1652A0` Unicorn 3,000/3,000; progress timer NOT found (TrainQueue uses bldtm, UNSURE). Pending natives: findings spec natives-pending.md (0 implemented; each blocked on missing state). ~43.5%.
 
 - **2026-10-11 (25)**: hero intelligence = c1 + trunc(gain·level) (core `0x6F0DB3A0`, Unicorn 300 + lead 400 fresh); kill-XP chain located (`0x6F2A4880` → `0x6F2A46F0` HeroExpRange → `0x6F2A3190` → `0x6F20B080`), split formula NOT resolved, so kill XP is not implemented (a wrong split would desync). Economy wired into Game (single gold/lumber store, Misc constants, mines).
 
