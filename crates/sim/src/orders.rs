@@ -31,9 +31,10 @@
 //!   (`6.4` world units with a cell size of 32, UNVERIFIED scale). Without tables (the softfloat division,
 //!   square root and arccosine need them) the mover does not move anything.
 //!
-//! Not modelled: combat (attack orders walk to the point and stop), target-following (target orders
-//! complete at once), build orders, patrol return, stop-by-owner details, the item drop orders (they stay
-//! in the item model, `natives/item.rs`), and the path smoothing and separation of the original.
+//! Attack orders of a unit with the attack ability are run by the attack cycle (`combat.rs`): it decides the
+//! chase and the swing, and completes the order. Other target orders complete at once (no target following).
+//! Not modelled here: build orders, patrol return, stop-by-owner details, the item drop orders (they stay in
+//! the item model, `natives/item.rs`), and the path smoothing and separation of the original.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -433,6 +434,7 @@ impl Game {
     /// Clears the unit's orders: the stop notification (when there was something), then the cleared
     /// notification for each order, then the lists and the route are emptied (orders.md section 5, clear-all).
     fn clear_orders(&mut self, unit: ObjKey) {
+        self.combat_end(unit);
         let Some(st) = self.orders.units.get_mut(&unit) else {
             return;
         };
@@ -466,6 +468,9 @@ impl Game {
         };
         self.orders.units.entry(unit).or_default().starting = true;
         self.orders.notices.push((unit, NOTE_STARTED_OR_CLEARED));
+        // Attack orders of a unit with the attack ability belong to the attack cycle (`combat.rs`), which
+        // plans the walk and completes the order.
+        let combat = self.combat_kind_of(unit, &head);
         let mut complete = true;
         let mut route = None;
         match head.class {
@@ -475,7 +480,8 @@ impl Game {
                 }
             }
             OrderClass::Point => {
-                if let (Some(kind), Some(goal)) = (
+                if let (None, Some(kind), Some(goal)) = (
+                    combat,
                     self.orders.ability_for(&abilities, head.id, false),
                     head.point,
                 ) {
@@ -497,7 +503,9 @@ impl Game {
             e.started = true;
         }
         let pending = std::mem::take(&mut st.pending);
-        if complete {
+        if combat.is_some() {
+            self.combat_begin(unit);
+        } else if complete {
             self.complete_head(unit);
         }
         // Orders that were dispatched during the start join the list behind the current one.
@@ -511,6 +519,9 @@ impl Game {
 
     /// Removes the finished head and starts the next order, if any.
     fn complete_head(&mut self, unit: ObjKey) {
+        if self.combat_head(unit).is_some() {
+            self.combat_end(unit);
+        }
         let st = self.orders.units.entry(unit).or_default();
         if !st.list.is_empty() {
             st.list.remove(0);
@@ -574,6 +585,63 @@ impl Game {
         }
     }
 
+    /// The active order of `unit` (the head of its list), or `None` when it has none.
+    pub(crate) fn order_head(&self, unit: ObjKey) -> Option<Order> {
+        self.orders
+            .units
+            .get(&unit)
+            .and_then(|u| u.list.first())
+            .map(|e| e.order.clone())
+    }
+
+    /// Completes the active order of `unit` and starts the next one (for the attack cycle).
+    pub(crate) fn complete_order_head(&mut self, unit: ObjKey) {
+        self.complete_head(unit);
+    }
+
+    /// Whether `unit` is walking a route.
+    pub(crate) fn route_active(&self, unit: ObjKey) -> bool {
+        self.orders
+            .units
+            .get(&unit)
+            .is_some_and(|u| u.route.is_some())
+    }
+
+    /// Stops `unit` where it stands (drops its route).
+    pub(crate) fn stop_route(&mut self, unit: ObjKey) {
+        if let Some(u) = self.orders.units.get_mut(&unit) {
+            u.route = None;
+        }
+    }
+
+    /// Plans a route from `unit` to `goal` and makes it the unit's route. Returns `false`, with no route, when the
+    /// planner finds no way.
+    pub(crate) fn chase_route(&mut self, unit: ObjKey, goal: (F32, F32)) -> bool {
+        let points = self.plan_route(unit, goal);
+        let st = self.orders.units.entry(unit).or_default();
+        if points.is_empty() {
+            st.route = None;
+            return false;
+        }
+        st.route = Some(Route { points, next: 0 });
+        true
+    }
+
+    /// The softfloat tables of the order system, when the host set them.
+    pub(crate) fn order_tables(&self) -> Option<&Tables> {
+        self.orders.tables.as_ref()
+    }
+
+    /// A route ended: an attack-cycle order keeps its order (the cycle decides the next step), any other order
+    /// completes.
+    fn route_finished(&mut self, unit: ObjKey) {
+        if self.combat_head(unit).is_some() {
+            self.stop_route(unit);
+        } else {
+            self.complete_head(unit);
+        }
+    }
+
     /// Issues an order from a native: validation, then dispatch. Returns `(validated, record index)`:
     /// the native returns `validated` (true even when the dispatcher drops the order), and fires the
     /// issued-order events only when `record index` is set.
@@ -613,6 +681,17 @@ impl Game {
     /// Runs one step of every moving unit (the mover of `movement.md` section 1, per unit in key order).
     /// Called once per simulation step by the script host.
     pub fn tick_orders(&mut self) {
+        // The attack cycle runs for every unit with an order; it needs no tables (the chase walk does).
+        let busy: Vec<ObjKey> = self
+            .orders
+            .units
+            .iter()
+            .filter(|(_, st)| !st.list.is_empty())
+            .map(|(&k, _)| k)
+            .collect();
+        for unit in busy {
+            self.combat_tick(unit);
+        }
         let Some(tables) = self.orders.tables.take() else {
             return;
         };
@@ -644,7 +723,7 @@ impl Game {
             return;
         };
         if route.next >= route.points.len() {
-            self.complete_head(unit);
+            self.route_finished(unit);
             return;
         }
         let target = route.points[route.next];
@@ -659,7 +738,7 @@ impl Game {
                 }
             }
             if next >= route.points.len() {
-                self.complete_head(unit);
+                self.route_finished(unit);
             }
             return;
         }

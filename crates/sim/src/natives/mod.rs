@@ -51,9 +51,12 @@ pub use game::{
     Ctx, Game, HandleKind, ObjKey, Payload, Playable, ScriptRuntime, UnitEvent, UnitObj, UnitType,
     UnitTypes,
 };
+pub(crate) use group::circle_candidates;
 pub use presentation::{PresentationEvent, PresentationLog, PresentationState};
 pub use timer::expire as expire_timer;
 pub use trigger::fire as fire_trigger;
+pub(crate) use unit::set_life;
+pub(crate) use unit_event::dispatch_unit_death;
 
 /// Registers the sleep, timer and trigger natives on `reg`, bound to `game`.
 ///

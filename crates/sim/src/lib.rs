@@ -15,6 +15,7 @@
 
 pub mod abilities;
 pub mod ai;
+pub mod combat;
 pub mod handles;
 pub mod hashmap;
 pub mod natives;

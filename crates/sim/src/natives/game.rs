@@ -43,6 +43,11 @@ pub enum Payload {
     Event(ObjKey),
     /// The duration of a timed life buff ends: the unit dies (`natives/ability.rs`). `serial` names the buff.
     TimedLife { unit: ObjKey, serial: u32 },
+    /// An attack timer of the unit's attack object (`combat.rs`).
+    Attack {
+        unit: ObjKey,
+        msg: crate::combat::AttackMsg,
+    },
 }
 
 /// The timer or trigger that a script thread runs for.
@@ -1095,6 +1100,8 @@ pub struct Game {
     /// The resource amount of each resource node (a unit with the gold mine flag). A unit has an entry only when it is
     /// a resource node (see `natives/economy.rs`).
     pub(crate) resources: BTreeMap<ObjKey, i32>,
+    /// The attack cycle: type data, Misc values, attack objects and the damage model (see `combat.rs`).
+    pub(crate) combat: crate::combat::CombatSystem,
 }
 
 impl Default for Game {
@@ -1146,6 +1153,7 @@ impl Game {
             firings: Vec::new(),
             waygates: BTreeMap::new(),
             resources: BTreeMap::new(),
+            combat: crate::combat::CombatSystem::default(),
         }
     }
 

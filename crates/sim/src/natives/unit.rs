@@ -502,7 +502,8 @@ pub(crate) fn create(
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
     // of units is UNSURE; 0 is used, as for the other handle types the scripts create on demand.
-    let (_, id) = gm.add_object(Object::Unit(unit), 0);
+    let (key, id) = gm.add_object(Object::Unit(unit), 0);
+    gm.combat_on_create(key);
     id
 }
 

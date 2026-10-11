@@ -575,6 +575,22 @@ fn cell_box(lo: (F32, F32), hi: (F32, F32), origin: (F32, F32)) -> CellBox {
     )
 }
 
+/// The units inside the circle of centre `(x, y)` and radius `radius`, in the order of the circle query: the cell
+/// walk (x-major, then y ascending, each chain from its head), each unit once, with the inclusive test of
+/// [`in_range`]. Dead and removed units are included; the caller filters them. Used by the acquisition scan of
+/// `combat.rs`.
+pub(crate) fn circle_candidates(gm: &Game, x: F32, y: F32, radius: F32) -> Vec<ObjKey> {
+    let query = Query::Circle { x, y, radius };
+    let origin = grid_origin(gm);
+    candidates_of(gm, &query)
+        .into_iter()
+        .filter(|&k| {
+            let u = gm.unit(k);
+            in_query(u.x, u.y, &query, origin)
+        })
+        .collect()
+}
+
 /// The candidates of a query, in the order the collector sees them. The type and owner queries walk the
 /// world unit list in creation order (spec 3.5; UNVERIFIED). The area queries walk the cells of the
 /// query box (spec 1.3 and 1.5).

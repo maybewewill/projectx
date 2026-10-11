@@ -28,6 +28,7 @@ use jass::compile::Module;
 use jass::vm::{NativeRegistry, ResumeError, RunStatus, ThreadId, Value, Vm, VmError};
 use softfloat::{Tables, F32};
 
+use crate::combat;
 use crate::natives::{self, Game, Payload};
 use crate::rng::{RngTable, Streams};
 use crate::timer::{AgileClock, TimerQueue};
@@ -186,6 +187,10 @@ impl ScriptHost {
                 Payload::TimedLife { unit, serial } => {
                     self.vm.set_now(expiry);
                     natives::expire_timed_life(&self.game, &mut self.vm, unit, serial);
+                }
+                Payload::Attack { unit, msg } => {
+                    self.vm.set_now(expiry);
+                    combat::expire_attack_timer(&self.game, &mut self.vm, unit, msg);
                 }
             }
         }
