@@ -355,6 +355,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (32)**: race enum table `0x6FA70FE8` (human 1 … other 7, creeps 8, commoner 9, critters 10, naga 11; NULL → 7, no match → 0), creep walk `0x6F29FD90` and neutral-building walk `0x6F294740` filters (Unicorn 3×2,000, 0 mismatches); candidate list ORDER still unresolved → ChooseRandomCreep/NPBuilding stay pending. GetWorldBounds: rect = 16-byte copy of terrain getter `0x6F73F500`, handle last; getter values not decoded. Vision pass 2 (grid = playable area, scale = cells/range; midpoint-circle span table; refresh on its own 0.4 s timer 0x80269) verified by the lead (Unicorn 200/118/200/11,640, 0 mismatches).
+
 - **2026-10-11 (vision pass 2)**: fog grid from the playable area (scale cells/range), span table and circle writer
   checked in Unicorn (0 mismatches on 300 grids), byte-wide cell writer found, refresh moved to its own 0.4 s timer
   (message 0x80269; lockstep.md 11.2 corrected), unit visibility natives on the slot-0xFC method.
