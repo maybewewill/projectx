@@ -292,14 +292,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~50.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~42.5%** of the 1:1 rewrite (= exact weighted sum of the table below). Correction 2026-10-11: the headline had drifted to ~50.5% while the table summed to ~41%; the headline is now always the computed sum.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
-| File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~78% | MPQ reader: every listfile entry of war3/War3x/War3xLocal reads (17,678 files, 0 failures); real common.j + Blizzard.j + a melee war3map.j parse and type-check clean; w3i/w3e/wpm geometry checked on a real map |
-| Game.dll analysis (names, classes, specs) | 10% | ~50% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~41% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
-| JASS VM + ~1000 natives | 12% | ~93% | parser/declarations/bytecode = original, VM on softfloat; natives: on the real melee map (2)Circumvention only **8 referenced natives are unbound** (was 55 before the 2026-10-11 lanes A–E); 49 NotImplemented rows with reasons remain in the support tables, AI 88 of 124 (36 unbound, each blocked by a named subsystem: docs/spec/ai-natives.md; 43 UNSURE, 0 raised by Unicorn; math/strings/text bit-exact, timers/triggers per spec) |
+| File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~82% | 170 of 171 shipped maps boot (RoC w3i v18 added);  MPQ reader: every listfile entry of war3/War3x/War3xLocal reads (17,678 files, 0 failures); real common.j + Blizzard.j + a melee war3map.j parse and type-check clean; w3i/w3e/wpm geometry checked on a real map |
+| Game.dll analysis (names, classes, specs) | 10% | ~52% | full decompile export; specs: JASS front end, JASS VM, math, handles |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~43% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
+| JASS VM + ~1000 natives | 12% | ~96% | parser/declarations/bytecode = original, VM on softfloat; natives: shipped melee maps reference **0 unbound natives** (was 55 before the 2026-10-11 lanes A–F); AI 97 of 124 bound; 49 NotImplemented rows with reasons remain in the support tables, AI 88 of 124 (36 unbound, each blocked by a named subsystem: docs/spec/ai-natives.md; 43 UNSURE, 0 raised by Unicorn; math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~15% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | ~5% | FDF parser, inheritance, layout, draw list (`crates/fdf`, synthetic tests only); no menus/HUD/renderer yet |
 | Network/lockstep, wasm, sound | 8% | ~9% | turn scheduler (time slots → steps), lockstep spec; 25 ms units confirmed, step listener open |
