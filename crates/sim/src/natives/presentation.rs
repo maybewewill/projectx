@@ -1384,6 +1384,12 @@ fn uv_sorted(a: &[Value]) -> [f32; 4] {
     [u0, v0, u1, v1]
 }
 
+/// The timing fields of the sound `handle` that `TriggerWaitForSound` reads: `(duration_ms, playing, play_position_ms)`.
+/// `None` when the handle is not a live sound.
+pub(crate) fn sound_timing(gm: &mut Game, handle: u32) -> Option<(i32, bool, i32)> {
+    sound_mut(gm, handle).map(|s| (s.duration_ms, s.playing, s.play_position_ms))
+}
+
 impl Game {
     /// The sound `handle` finished playing. A sound marked with `KillSoundWhenDone` (or stopped
     /// with `killWhenDone`) releases its handle now; any other sound only stops. The host calls this

@@ -665,6 +665,9 @@ pub struct UnitObj {
     pub class_flags: u32,
     /// Alternate icon flag (object `+0x280` bit 0x200, `UnitSetUsesAltIcon`); presentation only.
     pub alt_icon: bool,
+    /// The food bits of the registration word (object `+0x64`): `0x300` = the type's food used is applied to the
+    /// owner, `0xC00` = the food made is applied (see `natives/lane_f.rs`). Set at creation (flags `0x502`).
+    pub food_reg: u32,
     /// Ethereal counter (object `+0x158`): `IsUnitType(ETHEREAL)` is `> 0`. No writer in the model yet.
     pub ethereal: i32,
     /// Magic immunity counter (object `+0x15C`): `IsUnitType(MAGIC_IMMUNE)` is `> 0`. No writer in the model yet.
@@ -1246,6 +1249,8 @@ pub struct Game {
     pres: PresentationState,
     /// State of the selection, string, player-removal and timed-turn natives (`lane_e.rs`).
     pub lane: super::lane_e::LaneE,
+    /// State of the food-use, corpse, build-order, hotkey and sound-wait natives (`lane_f.rs`).
+    pub lane_f: super::lane_f::LaneF,
     /// The unit type registry the host fills (see [`UnitTypes`]).
     unit_types: UnitTypes,
     /// Unit events in the order they were produced, until the host takes them (see [`UnitEvent`]).
@@ -1354,6 +1359,7 @@ impl Game {
             rng_table: None,
             pres: PresentationState::default(),
             lane: super::lane_e::LaneE::default(),
+            lane_f: super::lane_f::LaneF::default(),
             unit_types: UnitTypes::new(),
             shops: ShopState::default(),
             unit_events: Vec::new(),

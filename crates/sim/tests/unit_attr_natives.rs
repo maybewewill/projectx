@@ -546,7 +546,8 @@ fn support_tables_cover_the_work_list() {
     // Plus SetUnitTypeSlots (shop stock, shop-stock.md).
     // Plus UnitDamageTarget, UnitDamagePoint, UnitUseItem, UnitUseItemPoint, UnitUseItemTarget, SetUnitRescuable.
     // Plus IsUnitType, IsUnitIdType, UnitAddType, UnitRemoveType, IsUnitInTransport, UnitSetUsesAltIcon (unit-classification.md).
-    assert_eq!(implemented, 83);
+    // Plus SetUnitUseFood and UnitSuspendDecay (lane_f.rs).
+    assert_eq!(implemented, 85);
 
     let host = host_for(
         r#"

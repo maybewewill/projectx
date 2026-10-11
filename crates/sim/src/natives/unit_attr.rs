@@ -375,9 +375,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SetUnitUseFood",
-        support: Support::NotImplemented(
-            "N:player food accounting is not modelled",
-        ),
+        support: Support::Confirmed,
     },
     NativeEntry {
         name: "SetUnitUserData",
@@ -464,9 +462,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitSuspendDecay",
-        support: Support::NotImplemented(
-            "N:corpse decay is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitUseItem",

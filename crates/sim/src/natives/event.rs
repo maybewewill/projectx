@@ -85,6 +85,8 @@
 //! | GetResearched | 0x6F3C2870 | 0x23..=0x25, 0x48..=0x4A | Researched |
 //! | GetSoldUnit | 0x6F3C2750 | 0x10D, 0x11E | Sold |
 //! | GetSoldItem | 0x6F3C25F0 | 0x10F, 0x115, 0x120, 0x126 | SoldItem |
+//! | GetSellingUnit | 0x6F3C2560 | 0x10D, 0x10F, 0x115 (payload), 0x11E, 0x120, 0x126 (trigger unit) | Seller |
+//! | GetRescuer | 0x6F3C2390 | 0x13, 0x3F | Rescuer |
 //! | GetBuyingUnit | 0x6F3C27B0 | 0x10D, 0x10F, 0x115, 0x11E, 0x120, 0x126 | Buyer |
 //! | GetChangingUnit | 0x6F3C2680 | 0x10E, 0x11F | Changing |
 //! | GetChangingUnitPrevOwner | 0x6F3C26E0 | 0x10E, 0x11F | PrevOwner (player) |
@@ -149,6 +151,8 @@ pub const EVENT_PLAYER_STATE: u32 = 0x0B;
 pub const EVENT_PLAYER_CHAT: u32 = 0x60;
 pub const EVENT_UNIT_STATE: u32 = 0x3B;
 pub const EVENT_UNIT_IN_RANGE: u32 = 0x3D;
+pub const EVENT_RESCUED_PLAYER: u32 = 0x13;
+pub const EVENT_RESCUED_UNIT: u32 = 0x3F;
 pub const EVENT_OWNER_PLAYER: u32 = 0x10E;
 pub const EVENT_OWNER_UNIT: u32 = 0x11F;
 
@@ -204,6 +208,11 @@ pub enum Field {
     Sold,
     SoldItem,
     Buyer,
+    /// The shop of a sell or pawn event (player-unit ids `0x10D`, `0x10F`, `0x115` carry it in the payload; the unit
+    /// ids read the trigger unit instead).
+    Seller,
+    /// The rescuer of a rescue event.
+    Rescuer,
     Changing,
     PrevOwner,
     Detector,
@@ -470,6 +479,47 @@ pub(crate) fn fire_owner_change(
         EventSlots {
             id: EVENT_OWNER_UNIT,
             unit: Some(unit),
+            data,
+            ..Default::default()
+        },
+    );
+}
+
+/// A rescue (`0x6F298000`): `rescued` was rescued by `rescuer`. Fires the player-unit listeners of the rescued unit's
+/// owner (id `0x13`, the player event is posted first) and then the unit's own listeners (id `0x3F`). The trigger unit
+/// is the rescued unit; `GetRescuer` is the rescuer. CONFIRMED order and payload; the sender of the rescue message
+/// (`0xD0257`, handled by `0x6F1EC030`) is not located, so the host calls this.
+pub fn fire_rescued(
+    game: &RefCell<Game>,
+    rt: &mut dyn ScriptRuntime,
+    rescued: ObjKey,
+    rescuer: ObjKey,
+) {
+    let owner = game.borrow().unit(rescued).owner;
+    let data = vec![
+        (Field::Rescuer, Datum::Object(rescuer)),
+        (Field::Player, Datum::Player(owner)),
+    ];
+    fire_event(
+        game,
+        rt,
+        ObjKey(owner),
+        KEY_BASE + EVENT_RESCUED_PLAYER,
+        EventSlots {
+            id: EVENT_RESCUED_PLAYER,
+            unit: Some(rescued),
+            data: data.clone(),
+            ..Default::default()
+        },
+    );
+    fire_event(
+        game,
+        rt,
+        rescued,
+        KEY_BASE + EVENT_RESCUED_UNIT,
+        EventSlots {
+            id: EVENT_RESCUED_UNIT,
+            unit: Some(rescued),
             data,
             ..Default::default()
         },
@@ -1033,6 +1083,30 @@ fn register_getters(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         Field::SoldItem,
         Ret::Handle,
     );
+    register_field(
+        reg,
+        game,
+        "GetRescuer",
+        Some(&[EVENT_RESCUED_PLAYER, EVENT_RESCUED_UNIT]),
+        Field::Rescuer,
+        Ret::Handle,
+    );
+    // GetSellingUnit (0x6F3C2560): the player-unit events (0x10D sell unit, 0x10F sell item, 0x115 pawn item) read the
+    // payload slot; the unit twins (0x11E, 0x120, 0x126) read the trigger unit (the shop the listener sits on).
+    {
+        let g = Rc::clone(game);
+        reg.register("GetSellingUnit", move |ctx, _| {
+            let mut gm = g.borrow_mut();
+            let thread = ctx.thread_key();
+            let id = match super::unit_event::current_event_id(&gm, thread) {
+                Some(0x10D | 0x10F | 0x115) => response(&gm, thread, None, Field::Seller)
+                    .map_or(0, |d| datum_handle(&mut gm, &d)),
+                Some(0x11E | 0x120 | 0x126) => trigger_unit_handle(&gm, thread),
+                _ => 0,
+            };
+            NativeResult::Return(Value::Handle(id))
+        });
+    }
     register_field(
         reg,
         game,
