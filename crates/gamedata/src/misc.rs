@@ -235,6 +235,48 @@ pub struct HeroMisc {
     pub grant_normal_xp: Vec<i32>,
     /// `GrantNormalXPFormulaA`, `B`, `C`.
     pub grant_normal_xp_formula: [F32; 3],
+    /// The per-attribute bonus keys (`docs/spec/heroes.md`, section 9). Read by the derived-bonus readers.
+    pub attr_bonus: AttrBonusMisc,
+}
+
+/// The eight reals that turn a hero attribute into a derived bonus (`docs/spec/heroes.md`, section 9). Each is read
+/// through the real reader `0x6F009EE0` with default `0.0`, so an absent key contributes nothing (CONFIRMED reader
+/// rule). The keys are the ones the Game.dll readers `0x6F208060`, `0x6F2080F0`, `0x6F207F40`, `0x6F207FB0`,
+/// `0x6F208170`, `0x6F2081F0` and `0x6F208270` read. `StrAttackBonus` is the only attack key: it multiplies the
+/// hero's primary attribute (`sim::heroes::primary_total`), and the game reads no `AgiAttackBonus` or `IntRegenBonus`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AttrBonusMisc {
+    /// `StrHitPointBonus`: maximum life per point of strength (multiplies the strength total and a factor).
+    pub str_hit_point_bonus: F32,
+    /// `StrRegenBonus`: life regeneration per point of strength.
+    pub str_regen_bonus: F32,
+    /// `StrAttackBonus`: attack damage per point of the primary attribute.
+    pub str_attack_bonus: F32,
+    /// `AgiDefenseBase`: the armor added to the agility armor.
+    pub agi_defense_base: F32,
+    /// `AgiDefenseBonus`: armor per point of agility.
+    pub agi_defense_bonus: F32,
+    /// `AgiMoveBonus`: movement speed per point of agility.
+    pub agi_move_bonus: F32,
+    /// `AgiAttackSpeedBonus`: attack speed per point of agility.
+    pub agi_attack_speed_bonus: F32,
+    /// `IntManaBonus`: maximum mana per point of intelligence.
+    pub int_mana_bonus: F32,
+}
+
+impl AttrBonusMisc {
+    fn read(reader: &mut Reader<'_>) -> AttrBonusMisc {
+        AttrBonusMisc {
+            str_hit_point_bonus: reader.real_or_zero("StrHitPointBonus"),
+            str_regen_bonus: reader.real_or_zero("StrRegenBonus"),
+            str_attack_bonus: reader.real_or_zero("StrAttackBonus"),
+            agi_defense_base: reader.real_or_zero("AgiDefenseBase"),
+            agi_defense_bonus: reader.real_or_zero("AgiDefenseBonus"),
+            agi_move_bonus: reader.real_or_zero("AgiMoveBonus"),
+            agi_attack_speed_bonus: reader.real_or_zero("AgiAttackSpeedBonus"),
+            int_mana_bonus: reader.real_or_zero("IntManaBonus"),
+        }
+    }
 }
 
 impl HeroMisc {
@@ -260,6 +302,7 @@ impl HeroMisc {
             reader.real_or_zero("GrantNormalXPFormulaB"),
             reader.real_or_zero("GrantNormalXPFormulaC"),
         ];
+        let attr_bonus = AttrBonusMisc::read(reader);
         HeroMisc {
             max_hero_level,
             need_hero_xp,
@@ -270,6 +313,7 @@ impl HeroMisc {
             max_unit_level,
             grant_normal_xp,
             grant_normal_xp_formula,
+            attr_bonus,
         }
     }
 }

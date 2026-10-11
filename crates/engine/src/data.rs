@@ -159,6 +159,8 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
     if let Some(t) = tables {
         game.set_hero_xp(sim::heroes::build(&hero_xp_inputs(&data.misc), t));
     }
+    // The derived attribute bonus rates (`docs/spec/heroes.md`, section 9): plain reals, no table needed.
+    game.set_hero_rates(hero_rates(&data.misc));
     for (code, row) in data.units.iter() {
         let Some(id) = rawcode(code) else {
             continue;
@@ -374,6 +376,21 @@ fn hero_attributes(ty: &UnitTypeData) -> sim::heroes::HeroAttributes {
 }
 
 /// The experience-builder inputs from the `[Misc]` hero keys.
+/// The derived attribute bonus rates of `[Misc]` (`docs/spec/heroes.md`, section 9).
+fn hero_rates(misc: &MiscData) -> sim::heroes::BonusRates {
+    let b = &misc.hero.attr_bonus;
+    sim::heroes::BonusRates {
+        str_hit_point: b.str_hit_point_bonus,
+        str_regen: b.str_regen_bonus,
+        str_attack: b.str_attack_bonus,
+        agi_defense_base: b.agi_defense_base,
+        agi_defense: b.agi_defense_bonus,
+        agi_move: b.agi_move_bonus,
+        agi_attack_speed: b.agi_attack_speed_bonus,
+        int_mana: b.int_mana_bonus,
+    }
+}
+
 fn hero_xp_inputs(misc: &MiscData) -> sim::heroes::XpInputs {
     let h = &misc.hero;
     sim::heroes::XpInputs {

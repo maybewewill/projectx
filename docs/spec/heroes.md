@@ -182,12 +182,8 @@ The structure is recorded so the next pass can start from it.
   arithmetic not Unicorn-checked). The owner's handicap (`player +0x2A4`, read through the global at `0x6F2834E0`)
   scales the value when the handicap flag is set.
 
-Open (kill XP): the formula for the value `F` in `0x6F2A3190` (the first `i2r` of the count, then `0x6F2A0230`
-which looks at the victim's ability/level and returns an int, then a division by the candidate count is LIKELY: the
-split), the `HeroFactorXP` and `SummonedKillFactor` uses, `SetPlayerHandicapXP` storage, and the rounding per
-recipient. Iteration order does not change the numbers unless a shared accumulator is updated per recipient, which
-has not been seen (LIKELY). These need a Unicorn run of `0x6F2A3190` with stubs for the candidate list and the
-per-hero call, then a second run of the level walk in `0x6F20B080`.
+The numeric rules of the kill split are now resolved and checked in Unicorn: see section 8.2 (amount, split, engine)
+and 8.3 (candidate selection, structure only).
 
 ### 7.2 Attribute bonuses (partly read)
 
@@ -197,16 +193,200 @@ per-hero call, then a second run of the level walk in `0x6F20B080`.
   callees `0x6F209000` / `0x6F209090` and the agility path `0x6F20A1E0`, which were not read to the end.
 - **Intelligence setter core** `0x6F20A260`: section 6 (counter, then the same refresh pattern).
 - The Misc keys (`StrAttackBonus`, `StrHitPointBonus`, `StrRegenBonus`, `AgiAttackBonus`, `AgiDefenseBonus`,
-  `AgiAttackSpeedBonus`, `IntManaBonus`, `IntRegenBonus`) are still not read into the model. Which unit fields they
-  set, and the rounding, are open. Not modelled.
+  `AgiAttackSpeedBonus`, `IntManaBonus`) are read into the model now (section 9; `IntRegenBonus` is not read by the
+  game at all). The unit fields they set are section 9.4; the rounding and the life rule are open.
 
-## 8. Hero gate (CONFIRMED)
+## 8. Kill experience split and hero gate
+
+Labels: CONFIRMED = read in the disassembly and reproduced in Unicorn with 0 mismatches; LIKELY = read, not run;
+UNSURE = not settled. Harness: `tools/emu/hero_kill_xp_emu.py` (modes A and B), check: `crates/sim/tests/kill_xp_vectors.rs`
+(`GAME_DLL` and `KILL_XP_VECTORS` set). Model: `sim::heroes` (`Gain`, `experience_engine`, `KillVictim`, `KillEnv`,
+`kill_amount`, `distribute_kill`).
+
+Runs: mode A (the engine `0x6F20B080`) 300 + 3000 cases, mode B (amount, split and the engine calls for every
+candidate) 300 + 3000 cases; **0 mismatches**. The synthetic inputs cover handicap, walk, range, bonus slots, summoned
+victims, illusions, suspended heroes, level-ups and the skill-point cap. Every case runs the real code below the
+entries; only the callees listed in the harness answer from synthetic data (Misc readers, the level and factor tables,
+player accessors, the upgrade-based bonus lookups, the victim's ability, and side effects that carry no numbers).
+
+### 8.1 Hero gate (CONFIRMED)
 
 Every hero native first finds the unit, requires its type id to start with an uppercase letter, the unit not to be
 removed, and the unit not to be an illusion (`+0x5C` bit 30). A failing call returns its default. The model applies
 the same gate (`natives/hero.rs`).
 
-## 9. Model changes
+### 8.2 The numbers (CONFIRMED by the Unicorn runs)
+
+**Amount `K` (`0x6F2A0230`, victim = dying unit, an int).**
+1. Level `L`: `0x6F2A0210` gives the hero counter + 1 when the victim has a hero object (unit `+0x1F0`), else the unit
+   level (`0x6F29DCA0`). An ability found by `0x6F0787D0` (rawcode from `0x6F113CC0`) overrides it when its virtual
+   flag at slot `0x36C` answers non-zero: `L := ability +0xE4`.
+2. `L < 1` gives `K = 0`. Otherwise the table is chosen by the type: the type id starts with an uppercase letter and
+   the illusion bit is clear gives **hero** tables (`MaxHeroLevel`, `GrantHeroXP`, Misc key read at `0x6F876208`);
+   anything else gives **unit** tables (`MaxUnitLevel`, `GrantNormalXP`, key `0x6F876218`). `L := min(L, max)`.
+3. `G = grant[L - 1]`. If the victim's `+0x248` bit 2 is set (summoned), `K = f2i(mul(i2r(G), SummonedKillFactor))`
+   (real Misc key `0x6F92F288`), otherwise `K = f2i(i2r(G)) = G`.
+
+**Split (`0x6F2A3190`, record built by `0x6F2A46F0`).** The chosen list is the in-range list (record `+0x14`) when it
+is not empty, otherwise the global list (record `+0xE0`). `N` is its count. `F = div(i2r(K), i2r(N))` is computed once
+(softfloat), and when `0 < F` every entry of the list gets the engine call with value `F`, the handicap flag set, the
+range flag set, and the walk flag set when the victim's owner index is 12 or above (`vf59` = owner, `cmp 12; setge`).
+The order of the list does not change any number (each recipient depends only on `F`, `N` and its own state).
+
+**Engine (`0x6F20B080`, kill flags).** Per recipient:
+- a. Nothing when `F == 0.0` or the hero is suspended (`+0xEC`).
+- b. Handicap: `v = mul(F, H)` with `H` the owner's handicap, player `+0x2A4` (the player is `0x6F2834E0(unit)`).
+- c. Upgrade bonus: `B1 = 0x6F40B340(player, 'HERO', 11)`. Walk the nine rawcodes at `0x6FA6F044` (`1NWT`..`9NWT`)
+   while `B1 != 0`, `i < 9`, and slot `i` exists (`0x6F40B380` of the unit's list). A non-zero code with `k = levels(code)
+   != 0` sets `bonus = value(code, min(k, B1) - 1)`; the last one found wins. If `bonus != 0`: `v = mul(v, add(1.0, bonus))`.
+- d. Plain gain (victim owner below 12): `XP += f2i(round(v))`, `round(x) = floor(x + 0.5)` (`0x6F6EF330`).
+   Walk gain (victim owner 12 or above): `X = i2r(XP)`, `c` = counter. If `c < MaxHeroLevel - 1`, loop:
+   `T = factor[c]` (HeroFactorXP / 100, table field `+8`); stop if `T == 0`; `X += mul(v, T)`; `c += 1`;
+   `Nf = i2r(need(c))`; stop unless `Nf < X`; `v = div(X - Nf, T)`; `X = Nf`; stop when `c >= MaxHeroLevel - 1`.
+   Then `XP := f2i(round(X))`: the walk **sets** the experience, it does not add to it.
+- e. Tail (shared with the plain `AddHeroXP`): while `need(c + 1) <= XP` and not at maximum: level up, skill point
+   `+1` when the new counter is below `MaxHeroLevel`. At maximum `XP := need(c + 1)`. When the hero leveled, skill points
+   are capped at `sum over the 5 hero ability slots of max(0, max - min)` (`0x6F207C80`, `0x6F207CC0`) when that is lower.
+
+Open for the amount/split: none found in the disassembly.
+
+### 8.3 Candidate selection (structure read, the numbers are NOT run)
+
+- Killer and dying: `0x6F2A4880` calls the builder `0x6F2A46F0` (dying, killer). No record when the killer is absent,
+  when `0x6F285AC0(killer, dying)` is non-zero (the dying owner's bit in the killer owner's `+0x38` mask, CONFIRMED
+  structure; LIKELY an ally test), or when the killer has flag `0x10000` (building, LIKELY) and the Misc key
+  `BuildingKillsGiveExp` is off (`0x6FAB4268`, read by `0x6F26E1xx`). Killer owner = `vf59` of the killer.
+- Range: `R = HeroExpRange` (Misc real, `0x6F009EE0`), `V = mul(R, R)` (record `+0x0C`, R is not divided by 32 here).
+  A candidate is in range when `D <= V`, `D` = squared distance of the normalised positions of the dying unit and of the
+  candidate (`0x6F28B990`, `dist2` `0x6F020000`). **The normaliser `0x6F4743A0 / 0x6F4742F0` is not understood** (it
+  reads the map object), so the units of `D` against `R` are UNSURE.
+- Candidates are all heroes of the global hero category list (`0x6F46D0B0` with category `0x41486572`, from
+  `0x6F2075E0`), in list order. Each candidate is eligible when: the flags `+0x5C & 0x40000100 == 0`; the candidate's
+  owner bit is set in the killer owner's `+0x68` mask (`0x6F3A34B0`, the shared-experience alliance, LIKELY); and when the
+  Misc key `MaxLevelHeroesDrainExp` (`0x6FA70E98`) is off, the hero is not at maximum level (`0x6F207F10`).
+- `GlobalExperience` (`0x6FA70E94`): when on, every eligible candidate is added to the global list (`+0xE0`); every
+  eligible candidate in range is also added to the in-range list (`+0x14`).
+- Misc values at runtime: the loader `0x6F26E1xx` reads `BuildingKillsGiveExp`, `GlobalExperience` and
+  `MaxLevelHeroesDrainExp` into `0x6FAB4268`, `0x6FA70E94`, `0x6FA70E98`. The file's own values (1, 1) are overwritten
+  at load; the Misc values are inputs (UNSURE for 1.26a defaults).
+- Not checked: dead heroes (no life test seen in the filter; whether the global list keeps dead heroes is UNSURE),
+  the normaliser, the `0x100` flag meaning, the alliance mask names (`+0x38`, `+0x68`).
+
+### 8.4 Model status
+
+- `sim::heroes::{experience_engine, distribute_kill, kill_amount}` implement 8.2 with `Gain` (handicap, walk, range).
+  Not wired into the death path: the simulation does not track the killer (`GetKillingUnit` is null) and the candidate
+  selection in 8.3 is not verified, so a hook would be guesswork. The death path and the combat code are untouched.
+
+### 8.5 Model changes
+
+## 9. Derived attribute bonuses
+
+Labels as above. Addresses are 1.26a VAs. Harness: `tools/emu/hero_bonus_emu.py` (the real readers run in Unicorn;
+the counter read `0x6F473170`, the Misc reader `0x6F009EE0` and the three attribute cores `0x6F0DB300` (strength),
+`0x6F0DB350` (agility), `0x6F0DB3A0` (intelligence) are the real code or hooks as stated there).
+
+### 9.1 The Misc keys that are read (CONFIRMED)
+
+The derived bonuses read exactly eight keys, through the real reader `0x6F009EE0` (key on the stack, index 0, default
+`0.0` when absent):
+
+| Key | Reader | Value |
+|---|---|---|
+| `StrHitPointBonus` | `0x6F208060` | `I2R(str) * StrHitPointBonus * *factor` (factor is a real at the reader's second stack pointer) |
+| `StrRegenBonus` | `0x6F2080F0` | `I2R(str) * StrRegenBonus` |
+| `StrAttackBonus` | `0x6F207F40` | `I2R(primary) * StrAttackBonus`, primary = core chosen by `+0xCC` |
+| `AgiDefenseBase` + `AgiDefenseBonus` | `0x6F207FB0` | `AgiDefenseBase + I2R(agi) * AgiDefenseBonus` |
+| `AgiMoveBonus` | `0x6F208170` | `I2R(agi) * AgiMoveBonus` |
+| `AgiAttackSpeedBonus` | `0x6F2081F0` | `I2R(agi) * AgiAttackSpeedBonus` |
+| `IntManaBonus` | `0x6F208270` | `I2R(int) * IntManaBonus` |
+
+The same keys are read a second time in `0x6F0E58A0` (strength attack, hit points, mana, agility defense/move/speed
+reads) and `0x6F0E5F20` (agility defense, move, speed, mana) and `0x6F0D4CB0` (strength attack, hit points). Those
+callers were not decoded further; they read the same keys with the same meaning (LIKELY).
+
+**Keys that are NOT read**: `AgiAttackBonus`, `IntRegenBonus`, `IntAttackBonus`, `StrDefense*` do not occur in the
+1.26a code (string search of the whole decompile). The primary attribute carries the attack bonus instead.
+
+### 9.2 Attribute totals and the primary attribute (CONFIRMED)
+
+- Strength total `str = base + trunc(gain * counter)` (section 5), agility the same (`+0xA8`, `+0xE4`), intelligence
+  `base_counter + trunc(gain * counter)` (section 6), where `counter = level - 1`.
+- The primary attribute is `+0xCC`: `1` selects the strength core `0x6F0DB300`, `2` the intelligence core `0x6F0DB3A0`,
+  any other value the agility core `0x6F0DB350`. Checked in Unicorn: the three cores return 451, 200 and 101 for the
+  same hero (STR 339 + 112, AGI 143 + 57, INT counter 1 + 100). **The source of `+0xCC` in the unit record is not found
+  (UNSURE).** The Rust default is agility (0).
+- Hence the attack bonus of a strength hero uses strength, an intelligence hero uses intelligence, and an agility hero
+  (and any other value) agility. There is no per-attribute attack key.
+
+### 9.3 Arithmetic (CONFIRMED, 14,000 Unicorn cases, 0 mismatches)
+
+All readers are softfloat `mul` / `add` of `I2R` results (`docs/spec/softfloat.md`). The harness draws random heroes
+(base and gain of each attribute, counter 0..25, primary 0..3), random Misc reals, and random factors, and compares
+`sim::heroes::derived_bonuses` with the original result for every reader: `HP`, `REGEN`, `STRATK`, `ARMOR`, `MOVE`,
+`ASPD`, `MANA`, 2,000 cases each. Test: `crates/sim/tests/hero_bonus_vectors.rs` (`HERO_BONUS_VECTORS`).
+
+Operand detail confirmed by the probes: the hit-point reader writes its result to its **first** pointer and multiplies
+by the real at its **second** pointer (a float the caller passes; the setter `0x6F20A160` passes a pointer built from
+`*(global + 0x29C)`, see 9.5, value UNSURE, the Rust side uses `1.0`, LIKELY).
+
+### 9.4 Where the values go (setter side)
+
+- **Strength setter** `0x6F20A160`: base `+0x94` += delta; the shared refresh `0x6F332810`; the attack ability refresh
+  `0x6F2087B0` when unit `+0x1E8` is set (it runs `0x6F207F40` for the attack bonus, then the damage sink
+  `0x6F0C6BD0` and the object at unit `+0x98`); then the hit-point path `0x6F209000` and the regeneration path
+  `0x6F209090` (which calls `0x6F2080F0` for the regeneration value and a sink at `this+0x13C`, LIKELY).
+- **Hit-point path** `0x6F209000` (CONFIRMED structure): new bonus = `0x6F208060(...)`; old = the real at hero `+0xA4`;
+  delta = new - old (`0x6F6EEEF0`, sub); then the unit life sink `0x6F2AC450(unit, delta, mode)` with
+  `mode = (show != 0) + 1`, where `show` is the setter's boolean (`permanent` in JASS); then the stored value object at
+  hero `+0xA0` receives the add (`vt[0](value, 1)`). Whether `+0xA4` is ever written was not found (UNSURE).
+- **Life sink** `0x6F2AC450` (CONFIRMED that it dispatches on mode 1 / 2, LIKELY the meaning): mode 1 path reads the
+  maximum (CUnit vt `+0x130`), sets it (vt `+0x144`), rescales the current life with the ratio, and clamps the result
+  to `[min, ...]` where the minimum is 1.0 for a living unit (vt `+0x13C` tests alive) and 0.0 otherwise; mode 2 with a
+  positive delta adds the delta to the maximum (vt `+0x128` / `+0x130`) and to the life; mode 2 with a non-positive
+  delta clamps the life to the new maximum. **The exact meaning of each mode is LIKELY from the decompile, not run.**
+  `CUnit` slot names used: vt `+0x124` = `CUnit::vf73` (set life, `0x6F28B1F0`: clamps negatives to 0, then sets, then
+  refreshes `0x6F2AB460`), vt `+0x128` = `vf74` (add: `get + value`, set, refresh, returns the difference), vt `+0x130`
+  = `vf76` (get, `0x6F28B080`), vt `+0x13C` = `vf79`, vt `+0x144` = `vf81`.
+- **Regeneration** `0x6F209190`: delta from the stored real at hero `+0xB0`, then the sink object at `+0xAC`.
+  **Mana** `0x6F209210`: delta from the stored real at hero `+0xC8`, sink `+0xC4`, with the same mode flag. **Armor**
+  path `0x6F202F50` (object `+0x6C`, then `0x6F201D50`). **Move** `0x6F208820` (`0x6F208170`, object `+0xB4`, then
+  `0x6F202F50`). **Attack speed** `0x6F208880` (`0x6F2081F0`, object `+0xBC`, then `0x6F0C9090`). **Intelligence
+  setter** `0x6F20A260`: the counter is written (`0x6F473140`), then the attack ability refresh, `0x6F209210` (mana) and
+  `0x6F2092A0` (a refresh with the unit's `+0x140` state and the `+0x5C` bit 2 event `vt+0xEC`).
+- Global object `0x6F2834E0()` (returns 0 when `DAT_6FAB65F4` is 0, else a runtime object); its field `+0x29C` is the
+  factor passed to the hit-point path. Value UNSURE.
+
+### 9.5 What the model applies (LIKELY, not run)
+
+- The sim has life and mana maxima but no armor, regeneration, attack speed, move bonus or attack bonus fields on the
+  unit. Those five derived values are computed (`derived_bonuses`) but **not stored or applied**; the unit model has no
+  place for them yet (listed as open).
+- **Maximum life and mana** change by the difference of the derived value before and after the setter
+  (`max_life_delta`, `max_mana_delta`). The current life and mana move by the same amount and are clamped to
+  `[0, max]` (`natives/hero.rs`, `with_attribute_change`). **UNSURE**: this is the placeholder for the life sink's
+  mode rule (9.4). The original's exact rule (proportional or absolute, and which mode `permanent` selects) is open.
+  Not verified.
+- Hit-point factor `1.0` is used by the natives (LIKELY, see 9.3).
+- Rates come from `[Misc]` through `gamedata::misc::AttrBonusMisc` (eight reals, default `0.0`), installed with
+  `Game::set_hero_rates`. A zero rate changes nothing.
+
+Verification of the applied path: `crates/sim/tests/hero_bonus_natives.rs` (JASS setter, hand-computed: StrHitPointBonus
+0.5, strength 20 to 30 gives max life 600 to 605; without rates nothing changes). Unit tests of the arithmetic are the
+vector test above.
+
+### 9.6 Open items (derived bonuses)
+
+1. The source of the primary attribute `+0xCC` in the unit record.
+2. The life sink `0x6F2AC450`: run mode 1 and mode 2 in Unicorn with a unit object (the stat cell helpers `0x6F4773A0`,
+   `0x6F477350`, `0x6F477440`, `0x6F4773E0` are the get and set of the stat block); decide the proportional or absolute
+   rule and which mode `permanent` selects.
+3. The stored old values at hero `+0xA4`, `+0xAC`/`+0xB0`, `+0xC4`/`+0xC8` (who writes them), and the global `+0x29C`.
+4. Model fields for armor, regeneration, attack speed and move bonus, and the attack bonus in the damage roll
+   (`combat.rs` read-only hook; not done in this pass).
+5. The `0x6F0E58A0` / `0x6F0E5F20` / `0x6F0D4CB0` readers (same keys) were not checked against the vectors.
+
+### 9.7 Model changes (earlier pass)
 
 - `sim::heroes`: the builder (`build`), the lookup (`XpTables::need_xp`), `add_xp`, `set_xp`, `set_level`,
   `strip_levels`, `modify_skill_points`, `attribute`, `intelligence`, `rebase`.
@@ -219,7 +399,9 @@ the same gate (`natives/hero.rs`).
 
 ## 10. Open items (priority)
 
-1. Kill experience split: the value `F` and the candidate loop (section 7.1). Needed for any XP gained in play.
+1. Kill candidate selection (section 8.3): the position normaliser `0x6F4743A0` / `0x6F4742F0` and the units of the
+   range test, dead heroes in the global hero list, the alliance mask names. The numeric split is done (section 8.2).
+   Wiring it into the death path needs the killer in the simulation (`GetKillingUnit` is null today).
 2. The per-recipient level walk in `0x6F20B080` (section 7.1), Unicorn-checked with stubs.
 3. Hero ability slots and the ability-level rules of the skill points (sections 4 and 7).
 4. Derived bonuses (section 7.2): the Misc values and the unit fields they set.
