@@ -293,6 +293,8 @@ pub enum HandleKind {
     Item,
     /// A destructable (see [`DestructableObj`]).
     Destructable,
+    /// A fog modifier (see `natives/fog.rs`).
+    FogModifier,
     /// Presentation handle types (see `presentation.rs`): camera setups, sounds, effects, quests,
     /// quest items, multiboards and their items, leaderboards, dialogs, buttons and timer dialogs.
     CameraSetup,
@@ -924,6 +926,8 @@ pub enum Object {
     Item(ItemObj),
     /// A destructable (see [`DestructableObj`]).
     Destructable(DestructableObj),
+    /// A fog modifier (see `natives/fog.rs`).
+    Fog(super::fog::FogModifierObj),
     /// A presentation object with a handle (see `presentation.rs`).
     Pres(PresObj),
 }
@@ -949,6 +953,7 @@ impl Object {
             Object::Group(_) => HandleKind::Group,
             Object::Item(_) => HandleKind::Item,
             Object::Destructable(_) => HandleKind::Destructable,
+            Object::Fog(_) => HandleKind::FogModifier,
             Object::Pres(p) => p.handle_kind(),
         }
     }
@@ -1015,6 +1020,13 @@ pub struct Game {
     filter_destructables: Vec<u32>,
     /// The ability type registry the host fills (see [`AbilityTypes`]).
     ability_types: AbilityTypes,
+    /// Game-state values (speed, difficulty, flags, campaign, tournament; see `natives/gamestate.rs`).
+    pub(crate) game_state: super::gamestate::GameState,
+    /// Fog of war: fog modifiers and the per-player cell state (see `natives/fog.rs`).
+    pub(crate) fog: super::fog::FogState,
+    /// Blight, terrain overlay, start locations, player tech and misc player state, and the native log
+    /// (see `natives/misc.rs`).
+    pub(crate) misc: super::misc::MiscState,
     /// The order system: unit order lists, the issued-order records and the mover (see `orders.rs`).
     pub(crate) orders: crate::orders::OrderSystem,
 }
@@ -1059,6 +1071,9 @@ impl Game {
             enum_destructables: Vec::new(),
             filter_destructables: Vec::new(),
             ability_types: AbilityTypes::new(),
+            game_state: super::gamestate::GameState::new(),
+            fog: super::fog::FogState::default(),
+            misc: super::misc::MiscState::default(),
             orders: crate::orders::OrderSystem::new(),
         }
     }
