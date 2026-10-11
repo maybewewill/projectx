@@ -292,7 +292,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~48.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~49.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -300,7 +300,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 | Game.dll analysis (names, classes, specs) | 10% | ~50% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~41% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
 | JASS VM + ~1000 natives | 12% | ~89% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,110 of 1,167 bound** (57 NotImplemented with a reason; the three player unit counts are now bound), AI 88 of 124 (36 unbound, each blocked by a named subsystem: docs/spec/ai-natives.md; 43 UNSURE, 0 raised by Unicorn; math/strings/text bit-exact, timers/triggers per spec) |
-| Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
+| Rendering (MDX, terrain, effects) | 12% | ~15% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | ~5% | FDF parser, inheritance, layout, draw list (`crates/fdf`, synthetic tests only); no menus/HUD/renderer yet |
 | Network/lockstep, wasm, sound | 8% | ~9% | turn scheduler (time slots → steps), lockstep spec; 25 ms units confirmed, step listener open |
 | Replay test harness against the original | 5% | ~30% | w3g parser + Unicorn harness for functions |
