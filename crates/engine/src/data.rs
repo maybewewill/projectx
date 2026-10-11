@@ -183,6 +183,17 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         reaction_delay: data.misc.reaction_delay,
     });
 
+    // The day cycle of the map's Misc data (`docs/spec/vision.md`, section 13). Without any [Misc] layer the usual
+    // cycle of `sim::daynight::DayCycle::default` stays in force.
+    if data.misc.layers_with_misc > 0 {
+        game.set_day_cycle(sim::daynight::DayCycle {
+            day_length: data.misc.day_length,
+            day_hours: data.misc.day_hours,
+            dawn: data.misc.dawn,
+            dusk: data.misc.dusk,
+        });
+    }
+
     let mut missing = Vec::new();
     if tables.is_none() {
         missing.push("no Game.dll tables");

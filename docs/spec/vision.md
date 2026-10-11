@@ -562,3 +562,78 @@ Sources: Ghidra decompile export (scratchpad, not committed), capstone listings 
    `0x6f408d10` and its callers (`find_callers.py` on `0x6f408d10`).
 3. Time of day: stub `0x6f009ee0` in the harness to return fixed `DayLength`/`DayHours`/`Dawn`/`Dusk` values, run
    `0x6f429770` and read the modifier object's fields (rate) for two `DayLength` values, to fix the rate formula.
+
+## 13. Pass 5 (2026-10-11): time of day rate and day rule (CONFIRMED); unit sight rows (partial)
+
+Harness: `tools/emu/time_of_day_emu.py` (time of day, GAME_DLL-gated, prints the vectors embedded in
+`crates/sim/tests/time_of_day.rs`) and `tools/emu/vision_unit_rows_emu.py` (13.5). Rust: `crates/sim/src/daynight.rs`.
+
+### 13.1 Rate of the time-of-day modifier (CONFIRMED, 4 vectors, 0 mismatches)
+
+- `0x6f429770` reads `DayLength`, `DayHours` (Misc reader `0x6f009ee0`, default 0.0 when absent) and the scale
+  (`0x6f4773a0`, the time-of-day scale of `GetTimeOfDayScale`). It computes `MUL(scale, DayHours)` (A = scale, B =
+  DayHours) and then `DIV(that, DayLength)`; the DIV is softfloat's `x * recip(y)` (its inner MUL is visible in the
+  trace). The result is the rate argument of the modifier constructor `0x6f4774e0`.
+- Vectors (DayLength, DayHours, scale -> rate bits): (240, 12, 1.0 -> 3D4CCCCD), (240, 24, 0.5 -> 3D4CCCCD),
+  (37, 9, 2.5 -> 3F1BACFA), (3, 7, 0.1 -> 3E6EEEEF). So rate = scale x DayHours / DayLength, per second of agile time
+  (LIKELY the unit: the rate is applied per agile second, see 13.4). `DayCycle::rate` in `crates/sim/src/daynight.rs`.
+
+### 13.2 Day rule of the switch `0x6f42c210` (CONFIRMED, 13 vectors, 0 mismatches)
+
+- The current time t comes from the time-of-day getter (`0x6f4773a0` on the slot). Day iff `Dawn <= t` and `t < Dusk`
+  (f32 compares; the flag goes to the setter `0x6f473140`). Checked with (Dawn, Dusk) = (6, 18), (4.5, 20) and the
+  inverted (20, 4): t = 5.99 night, 6 day, 17.99 day, 18 night; with (4.5, 20): 4.49 night, 4.5 day, 19.99 day, 20 night;
+  with (20, 4): 5 and 21 both night.
+- The switch reads `DayHours` too (`0x6f42c243`, before the Dawn and Dusk reads), through a property write of 0.0 that the
+  harness stubs (`0x6f4774a0`); that write is not analysed further (UNSURE what it does).
+- Sim: `DayCycle::is_day` = `le(dawn, t) && lt(t, dusk)`; `Game::is_night` uses the map's Misc values (engine wiring in
+  `crates/engine/src/data.rs`, default cycle 240 s / 24 h / 6 to 18 when no `[Misc]` layer exists, UNSURE).
+  `gamedata::MiscData` now reads `DayLength`, `DayHours`, `Dawn`, `Dusk` (default 0.0, as the original's reader).
+
+### 13.3 Listener and wrap (LIKELY)
+
+- The listener `0x6f477550` is created with message `0x80262` and threshold = a second read of `DayHours` (`0x6f429881`).
+  Its handler `0x6f42fc9f` stores 0.0 into the time-of-day slot (section 11.9.6). With the rate of 13.1 the value runs
+  from 0 to DayHours in DayLength seconds and then wraps: so one cycle = DayLength seconds, and DayHours is both the
+  cycle's hours and the wrap point (LIKELY; consistent with the usual values 240 s and 24 h).
+
+### 13.4 What was not run (UNSURE, the open part of the clock)
+
+- The per-tick value of state 2 is NOT computed. The modifier constructor needs the agile world: `0x6f48ab80` calls the
+  world's vtable slot 0x10 (world global `0x6fab73d8`), and the property getter goes `0x6f4773a0` -> handle lookup
+  `0x6f03fa30` -> `0x6f497460` -> world `0x6f4885a0`. The harness stubs the world query (returns a zeroed object) and the
+  handle lookup; that is enough to build the modifier (fields checked: vtable `0x6f878528`, refcount, rate), not to
+  evaluate it.
+- Property layout seen so far (CONFIRMED by disassembly): the value is at `obj+0x78`, limits at `+0x7C` and `+0x80`;
+  `0x6f477180` clamps a value against them (`lo = +0x78 + ...` via MUL/ADD, see the listing); `0x6f4a90b0` stores
+  `clamp(get(obj))` into `+0x78`; `0x6f4a9390` / `0x6f4a92b0` store and notify the listeners (`0x6f4a9230`). The modifier
+  fields: `+0x30` (set from the start-time argument, 0.0 in the setup), `+0x40` (set by `0x6f4a6bc0`), flags `+0x4c`
+  (`0x200000`, `0x1000`, `0x2000`, `0x80000`, bits 1, 2, 4), evaluation helpers `0x6f4a6b70 / 0x6f4a6bc0 / 0x6f4a6af0`
+  (the last one is the flag recomputation used by both setters). The per-tick update that applies the rate is not
+  located (the timer pump `0x6f46E370` calls listeners, not the modifier, as far as read).
+- Consequence: the clock is NOT advanced by the sim (`GetFloatGameState(2)` only moves through `SetFloatGameState`).
+  Any value of state 2 after N ticks is open. The decision is the next step: run the agile world (`0x6f4885a0`) or find
+  the modifier's evaluate method through its vtable (the `FloatModifier` vtable `0x6f878528` slots 5 and 6 are
+  `0x6f478820` and `0x6f4797f0`, not read).
+
+### 13.5 Unit sight rows of `0x6f409e00` (PARTIAL, circle stand-in kept)
+
+Experiments (Unicorn, `vision_unit_emu.Ctx` with a flat grid, 64 x 64, pitch 64, centre fog cell (32, 32); the spans in
+grid+0x1C / grid+0x20 are written by the harness, so they are NOT the original's producer; `tools/emu/vision_unit_rows_emu.py`):
+
+- Dispatch (CONFIRMED by disassembly, `0x6f409e00`): radius kind `k = u16 unit+0x10C` (4 when arg4 is non-zero), centre
+  `0x6f474460` then `sar 2`, `k == 0` nothing, `k == 1` 2 by 2, `k == 2` the arms, else `0x6f409d00(grid+0x78, k, pitch)`.
+  The flag `[esp+0x18]` is `unit+0x5C & 0x20000000 && unit+0x200 > 0` (overwritten later by the elevation level, so its
+  use is not traced); all experiments used flag 0, i.e. the span path (`grid+0x20`), which is the path of `0x6f40a089`.
+- Row count (CONFIRMED, 3 counts, interior centre): with `grid+0x1C = C` the writer covers `C + 2` rows, starting at
+  `dy = -k` (k = 3: C = 6 covers dy -3..4, C = 7 covers -3..5, C = 8 covers -3..6).
+- Row extents with distinct spans (k = 3, C = 7, pair i = (-(i+1), i+1), one case, 64 grid): dy -3: x in [0, 1];
+  dy -2: [-2, 2]; dy -1: [-3, 2]; dy 0: [-3, 3]; dy 1: [-3, 3]; dy 2: [-4, 4]; dy 3: [-5, 5]; dy 4: [-6, 6]; dy 5: [-7, 7].
+  The row limits are not the circle of `0x6f3ba480` (its k = 3 half widths are 1, 2, 3, 3, 3, 2, 1). The top row is clipped
+  to [0, 1] whatever the span; the lower rows are clipped on one side by an amount that is not yet a formula (LIKELY a
+  second clip inside the shape records, UNSURE).
+- With spans of +-50 the rows are not clipped at all (only the grid edge clips them), so the shape limit is not a plain
+  intersection with the circle either.
+- Conclusion: the k >= 3 row rule and the producer of `grid+0x1C/+0x20` are still open. `crates/sim/src/vision.rs` keeps the
+  circle stand-in for units (it is known to differ from the original for k >= 3). Next: run `0x6f409d00` on its own
+  (the shape records at `shape+0x30`, 20-byte stride) and trace which record each written cell reads.

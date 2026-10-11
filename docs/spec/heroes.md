@@ -407,6 +407,64 @@ value against 0 (non-zero is on). `gamedata::misc::HeroMisc` has the three bools
 inputs for units (above), and the 'AHer' membership and order are not confirmed. The death path is unchanged, so the
 sim gives no kill experience. Killer tracking (8.6) is unchanged.
 
+## 8.8 Pass 3: position getters, setters and the round trip (2026-10-11)
+
+Harness: `tools/emu/hero_roundtrip_emu.py` (`ROUNDTRIP_REST=1` for units with a zero step vector). Built on the
+normaliser harness (`hero_normaliser_emu.py`) and the candidate harness (`hero_candidate_emu.py`). Run:
+`GAME_DLL=... python3 tools/emu/hero_roundtrip_emu.py CASES SEED`.
+
+**Getters (CONFIRMED by disassembly).** `GetUnitX` `0x6F3C5510` / `GetUnitY` `0x6F3C5550`: lookup the unit
+(`0x6F3BDCB0`; null gives the default `0.0` from `0x6FAAE470`), call its vtable slot `0xB8` (`CUnit::vf46`, the
+position reference = unit+0x164), and return the normaliser `0x6F4743A0` of that reference. So **GetUnitX/Y are the
+normaliser by construction**: no separate formula exists for the getter. Consequence: a kill-XP distance between two
+units is the distance between their `GetUnitX/Y` values, which is what 8.3 uses.
+
+**Setters (CONFIRMED by disassembly).** `SetUnitX` `0x6F3C5970`, `SetUnitY` `0x6F3C59E0`: read the current position
+with the normaliser, replace one coordinate by the JASS real (through the pointer argument), and call
+`0x6F4743C0` (which pushes flag 1 and calls the cell setter `0x6F474250`) with the pair `{x, y}` (a 2-float vector
+pointed to on the stack). `0x6F474250` subtracts the world origin (`W+0x6C` for x, `W+0x70` for y) by softfloat
+`0x6F6EEEF0`, scales by 1/32 (exponent minus 5, the same bit trick as the normaliser's inverse), and calls
+`0x6F4737D0` → `0x6F4A7380` → `0x6F4A6FD0`, which writes unit+0x78/+0x7C and calls `0x6F497440` (cell term refresh:
+`0x6F483430` writes unit+0x70/+0x74). After the write, `0x6F4A7380` calls the vtable slot `+0x54` of the unit with
+`&unit+0x78` when the flag is 1 (a notification; not traced).
+
+**Round trip (Unicorn, real setter `0x6F474250` and real normaliser, synthetic unit and grids).** Probe: read
+(x, y) by the normaliser, call the setter with the new coordinate and the other coordinate read back, read again.
+- Random units (random cell term, step vector and grids): 200 cases, `x` exact 21/91, `y` exact 36/109
+  (57 of 200 set operations, 28%, return the value that was set, bit for bit). Differences are a few ulps, and once
+  about 1e-3 (the cell term and the step vector enter `X = O+0x78 + O+0x80*v`).
+- Units with zero step vector (`ROUNDTRIP_REST=1`, the cell term multiplies by zero): 300 cases, `x` exact 59/149,
+  `y` exact 50/151 (109 of 300, 36%). Still inexact: the round trip is `add(mul(32, mul(sub(x, origin), 1/32)), origin)` with truncating
+  softfloat, and the subtraction loses bits whenever `x - origin` needs more than 24 mantissa bits.
+- The other coordinate moved in no case (its own round trip is unchanged apart from its own setter).
+
+**Harness assumptions (LIKELY, each is outside the position fields).** `0x6F4A6D70` (pathing projection on
+unit+0x94; reads only the synthetic pathing object and writes no unit field, from its body) and `0x6F4A6E40` (gate on
+the byte at unit+0x98 +0x37; set to 1 so the pathing call is skipped) are stubbed. The vtable slot `+0x54`
+notification is recorded only. The grid and unit values come from `hero_normaliser_emu.set_case`, not from a real map.
+
+**Verdict for goal 2 (NOT CONFIRMED).** `normalise(O) == GetUnitX bits` holds by construction, but the sim stores
+world `x, y` and the original stores cell values (unit+0x78/+0x7C) plus the cell term and step vector. The original
+round trip is not the identity (72% of the random and 64% of the zero-step-vector set operations are inexact, mostly by a few ulps), so `UnitObj.x/y` is **not**
+bit-equal to `GetUnitX` after a setter. Kill-XP distances computed from the sim's `x/y` can therefore differ in the last
+bits, which only changes a decision when `D` and `V` are within a few ulps (a boundary case, but a real one). The model
+must store the cell pair (unit+0x78/+0x7C), the cell term (unit+0x70/+0x74) and the step vector (unit+0x80/+0x84) and
+compute world positions through the normaliser chain. Grid G (`mgr+0x14/+0x68`: +0x40, +0x44, +0x48) and the step
+vector's writers during a walk are still open (movement-4/5), so this cannot be modelled completely yet.
+
+**'AHer' membership and order (goal 3, NOT FOUND in this pass).** `0x6F2075F0` registers the category with `0x6F4716D0`
+(keyed registry: `0x6F4C8520` builds the key, `0x6F001EC0` looks the key up in the table at `[world+0xC]`, a new entry is
+created by `0x6F4711E0` (LIKELY) and holds the category pointer at +0x18, flag +0x7C). The element insert `0x6F471140` works on
+a hashed table: `mask = table+0x24`, bucket = `key & mask` (after the probe `0x6F470D60`), 12-byte buckets at
+`table+0x1C`, a chain sentinel at `table+8`, growth `0x6F470110`. This is a bucket structure of the same kind as the
+hash map of `sim::hashmap`. The per-category walk list (head `cat+0x58`, next `node+8`, used by `0x6F46D0B0`) is not
+the same storage as the bucket chain, and its writers are the object constructors listed in 8.7. The insertion order
+of heroes into the 'AHer' walk is therefore still open. Not confirmed in Unicorn.
+
+**Status (8.8).** Goal 1: getter/setter/round trip measured (above). Goal 2: NOT confirmed, so UnitObj x/y is not used
+for kill XP. Goal 3: open. Goal 4: NOT wired (`sim::heroes::distribute_kill` stays unused, the death path unchanged).
+Counts: 500 Unicorn round-trip cases in total, 0 harness crashes after the assumptions above.
+
 ## 9. Derived attribute bonuses
 
 Labels as above. Addresses are 1.26a VAs. Harness: `tools/emu/hero_bonus_emu.py` (the real readers run in Unicorn;

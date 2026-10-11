@@ -102,6 +102,16 @@ pub struct MiscData {
     pub revive_refund_rate: F32,
     /// `LowGoldAmount`, the mine threshold of the low-gold notice. `0.0` when absent.
     pub low_gold_amount: F32,
+    /// `DayLength`: the seconds of one day cycle (the time-of-day rate divides by it, `docs/spec/vision.md` 13).
+    /// `0.0` when absent, as the original's reader does.
+    pub day_length: F32,
+    /// `DayHours`: the hours of game time (state 2) that one day cycle covers; also the value at which the cycle wraps.
+    /// `0.0` when absent.
+    pub day_hours: F32,
+    /// `Dawn`: the hour at which day starts (inclusive). `0.0` when absent.
+    pub dawn: F32,
+    /// `Dusk`: the hour at which night starts (exclusive). `0.0` when absent.
+    pub dusk: F32,
 }
 
 impl MiscData {
@@ -151,6 +161,10 @@ impl MiscData {
         let research_refund_rate = reader.real("ResearchRefundRate").unwrap_or(F32::ZERO);
         let revive_refund_rate = reader.real("ReviveRefundRate").unwrap_or(F32::ZERO);
         let low_gold_amount = reader.real("LowGoldAmount").unwrap_or(F32::ZERO);
+        let day_length = reader.real("DayLength").unwrap_or(F32::ZERO);
+        let day_hours = reader.real("DayHours").unwrap_or(F32::ZERO);
+        let dawn = reader.real("Dawn").unwrap_or(F32::ZERO);
+        let dusk = reader.real("Dusk").unwrap_or(F32::ZERO);
         let hero = HeroMisc::read(&mut reader);
         let Reader {
             defaulted, notes, ..
@@ -172,6 +186,10 @@ impl MiscData {
             research_refund_rate,
             revive_refund_rate,
             low_gold_amount,
+            day_length,
+            day_hours,
+            dawn,
+            dusk,
         }
     }
 
@@ -204,6 +222,10 @@ impl MiscData {
             research_refund_rate: F32::ZERO,
             revive_refund_rate: F32::ZERO,
             low_gold_amount: F32::ZERO,
+            day_length: F32::ZERO,
+            day_hours: F32::ZERO,
+            dawn: F32::ZERO,
+            dusk: F32::ZERO,
         }
     }
 }
