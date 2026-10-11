@@ -44,6 +44,7 @@ use jass::compile::{compile, CompileError};
 use jass::vm::{NativeRegistry, RunStatus, ThreadId, VmError};
 use mpq::Archive;
 use sim::ai::{AiEvent, AiHost, AiLibrary};
+use sim::commands::{Command, CommandState, Outcome};
 use sim::lockstep::{TurnReport, TICKS_PER_BATCH};
 use sim::{Game, RngTable, ScriptHost};
 use softfloat::{Tables, F32};
@@ -52,6 +53,7 @@ use w3map::MapInfo;
 pub mod data;
 pub mod map;
 pub mod pathing;
+pub mod replay;
 pub mod scripts;
 
 pub use map::{apply_players, controller_of, playable_area};
@@ -140,6 +142,8 @@ pub struct Engine {
     notes: Vec<String>,
     combat: data::CombatSetup,
     economy: data::EconomySetup,
+    /// Replay command state: selections, hotkey groups, the object table and the speed setting.
+    commands: CommandState,
 }
 
 /// What the AI host did, as the report shows it (see [`sim::ai::AiShared`] for the full logs).
@@ -316,6 +320,7 @@ impl Engine {
             ai,
             combat,
             economy,
+            commands: CommandState::new(),
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
@@ -378,10 +383,30 @@ impl Engine {
         fired
     }
 
-    /// Runs one replay turn: the game ticks it produced (see [`sim::lockstep::TurnScheduler`]).
-    /// The caller applies `turn.actions` first, as the turn's commands come before its ticks.
-    pub fn run_turn<A>(&mut self, turn: &TurnReport<A>) -> usize {
+    /// Runs one replay turn: applies its commands in stream order, then runs the game ticks it produced
+    /// (lockstep.md section 3; see [`sim::lockstep::TurnScheduler`]). Returns the timers fired by the ticks.
+    pub fn run_turn(&mut self, turn: &TurnReport<Command>) -> usize {
+        self.apply_commands(&turn.actions);
         self.step_ticks(turn.game_ticks)
+    }
+
+    /// Applies commands in the given order and returns their outcomes (one per command).
+    pub fn apply_commands(&mut self, commands: &[(u8, Command)]) -> Vec<Outcome> {
+        let mut game = self.host.game_mut();
+        commands
+            .iter()
+            .map(|(_, cmd)| self.commands.apply(&mut game, cmd))
+            .collect()
+    }
+
+    /// The replay command state (selections, hotkey groups, the object table, the speed setting).
+    pub fn commands(&self) -> &CommandState {
+        &self.commands
+    }
+
+    /// Mutable access to the replay command state (to register the object pairs of units).
+    pub fn commands_mut(&mut self) -> &mut CommandState {
+        &mut self.commands
     }
 
     /// The script host (VM, clock, timers and game state).

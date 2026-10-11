@@ -54,7 +54,7 @@ use std::rc::Rc;
 use jass::vm::{NativeRegistry, NativeResult, Value};
 use softfloat::{arith, F32};
 
-use super::game::{Game, HeroObj, LocationObj, ObjKey, Object, UnitEvent, UnitObj};
+use super::game::{Game, LocationObj, ObjKey, Object, UnitEvent, UnitObj};
 use super::hero::is_hero_id;
 use super::player::raw_at;
 use super::region;
@@ -498,7 +498,7 @@ pub(crate) fn create(
         loaded: false,
         abilities,
         buffs: Vec::new(),
-        hero: is_hero_id(type_id).then(HeroObj::default),
+        hero: is_hero_id(type_id).then(|| gm.new_hero(type_id)),
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
     // of units is UNSURE; 0 is used, as for the other handle types the scripts create on demand.

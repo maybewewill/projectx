@@ -1,11 +1,23 @@
+use crate::actions::{decode_actions, Action};
 use crate::reader::Reader;
 use crate::Error;
 
-/// Commands issued by one player inside a time slot. Action payloads are kept raw for now.
+/// Commands issued by one player inside a time slot.
+///
+/// `actions` is the raw sub-stream; `offset` is its absolute position in the decompressed replay, used
+/// in decoding errors. [`CommandBlock::decode`] gives the typed actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandBlock {
     pub player_id: u8,
+    pub offset: usize,
     pub actions: Vec<u8>,
+}
+
+impl CommandBlock {
+    /// Decodes the typed actions of this player's sub-stream, in stream order.
+    pub fn decode(&self) -> Result<Vec<Action>, Error> {
+        decode_actions(&self.actions, self.offset)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,14 +63,17 @@ impl Block {
     }
 }
 
-fn parse_commands(body: &[u8]) -> Result<Vec<CommandBlock>, Error> {
+/// Splits a time slot's payload into per-player command blocks (`base` = absolute offset of `body`).
+fn parse_commands(body: &[u8], base: usize) -> Result<Vec<CommandBlock>, Error> {
     let mut r = Reader::new(body);
     let mut out = Vec::new();
     while r.remaining() > 0 {
         let player_id = r.u8()?;
         let len = r.u16()? as usize;
+        let offset = base + r.pos();
         out.push(CommandBlock {
             player_id,
+            offset,
             actions: r.bytes(len)?.to_vec(),
         });
     }
@@ -89,7 +104,8 @@ pub(crate) fn parse_blocks(r: &mut Reader) -> Result<Vec<Block>, Error> {
                     return Err(Error::BadBlockLength { offset, id, len: n });
                 }
                 let increment_ms = r.u16()?;
-                let commands = parse_commands(r.bytes(n - 2)?)?;
+                let body_offset = r.pos();
+                let commands = parse_commands(r.bytes(n - 2)?, body_offset)?;
                 Block::TimeSlot {
                     increment_ms,
                     commands,

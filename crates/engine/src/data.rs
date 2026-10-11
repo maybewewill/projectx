@@ -144,6 +144,14 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         };
         unit_types += 1;
         game.unit_types_mut().insert(id, sim_unit_type(ty));
+        // Hero attributes (STR, AGI and their gains) of a hero type; a hero starts from them (`sim::heroes`).
+        if is_hero_type(id) {
+            game.set_hero_attributes(id, hero_attributes(ty));
+        }
+    }
+    // The hero experience tables (`docs/spec/heroes.md`). The builder needs the reciprocal table of Game.dll.
+    if let Some(t) = tables {
+        game.set_hero_xp(sim::heroes::build(&hero_xp_inputs(&data.misc), t));
     }
     for (code, row) in data.units.iter() {
         let Some(id) = rawcode(code) else {
@@ -314,6 +322,37 @@ fn attack_type(w: &combat::Weapon) -> AttackType {
 /// The `f32` of a record value as the soft float the simulation uses (same bits).
 fn soft(x: f32) -> F32 {
     F32::from_bits(x.to_bits())
+}
+
+/// Whether a raw type id is a hero type: its top byte is an uppercase letter (`IsHeroUnitId`, CONFIRMED).
+fn is_hero_type(id: u32) -> bool {
+    (id >> 24).wrapping_sub(0x41) < 0x1A
+}
+
+/// The hero attributes of a unit record (`STR`, `AGI` and the per-level gains).
+fn hero_attributes(ty: &UnitTypeData) -> sim::heroes::HeroAttributes {
+    sim::heroes::HeroAttributes {
+        str_base: ty.attributes[0],
+        str_plus: soft(ty.attribute_plus[0]),
+        agi_base: ty.attributes[1],
+        agi_plus: soft(ty.attribute_plus[1]),
+    }
+}
+
+/// The experience-builder inputs from the `[Misc]` hero keys.
+fn hero_xp_inputs(misc: &MiscData) -> sim::heroes::XpInputs {
+    let h = &misc.hero;
+    sim::heroes::XpInputs {
+        max_hero_level: h.max_hero_level,
+        need: h.need_hero_xp.clone(),
+        need_formula: h.need_hero_xp_formula,
+        grant: h.grant_hero_xp.clone(),
+        grant_formula: h.grant_hero_xp_formula,
+        factor: h.hero_factor_xp.clone(),
+        max_unit_level: h.max_unit_level,
+        normal: h.grant_normal_xp.clone(),
+        normal_formula: h.grant_normal_xp_formula,
+    }
 }
 
 /// Reads the last archive's copy of `name`, if any archive has it.

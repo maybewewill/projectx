@@ -16,9 +16,11 @@
 pub mod abilities;
 pub mod ai;
 pub mod combat;
+pub mod commands;
 pub mod damage;
 pub mod economy;
 pub mod handles;
+pub mod heroes;
 pub mod hashmap;
 pub mod lockstep;
 pub mod missiles;

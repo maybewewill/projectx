@@ -80,6 +80,8 @@ pub struct MiscData {
     pub reaction_delay: F32,
     /// `AttackHalfAngle`, or `None` when no layer sets it.
     pub attack_half_angle: Option<F32>,
+    /// The hero experience keys (`docs/spec/heroes.md`, section 2).
+    pub hero: HeroMisc,
     /// The keys that took their default (absent, or present but rejected), in reading order.
     pub defaulted: Vec<&'static str>,
     /// Why a present value was rejected, one line each.
@@ -149,6 +151,7 @@ impl MiscData {
         let research_refund_rate = reader.real("ResearchRefundRate").unwrap_or(F32::ZERO);
         let revive_refund_rate = reader.real("ReviveRefundRate").unwrap_or(F32::ZERO);
         let low_gold_amount = reader.real("LowGoldAmount").unwrap_or(F32::ZERO);
+        let hero = HeroMisc::read(&mut reader);
         let Reader {
             defaulted, notes, ..
         } = reader;
@@ -158,6 +161,7 @@ impl MiscData {
             ethereal_damage_bonus,
             reaction_delay,
             attack_half_angle,
+            hero,
             defaulted,
             notes,
             layers_with_misc,
@@ -189,6 +193,7 @@ impl MiscData {
             ethereal_damage_bonus: [F32::ZERO; ETHEREAL_ENTRIES],
             reaction_delay: F32::ZERO,
             attack_half_angle: None,
+            hero: HeroMisc::default(),
             defaulted: Vec::new(),
             notes: Vec::new(),
             layers_with_misc: 0,
@@ -203,6 +208,72 @@ impl MiscData {
     }
 }
 
+/// The hero experience keys of `[Misc]` (`docs/spec/heroes.md`, section 2). CONFIRMED by the builder
+/// `0x6F00ABD0` (Unicorn-checked, `tools/emu/hero_xp_emu.py`): the integer keys are read through the list reader
+/// (element 0 for the scalars), the formula constants through the real reader with default `0.0`.
+///
+/// Integer elements are parsed as decimal integers (LIKELY: the original's integer reader; a malformed element is
+/// `0`). A missing list is empty. The original reads the word before its table when a list is empty and the table
+/// is not, which is not modelled, so the builder requires at least one element (see `sim::heroes`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HeroMisc {
+    /// `MaxHeroLevel` (element 0).
+    pub max_hero_level: i32,
+    /// `NeedHeroXP`: the experience thresholds of the first levels.
+    pub need_hero_xp: Vec<i32>,
+    /// `NeedHeroXPFormulaA`, `B`, `C`: the recurrence constants of the thresholds beyond the list.
+    pub need_hero_xp_formula: [F32; 3],
+    /// `GrantHeroXP`: experience granted for a hero of each level.
+    pub grant_hero_xp: Vec<i32>,
+    /// `GrantHeroXPFormulaA`, `B`, `C`.
+    pub grant_hero_xp_formula: [F32; 3],
+    /// `HeroFactorXP`: per-level factor, stored as the list value divided by 100 (the builder's column).
+    pub hero_factor_xp: Vec<i32>,
+    /// `MaxUnitLevel` (element 0).
+    pub max_unit_level: i32,
+    /// `GrantNormalXP`: experience granted for a normal unit of each level.
+    pub grant_normal_xp: Vec<i32>,
+    /// `GrantNormalXPFormulaA`, `B`, `C`.
+    pub grant_normal_xp_formula: [F32; 3],
+}
+
+impl HeroMisc {
+    fn read(reader: &mut Reader<'_>) -> HeroMisc {
+        let max_hero_level = reader.int_element("MaxHeroLevel");
+        let need_hero_xp = reader.int_list("NeedHeroXP");
+        let need_hero_xp_formula = [
+            reader.real_or_zero("NeedHeroXPFormulaA"),
+            reader.real_or_zero("NeedHeroXPFormulaB"),
+            reader.real_or_zero("NeedHeroXPFormulaC"),
+        ];
+        let grant_hero_xp = reader.int_list("GrantHeroXP");
+        let grant_hero_xp_formula = [
+            reader.real_or_zero("GrantHeroXPFormulaA"),
+            reader.real_or_zero("GrantHeroXPFormulaB"),
+            reader.real_or_zero("GrantHeroXPFormulaC"),
+        ];
+        let hero_factor_xp = reader.int_list("HeroFactorXP");
+        let max_unit_level = reader.int_element("MaxUnitLevel");
+        let grant_normal_xp = reader.int_list("GrantNormalXP");
+        let grant_normal_xp_formula = [
+            reader.real_or_zero("GrantNormalXPFormulaA"),
+            reader.real_or_zero("GrantNormalXPFormulaB"),
+            reader.real_or_zero("GrantNormalXPFormulaC"),
+        ];
+        HeroMisc {
+            max_hero_level,
+            need_hero_xp,
+            need_hero_xp_formula,
+            grant_hero_xp,
+            grant_hero_xp_formula,
+            hero_factor_xp,
+            max_unit_level,
+            grant_normal_xp,
+            grant_normal_xp_formula,
+        }
+    }
+}
+
 /// Reads keys of the merged `[Misc]` section, recording the defaults and the rejected values.
 struct Reader<'a> {
     profile: &'a Profile,
@@ -212,6 +283,33 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    /// Element 0 of an integer key (the hero keys). `0` when absent or malformed. Not recorded as defaulted: the
+    /// hero keys have their own reading rules (see [`HeroMisc`]).
+    fn int_element(&mut self, key: &'static str) -> i32 {
+        self.profile
+            .get_list(MISC_SECTION, key)
+            .first()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .unwrap_or(0)
+    }
+
+    /// Every element of an integer list key (malformed elements are `0`).
+    fn int_list(&mut self, key: &'static str) -> Vec<i32> {
+        self.profile
+            .get_list(MISC_SECTION, key)
+            .iter()
+            .map(|s| s.trim().parse::<i32>().unwrap_or(0))
+            .collect()
+    }
+
+    /// One real of a hero key, `0.0` when absent or malformed (the reader's default).
+    fn real_or_zero(&mut self, key: &'static str) -> F32 {
+        self.profile
+            .get(MISC_SECTION, key)
+            .and_then(|raw| parse_real(raw, self.tables))
+            .unwrap_or(F32::ZERO)
+    }
+
     /// One real. `None` when the key is absent (recorded as defaulted) or malformed (recorded with a note).
     fn real(&mut self, key: &'static str) -> Option<F32> {
         let Some(raw) = self.profile.get(MISC_SECTION, key) else {

@@ -542,6 +542,12 @@ pub struct HeroObj {
     pub skill_points: i32,
     /// Set by `SuspendHeroXP` (`+0xEC`): experience is not gained while set (LIKELY).
     pub xp_suspended: bool,
+    /// Base strength (`+0x94`) and per-level strength gain (`+0xD4`, real), see `crate::heroes::attribute`.
+    pub str_base: i32,
+    pub str_plus: softfloat::F32,
+    /// Base agility (`+0xA8`) and per-level agility gain (`+0xE4`, real).
+    pub agi_base: i32,
+    pub agi_plus: softfloat::F32,
 }
 
 impl Default for HeroObj {
@@ -551,6 +557,10 @@ impl Default for HeroObj {
             xp: 0,
             skill_points: 0,
             xp_suspended: false,
+            str_base: 0,
+            str_plus: softfloat::F32::ZERO,
+            agi_base: 0,
+            agi_plus: softfloat::F32::ZERO,
         }
     }
 }
@@ -1115,6 +1125,11 @@ pub struct Game {
     pub(crate) economy_constants: crate::economy::EconomyConstants,
     /// The attack cycle: type data, Misc values, attack objects and the damage model (see `combat.rs`).
     pub(crate) combat: crate::combat::CombatSystem,
+    /// The hero experience tables built from the Misc values (see `crate::heroes`). Empty until the engine sets them,
+    /// in which case the heroes have no thresholds (`MaxHeroLevel` 0).
+    pub(crate) hero_xp: crate::heroes::XpTables,
+    /// Hero attributes of each hero type (base and per-level gain), copied into a new hero (see `heroes`).
+    pub(crate) hero_attributes: BTreeMap<u32, crate::heroes::HeroAttributes>,
 }
 
 impl Default for Game {
@@ -1171,6 +1186,8 @@ impl Game {
             economy: (0..PLAYER_SLOTS).map(crate::economy::PlayerEconomy::new).collect(),
             economy_constants: crate::economy::EconomyConstants::default(),
             combat: crate::combat::CombatSystem::default(),
+            hero_xp: crate::heroes::XpTables::default(),
+            hero_attributes: BTreeMap::new(),
         }
     }
 
@@ -1338,6 +1355,33 @@ impl Game {
     }
 
     /// The unit behind `key`. Panics if `key` is not a unit.
+    /// Installs the hero experience tables (built by `crate::heroes::build` from the Misc values).
+    pub fn set_hero_xp(&mut self, tables: crate::heroes::XpTables) {
+        self.hero_xp = tables;
+    }
+
+    /// Sets the hero attributes of a hero type (the engine fills them from the unit records).
+    pub fn set_hero_attributes(&mut self, type_id: u32, attributes: crate::heroes::HeroAttributes) {
+        self.hero_attributes.insert(type_id, attributes);
+    }
+
+    /// The hero state a new hero of `type_id` starts with (level 1, no experience, the type's attributes).
+    pub fn new_hero(&self, type_id: u32) -> HeroObj {
+        let mut h = HeroObj::default();
+        if let Some(a) = self.hero_attributes.get(&type_id) {
+            h.str_base = a.str_base;
+            h.str_plus = a.str_plus;
+            h.agi_base = a.agi_base;
+            h.agi_plus = a.agi_plus;
+        }
+        h
+    }
+
+    /// The hero experience tables in force.
+    pub fn hero_xp(&self) -> &crate::heroes::XpTables {
+        &self.hero_xp
+    }
+
     pub fn unit(&self, key: ObjKey) -> &UnitObj {
         match self.object(key) {
             Object::Unit(u) => u,

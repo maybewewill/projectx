@@ -4,6 +4,7 @@
 //! Inputs are text in UTF-8 or Windows-1252, with LF or CRLF line endings.
 //! The `parse_bytes` variants decode raw bytes first.
 
+pub mod abilitytype;
 pub mod combat;
 pub mod misc;
 pub mod profile;
