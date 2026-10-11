@@ -900,3 +900,75 @@ Consequences (CONFIRMED by the algebra, tested in `sync.rs`):
 - Whether T is the tick clock before or after the slot's own ticks (the applier runs before the ticks; LIKELY
   before). The GF(2) test above assumed the prefix sums; with the state-dependent A, X, Y it cannot decide.
 - `CNetData+0x2F8` (alternative tick source) and the flag that gates the computation (`+0x2288` tag, `+0x610`).
+
+### 13.5 Pass 10 (2026-10-11): the components, re-read from the machine code
+
+Labels as above. Addresses are Game.dll 1.26a. The value chain was re-read from the **machine code** (capstone
+over the whole `.text`, plus an independent disassembly from `0x6F545840`), not only from the Ghidra decompile.
+
+- **Correction of the decompile reading (CONFIRMED)**: the Ghidra output of `FUN_6f545840` shows only two XOR
+  steps with the world words. The machine code has **three**: `rol3 ^X`, `rol3 ^X`, `rol3 ^Y`, then a final
+  `rol3` (`0x6F5458E0`..`0x6F5458F9`). Section 13.3 is correct; `crates/w3g/src/sync.rs` and the new
+  `crates/sim/src/sync.rs` implement the machine-code order (tests compare against the step-by-step version).
+  Rule for agents: when a decompile and the disassembly disagree on a value chain, trust the disassembly.
+- The registry fold (`0x6F005E20`, CONFIRMED): starts at acc = 0; walks slots from index 19 down to 0 (count at
+  object+0x0C = 20); skips null slots; each non-null participant `p` contributes `v = vtable[0](p)` (the call goes
+  through the object's first dword, the vtable) and `acc = rol(v ^ acc, 3)`. Implemented as
+  `sim::sync::registry_fold(&[Option<u32>; 20])`.
+- The registry object (CONFIRMED layout): `FUN_6f007d90` builds a 20-byte struct: +0 and +4 are two ref-counted
+  pointers (cleared and released by `0x6F009B80`), +0x0C = 20 (slot count), +0x10 = data pointer to 20 zeroed
+  dword slots (`0x6F006F10` reserve + `memset`). Created lazily by `0x6F008420` when the thread table entry 13 is
+  null (`0x6F0084B2`), stored into table entry 13 at `0x6F0084E3`. The table is per thread: `FUN_6f4c34d0(id)` =
+  `TlsGetValue`-based table lookup (`0x6F6D98E0`), `FUN_6f4c34f0(id, value)` = store. Writers of entry 13: `0x6F007AA6`
+  (read), `0x6F007AE0` (clears it to 0 in the start-up sequence of `0x6F007A50`), `0x6F0084E3` (creates it). About
+  33 functions read entry 13 (`0x6F002698` ... `0x6F06AA46`, list from the disassembly scan).
+- **Open for A**: the code that writes a participant into a slot of the 20-slot array was not found. The scan for
+  `[reg + idx*4 + 0x10]` stores is too broad (many containers). Which objects are participants, and what their
+  vtable slot 0 returns, is still UNSURE.
+- The tick clock T = `CNetData+0x1C70` (CONFIRMED): reset to 0 in the CNetData init (`0x6F5505D6`, and `0x6F54C5ED`
+  in another init). Per game tick the frame driver loop (`0x6F553470`) runs `add [esi+0x1C70], ebp` at `0x6F553770`
+  **before** it dispatches the tick (`0x6F5378E0`), and `add [esi+0x22C0], ebp` (wrap at 250) after. `ebp` =
+  `[CNetData+0x139C]` (`0x6F553516`); the value 5 is LIKELY (110 ms per slot at normal speed = 22 ticks of 5 ms), the
+  writer of +0x139C was not found (no direct store; UNSURE).
+- The `+0x2F8 != 0` branch (CONFIRMED arithmetic): T = `FUN_6f543d40(world)` (`0x6F543D40`), a walk over 8-byte
+  entries at world+0x0C, count at world+0x1C, that calls vtable slot 0x3C of entries tagged -2 and returns the
+  value written by that call. Whether +0x2F8 is set in the replay checked here is UNSURE.
+- The world words (`crates/sim/src/sync.rs::WorldWords`):
+  - `world = [0x6FAB778C]`, allocated in `0x6F46D940` (0xDC bytes, constructor `0x6F46B6B0`).
+  - The constructor's init `0x6F46B120` (CONFIRMED): `world+0x40 = -1`, `+0x44 = -1`, `+0x48 = 0`, `+0x4C = 0`,
+    `+0x50 = 0`, `+0x54 = 0`, `+0x58 = 0` (the `or eax, 0xFFFFFFFF` at `0x6F46B169` makes the -1). So at creation
+    X = world+0x1C (since +0x40 = -1) and Y = world+0x50 = 0.
+  - `world+0x1C` is not written by the constructor; its writers are not found. UNSURE what it holds at start.
+  - `world+0x50` has more writers (e.g. `0x6F46C616`, inside a different constructor with vtable `0x6F951858` that
+    also writes +0x40 = `[0x6FAAE470]` = 0.0). The writers that change world+0x40/+0x50 during a game were not
+    identified in the world's own code (UNSURE).
+- The record stream itself (CONFIRMED on the real 1.26a replay, 89,259 records, tool `tools/analysis/sync_stream.py`):
+  - **No consecutive pair shows the constant-state signature**: for two records with the same A, X, Y the XOR
+    `rotr(csum_k ^ csum_k+1, 12)` equals `T_k ^ T_k+1`, which is below 2^20 for slots about 110 ms apart. The
+    smallest bit length over all 89,258 pairs is 20, the typical one is 31 or 32. So A, X or Y changes between
+    **every** pair of slots, from the first slot on (the test does not depend on the T model, only on T being
+    small and close between slots).
+  - One-variable tests fail too: "only Y changes" (`rol(dY,23)` pattern) gives large implied dY in every pair;
+    "only A changes" gives a random-looking constant in every pair.
+  - The 89,259 values are distinct except for one pair (consistent with random 32-bit values).
+  - **First record**: with A = 0 (no participants yet), Y = 0 (world init) and T = 0 (CNetData init), the first
+    value `cef28d12` is **not reachable** for any X (solved as a GF(2)-affine system in X: rank 31, 998/2000 random
+    targets are reachable, so the test is about 50% weak per record, but it rejects this start state). So at the first
+    slot either a participant is registered, or Y/T is not the start value assumed here. This is the first concrete
+    hypothesis test and it fails.
+- Verification counts (this pass): `crates/sim/src/sync.rs` 7 tests; `crates/w3g/tests/sync_state.rs` 3 tests (the real-file
+  one under `W3G_REPLAY`); workspace tests 1037 passed without and with `GAME_DLL` + `W3G_REPLAY`; clippy clean.
+
+### 13.6 Status of the oracle (what can and cannot be checked now)
+
+- Checkable now: the arithmetic from (T, A, X, Y) to the record (sim and w3g agree with the machine code).
+- Not checkable yet: any record of the real file, because A, X and Y are not produced by the simulation. To reproduce
+  the first N records one needs (a) the start participants of registry 13 (their vtable slot 0 values), (b) the
+  producers of world+0x1C and world+0x50 during map init (DotA's init script runs before slot 0), and (c) the
+  per-slot changes. Without (a) and (b) the hidden state is not determined; the GF(2) solve shows that the
+  simplest start state is wrong.
+- Next steps: find the `[reg + idx*4 + 0x10]` store used by the participant registration (the functions that take
+  the table entry 13 and the object to add: probably the sync-participant registration on object creation); trace
+  the writes to world+0x1C and world+0x50 with a Unicorn run of the world constructor and the first map-init
+  calls (the `tools/emu/emu.py` harness runs initializers); get the value of `[CNetData+0x139C]` from a running
+  constructor.
