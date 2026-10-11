@@ -86,6 +86,17 @@ impl SheetLayout {
     }
 }
 
+impl SheetLayout {
+    /// Grid of a ground texture with the given pixel size. Ground textures have 4 rows of
+    /// square variation cells, and the column count follows the aspect ratio: 4 columns for a
+    /// square texture (256x256), 8 for 512x256 (the common WC3 size). Clamped to 1..=8.
+    pub fn for_size(width: u32, height: u32) -> SheetLayout {
+        let height = height.max(1);
+        let cols = ((4.0 * width as f32 / height as f32).round() as u32).clamp(1, 8);
+        SheetLayout { cols, rows: 4 }
+    }
+}
+
 impl Default for SheetLayout {
     fn default() -> Self {
         SheetLayout::GRID_4X4
@@ -107,26 +118,75 @@ impl UvRect {
     }
 }
 
-/// The atlas is a square of `SHEET_GRID x SHEET_GRID` sheets, each `sheet_px` pixels square.
+/// Where one ground slot lives in the atlas: the top-left `width x height` pixels of its
+/// `sheet_px` square, cut into `sheet` cells. A 512x256 texture uses 256x128 of its slot, so its
+/// cells stay square.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotLayout {
+    pub sheet: SheetLayout,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The atlas is a square of `SHEET_GRID x SHEET_GRID` slots, each `sheet_px` pixels square.
+/// Every slot has its own layout, so textures of different shapes can share one atlas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasLayout {
     pub sheet_px: u32,
+    pub slots: [SlotLayout; GROUND_SLOTS],
 }
 
 impl AtlasLayout {
+    /// Layout for `sheet_px` slots with the default 4x4 square cell grid in every slot (what
+    /// the procedural sheets use).
+    pub fn square(sheet_px: u32) -> AtlasLayout {
+        AtlasLayout {
+            sheet_px,
+            slots: [SlotLayout {
+                sheet: SheetLayout::GRID_4X4,
+                width: sheet_px,
+                height: sheet_px,
+            }; GROUND_SLOTS],
+        }
+    }
+
+    /// Layout that fits each supplied texture into its slot, keeping its aspect ratio. Slots
+    /// without a texture keep the procedural square layout.
+    pub fn for_textures(sheet_px: u32, sources: &[Option<&TextureData>]) -> AtlasLayout {
+        let mut layout = AtlasLayout::square(sheet_px);
+        for (slot, source) in sources.iter().take(GROUND_SLOTS).enumerate() {
+            let Some(texture) = source else {
+                continue;
+            };
+            let (w, h) = (texture.width.max(1), texture.height.max(1));
+            let (width, height) = if w >= h {
+                (sheet_px, (sheet_px as u64 * u64::from(h) / u64::from(w)).max(1) as u32)
+            } else {
+                ((sheet_px as u64 * u64::from(w) / u64::from(h)).max(1) as u32, sheet_px)
+            };
+            layout.slots[slot] = SlotLayout {
+                sheet: SheetLayout::for_size(w, h),
+                width,
+                height,
+            };
+        }
+        layout
+    }
+
     /// Side of the atlas in pixels.
     pub fn size(self) -> u32 {
         self.sheet_px * SHEET_GRID
     }
 
     /// UV rectangle of one variation of one ground texture.
-    pub fn cell_uv(self, texture: u8, variation: u8, sheet: SheetLayout) -> UvRect {
+    pub fn cell_uv(self, texture: u8, variation: u8) -> UvRect {
         let slot = u32::from(texture) % (SHEET_GRID * SHEET_GRID);
         let (slot_x, slot_y) = (slot % SHEET_GRID, slot / SHEET_GRID);
-        let (cell_x, cell_y) = sheet.cell(variation);
+        let layout = self.slots[slot as usize];
+        let (cell_x, cell_y) = layout.sheet.cell(variation);
+        let cell_w = layout.width as f32 / layout.sheet.cols as f32;
+        let cell_h = layout.height as f32 / layout.sheet.rows as f32;
         let sheet_px = self.sheet_px as f32;
-        let cell_w = sheet_px / sheet.cols as f32;
-        let cell_h = sheet_px / sheet.rows as f32;
         let x0 = slot_x as f32 * sheet_px + cell_x as f32 * cell_w;
         let y0 = slot_y as f32 * sheet_px + cell_y as f32 * cell_h;
         let atlas = self.size() as f32;
@@ -139,7 +199,7 @@ impl AtlasLayout {
 
 impl Default for AtlasLayout {
     fn default() -> Self {
-        AtlasLayout { sheet_px: 256 }
+        AtlasLayout::square(256)
     }
 }
 
@@ -173,22 +233,22 @@ const PALETTE: [[f32; 3]; GROUND_SLOTS] = [
 /// Builds the atlas. Slots with a texture get that texture resampled (nearest) to the sheet
 /// size. Missing slots get a deterministic procedural sheet: one palette colour per slot with
 /// slightly different cells, so the variations are visible without any game files.
-pub fn build_atlas(
-    layout: AtlasLayout,
-    sheet: SheetLayout,
-    sources: &[Option<&TextureData>],
-) -> Atlas {
+pub fn build_atlas(layout: AtlasLayout, sources: &[Option<&TextureData>]) -> Atlas {
     let size = layout.size();
     let s = layout.sheet_px;
     let mut rgba = vec![0u8; (size as usize) * (size as usize) * 4];
     for slot in 0..GROUND_SLOTS as u32 {
         let (slot_x, slot_y) = (slot % SHEET_GRID, slot / SHEET_GRID);
         let source = sources.get(slot as usize).copied().flatten();
-        for py in 0..s {
-            for px in 0..s {
-                let color = match source {
-                    Some(texture) => sample_nearest(texture, px, py, s),
-                    None => procedural_texel(slot, sheet, s, px, py),
+        let slot_layout = layout.slots[slot as usize];
+        let fill = source.map(opaque_average);
+        for py in 0..slot_layout.height {
+            for px in 0..slot_layout.width {
+                let color = match (source, fill) {
+                    (Some(texture), Some(fill)) => {
+                        bake_alpha(sample_area(texture, px, py, slot_layout), fill)
+                    }
+                    _ => procedural_texel(slot, slot_layout.sheet, s, px, py),
                 };
                 let dst_x = slot_x * s + px;
                 let dst_y = slot_y * s + py;
@@ -200,17 +260,67 @@ pub fn build_atlas(
     Atlas { size, rgba }
 }
 
-fn sample_nearest(texture: &TextureData, px: u32, py: u32, sheet_px: u32) -> [u8; 4] {
-    let sx = (u64::from(px) * u64::from(texture.width) / u64::from(sheet_px))
-        .min(u64::from(texture.width) - 1) as usize;
-    let sy = (u64::from(py) * u64::from(texture.height) / u64::from(sheet_px))
-        .min(u64::from(texture.height) - 1) as usize;
-    let index = (sy * texture.width as usize + sx) * 4;
+/// One texel of a slot filled from `texture`: the average of the source texels that cover it
+/// when shrinking (box filter, so a 512-pixel texture does not alias into a 256 slot), and the
+/// nearest texel when enlarging.
+fn sample_area(texture: &TextureData, px: u32, py: u32, slot: SlotLayout) -> [u8; 4] {
+    let (tw, th) = (texture.width.max(1), texture.height.max(1));
+    let x0 = u64::from(px) * u64::from(tw) / u64::from(slot.width);
+    let x1 = ((u64::from(px) + 1) * u64::from(tw) / u64::from(slot.width)).max(x0 + 1);
+    let y0 = u64::from(py) * u64::from(th) / u64::from(slot.height);
+    let y1 = ((u64::from(py) + 1) * u64::from(th) / u64::from(slot.height)).max(y0 + 1);
+    let mut sum = [0u64; 4];
+    let mut count = 0u64;
+    for sy in y0..y1.min(u64::from(th)) {
+        for sx in x0..x1.min(u64::from(tw)) {
+            let index = (sy as usize * tw as usize + sx as usize) * 4;
+            for (c, total) in sum.iter_mut().enumerate() {
+                *total += u64::from(texture.rgba[index + c]);
+            }
+            count += 1;
+        }
+    }
+    let count = count.max(1);
+    std::array::from_fn(|c| ((sum[c] + count / 2) / count) as u8)
+}
+
+/// Mean colour of the opaque texels (alpha at least 128) of a texture; the mean of all texels
+/// when none is opaque. Used to fill the transparent parts of a texture.
+fn opaque_average(texture: &TextureData) -> [u8; 3] {
+    let mut sum = [0u64; 3];
+    let mut count = 0u64;
+    let mut all = [0u64; 3];
+    let mut all_count = 0u64;
+    for px in texture.rgba.chunks_exact(4) {
+        for c in 0..3 {
+            all[c] += u64::from(px[c]);
+        }
+        all_count += 1;
+        if px[3] >= 128 {
+            for c in 0..3 {
+                sum[c] += u64::from(px[c]);
+            }
+            count += 1;
+        }
+    }
+    let (sum, count) = if count > 0 { (sum, count) } else { (all, all_count.max(1)) };
+    sum.map(|s| ((s + count / 2) / count.max(1)) as u8)
+}
+
+/// Blends a texel over the texture's fill colour by its alpha, and keeps the alpha.
+///
+/// Ground textures carry transition masks: texels with alpha 0 hold black, and the original
+/// draws them over the neighbouring ground. The opaque ground pass has nothing to show through,
+/// so those texels take the fill colour instead. The overlay pass keeps the alpha, so the
+/// transition still fades in over the ground.
+fn bake_alpha(texel: [u8; 4], fill: [u8; 3]) -> [u8; 4] {
+    let a = u32::from(texel[3]);
+    let mix = |c: u8, f: u8| ((u32::from(c) * a + u32::from(f) * (255 - a) + 127) / 255) as u8;
     [
-        texture.rgba[index],
-        texture.rgba[index + 1],
-        texture.rgba[index + 2],
-        texture.rgba[index + 3],
+        mix(texel[0], fill[0]),
+        mix(texel[1], fill[1]),
+        mix(texel[2], fill[2]),
+        texel[3],
     ]
 }
 
@@ -314,7 +424,6 @@ impl TerrainMesh {
 /// Settings for [`build_mesh`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MeshOptions {
-    pub sheet: SheetLayout,
     pub atlas: AtlasLayout,
 }
 
@@ -377,7 +486,7 @@ pub fn build_mesh(terrain: &W3eTerrain, options: MeshOptions) -> Result<TerrainM
             let base_corner = textures.iter().position(|&t| t == base).unwrap_or(0);
             let base_cell = options
                 .atlas
-                .cell_uv(base, variations[base_corner], options.sheet)
+                .cell_uv(base, variations[base_corner])
                 .to_array();
             mesh.ground
                 .quad(tile_vertices(positions, [base_cell; 4], [[1.0; 4]; 4]));
@@ -391,7 +500,7 @@ pub fn build_mesh(terrain: &W3eTerrain, options: MeshOptions) -> Result<TerrainM
                 seen.push(texture);
                 let cell = options
                     .atlas
-                    .cell_uv(texture, variations[corner], options.sheet)
+                    .cell_uv(texture, variations[corner])
                     .to_array();
                 let weights = textures.map(|t| if t == texture { 1.0 } else { 0.0 });
                 let colors = weights.map(|w| [1.0, 1.0, 1.0, w]);
@@ -505,15 +614,18 @@ pub struct TerrainScene {
 const TERRAIN_SLK: &str = "TerrainArt\\Terrain.slk";
 
 impl TerrainScene {
-    /// Meshes a parsed terrain. `textures[slot]` is the sheet for ground slot `slot`, if known.
+    /// Meshes a parsed terrain. `textures[slot]` is the texture for ground slot `slot`, if known.
+    /// Each texture keeps its own cell grid (see [`AtlasLayout::for_textures`]).
     pub fn from_terrain(
         terrain: &W3eTerrain,
         textures: &[Option<TextureData>],
-        options: MeshOptions,
     ) -> Result<TerrainScene, MeshError> {
-        let mesh = build_mesh(terrain, options)?;
         let refs: Vec<Option<&TextureData>> = textures.iter().map(Option::as_ref).collect();
-        let atlas = build_atlas(options.atlas, options.sheet, &refs);
+        let options = MeshOptions {
+            atlas: AtlasLayout::for_textures(DEFAULT_SHEET_PX, &refs),
+        };
+        let mesh = build_mesh(terrain, options)?;
+        let atlas = build_atlas(options.atlas, &refs);
         let bounds = mesh.bounds().ok_or(MeshError::TooSmall {
             width: terrain.width,
             height: terrain.height,
@@ -527,41 +639,78 @@ impl TerrainScene {
         })
     }
 
-    /// Reads `war3map.w3e` from a map archive (`.w3x`) and meshes it. Ground textures are looked
-    /// up through `TerrainArt\Terrain.slk`; any step that fails falls back to the procedural
+    /// Reads `war3map.w3e` from a map archive (`.w3x`) and meshes it, with procedural ground
     /// sheets.
     pub fn from_map(map: &[u8]) -> Result<TerrainScene, MapError> {
+        TerrainScene::from_map_with_sources(map, &[])
+    }
+
+    /// Like [`TerrainScene::from_map`], with ground textures read from `sources`: the game
+    /// archives, in load order (later archives override earlier ones, as in the game). The
+    /// tileset table `TerrainArt\Terrain.slk` is merged over all of them, then each ground
+    /// slot's `dir\file.blp` is looked up from the last archive that has it. A slot that cannot
+    /// be read falls back to its procedural sheet.
+    pub fn from_map_with_sources(
+        map: &[u8],
+        sources: &[&[u8]],
+    ) -> Result<TerrainScene, MapError> {
         let archive = mpq::Archive::open(map)?;
         let terrain = W3eTerrain::parse(&archive.read("war3map.w3e")?)?;
-        let textures = load_ground_textures(&archive, &terrain);
-        Ok(TerrainScene::from_terrain(
-            &terrain,
-            &textures,
-            MeshOptions::default(),
-        )?)
+        let archives: Vec<mpq::Archive<'_>> = sources
+            .iter()
+            .filter_map(|bytes| mpq::Archive::open(bytes).ok())
+            .collect();
+        let textures = load_ground_textures(&archives, &terrain);
+        Ok(TerrainScene::from_terrain(&terrain, &textures)?)
     }
 }
 
+/// Atlas sheet size in pixels, per slot.
+pub const DEFAULT_SHEET_PX: u32 = 256;
+
+/// Reads `name` from the last archive that has it.
+fn read_from_archives(archives: &[mpq::Archive<'_>], name: &str) -> Option<Vec<u8>> {
+    archives.iter().rev().find_map(|archive| archive.read(name).ok())
+}
+
+/// `TerrainArt\Terrain.slk` merged over every archive, in load order. Later archives replace
+/// the cells they define; the expansion and patch files carry the Ruins and Fall tilesets with
+/// their own column layout, which the column names account for.
+fn merged_terrain_slk(archives: &[mpq::Archive<'_>]) -> Option<gamedata::Slk> {
+    let mut merged: Option<gamedata::Slk> = None;
+    for archive in archives {
+        let Ok(bytes) = archive.read(TERRAIN_SLK) else {
+            continue;
+        };
+        let Ok(slk) = gamedata::Slk::parse_bytes(&bytes) else {
+            continue;
+        };
+        match merged.as_mut() {
+            Some(base) => base.merge(&slk),
+            None => merged = Some(slk),
+        }
+    }
+    merged
+}
+
 /// Best effort: `TerrainArt\Terrain.slk` row of each ground tileset id, then its `dir` and `file`
-/// columns as `dir\file.blp`. UNVERIFIED against real files (column names are assumed).
+/// columns as `dir\file.blp`. Missing or unreadable entries give `None` (procedural slot).
 fn load_ground_textures(
-    archive: &mpq::Archive<'_>,
+    archives: &[mpq::Archive<'_>],
     terrain: &W3eTerrain,
 ) -> Vec<Option<TextureData>> {
-    let slk = archive
-        .read(TERRAIN_SLK)
-        .ok()
-        .and_then(|bytes| gamedata::Slk::parse_bytes(&bytes).ok());
+    let slk = merged_terrain_slk(archives);
     (0..GROUND_SLOTS)
         .map(|slot| {
             let id = terrain.ground_tilesets.get(slot)?;
             let key = String::from_utf8_lossy(id)
                 .trim_end_matches('\0')
                 .to_string();
-            let row = slk.as_ref()?.row(&key)?;
-            let dir = row.raw("dir")?;
-            let file = row.raw("file")?;
-            let bytes = archive.read(&format!("{dir}\\{file}.blp")).ok()?;
+            let slk = slk.as_ref()?;
+            // Text cells are stored quoted in the SLK; `as_str` gives the bare text.
+            let dir = slk.get(&key, "dir")?.as_str()?;
+            let file = slk.get(&key, "file")?.as_str()?;
+            let bytes = read_from_archives(archives, &format!("{dir}\\{file}.blp"))?;
             let blp = blp::Blp::parse(&bytes).ok()?;
             TextureData::from_blp(&blp).ok()
         })
@@ -721,9 +870,9 @@ mod tests {
         assert_eq!(mesh.ground.quad_count(), 1);
         assert_eq!(mesh.overlays.quad_count(), 1);
         // Tie: texture 3 is met first, so it is the base.
-        let base = options.atlas.cell_uv(3, 0, options.sheet).to_array();
+        let base = options.atlas.cell_uv(3, 0).to_array();
         assert_eq!(mesh.ground.vertices[0].cell, base);
-        let overlay_cell = options.atlas.cell_uv(5, 0, options.sheet).to_array();
+        let overlay_cell = options.atlas.cell_uv(5, 0).to_array();
         let weights: Vec<f32> = mesh.overlays.vertices.iter().map(|v| v.color[3]).collect();
         assert_eq!(weights, vec![0.0, 1.0, 1.0, 0.0]);
         assert!(mesh.overlays.vertices.iter().all(|v| v.cell == overlay_cell));
@@ -741,7 +890,7 @@ mod tests {
         let options = MeshOptions::default();
         let mesh = build_mesh(&terrain(2, 2, &points), options).unwrap();
         assert!(mesh.overlays.is_empty());
-        let expected = options.atlas.cell_uv(1, 5, options.sheet).to_array();
+        let expected = options.atlas.cell_uv(1, 5).to_array();
         assert!(mesh.ground.vertices.iter().all(|v| v.cell == expected));
         // Local UVs cover the whole tile.
         assert_eq!(mesh.ground.vertices[0].uv, [0.0, 0.0]);
@@ -819,12 +968,11 @@ mod tests {
 
     #[test]
     fn atlas_cells_are_disjoint_and_inside_their_sheet() {
-        let layout = AtlasLayout { sheet_px: 64 };
-        let sheet = SheetLayout::GRID_4X4;
+        let layout = AtlasLayout::square(64);
         let mut seen = Vec::new();
         for texture in 0..16u8 {
             for variation in 0..16u8 {
-                let r = layout.cell_uv(texture, variation, sheet);
+                let r = layout.cell_uv(texture, variation);
                 assert!(r.min[0] > 0.0 && r.min[1] > 0.0);
                 assert!(r.min[0] + r.size[0] < 1.0 && r.min[1] + r.size[1] < 1.0);
                 // Inside the sheet of this texture (4x4 sheets in the atlas).
@@ -842,8 +990,8 @@ mod tests {
 
     #[test]
     fn procedural_atlas_has_every_slot_filled() {
-        let layout = AtlasLayout { sheet_px: 32 };
-        let atlas = build_atlas(layout, SheetLayout::GRID_8X4, &[]);
+        let layout = AtlasLayout::square(32);
+        let atlas = build_atlas(layout, &[]);
         assert_eq!(atlas.size, 128);
         assert_eq!(atlas.rgba.len(), 128 * 128 * 4);
         assert!(atlas.rgba.chunks(4).all(|px| px[3] == 255));
@@ -867,21 +1015,99 @@ mod tests {
 
     #[test]
     fn supplied_texture_is_resampled_into_its_slot() {
-        let layout = AtlasLayout { sheet_px: 4 };
         // A 2x2 red texture fills slot 2 completely.
         let red = TextureData::from_rgba(2, 2, [255, 0, 0, 255].repeat(4)).unwrap();
         let mut sources: Vec<Option<&TextureData>> = vec![None; GROUND_SLOTS];
         sources[2] = Some(&red);
-        let atlas = build_atlas(layout, SheetLayout::GRID_4X4, &sources);
+        let layout = AtlasLayout::for_textures(4, &sources);
+        let atlas = build_atlas(layout, &sources);
         // Slot 2 is at sheet column 2, row 0: pixels x in 8..12, y in 0..4.
         let i = ((16 + 9) * 4) as usize;
         assert_eq!(&atlas.rgba[i..i + 4], &[255, 0, 0, 255]);
     }
 
     #[test]
+    fn wide_texture_keeps_square_cells_and_its_colours() {
+        // A 512x256 texture: left half blue, right half green, 8x4 cells of 64 px.
+        let (w, h) = (512u32, 256u32);
+        let mut rgba = Vec::new();
+        for _y in 0..h {
+            for x in 0..w {
+                rgba.extend_from_slice(if x < w / 2 { &[0, 0, 255, 255] } else { &[0, 255, 0, 255] });
+            }
+        }
+        let wide = TextureData::from_rgba(w, h, rgba).unwrap();
+        let mut sources: Vec<Option<&TextureData>> = vec![None; GROUND_SLOTS];
+        sources[0] = Some(&wide);
+        let layout = AtlasLayout::for_textures(64, &sources);
+        assert_eq!(layout.slots[0].sheet, SheetLayout { cols: 8, rows: 4 });
+        assert_eq!((layout.slots[0].width, layout.slots[0].height), (64, 32));
+        // Cells are 8x8 px in a 64x32 slot: square.
+        let cell = layout.cell_uv(0, 0);
+        assert!((cell.size[0] - cell.size[1]).abs() < 1e-6);
+        let atlas = build_atlas(layout, &sources);
+        // Left-most texel is blue, right-most of the slot is green, and the lower half of the
+        // slot's square is unused (transparent).
+        assert_eq!(&atlas.rgba[0..4], &[0, 0, 255, 255]);
+        let right = (60 * 4) as usize;
+        assert_eq!(&atlas.rgba[right..right + 4], &[0, 255, 0, 255]);
+        let below = (((40 * atlas.size) + 2) * 4) as usize;
+        assert_eq!(&atlas.rgba[below..below + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn transparent_texels_take_the_fill_colour_and_keep_their_alpha() {
+        // Opaque texels are green, transparent ones black (the transition-mask convention).
+        let mut rgba = Vec::new();
+        for i in 0..4 {
+            if i % 2 == 0 {
+                rgba.extend_from_slice(&[0, 200, 0, 255]);
+            } else {
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+        let texture = TextureData::from_rgba(4, 1, rgba).unwrap();
+        assert_eq!(opaque_average(&texture), [0, 200, 0]);
+        // Fully transparent: fill colour, alpha 0. Opaque: unchanged.
+        assert_eq!(bake_alpha([0, 0, 0, 0], [0, 200, 0]), [0, 200, 0, 0]);
+        assert_eq!(bake_alpha([10, 20, 30, 255], [0, 200, 0]), [10, 20, 30, 255]);
+        // Half transparent: halfway between the texel and the fill colour.
+        let half = bake_alpha([0, 0, 0, 128], [200, 200, 200]);
+        assert!((i32::from(half[0]) - 100).abs() <= 1 && half[3] == 128);
+    }
+
+    #[test]
+    fn overlay_layers_keep_the_texel_alpha_for_blending() {
+        // A transparent texel in a blended cell must not paint black: the atlas bakes the fill
+        // colour into it, and the alpha stays 0 for the overlay pass.
+        let texture = TextureData::from_rgba(2, 2, vec![0, 0, 0, 0, 90, 90, 90, 255, 90, 90, 90, 255, 90, 90, 90, 255]).unwrap();
+        let mut sources: Vec<Option<&TextureData>> = vec![None; GROUND_SLOTS];
+        sources[0] = Some(&texture);
+        let layout = AtlasLayout::for_textures(4, &sources);
+        let atlas = build_atlas(layout, &sources);
+        assert_eq!(&atlas.rgba[0..4], &[90, 90, 90, 0]);
+        // Atlas column 2 maps to texel column 1, which is opaque.
+        assert_eq!(&atlas.rgba[2 * 4..2 * 4 + 4], &[90, 90, 90, 255]);
+    }
+
+    #[test]
+    fn box_filter_averages_when_shrinking() {
+        // 4x1 texture black, white, black, white into a 2x1 slot: each texel is a 2-pixel average.
+        let rgba = [0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255].to_vec();
+        let texture = TextureData::from_rgba(4, 1, rgba).unwrap();
+        let slot = SlotLayout {
+            sheet: SheetLayout::GRID_4X4,
+            width: 2,
+            height: 1,
+        };
+        assert_eq!(sample_area(&texture, 0, 0, slot), [128, 128, 128, 255]);
+        assert_eq!(sample_area(&texture, 1, 0, slot), [128, 128, 128, 255]);
+    }
+
+    #[test]
     fn terrain_scene_from_parsed_bytes() {
         let t = terrain(2, 2, &flat(2, 2));
-        let scene = TerrainScene::from_terrain(&t, &[], MeshOptions::default()).unwrap();
+        let scene = TerrainScene::from_terrain(&t, &[]).unwrap();
         assert_eq!(scene.textures_loaded, 0);
         assert_eq!(scene.atlas.size, 4 * 256);
         assert!(approx(scene.bounds.min.x, -256.0));
@@ -892,5 +1118,24 @@ mod tests {
     fn garbage_map_is_an_error_not_a_panic() {
         assert!(TerrainScene::from_map(&[]).is_err());
         assert!(TerrainScene::from_map(b"not an archive at all, just text").is_err());
+    }
+
+    #[test]
+    fn terrain_slk_text_cells_are_read_unquoted() {
+        // Two layouts of the same table, as the base and the expansion files store them: the
+        // `dir` column is X2 in one and X3 in the other. Columns are found by name.
+        let base = b"ID;PWXL;N;E\nC;X1;K\"tileID\"\nC;X2;K\"dir\"\nC;X3;K\"file\"\nC;X1;Y2;K\"Ldrt\"\nC;X2;K\"TerrainArt\\LordaeronSummer\"\nC;X3;K\"Lords_Dirt\"\nE\n";
+        let patch = b"ID;PWXL;N;E\nC;X1;Y1;K\"tileID\"\nC;X3;K\"dir\"\nC;X4;K\"file\"\nC;X1;Y100;K\"Zdrt\"\nC;X2;K-1\nC;X3;K\"TerrainArt\\Ruins\"\nC;X4;K\"Ruins_Dirt\"\nE\n";
+        let mut slk = gamedata::Slk::parse_bytes(base).unwrap();
+        slk.merge(&gamedata::Slk::parse_bytes(patch).unwrap());
+        let text = |key: &str, column: &str| {
+            slk.get(key, column)
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        };
+        assert_eq!(text("Ldrt", "dir").as_deref(), Some("TerrainArt\\LordaeronSummer"));
+        assert_eq!(text("Ldrt", "file").as_deref(), Some("Lords_Dirt"));
+        assert_eq!(text("Zdrt", "dir").as_deref(), Some("TerrainArt\\Ruins"));
+        assert_eq!(text("Zdrt", "file").as_deref(), Some("Ruins_Dirt"));
     }
 }

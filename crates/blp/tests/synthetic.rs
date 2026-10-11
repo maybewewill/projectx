@@ -1,7 +1,9 @@
 //! Synthetic BLP1 files: paletted content at every alpha depth with mip-maps, JPEG content
 //! wrapped from a `jpeg-encoder` image, and header error cases. No game assets are used.
 
-use blp::{Blp, ContentType, Error, HEADER_LEN, MAX_MIPS, PALETTE_LEN};
+use blp::{
+    alpha_section_len, split_jpeg_mip, Blp, ContentType, Error, HEADER_LEN, MAX_MIPS, PALETTE_LEN,
+};
 
 /// BGRA palette entry for index `i`. The alpha byte is deliberately non-255 to check that it
 /// is ignored.
@@ -351,4 +353,72 @@ fn jpeg_content_decodes_with_approximate_colors() {
     near(at(13, 2), [0, 0, 255]);
     near(at(4, 8), [0, 255, 0]);
     near(at(12, 12), [0, 0, 255]);
+}
+
+/// Appends an alpha section to a single-level JPEG BLP built by [`build_jpeg_blp`] and declares
+/// it in the header (the alpha section is the last bytes of the mip).
+fn add_alpha_tail(mut file: Vec<u8>, alpha_bits: u32, alpha: &[u8]) -> Vec<u8> {
+    file[8..12].copy_from_slice(&alpha_bits.to_le_bytes());
+    let size = u32::from_le_bytes([file[0x5C], file[0x5D], file[0x5E], file[0x5F]]);
+    file[0x5C..0x60].copy_from_slice(&(size + alpha.len() as u32).to_le_bytes());
+    file.extend_from_slice(alpha);
+    file
+}
+
+#[test]
+fn jpeg_alpha_tail_sets_per_pixel_alpha() {
+    // 8x8, 8-bit alpha: every pixel gets its own alpha, the colours stay as the JPEG says.
+    let (w, h) = (8u16, 8u16);
+    let bgr = vec![128u8; 8 * 8 * 3];
+    let alpha: Vec<u8> = (0..64).map(|i| (i * 4) as u8).collect();
+    let file = add_alpha_tail(build_jpeg_blp(w, h, &bgr), 8, &alpha);
+    let blp = Blp::parse(&file).unwrap();
+    let (_, _, rgba) = blp.mip_rgba(0).unwrap();
+    for i in 0..64 {
+        assert_eq!(rgba[i * 4 + 3], alpha[i], "pixel {i}");
+        assert!((i32::from(rgba[i * 4]) - 128).abs() <= 8, "colour kept");
+    }
+}
+
+#[test]
+fn jpeg_four_bit_alpha_tail_uses_low_nibble_first() {
+    // 4x4 image, 4-bit alpha: 8 bytes, pixel 0 = low nibble of byte 0.
+    let (w, h) = (4u16, 4u16);
+    let bgr = vec![60u8; 4 * 4 * 3];
+    let packed: Vec<u8> = (0..8u8).map(|i| ((2 * i + 1) << 4) | (2 * i)).collect();
+    let file = add_alpha_tail(build_jpeg_blp(w, h, &bgr), 4, &packed);
+    let blp = Blp::parse(&file).unwrap();
+    let (_, _, rgba) = blp.mip_rgba(0).unwrap();
+    for i in 0..16usize {
+        let nibble = (i % 16) as u8;
+        assert_eq!(rgba[i * 4 + 3], nibble * 17, "pixel {i}");
+    }
+}
+
+#[test]
+fn split_jpeg_mip_takes_the_tail_as_alpha() {
+    let mip: Vec<u8> = (0..30).collect();
+    // 4x2 pixels, 8-bit: the last 8 bytes are alpha.
+    let (jpeg, alpha) = split_jpeg_mip(&mip, 4, 2, 8);
+    assert_eq!(jpeg.len(), 22);
+    assert_eq!(alpha.unwrap(), &mip[22..]);
+    // 4x2 pixels, 1-bit: 1 byte of alpha.
+    let (jpeg, alpha) = split_jpeg_mip(&mip, 4, 2, 1);
+    assert_eq!((jpeg.len(), alpha.unwrap().len()), (29, 1));
+    // 4x2 pixels, 4-bit: 4 bytes.
+    let (jpeg, alpha) = split_jpeg_mip(&mip, 4, 2, 4);
+    assert_eq!((jpeg.len(), alpha.unwrap().len()), (26, 4));
+    // No alpha declared, or a mip too short to hold the section: pure JPEG.
+    assert!(split_jpeg_mip(&mip, 4, 2, 0).1.is_none());
+    let short = [1u8, 2, 3];
+    let (jpeg, alpha) = split_jpeg_mip(&short, 4, 2, 8);
+    assert_eq!((jpeg, alpha), (&short[..], None));
+}
+
+#[test]
+fn alpha_section_len_matches_packing() {
+    assert_eq!(alpha_section_len(512, 256, 8), 131_072);
+    assert_eq!(alpha_section_len(3, 3, 1), 2);
+    assert_eq!(alpha_section_len(3, 3, 4), 5);
+    assert_eq!(alpha_section_len(3, 3, 0), 0);
 }

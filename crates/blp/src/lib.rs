@@ -273,14 +273,16 @@ impl Blp {
         Ok(out)
     }
 
-    /// Decodes one JPEG mip: the shared header followed by this mip's data.
+    /// Decodes one JPEG mip: the shared header, then this mip's JPEG data, then (when the
+    /// header declares alpha bits) the alpha section stored at the end of the mip.
     fn decode_jpeg(&self, mip: &[u8], w: u32, h: u32) -> Result<Vec<u8>, Error> {
         let header_len = u32_at(&self.data, HEADER_LEN) as usize;
         let shared = &self.data[HEADER_LEN + 4..HEADER_LEN + 4 + header_len];
+        let (jpeg_data, alpha) = split_jpeg_mip(mip, w, h, self.header.alpha_bits);
 
-        let mut jpeg = Vec::with_capacity(shared.len() + mip.len());
+        let mut jpeg = Vec::with_capacity(shared.len() + jpeg_data.len());
         jpeg.extend_from_slice(shared);
-        jpeg.extend_from_slice(mip);
+        jpeg.extend_from_slice(jpeg_data);
 
         let mut decoder = zune_jpeg::JpegDecoder::new(&jpeg);
         let pixels = decoder.decode().map_err(|e| Error::Jpeg(e.to_string()))?;
@@ -328,7 +330,42 @@ impl Blp {
                 )))
             }
         }
+        if let Some(alpha) = alpha {
+            apply_alpha(&mut out, alpha, self.header.alpha_bits);
+        }
         Ok(out)
+    }
+}
+
+/// Bytes of the alpha section that follows the JPEG data of a `w x h` mip.
+pub fn alpha_section_len(w: u32, h: u32, alpha_bits: u32) -> usize {
+    let pixels = w as usize * h as usize;
+    match alpha_bits {
+        1 => pixels.div_ceil(8),
+        4 => pixels.div_ceil(2),
+        8 => pixels,
+        _ => 0,
+    }
+}
+
+/// Splits a JPEG mip into its JPEG bytes and its alpha section. The alpha section is the last
+/// [`alpha_section_len`] bytes of the mip. A mip too short to hold it is taken as pure JPEG.
+///
+/// Real 512x256 terrain textures (8-bit alpha) confirm the tail layout: the JPEG part of the
+/// mip ends where the alpha section begins, and it has no end-of-image marker.
+pub fn split_jpeg_mip(mip: &[u8], w: u32, h: u32, alpha_bits: u32) -> (&[u8], Option<&[u8]>) {
+    let alpha_len = alpha_section_len(w, h, alpha_bits);
+    if alpha_len == 0 || mip.len() <= alpha_len {
+        return (mip, None);
+    }
+    let (jpeg, alpha) = mip.split_at(mip.len() - alpha_len);
+    (jpeg, Some(alpha))
+}
+
+/// Writes the alpha of every pixel of an RGBA buffer, using [`alpha_at`].
+pub fn apply_alpha(rgba: &mut [u8], alpha: &[u8], alpha_bits: u32) {
+    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        px[3] = alpha_at(alpha, alpha_bits, i);
     }
 }
 

@@ -1,6 +1,8 @@
 //! Native viewer: `viewer [--seq NAME] [--texture-dir DIR] [model.mdx [texture.blp]]`,
-//! or `viewer --map map.w3x` for the terrain of a map (ground textures best effort, see
-//! `viewer::terrain`; procedural sheets otherwise).
+//! or `viewer --map map.w3x [--mpq archive]... [--render-png out.png] [--size WxH]` for the
+//! terrain of a map. The `--mpq` archives (load order, last wins) supply the ground textures;
+//! without them the procedural sheets are used. `--render-png` draws offscreen to a PNG file
+//! instead of opening a window (see `viewer::offscreen`).
 //!
 //! Without a model it shows a built-in cube. With one, the model is animated and plays its
 //! "Stand" sequence (or the one named by `--seq`). Textures are matched by file name, ignoring
@@ -15,7 +17,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use viewer::model::ModelAsset;
     use viewer::scene::{Scene, TextureData};
-    use viewer::terrain::TerrainScene;
 
     #[derive(Default)]
     struct Options {
@@ -90,25 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    {
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        if let [flag, path] = args.as_slice() {
-            if flag == "--map" {
-                let terrain = TerrainScene::from_map(&std::fs::read(path)?)?;
-                let tiles = terrain.mesh.tiles;
-                eprintln!(
-                    "viewer: {path}: {}x{} tiles, {} ground textures from the archive, {} quads",
-                    tiles.0,
-                    tiles.1,
-                    terrain.textures_loaded,
-                    terrain.mesh.ground.quad_count() + terrain.mesh.overlays.quad_count()
-                );
-                viewer::run_terrain(terrain)?;
-                return Ok(());
-            }
-        }
-    }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--map") {
+        return run_map(&args);
+    }
     let opts = parse_args(&args)?;
     let Some(model_path) = opts.model.as_deref() else {
         viewer::run(Scene::builtin_cube())?;
@@ -127,6 +113,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fallback.clone()
     })?;
     viewer::run_model(asset, opts.seq.as_deref())?;
+    Ok(())
+}
+
+/// `viewer --map map.w3x [--mpq archive]... [--render-png out.png] [--size WxH]`.
+///
+/// `--mpq` archives supply the terrain art (`TerrainArt\Terrain.slk` and the BLP textures); give
+/// them in load order, the last one wins. With `--render-png` the terrain is drawn offscreen to
+/// that file and a short summary of the image is printed; without it the window opens.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::path::PathBuf;
+
+    use viewer::offscreen;
+    use viewer::terrain::TerrainScene;
+
+    let mut map: Option<PathBuf> = None;
+    let mut mpqs: Vec<PathBuf> = Vec::new();
+    let mut png: Option<PathBuf> = None;
+    let mut dump_atlas: Option<PathBuf> = None;
+    let mut size = (1280u32, 720u32);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--map" => map = Some(it.next().ok_or("--map needs a file")?.into()),
+            "--mpq" => mpqs.push(it.next().ok_or("--mpq needs a file")?.into()),
+            "--render-png" => png = Some(it.next().ok_or("--render-png needs a file")?.into()),
+            "--dump-atlas" => {
+                dump_atlas = Some(it.next().ok_or("--dump-atlas needs a file")?.into());
+            }
+            "--size" => {
+                let text = it.next().ok_or("--size needs WxH")?;
+                let (w, h) = text.split_once('x').ok_or("--size needs WxH")?;
+                size = (w.parse()?, h.parse()?);
+            }
+            other => return Err(format!("unknown option {other}").into()),
+        }
+    }
+    let map = map.ok_or("usage: viewer --map map.w3x [--mpq archive]... [--render-png out.png]")?;
+
+    let map_bytes = std::fs::read(&map)?;
+    let archive_bytes = mpqs
+        .iter()
+        .map(|path| std::fs::read(path).map_err(|e| format!("{}: {e}", path.display())))
+        .collect::<Result<Vec<Vec<u8>>, String>>()?;
+    let sources: Vec<&[u8]> = archive_bytes.iter().map(Vec::as_slice).collect();
+    let terrain = TerrainScene::from_map_with_sources(&map_bytes, &sources)?;
+    let tiles = terrain.mesh.tiles;
+    eprintln!(
+        "viewer: {}: {}x{} tiles, {} ground textures from {} archives, {} quads",
+        map.display(),
+        tiles.0,
+        tiles.1,
+        terrain.textures_loaded,
+        mpqs.len(),
+        terrain.mesh.ground.quad_count() + terrain.mesh.overlays.quad_count()
+    );
+
+    if let Some(out) = dump_atlas {
+        let size = terrain.atlas.size;
+        offscreen::write_png(&out, size, size, &terrain.atlas.rgba)?;
+        eprintln!("viewer: wrote the ground atlas to {}", out.display());
+    }
+    match png {
+        Some(out) => {
+            let (w, h) = size;
+            let rgba = offscreen::render_terrain(&terrain, w, h)?;
+            offscreen::write_png(&out, w, h, &rgba)?;
+            let s = offscreen::summarize(w, h, &rgba);
+            eprintln!(
+                "viewer: wrote {} ({}x{}): {} distinct colours, mean RGB {:.1} {:.1} {:.1}",
+                out.display(),
+                w,
+                h,
+                s.distinct_colors,
+                s.mean_rgb[0],
+                s.mean_rgb[1],
+                s.mean_rgb[2]
+            );
+            eprintln!("viewer: luma histogram (32-wide bins): {:?}", s.luma_histogram);
+        }
+        None => viewer::run_terrain(terrain)?,
+    }
     Ok(())
 }
 

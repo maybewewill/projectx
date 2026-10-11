@@ -1952,6 +1952,7 @@ version = "0.1.0"
 dependencies = [
  "blp",
  "bytemuck",
+ "flate2",
  "gamedata",
  "glam",
  "mdx",
