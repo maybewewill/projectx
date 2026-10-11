@@ -429,6 +429,11 @@ impl Game {
 
     /// Starts the cycle for the unit's active order (called by the order system when the order starts).
     pub(crate) fn combat_begin(&mut self, unit: ObjKey) {
+        if self.is_stunned(unit) {
+            // A stunned unit does not act: its orders wait (the stun buff of a spell, `cast.rs`).
+            self.stop_route(unit);
+            return;
+        }
         let Some(head) = self.order_head(unit) else {
             return;
         };
@@ -669,7 +674,7 @@ impl Game {
 
     /// `IsPlayerEnemy(p, q)` (LIKELY: the passive relation bit of `p` for `q` is clear, and a player is never the
     /// enemy of itself). Neutral players are enemies by default (UNSURE).
-    fn is_enemy(&self, p: u32, q: u32) -> bool {
+    pub(crate) fn is_enemy(&self, p: u32, q: u32) -> bool {
         p != q && self.player(p).alliances[ALLIANCE_PASSIVE] & (1 << q) == 0
     }
 

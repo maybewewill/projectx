@@ -118,6 +118,8 @@ pub struct ObjectText {
     pub item_stock: BTreeMap<u32, TypeStock>,
     /// The starting gold of `Agld` (level 1 `DataA`), when the ability table has the row.
     pub gold_mine_amount: Option<i32>,
+    /// The level records of the spells the cast core knows (`sim::cast`), by raw code.
+    pub spell_levels: BTreeMap<u32, Vec<sim::cast::SpellLevel>>,
     /// What each unit type trains, builds and researches, and what it requires (`Trains`, `Builds`, `Researches`,
     /// `Requires`, `Upgrade` of the unit profiles), by raw code.
     pub tech: BTreeMap<u32, sim::production::TypeTech>,
@@ -328,6 +330,36 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
             return Ok(());
         }
     };
+    for (name, code) in [
+        ("AHtb", sim::cast::STORM_BOLT),
+        ("AHhb", sim::cast::HOLY_LIGHT),
+        ("Aslo", sim::cast::SLOW),
+    ] {
+        if let Some(def) = gamedata::abilitytype::read_ability(&slk, name) {
+            let f = |v: f32| F32::from_bits(v.to_bits());
+            let levels = def
+                .levels
+                .iter()
+                .map(|l| {
+                    let mut data = [F32::ZERO; 9];
+                    for (d, v) in data.iter_mut().zip(l.data.iter()) {
+                        *d = f(*v);
+                    }
+                    sim::cast::SpellLevel {
+                        cast: f(l.cast),
+                        dur: f(l.dur),
+                        hero_dur: f(l.hero_dur),
+                        cost: l.cost,
+                        cool: f(l.cool),
+                        area: f(l.area),
+                        rng: f(l.rng),
+                        data,
+                    }
+                })
+                .collect();
+            out.spell_levels.insert(code, levels);
+        }
+    }
     if slk.row(GOLD_MINE_ABILITY).is_some() {
         let level = gamedata::abilitytype::read_level(&slk, GOLD_MINE_ABILITY, 1);
         out.gold_mine_amount = Some(level.data[0] as i32);
@@ -363,6 +395,9 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     }
     for (&code, &u) in &text.upgrades {
         game.production_mut().upgrades.insert(code, u);
+    }
+    for (&code, levels) in &text.spell_levels {
+        game.set_spell_levels(code, levels.clone());
     }
     if let Some(amount) = text.gold_mine_amount {
         if let Some(code) = raw_code(GOLD_MINE_ABILITY) {
