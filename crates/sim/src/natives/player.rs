@@ -259,12 +259,22 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 
     let g = Rc::clone(game);
-    reg.register("SetPlayerState", move |_, a| {
+    reg.register("SetPlayerState", move |ctx, a| {
         let v = raw_at(a, 2);
-        let mut gm = g.borrow_mut();
-        if let (Some(p), Some(s)) = (index_at(&gm, a, 0), state_at(a, 1)) {
-            let stored = state_store(s, v);
-            gm.player_mut(p).expect("slot").states[s as usize] = stored;
+        let changed = {
+            let mut gm = g.borrow_mut();
+            match (index_at(&gm, a, 0), state_at(a, 1)) {
+                (Some(p), Some(s)) => {
+                    let stored = state_store(s, v);
+                    gm.player_mut(p).expect("slot").states[s as usize] = stored;
+                    Some((p, s, stored))
+                }
+                _ => None,
+            }
+        };
+        if let Some((p, s, stored)) = changed {
+            let value = softfloat::conv::i2r(state_load(s, stored));
+            super::event::fire_player_state(&g, ctx, p, s, value);
         }
         NativeResult::Return(Value::Null)
     });

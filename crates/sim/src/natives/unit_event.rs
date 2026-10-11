@@ -1,6 +1,6 @@
 //! Unit and player-unit events: `TriggerRegisterUnitEvent`, `TriggerRegisterPlayerUnitEvent`, the death
 //! dispatch that `KillUnit`, `SetWidgetLife` and `SetUnitState` (state 0) run, and the event getters
-//! `GetTriggerUnit`, `GetDyingUnit`, `GetKillingUnit` and `GetTriggerPlayer`.
+//! `GetTriggerUnit`, `GetDyingUnit` and `GetTriggerPlayer` (`GetKillingUnit` is in `event.rs`).
 //!
 //! Behaviour notes. Addresses are the 1.26a `Game.dll` functions in `docs/spec/groups-events.md`
 //! (section 5 to 9). Labels as in `unit.rs`.
@@ -114,15 +114,21 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         NativeResult::Return(Value::Handle(id))
     });
 
-    // UNSURE (spec 8): the killer lookup is not decoded, so the native answers the null handle.
-    reg.register("GetKillingUnit", move |_, _| {
-        NativeResult::Return(Value::Handle(0))
-    });
-
     let g = Rc::clone(game);
     reg.register("GetTriggerPlayer", move |ctx, _| {
         let mut gm = g.borrow_mut();
-        let player = match gm.context(ctx.thread_key()) {
+        let firing_player = match gm.context(ctx.thread_key()) {
+            Some(Ctx::Trigger {
+                firing: Some(i), ..
+            }) => gm.firings.get(i as usize).and_then(|f| {
+                f.data.iter().find_map(|(field, d)| match (field, d) {
+                    (super::event::Field::Player, super::event::Datum::Player(p)) => Some(*p),
+                    _ => None,
+                })
+            }),
+            _ => None,
+        };
+        let player = firing_player.or(match gm.context(ctx.thread_key()) {
             Some(Ctx::Trigger { event: Some(e), .. }) => match gm.object(e) {
                 Object::Event(ev) => match ev.source {
                     EventSource::PlayerUnitEvent { player, .. } => Some(player),
@@ -131,7 +137,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
                 _ => None,
             },
             _ => None,
-        };
+        });
         let id = player.map_or(0, |p| gm.player_handle(p));
         NativeResult::Return(Value::Handle(id))
     });
@@ -197,6 +203,7 @@ pub(crate) fn filter_passes(
         event: Some(node.event),
         unit: Some(unit),
         order: None,
+        firing: None,
     });
     game.borrow_mut().push_filter_unit(id);
     let ok = eval_boolexpr(game, rt, b, key);
@@ -250,6 +257,13 @@ fn player_unit_event_accepted(id: u32) -> bool {
 
 /// The event id of the running dispatch (the key without its base), if the thread runs an event that has one.
 pub(crate) fn current_event_id(gm: &Game, thread: u32) -> Option<u32> {
+    // An event fired through `event::fire_event` carries its id in its firing record.
+    if let Some(Ctx::Trigger {
+        firing: Some(i), ..
+    }) = gm.context(thread)
+    {
+        return gm.firings.get(i as usize).map(|f| f.id);
+    }
     let Some(Ctx::Trigger { event: Some(e), .. }) = gm.context(thread) else {
         return None;
     };
@@ -258,7 +272,9 @@ pub(crate) fn current_event_id(gm: &Game, thread: u32) -> Option<u32> {
             EventSource::UnitEvent { key }
             | EventSource::PlayerUnitEvent { key, .. }
             | EventSource::RegionEvent { key, .. }
-            | EventSource::WidgetDeath { key, .. } => key.checked_sub(KEY_BASE),
+            | EventSource::WidgetDeath { key, .. }
+            | EventSource::Keyed { key, .. }
+            | EventSource::InRange { key, .. } => key.checked_sub(KEY_BASE),
             _ => None,
         },
         _ => None,

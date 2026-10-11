@@ -17,6 +17,7 @@ use softfloat::F32;
 mod ability;
 pub mod ai;
 mod destructable;
+pub mod event;
 pub mod fog;
 mod force;
 pub mod game;
@@ -81,6 +82,7 @@ pub fn register_world(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     presentation::register(reg, game);
     unit::register(reg, game);
     unit_event::register(reg, game);
+    event::register(reg, game);
     region::register(reg, game);
     group::register(reg, game);
     item::register(reg, game);

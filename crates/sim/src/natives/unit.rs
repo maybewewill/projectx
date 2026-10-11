@@ -166,11 +166,17 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     let g = Rc::clone(game);
     reg.register("KillUnit", move |ctx, a| {
-        let died = {
+        let (unit, died) = {
             let mut gm = g.borrow_mut();
-            unit_at(&gm, a, 0).filter(|&k| set_life(&mut gm, k, F32::ZERO))
+            match unit_at(&gm, a, 0) {
+                Some(k) => (Some(k), set_life(&mut gm, k, F32::ZERO)),
+                None => (None, false),
+            }
         };
-        if let Some(k) = died {
+        if let Some(k) = unit {
+            super::event::fire_unit_state(&g, ctx, k, STATE_LIFE);
+        }
+        if let (Some(k), true) = (unit, died) {
             unit_event::dispatch_unit_death(&g, ctx, k);
         }
         NativeResult::Return(Value::Null)
@@ -289,19 +295,30 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     let g = Rc::clone(game);
     // `changeColor` is read by nothing here (UNSURE, see the module notes).
-    reg.register("SetUnitOwner", move |_, a| {
-        let mut gm = g.borrow_mut();
-        let new_owner = gm.player_index_of_handle(handle_arg(a, 1));
-        if let (Some(k), Some(new_owner)) = (unit_at(&gm, a, 0), new_owner) {
-            let from = gm.unit(k).owner;
-            if from != new_owner {
-                gm.unit_mut(k).owner = new_owner;
-                gm.push_unit_event(UnitEvent::OwnerChanged {
-                    unit: k,
-                    from,
-                    to: new_owner,
-                });
+    reg.register("SetUnitOwner", move |ctx, a| {
+        let changed = {
+            let mut gm = g.borrow_mut();
+            let new_owner = gm.player_index_of_handle(handle_arg(a, 1));
+            match (unit_at(&gm, a, 0), new_owner) {
+                (Some(k), Some(new_owner)) => {
+                    let from = gm.unit(k).owner;
+                    if from == new_owner {
+                        None
+                    } else {
+                        gm.unit_mut(k).owner = new_owner;
+                        gm.push_unit_event(UnitEvent::OwnerChanged {
+                            unit: k,
+                            from,
+                            to: new_owner,
+                        });
+                        Some((k, from, new_owner))
+                    }
+                }
+                _ => None,
             }
+        };
+        if let Some((k, from, to)) = changed {
+            super::event::fire_owner_change(&g, ctx, k, from, to);
         }
         NativeResult::Return(Value::Null)
     });
@@ -328,12 +345,18 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     let g = Rc::clone(game);
     reg.register("SetUnitState", move |ctx, a| {
-        let died = {
+        let state = raw_at(a, 1) as u32;
+        let (unit, died) = {
             let mut gm = g.borrow_mut();
-            unit_at(&gm, a, 0)
-                .filter(|&k| set_state(&mut gm, k, raw_at(a, 1) as u32, real_at(a, 2)))
+            match unit_at(&gm, a, 0) {
+                Some(k) => (Some(k), set_state(&mut gm, k, state, real_at(a, 2))),
+                None => (None, false),
+            }
         };
-        if let Some(k) = died {
+        if let Some(k) = unit {
+            super::event::fire_unit_state(&g, ctx, k, state);
+        }
+        if let (Some(k), true) = (unit, died) {
             unit_event::dispatch_unit_death(&g, ctx, k);
         }
         NativeResult::Return(Value::Null)
@@ -348,11 +371,17 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     let g = Rc::clone(game);
     reg.register("SetWidgetLife", move |ctx, a| {
-        let died = {
+        let (unit, died) = {
             let mut gm = g.borrow_mut();
-            unit_at(&gm, a, 0).filter(|&k| set_life(&mut gm, k, real_at(a, 1)))
+            match unit_at(&gm, a, 0) {
+                Some(k) => (Some(k), set_life(&mut gm, k, real_at(a, 1))),
+                None => (None, false),
+            }
         };
-        if let Some(k) = died {
+        if let Some(k) = unit {
+            super::event::fire_unit_state(&g, ctx, k, STATE_LIFE);
+        }
+        if let (Some(k), true) = (unit, died) {
             unit_event::dispatch_unit_death(&g, ctx, k);
         }
         NativeResult::Return(Value::Null)

@@ -269,6 +269,7 @@ pub(crate) fn unit_moved(
     unit: ObjKey,
     from: (F32, F32),
 ) {
+    super::event::unit_range_moved(game, rt, unit, from);
     // Phase 1, detection: every live region whose membership changed between the two cells, its matching
     // registrations in order. Nothing runs here.
     let candidates: Vec<Observer> = {

@@ -28,6 +28,10 @@ pub use crate::abilities::{AbilityType, AbilityTypes};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjKey(pub u32);
 
+/// The observer agent of game-level events (game events, game states, global variables). It is not an
+/// arena object: its table lives in `Game::observers` under this key (see `event.rs`).
+pub const GAME_AGENT: ObjKey = ObjKey(u32::MAX);
+
 /// What a queued timer entry is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Payload {
@@ -52,6 +56,9 @@ pub enum Ctx {
         unit: Option<ObjKey>,
         /// Index of the issued-order record of an order event (`GetIssuedOrderId`), if any.
         order: Option<u32>,
+        /// Index of the [`super::event::Firing`] whose response slots the getters read, if the event was
+        /// fired through `event::fire_event`.
+        firing: Option<u32>,
     },
     /// A timer handler started at the timer's expiry.
     Timer(ObjKey),
@@ -178,6 +185,20 @@ pub enum EventSource {
     /// `TriggerRegisterDeathEvent` (`natives/destructable.rs`): fires when the widget `widget` dies. `key`
     /// is the registration key (`0x80259`). The widget is what `GetTriggerDestructable` returns.
     WidgetDeath { key: u32, widget: ObjKey },
+    /// A keyed event with no extra matching rule (`natives/event.rs`): game events, filtered unit events,
+    /// alliance changes, dialogs, buttons and trackables. `value` is the registration argument that the
+    /// rule of the event uses (the alliance type for alliance changes, 0 otherwise).
+    Keyed { key: u32, value: i32 },
+    /// A player or unit state event (`TriggerRegisterPlayerStateEvent`, `TriggerRegisterUnitStateEvent`).
+    /// The operator is `key - 0x80101`. It fires for state `state` when the new value compares to `limit`.
+    Limit { key: u32, state: u32, limit: F32 },
+    /// `TriggerRegisterPlayerChatEvent`: `text` indexes [`Game::strings`]; `exact` selects the match rule.
+    Chat { key: u32, exact: bool, text: u32 },
+    /// `TriggerRegisterUnitInRange`: fires for a unit that comes within `range` of the registering unit.
+    InRange { key: u32, range: F32 },
+    /// `TriggerRegisterVariableEvent`: fires when the global `name` (index into [`Game::strings`]) changes and
+    /// the new value compares to `limit` with the operator `op` (`0..=5`, the JASS limit operators).
+    Variable { name: u32, op: u32, limit: F32 },
 }
 
 /// A destructable type as the simulation needs it: the template values a new destructable starts with.
@@ -1001,6 +1022,11 @@ pub struct Game {
     pub(crate) orders: crate::orders::OrderSystem,
     /// The last buff serial handed out (see [`Buff::serial`]).
     pub(crate) buff_serial: u32,
+    /// Strings that event records refer to by index: chat patterns and global variable names (see
+    /// `event.rs`). Never removed.
+    pub strings: Vec<String>,
+    /// The response slots of every event fired through `event::fire_event`, by index (see `Ctx::Trigger`).
+    pub(crate) firings: Vec<super::event::Firing>,
 }
 
 impl Default for Game {
@@ -1048,6 +1074,8 @@ impl Game {
             misc: super::misc::MiscState::default(),
             orders: crate::orders::OrderSystem::new(),
             buff_serial: 0,
+            strings: Vec::new(),
+            firings: Vec::new(),
         }
     }
 
