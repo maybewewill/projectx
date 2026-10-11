@@ -355,6 +355,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (39)**: zero-sign divergence of (35) **fixed**: the set-core `0x6F4A92B0` / pair setter `0x6F4A9390` first run the refresh `0x6F4A90B0` → `0x6F477180` (life = clamp(add(life, mul(+0x7C, w))), +0x7C = +0.0), so a zero life becomes +0.0. Test now exact (no tolerance): 2,000 agent + 600 fresh lead cases bit-exact. Mana sink `0x6F278F50` decoded and wired (mode 1 proportional without minimum, mode 3 moves max twice): 2,000 + 600 fresh lead cases bit-exact. 990 tests with and without GAME_DLL, clippy clean.
+
 - **2026-10-11 (38)**: construction (construction.md): placement payment `0x6F0EDA70` (cost ≤ stored/10, taken through the changers; pending refund returns the full amounts) — Unicorn 3,000 (agent) + 500 fresh (lead), 0 mismatches; registration transition `0x6F29F850` (food used at start, food made at finish) — Unicorn 3,000, 0 mismatches. **Correction**: `0x6F179000/0x6F1793E0` are upgrade start/finish, not construction. Not found: progress/HP growth, placement validation, completion events. Lead verified the merged tree: 989 tests with and without GAME_DLL, clippy clean. ~47.5%.
 
 - **2026-10-11 (37)**: vision pass 4 (docs only, `docs/spec/vision.md` section 12): time of day is an agile float property
