@@ -110,8 +110,15 @@ impl Parser {
             }
             let line = self.line();
             let constant = self.eat_kw("constant");
-            if (self.is_kw("type") || self.is_kw("globals")) && seen_function {
-                return self.err("type or globals block after a function");
+            if constant && !(self.is_kw("native") || self.is_kw("function")) {
+                // `constant` prefixes a native or a function (inside `globals` it prefixes a
+                // variable); `constant type` is a syntax error.
+                return self.err("expected 'native' or 'function' after 'constant'");
+            }
+            if (self.is_kw("type") || self.is_kw("globals") || self.is_kw("native"))
+                && seen_function
+            {
+                return self.err("type, globals or native declaration after a function");
             }
             if self.eat_kw("type") {
                 let name = self.ident()?;

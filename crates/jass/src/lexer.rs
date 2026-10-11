@@ -103,13 +103,21 @@ pub fn lex_with(src: &str, tables: Option<&Tables>) -> Result<Vec<Token>, Error>
                                 msg: "bad escape".into(),
                             })?;
                             i += 1;
+                            // The original accepts exactly these escapes (probed for every
+                            // printable character); any other `\x` is a lexical error.
                             s.push(match e {
                                 b'n' => b'\n',
                                 b'r' => b'\r',
                                 b't' => b'\t',
                                 b'b' => 0x08,
                                 b'f' => 0x0C,
-                                other => other,
+                                b'"' | b'\'' | b'\\' => e,
+                                _ => {
+                                    return Err(Error::Lex {
+                                        line,
+                                        msg: format!("bad escape \\{}", e as char),
+                                    })
+                                }
                             });
                         }
                         b'\n' => {
@@ -137,7 +145,28 @@ pub fn lex_with(src: &str, tables: Option<&Tables>) -> Result<Vec<Token>, Error>
                         msg: "unterminated rawcode".into(),
                     })?;
                 let raw = &b[start..end];
-                if raw.len() != 1 && raw.len() != 4 {
+                // A single escaped character (`'\n'`) is one character; escapes inside a four
+                // character code are an error in the original.
+                if let [b'\\', e] = raw {
+                    let v = match e {
+                        b'b' => 0x08,
+                        b'f' => 0x0C,
+                        b'n' => b'\n',
+                        b'r' => b'\r',
+                        b't' => b'\t',
+                        b'\\' => b'\\',
+                        _ => {
+                            return Err(Error::Lex {
+                                line,
+                                msg: format!("bad rawcode escape \\{}", *e as char),
+                            })
+                        }
+                    };
+                    push(&mut out, Tok::Int(v as i32), line);
+                    i = end + 1;
+                    continue;
+                }
+                if (raw.len() != 1 && raw.len() != 4) || (raw.len() == 4 && raw.contains(&b'\\')) {
                     return Err(Error::Lex {
                         line,
                         msg: format!("rawcode must be 1 or 4 chars, got {}", raw.len()),
@@ -191,7 +220,8 @@ pub fn lex_with(src: &str, tables: Option<&Tables>) -> Result<Vec<Token>, Error>
                 };
                 push(&mut out, tok, line);
             }
-            c if c.is_ascii_alphabetic() || c == b'_' => {
+            // An identifier starts with a letter; a leading `_` is a lexical error in the original.
+            c if c.is_ascii_alphabetic() => {
                 let s = i;
                 while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                     i += 1;

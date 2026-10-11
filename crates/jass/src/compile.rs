@@ -909,7 +909,15 @@ fn compile_init(g: &mut Gen, programs: &[Program], sym: u32) -> CResult<FuncDef>
 
 /// Compiles `programs` (in load order) into a `Module`.
 pub fn compile(programs: &[Program]) -> Result<Module, CompileError> {
-    let diags = check::check(programs);
+    compile_with(programs, &check::CheckOptions::default())
+}
+
+/// Like [`compile`], with checker options (the native registry of the game, lenient returns).
+pub fn compile_with(
+    programs: &[Program],
+    opts: &check::CheckOptions,
+) -> Result<Module, CompileError> {
+    let diags = check::check_with(programs, opts);
     if !diags.is_empty() {
         return Err(CompileError::Check(diags));
     }

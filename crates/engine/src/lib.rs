@@ -40,7 +40,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use jass::bytecode::Op;
-use jass::compile::{compile, CompileError};
+use jass::compile::CompileError;
 use jass::vm::{NativeRegistry, RunStatus, ThreadId, VmError};
 use mpq::Archive;
 use sim::ai::{AiEvent, AiHost, AiLibrary};
@@ -49,6 +49,9 @@ use sim::lockstep::{TurnReport, TICKS_PER_BATCH};
 use sim::{Game, RngTable, ScriptHost};
 use softfloat::{Tables, F32};
 use w3map::MapInfo;
+
+/// Name and signature of every native the game registers (`docs/spec/natives-1.26a.tsv`).
+const NATIVE_TABLE: &str = include_str!("../../../docs/spec/natives-1.26a.tsv");
 
 pub mod data;
 pub mod game_start;
@@ -253,7 +256,13 @@ impl Engine {
             jass::parse_with(src, tables.as_ref()).map_err(|source| Error::Parse { file, source })
         })
         .collect::<Result<Vec<_>, _>>()?;
-        let module = compile(&programs).map_err(Error::Compile)?;
+        // The game registers its natives before it compiles the map script; a `native` line of the
+        // script has to name one of them with the same signature (docs/spec/jass-frontend.md).
+        let check_opts = jass::check::CheckOptions {
+            lenient_returns: false,
+            natives: Some(jass::check::NativeRegistry::from_tsv(NATIVE_TABLE, &["common"])),
+        };
+        let module = jass::compile::compile_with(&programs, &check_opts).map_err(Error::Compile)?;
 
         let functions = module.functions.len();
         let globals = module.globals.len();
@@ -270,6 +279,10 @@ impl Engine {
             notes.push("no common.ai: AI VMs are built without it".to_string());
         }
         library.set_prelude(&inputs.common_j);
+        library.set_native_registry(jass::check::NativeRegistry::from_tsv(
+            NATIVE_TABLE,
+            &["common", "ai"],
+        ));
         for (name, source) in &inputs.ai_scripts {
             library.add_script(name, source);
         }

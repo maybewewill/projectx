@@ -1,8 +1,12 @@
-/// The lookup key of an identifier. JASS identifiers are case-insensitive: functions, globals,
-/// locals and types all fold case (harness q04, q05, q06, q07, q10, t01 in `tools/emu/jasscomp`).
+/// The lookup key of an identifier. JASS identifiers are **case-sensitive**: functions, globals,
+/// locals and types compare their exact spelling (`Rect` the native and `rect` the type coexist in
+/// retail `common.j`; `native Sleep` and `constant integer SLEEP` coexist in `common.ai`). The
+/// symbol table hashes names without regard to case but compares with Storm's case-sensitive string
+/// compare (ordinal 508). Earlier versions of this crate folded case because the emulation harness
+/// stubbed that ordinal as case-insensitive; see docs/spec/jass-frontend.md, "Real compile path".
 /// Diagnostics and the AST keep the spelling that was written.
 pub fn ident_key(name: &str) -> String {
-    name.to_ascii_lowercase()
+    name.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq)]

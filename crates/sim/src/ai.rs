@@ -36,7 +36,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use jass::compile::{compile, Module};
+use jass::compile::Module;
 use jass::vm::{NativeRegistry, RunStatus, ThreadId, Vm};
 use softfloat::{Tables, F32};
 
@@ -195,6 +195,9 @@ pub struct AiLibrary {
     prelude: String,
     common: String,
     scripts: BTreeMap<String, String>,
+    /// The natives the game has registered when it compiles an AI script (common + AI natives). When set,
+    /// `native` declarations are checked against it like the original does.
+    natives: Option<jass::check::NativeRegistry>,
 }
 
 impl AiLibrary {
@@ -204,7 +207,19 @@ impl AiLibrary {
             prelude: String::new(),
             common: common.to_string(),
             scripts: BTreeMap::new(),
+            natives: None,
         }
+    }
+
+    /// Checks every `native` declaration of the compiled AI scripts against `registry` (see
+    /// `jass::check::CheckOptions::natives`).
+    pub fn set_native_registry(&mut self, registry: jass::check::NativeRegistry) {
+        self.natives = Some(registry);
+    }
+
+    /// The native registry, when one was set.
+    pub fn native_registry(&self) -> Option<&jass::check::NativeRegistry> {
+        self.natives.as_ref()
     }
 
     /// Sets the source compiled before the common script in every AI VM: the map's `common.j`, which declares the
@@ -245,6 +260,7 @@ fn build_module(
     common: &str,
     script: &str,
     tables: Option<&Tables>,
+    natives: Option<&jass::check::NativeRegistry>,
 ) -> Result<Module, String> {
     let mut programs = Vec::with_capacity(3);
     if !prelude.is_empty() {
@@ -252,7 +268,11 @@ fn build_module(
     }
     programs.push(jass::parse_with(common, tables).map_err(|e| format!("common: {e:?}"))?);
     programs.push(jass::parse_with(script, tables).map_err(|e| format!("script: {e:?}"))?);
-    compile(&programs).map_err(|e| format!("{e:?}"))
+    let opts = jass::check::CheckOptions {
+        lenient_returns: false,
+        natives: natives.cloned(),
+    };
+    jass::compile::compile_with(&programs, &opts).map_err(|e| format!("{e:?}"))
 }
 
 /// Runs one JASS VM per AI player, stepped after the main VM.
@@ -365,6 +385,7 @@ impl AiHost {
             self.library.common(),
             &source,
             self.tables.as_ref(),
+            self.library.native_registry(),
         ) {
             Ok(m) => m,
             Err(error) => {
