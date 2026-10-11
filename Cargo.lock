@@ -420,6 +420,7 @@ dependencies = [
  "sim",
  "softfloat",
  "thiserror 2.0.21",
+ "w3g",
  "w3map",
 ]
 
