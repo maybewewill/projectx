@@ -108,6 +108,19 @@ impl Game {
     /// coordinates become the normaliser's output for them. Does nothing for a non-unit key.
     pub fn store_unit_position(&mut self, k: ObjKey, x: F32, y: F32) {
         let (ox, oy) = self.world_origin();
+        if self.movers.get(&k).is_some_and(|m| m.in_motion()) {
+            // A unit in motion: the setter forms `delta = P - F` against the position evaluated at the game time
+            // (`F = cell + V * v`, 0x6F4737D0) and the core writer re-bases the cells and the snapshot with it
+            // (0x6F4A6FD0); the velocity is unchanged.
+            let g = self.layer();
+            let mut kin = self.kin_of(k);
+            let f = kin.position(&g);
+            let p = (world_to_cell(x, ox), world_to_cell(y, oy));
+            let delta = (arith::sub(p.0, f.0), arith::sub(p.1, f.1));
+            kin.rebase(&g, delta);
+            self.commit_kin(k, &kin);
+            return;
+        }
         let u = self.unit_mut(k);
         let (cx, cy) = (stored_cell(u.cell_x, x, ox), stored_cell(u.cell_y, y, oy));
         u.cell_x = cx;

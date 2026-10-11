@@ -67,11 +67,10 @@ const ATTACK: i32 = 0xD000F;
 const HOLD: i32 = 0xD0019;
 const NOTE_STOP: u32 = 0xD0144;
 const NOTE_STARTED_OR_CLEARED: u32 = 0xD02A6;
-/// Facing after the straight move (radians), the model's value (see `straight_moves_arrive_with_model_positions`).
-/// Zero: the move is due east (y stays 0), and the heading of the last walk that stepped is below the
-/// arccosine epsilon. With the 0.03 s walk the earlier value (0.005 rad, from the 0.1 s model) was rounding
-/// noise of `vx / r` at the old positions (lockstep.md section 11.3).
-const FACING_BITS: u32 = 0x0000_0000;
+/// Facing after the straight move (radians), the mover's value (see `straight_moves_arrive_with_model_positions`):
+/// the unit stops with `facing = normalise(heading)`, and the last heading is slightly below zero (the steering
+/// turned the 3.4e-4 rad arccosine drift back past zero), which the normaliser folds to 2*pi - 0.0054.
+const FACING_BITS: u32 = 0x40C8_E59E;
 
 fn tables() -> Option<Tables> {
     let path = std::env::var("GAME_DLL").ok()?;
@@ -101,6 +100,10 @@ fn host_for(src: &str) -> ScriptHost {
             FOOTMAN,
             UnitType {
                 move_speed: speed,
+                // A unit only accelerates while the heading error is inside its propulsion window
+                // (movement-6.md), so the fixture needs the footman's real turn rate and window.
+                turn_speed: F32::from_bits(0x3F19_999A), // 0.6, the footman's turn rate
+                prop_window: F32::from_bits(0x3F86_0A92), // 60 degrees in radians
                 ..ut("Footman")
             },
         );
@@ -108,6 +111,8 @@ fn host_for(src: &str) -> ScriptHost {
             RANGER,
             UnitType {
                 move_speed: speed,
+                turn_speed: F32::from_bits(0x3F19_999A), // 0.6, the footman's turn rate
+                prop_window: F32::from_bits(0x3F86_0A92), // 60 degrees in radians
                 ..ut("Ranger")
             },
         );
@@ -487,18 +492,16 @@ fn straight_moves_arrive_with_model_positions() {
             break;
         }
     }
-    // The model's own output (UNVERIFIED against the original): the movement walk fires every 0.03 s of
-    // agile clock (lockstep.md section 11.2), so a batch of 20 ticks holds three or four walks, each moving
-    // 8.1 world units (270 per second times 0.03). `Main` issues the order at once, at tick 0 (lockstep.md
-    // section 12.1), and the first batch (ticks 1..20) holds the walks at ticks 6, 12 and 18 (24.3), which
-    // run before the first recorded step. The recorded steps are batches 2, 3 and 4; each holds three walks,
-    // because the soft-float sum of the 0.03 period drifts (the walks of a batch are not always four). The
-    // order completes on the third recorded step, when the unit is within the arrival radius (6.4 world units)
-    // of the goal.
+    // The mover is the original's walk (movement-6.md; kernels CONFIRMED in Unicorn): the unit accelerates by its
+    // speed cap (270 / 32 cells per second) on the first walk it faces the goal within the window, and the position is
+    // evaluated from the velocity at the game time of each read (batches of 20 ticks = 0.1 s). A move to the east
+    // drifts a little in y: the heading of the velocity comes from the softfloat arccosine near 1 (3.4e-4 rad),
+    // and the steering turns it back. The unit stops inside its arrival radius (0.49 cells = 15.68 world units) once
+    // its heading is aligned, so the order completes on the third recorded step at x = 89.1.
     let golden: [(u32, u32); 3] = [
-        (0x4242_660E, 0x0000_0000),
-        (0x4291_CC92, 0x0000_0000),
-        (0x42C2_6619, 0x0000_0000),
+        (0x4237_9857, 0xBC55_F40A),
+        (0x4291_CBD1, 0xBB96_13C0),
+        (0x42B2_3215, 0x3B5C_53C0),
     ];
     let bits: Vec<(u32, u32)> = positions
         .iter()
@@ -514,6 +517,36 @@ fn straight_moves_arrive_with_model_positions() {
     let facing = host.game().unit(u).facing;
     eprintln!("facing bits {:#010x}", facing.to_bits());
     assert_eq!(facing.to_bits(), FACING_BITS, "facing of the step vector");
+}
+
+/// The position of a unit in motion is evaluated from its velocity at the game time (movement-6.md), so it
+/// advances on every tick, not only at the 0.03 s walks, and the speed is the cap (270 / 32 cells per second): over
+/// one second of ticks the unit covers about 270 world units.
+#[test]
+fn position_is_evaluated_between_walks() {
+    if tables().is_none() {
+        eprintln!("GAME_DLL not set: skipping the movement test");
+        return;
+    }
+    let mut host = host_for(&footman_script(
+        0,
+        0,
+        r#"set gOk = IssuePointOrder(gU, "move", I2R(2000), I2R(0))"#,
+    ));
+    host.start("Main", &[]).expect("start");
+    let u = unit_key(&host, "gU");
+    // two batches: the first walks have run and the unit is at speed
+    host.step_ticks(40);
+    let mut xs = Vec::new();
+    for _ in 0..200 {
+        host.step_ticks(1);
+        xs.push(host.game().unit(u).x.to_f32());
+    }
+    // strictly increasing on every tick (a stepped model would repeat values between walks)
+    assert!(xs.windows(2).all(|w| w[1] > w[0]), "x advances on every tick");
+    let per_second = xs[199] - xs[0];
+    // 199 ticks of 5 ms = 0.995 s at 270 per second, up to the rounding of the softfloat clock
+    assert!((per_second - 268.65).abs() < 1.0, "speed {per_second}");
 }
 
 /// A route around a wall, through the pathing search. The start and goal are at cell `(1, 1)` and `(6, 1)`; a
@@ -563,13 +596,15 @@ fn route_goes_around_a_wall() {
         "the move completed"
     );
     let end = host.game().unit(u).clone();
+    // The mover stops inside its arrival radius: 0.49 cells = 15.68 world units (movement-6.md; the old model used
+    // 6.4).
     assert!(
-        (end.x.to_f32() - 208.0).abs() <= 6.4,
+        (end.x.to_f32() - 208.0).abs() <= 15.68,
         "x = {}",
         end.x.to_f32()
     );
     assert!(
-        (end.y.to_f32() - 48.0).abs() <= 6.4,
+        (end.y.to_f32() - 48.0).abs() <= 15.68,
         "y = {}",
         end.y.to_f32()
     );

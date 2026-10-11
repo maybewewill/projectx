@@ -160,6 +160,9 @@ fn walk(wpm_bytes: Option<Vec<u8>>, dll: Vec<u8>) -> (f32, f32, f32, bool) {
                 name: "Footman".to_string(),
                 max_life: F32::from_bits(0x43D2_0000),
                 move_speed: F32::from_bits(270.0f32.to_bits()),
+                // The walk only accelerates inside the propulsion window (movement-6.md): real footman values.
+                turn_speed: F32::from_bits(0x3F19_999A),
+                prop_window: F32::from_bits(0x3F86_0A92),
                 ..Default::default()
             },
         );

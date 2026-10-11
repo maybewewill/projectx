@@ -1227,6 +1227,10 @@ pub struct Game {
     pub movement_armed: bool,
     /// Movement walks run so far (one per firing of the movement timer).
     pub movement_calls: u64,
+    /// The game time positions are evaluated at (see `crate::movement`).
+    pub(crate) game_time: F32,
+    /// The movers of units that have walked (see `crate::movement`).
+    pub(crate) movers: crate::movement::Movers,
     /// Whether the vision refresh timer (0x80269, [`Payload::Vision`]) has been armed. Armed once per game.
     pub vision_armed: bool,
     /// The softfloat tables that the playable-area grid needs (set by the host, see [`Game::set_vision_tables`]).
@@ -1339,6 +1343,8 @@ impl Game {
             timers: TimerQueue::new(),
             movement_armed: false,
             movement_calls: 0,
+            game_time: F32::ZERO,
+            movers: crate::movement::Movers::new(),
             vision_armed: false,
             vision_tables: None,
             contexts: Vec::new(),

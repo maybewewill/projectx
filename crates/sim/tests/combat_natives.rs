@@ -76,6 +76,9 @@ fn host_for(src: &str) -> ScriptHost {
                 name: "Footman".to_string(),
                 max_life: f(100.0),
                 move_speed: f(270.0),
+                // The walk only accelerates inside the propulsion window (movement-6.md): real footman values.
+                turn_speed: f(0.6),
+                prop_window: F32::from_bits(0x3F86_0A92),
                 ..Default::default()
             },
         );

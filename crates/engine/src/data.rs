@@ -319,7 +319,11 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         inventory_size: 0,
         move_speed: soft(ty.speed),
         turn_speed: soft(ty.turn_rate),
-        prop_window: soft(ty.prop_win),
+        // The record holds the propulsion window in degrees (SLK `propWin`, 60 for most units); the mover compares it
+        // with a heading error in radians (`SetUnitPropWindow` takes radians), so it is converted with the
+        // degree-to-radian constant `0x6FAAE5E8` (movement-6.md section 5, LIKELY: the load-time conversion site was
+        // not located).
+        prop_window: softfloat::arith::mul(soft(ty.prop_win), softfloat::F32::from_bits(0x3C8E_FA35)),
         // The record's `moveHeight` is the default fly height (`docs/spec/unit-types.md` section 4.3).
         fly_height: soft(ty.move_height),
         acquire_range: soft(ty.acquire),
