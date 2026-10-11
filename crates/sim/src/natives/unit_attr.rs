@@ -528,12 +528,6 @@ pub const NATIVES: &[NativeEntry] = &[
         support: Support::Likely,
     },
     NativeEntry {
-        name: "UnitPoolAddUnitType",
-        support: Support::NotImplemented(
-            "N:unit pools are not modelled",
-        ),
-    },
-    NativeEntry {
         name: "UnitRemoveAbility",
         support: Support::Likely,
     },

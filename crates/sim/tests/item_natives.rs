@@ -123,6 +123,9 @@ fn item_type(
         flag_48,
         charges,
         flags,
+        powerup: false,
+        sellable: false,
+        pawnable: false,
     }
 }
 

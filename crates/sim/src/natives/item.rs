@@ -66,6 +66,7 @@ use super::game::{
 use super::group::in_rect;
 use super::player::raw_at;
 use super::trigger::eval_boolexpr;
+use super::unit_attr::{NativeEntry, Support};
 use super::ScriptRuntime;
 
 /// The RNG stream of the item selection (spec 7.3, `0x23`).
@@ -74,6 +75,46 @@ const ITEM_STREAM: usize = 35;
 const CATEGORY_PLAIN: i32 = 7;
 /// The category that accepts every item class in `ChooseRandomItemEx` (spec 7.2 item 2).
 const CATEGORY_ANY: i32 = 8;
+
+/// The support table of the item-type and item-data natives registered by [`register_types`].
+pub const NATIVES: &[NativeEntry] = &[
+    NativeEntry {
+        name: "IsItemIdPowerup",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "IsItemIdSellable",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "IsItemIdPawnable",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "IsItemSellable",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "GetItemType",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "GetItemLevel",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "GetItemUserData",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "SetItemUserData",
+        support: Support::Confirmed,
+    },
+    NativeEntry {
+        name: "SetItemDropID",
+        support: Support::Likely,
+    },
+];
 
 /// Registers the item natives on `reg`, bound to `game`.
 pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
@@ -381,6 +422,97 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             Err(status) => NativeResult::Fail(status),
         }
     });
+
+    register_types(reg, game);
+}
+
+/// Registers the item-type and item-data natives: the `IsItemId*` tests on a type id, `IsItemSellable`, `GetItemType`,
+/// `GetItemLevel`, the user data and the drop id. The type record offsets are in `docs/spec/items.md` 3.4 (CONFIRMED
+/// for `+0x38`, `+0x3C`, `+0x4C`, `+0x50`, `+0x54`: `FUN_6f2b8c50`, `FUN_6f2b8cb0`, `FUN_6f2b8dd0`, `FUN_6f2b8e00`,
+/// `FUN_6f2b8e30`), the item fields `+0x80` and `+0xCC` (CONFIRMED: `FUN_6f3c50f0`, `FUN_6f3c5030`).
+fn register_types(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
+    let g = Rc::clone(game);
+    reg.register("IsItemIdPowerup", move |_, a| {
+        let v = g
+            .borrow()
+            .item_types()
+            .get(raw_at(a, 0) as u32)
+            .is_some_and(|t| t.powerup);
+        NativeResult::Return(Value::Boolean(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("IsItemIdSellable", move |_, a| {
+        let v = g
+            .borrow()
+            .item_types()
+            .get(raw_at(a, 0) as u32)
+            .is_some_and(|t| t.sellable);
+        NativeResult::Return(Value::Boolean(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("IsItemIdPawnable", move |_, a| {
+        let v = g
+            .borrow()
+            .item_types()
+            .get(raw_at(a, 0) as u32)
+            .is_some_and(|t| t.pawnable);
+        NativeResult::Return(Value::Boolean(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("IsItemSellable", move |_, a| {
+        let gm = g.borrow();
+        let v = item_at(&gm, a, 0)
+            .and_then(|k| gm.item_types().get(gm.item(k).type_id))
+            .is_some_and(|t| t.sellable);
+        NativeResult::Return(Value::Boolean(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetItemType", move |_, a| {
+        // The original answers 7 (any) for a null item and for a type it cannot find.
+        let gm = g.borrow();
+        let class = item_at(&gm, a, 0)
+            .and_then(|k| gm.item_types().get(gm.item(k).type_id))
+            .map_or(7, |t| t.class as i32);
+        NativeResult::Return(Value::Integer(class))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetItemLevel", move |_, a| {
+        let gm = g.borrow();
+        let level = item_at(&gm, a, 0)
+            .and_then(|k| gm.item_types().get(gm.item(k).type_id))
+            .map_or(0, |t| t.level_ex);
+        NativeResult::Return(Value::Integer(level))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GetItemUserData", move |_, a| {
+        let gm = g.borrow();
+        let v = item_at(&gm, a, 0).map_or(0, |k| gm.item(k).user_data);
+        NativeResult::Return(Value::Integer(v))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SetItemUserData", move |_, a| {
+        let mut gm = g.borrow_mut();
+        if let Some(k) = item_at(&gm, a, 0) {
+            gm.item_mut(k).user_data = raw_at(a, 1);
+        }
+        NativeResult::Return(Value::Null)
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SetItemDropID", move |_, a| {
+        let mut gm = g.borrow_mut();
+        if let Some(k) = item_at(&gm, a, 0) {
+            gm.item_mut(k).drop_id = raw_at(a, 1);
+        }
+        NativeResult::Return(Value::Null)
+    });
 }
 
 /// Registers a native that sets (`on` argument) one bit of the flag word.
@@ -408,7 +540,7 @@ fn flag_getter(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>, name: &str, b
 /// The item of a new `CreateItem` (spec 3.2): the type record must exist, else the builder fails and nothing is
 /// made. The flag word starts from the type's bits, with the no-charges bit when the charges are 0 (spec 3.3, the
 /// `<= 0` form is UNSURE). The item starts on the ground, owned by player 0 (UNSURE).
-fn new_item(gm: &Game, type_id: u32, x: F32, y: F32) -> Option<ItemObj> {
+pub(super) fn new_item(gm: &Game, type_id: u32, x: F32, y: F32) -> Option<ItemObj> {
     let ty = gm.item_types().get(type_id)?;
     let mut flags = ty.flags;
     if ty.charges <= 0 {
@@ -422,6 +554,9 @@ fn new_item(gm: &Game, type_id: u32, x: F32, y: F32) -> Option<ItemObj> {
         charges: ty.charges,
         owner: 0,
         holder: None,
+        // UNSURE: the user data and the drop id start at 0 (the original's new object is zeroed there).
+        user_data: 0,
+        drop_id: 0,
         removed: false,
     })
 }

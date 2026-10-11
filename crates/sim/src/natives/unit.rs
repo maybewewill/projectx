@@ -437,7 +437,16 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 /// Creates a unit (the body of the `CreateUnit` natives, CONFIRMED order in the module notes). Returns
 /// its handle id, or 0 when the owner handle is not a live player or the type is not registered. A
 /// failed call allocates no id.
-fn create(gm: &mut Game, owner_handle: u32, type_id: u32, x: F32, y: F32, face: F32) -> u32 {
+/// Builds a unit of `type_id` for the player with handle `owner_handle` and gives it its handle last (the
+/// `CreateUnit` path). Returns the handle id, or 0 for an unknown player or type. Also used by `PlaceRandomUnit`.
+pub(crate) fn create(
+    gm: &mut Game,
+    owner_handle: u32,
+    type_id: u32,
+    x: F32,
+    y: F32,
+    face: F32,
+) -> u32 {
     let Some(owner) = gm.player_index_of_handle(owner_handle) else {
         return 0;
     };

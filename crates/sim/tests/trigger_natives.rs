@@ -38,7 +38,7 @@ native GetTriggerExecCount takes trigger t returns integer
 native TriggerRegisterTimerEvent takes trigger t, real timeout, boolean periodic returns event
 native TriggerRegisterTimerExpireEvent takes trigger t, timer tm returns event
 native GetTriggeringTrigger takes nothing returns trigger
-native GetTriggerEventId takes nothing returns event
+native GetTriggerEventId takes nothing returns integer
 native Condition takes code c returns boolexpr
 native Filter takes code c returns filterfunc
 native DestroyBoolExpr takes boolexpr b returns nothing
@@ -393,9 +393,8 @@ function Act takes nothing returns nothing
     if GetTriggeringTrigger() == gTr then
         set gSame = 1
     endif
-    if GetTriggerEventId() != null then
-        set gHasEvent = 1
-    endif
+    // A timer event carries no event id in the model (UNSURE), so the raw id is 0 here.
+    set gHasEvent = GetTriggerEventId()
 endfunction
 
 function Main takes nothing returns nothing
@@ -410,7 +409,7 @@ endfunction
         host.step();
     }
     assert_eq!(int(&host, "gSame"), 1);
-    assert_eq!(int(&host, "gHasEvent"), 1);
+    assert_eq!(int(&host, "gHasEvent"), 0);
 }
 
 #[test]

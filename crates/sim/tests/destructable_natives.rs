@@ -117,6 +117,9 @@ fn host_for(src: &str) -> ScriptHost {
             flag_48: 1,
             charges: 0,
             flags: 0,
+            powerup: false,
+            sellable: false,
+            pawnable: false,
         };
         g.item_types_mut().insert(PLAIN, item);
     }

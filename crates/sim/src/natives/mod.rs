@@ -16,7 +16,10 @@ use softfloat::F32;
 
 mod ability;
 pub mod ai;
+pub mod animation;
+pub mod defeat;
 mod destructable;
+pub mod economy;
 pub mod event;
 pub mod fog;
 mod force;
@@ -26,11 +29,14 @@ pub mod gamestate;
 mod group;
 mod hashtable;
 pub mod hero;
-mod item;
+pub mod item;
 mod location;
 pub mod misc;
-mod order;
+pub mod object;
+pub mod order;
+pub mod pending;
 mod player;
+pub mod pool;
 pub mod presentation;
 mod region;
 mod rng;
@@ -94,4 +100,9 @@ pub fn register_world(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     fog::register(reg, game);
     misc::register(reg, game);
     order::register(reg, game);
+    pool::register(reg, game);
+    defeat::register(reg, game);
+    economy::register(reg, game);
+    object::register(reg, game);
+    animation::register(reg, game);
 }

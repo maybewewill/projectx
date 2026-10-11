@@ -334,6 +334,14 @@ pub enum HandleKind {
     Dialog,
     Button,
     TimerDialog,
+    /// A unit pool (`unitpool`, see `natives/pool.rs`).
+    UnitPool,
+    /// An item pool (`itempool`, see `natives/pool.rs`).
+    ItemPool,
+    /// A defeat condition (see `natives/defeat.rs`).
+    DefeatCondition,
+    /// A trackable (see `natives/defeat.rs`).
+    Trackable,
 }
 
 /// A `location` handle: a point with raw coordinates (no clamping, no terrain height).
@@ -556,6 +564,12 @@ pub struct ItemType {
     pub flag_48: u32,
     /// Charges a new item starts with (template value copied to `+0x84`).
     pub charges: i32,
+    /// Record `+0x4C`: the type is a powerup (`IsItemIdPowerup`).
+    pub powerup: bool,
+    /// Record `+0x50`: the type can be sold (`IsItemIdSellable`).
+    pub sellable: bool,
+    /// Record `+0x54`: the type can be pawned (`IsItemIdPawnable`).
+    pub pawnable: bool,
     /// Flag bits a new item starts with (the type-record bits of `+0x20`, see [`item_flags`]).
     pub flags: u32,
 }
@@ -645,6 +659,10 @@ pub struct ItemObj {
     pub owner: u32,
     /// The unit whose pack holds the item, or `None` while the item is on the ground.
     pub holder: Option<ObjKey>,
+    /// The user data integer (`SetItemUserData`, object `+0x80`).
+    pub user_data: i32,
+    /// The drop id (`SetItemDropID`, object `+0xCC`). Stored only: no drop system reads it yet.
+    pub drop_id: i32,
     /// Set by `RemoveItem` and by a powerup consumed on pickup. A removed item has no live handle for the
     /// natives, although its id is released only when its reference is dropped (see `natives/item.rs`).
     pub removed: bool,
@@ -921,6 +939,42 @@ pub enum Object {
     Fog(super::fog::FogModifierObj),
     /// A presentation object with a handle (see `presentation.rs`).
     Pres(PresObj),
+    /// A unit or item pool (see `natives/pool.rs`).
+    Pool(PoolObj),
+    /// A defeat condition (see `natives/defeat.rs`).
+    DefeatCondition(DefeatObj),
+    /// A trackable (see `natives/defeat.rs`).
+    Trackable(TrackableObj),
+}
+
+/// A unit pool or an item pool (`unitpool` / `itempool`): weighted entries in insertion order. An entry is a raw
+/// type id and its weight (a float32 in the engine's soft-float). The entries follow the original's pool layout
+/// (`natives/pool.rs`, spec in the module notes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PoolObj {
+    /// `true` for an item pool, `false` for a unit pool.
+    pub item: bool,
+    /// `(raw type id, weight)` in insertion order. An entry is never added twice: adding an existing id updates its
+    /// weight in place.
+    pub entries: Vec<(u32, F32)>,
+}
+
+/// A defeat condition (`defeatcondition`). Only its description is kept: the victory and defeat checks that read
+/// the list are not modelled (`natives/defeat.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DefeatObj {
+    /// The text set by `DefeatConditionSetDescription`.
+    pub description: String,
+}
+
+/// A trackable (`trackable`): a model path and a position. Its events are not fired (`natives/defeat.rs`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackableObj {
+    /// The model path given to `CreateTrackable`.
+    pub model: String,
+    pub x: F32,
+    pub y: F32,
+    pub z: F32,
 }
 
 impl Object {
@@ -946,6 +1000,15 @@ impl Object {
             Object::Destructable(_) => HandleKind::Destructable,
             Object::Fog(_) => HandleKind::FogModifier,
             Object::Pres(p) => p.handle_kind(),
+            Object::Pool(p) => {
+                if p.item {
+                    HandleKind::ItemPool
+                } else {
+                    HandleKind::UnitPool
+                }
+            }
+            Object::DefeatCondition(_) => HandleKind::DefeatCondition,
+            Object::Trackable(_) => HandleKind::Trackable,
         }
     }
 }
@@ -1027,6 +1090,11 @@ pub struct Game {
     pub strings: Vec<String>,
     /// The response slots of every event fired through `event::fire_event`, by index (see `Ctx::Trigger`).
     pub(crate) firings: Vec<super::event::Firing>,
+    /// Waygate state of the units that have the waygate ability (see `natives/economy.rs`).
+    pub(crate) waygates: BTreeMap<ObjKey, super::economy::WaygateState>,
+    /// The resource amount of each resource node (a unit with the gold mine flag). A unit has an entry only when it is
+    /// a resource node (see `natives/economy.rs`).
+    pub(crate) resources: BTreeMap<ObjKey, i32>,
 }
 
 impl Default for Game {
@@ -1076,6 +1144,8 @@ impl Game {
             buff_serial: 0,
             strings: Vec::new(),
             firings: Vec::new(),
+            waygates: BTreeMap::new(),
+            resources: BTreeMap::new(),
         }
     }
 

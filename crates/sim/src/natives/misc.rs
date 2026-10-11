@@ -66,13 +66,14 @@
 //! | `GetPlayerTechCount` | 0x6f3c97a0 | CONFIRMED structure, UNSURE values for the non-specific form | the researched level of the tech |
 //! | `SetPlayerAbilityAvailable` | 0x6f3c97d0 | CONFIRMED structure | stores the set of unavailable abilities |
 //!
-//! Not in this module: `GetPlayerScore` (its counters are combat and unit statistics), the unit and item pools and
-//! `PlaceRandom*` (they create units or items), `CreateBlightedGoldmine` (a unit), the object-data string lookups
-//! `UnitId`, `AbilityId`, `OrderId` and their `2String` forms, `GetObjectName`, `GetAbilityEffect*`, `GetAbilitySound*`
-//! and `GetDestructableName` (the object tables are not loaded), `GetLocalizedString` and `GetLocalizedHotkey` (the string
-//! tables are not loaded), `SetPlayers`, `GetPlayers`, `SetTeams`, `GetTeams` (slot setup), `RemovePlayer`, `CripplePlayer`,
-//! `SetPlayerUnitsOwner`, the unit and structure counts, `CachePlayerHeroData` and `IsSuspendedXP` (hero data), the
-//! animation, selection and sync natives, `Cheat`, `ExecuteFunc`, `PauseCompAI` and the AI start natives.
+//! Not in this module: `GetPlayerScore` (its counters are combat and unit statistics), the pools and `PlaceRandom*`
+//! (`pool.rs`), `CreateBlightedGoldmine` (`pending.rs`), the object-data lookups `UnitId` and `UnitId2String` (`object.rs`),
+//! `AbilityId`, `AbilityId2String`, `GetObjectName`, `GetAbilityEffect*`, `GetAbilitySound*` and `GetDestructableName`
+//! (the object tables are not loaded: `pending.rs`), `GetLocalizedString` and `GetLocalizedHotkey` (the string tables are
+//! not loaded: `pending.rs`), the slot counts (`gamestate.rs`), `RemovePlayer`, `CripplePlayer`, `SetPlayerUnitsOwner`, the
+//! unit and structure counts, `CachePlayerHeroData` (`pending.rs`), `IsSuspendedXP` (`hero.rs`), the animation natives
+//! (`animation.rs`), selection and sync natives (`pending.rs`), `Cheat`, `PauseCompAI` and the AI start natives. `ExecuteFunc`
+//! is a builtin of the VM.
 //!
 //! The tests are in `tests/misc_natives.rs`.
 

@@ -522,7 +522,7 @@ fn support_tables_cover_the_work_list() {
         .chain(HERO_NATIVES.iter())
         .filter(|e| !matches!(e.support, Support::NotImplemented(_)))
         .count();
-    assert_eq!(implemented, 54);
+    assert_eq!(implemented, 55);
 
     let host = host_for(
         r#"

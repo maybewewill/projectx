@@ -31,6 +31,10 @@ use super::unit_attr::{NativeEntry, Support};
 /// calls one fails to bind (see `unbound_natives` in the VM), which is the work queue for the hero system.
 pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
+        name: "IsSuspendedXP",
+        support: Support::Unsure,
+    },
+    NativeEntry {
         name: "AddHeroXP",
         support: Support::NotImplemented(
             "N:experience gain runs the level-up engine (FUN_6F20B080, FUN_6F20B4D0), not read",
@@ -165,6 +169,15 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let gm = g.borrow();
         let v = hero_of(&gm, a).map_or(0, |h| h.skill_points);
         NativeResult::Return(Value::Integer(v))
+    });
+
+    // `IsSuspendedXP` (CONFIRMED gate, UNSURE value): the same hero gate as the other hero natives. The flag it reads is
+    // the one `SuspendHeroXP` stores; a unit that fails the gate reports true (the original's default is 1).
+    let g = Rc::clone(game);
+    reg.register("IsSuspendedXP", move |_, a| {
+        let gm = g.borrow();
+        let v = hero_of(&gm, a).is_none_or(|h| h.xp_suspended);
+        NativeResult::Return(Value::Boolean(v))
     });
 
     let g = Rc::clone(game);

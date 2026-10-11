@@ -40,9 +40,9 @@
 //!   `timer.rs`).
 //! * `GetTriggeringTrigger` (0x6F3BB2A0): the trigger whose conditions, actions or handler the calling
 //!   thread runs (per-thread context, see `game.rs`). The null handle otherwise. LIKELY.
-//! * `GetTriggerEventId` (0x6F3BB2C0 -> 0x6F4280B0): the event that started the calling thread's
-//!   trigger, or the null handle (UNSURE: the native calls a current-event getter, its handle type is
-//!   not resolved).
+//! * `GetTriggerEventId` (0x6F3BB2C0 -> 0x6F4280B0): the raw event id of the calling thread's event (the
+//!   last value of response slot 6; CONFIRMED that the native returns the slot value, not a handle). 0 without an
+//!   event. The id is the registration key minus 0x80200 (`unit_event::current_event_id`).
 //! * `GetTriggerEvalCount` / `GetTriggerExecCount` (0x6F3C1CE0 / 0x6F3C1D00): the counters, 0 for a
 //!   null or destroyed trigger. CONFIRMED.
 
@@ -328,12 +328,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     let g = Rc::clone(game);
     reg.register("GetTriggerEventId", move |ctx, _| {
+        // The original returns the value of response slot 6, the raw event id (not a handle), 0 when the
+        // thread has no event (CONFIRMED: `FUN_6f4280b0(6)` reads the last value of the slot).
         let gm = g.borrow();
-        let id = match gm.context(ctx.thread_key()) {
-            Some(Ctx::Trigger { event: Some(e), .. }) => gm.handle_of(e),
-            _ => 0,
-        };
-        NativeResult::Return(Value::Handle(id))
+        let id = super::unit_event::current_event_id(&gm, ctx.thread_key()).unwrap_or(0);
+        NativeResult::Return(Value::Integer(id as i32))
     });
 }
 

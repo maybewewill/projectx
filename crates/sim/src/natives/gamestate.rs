@@ -177,6 +177,11 @@ pub struct GameState {
     pub campaign: BTreeMap<CampaignKey, bool>,
     /// The campaign menu race (`SetCampaignMenuRace` and its `Ex` form, raw value).
     pub campaign_menu_race: i32,
+    /// The number of player slots the game uses (`SetPlayers` / `GetPlayers`, the game struct's `+0x44`). Default 0
+    /// until a map or the host sets it (UNSURE: the original takes it from the map's player list).
+    pub players: i32,
+    /// The number of teams (`SetTeams` / `GetTeams`, the game struct's `+0x9C`). Default 0 (UNSURE, as `players`).
+    pub teams: i32,
 }
 
 impl Default for GameState {
@@ -213,6 +218,8 @@ impl GameState {
             tournament: Tournament::default(),
             campaign: BTreeMap::new(),
             campaign_menu_race: 0,
+            players: 0,
+            teams: 0,
         }
     }
 }
@@ -229,8 +236,46 @@ impl Game {
     }
 }
 
+/// The support table of the slot-count natives. `SetPlayers` is a CONFIRMED plain store of the game struct's `+0x44`
+/// (`FUN_6f3badf0`), `GetPlayers` reads it (CONFIRMED). `GetTeams` reads `+0x9C` (CONFIRMED), but `SetTeams` calls
+/// `FUN_6f3ae370` (not read), so the team count is stored as given (UNSURE). The defaults are UNSURE.
+pub const SLOT_NATIVES: &[super::unit_attr::NativeEntry] = &[
+    super::unit_attr::NativeEntry {
+        name: "GetPlayers",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "SetPlayers",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GetTeams",
+        support: super::unit_attr::Support::Likely,
+    },
+    super::unit_attr::NativeEntry {
+        name: "SetTeams",
+        support: super::unit_attr::Support::Unsure,
+    },
+];
+
 /// Registers the game-state natives on `reg`, bound to `game`.
 pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
+    // Slot counts (see `SLOT_NATIVES`): the values are stored as given.
+    native(reg, game, "GetPlayers", |gm, _, _| {
+        Value::Integer(gm.game_state.players)
+    });
+    native(reg, game, "SetPlayers", |gm, _, a| {
+        gm.game_state.players = int_at(a, 0);
+        Value::Null
+    });
+    native(reg, game, "GetTeams", |gm, _, _| {
+        Value::Integer(gm.game_state.teams)
+    });
+    native(reg, game, "SetTeams", |gm, _, a| {
+        gm.game_state.teams = int_at(a, 0);
+        Value::Null
+    });
+
     // Speed and difficulty.
     native(reg, game, "GetGameSpeed", |gm, _, _| {
         Value::Integer(gm.game_state.speed)

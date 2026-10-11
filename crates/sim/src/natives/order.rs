@@ -37,6 +37,45 @@ const PLAYER_ISSUED: [u32; 3] = [38, 39, 40];
 /// Unit event ids of the issued order: immediate, point, target (75, 76, 77).
 const UNIT_ISSUED: [u32; 3] = [75, 76, 77];
 
+/// The support table of the group order natives registered by [`register_group`]. Immediate orders reach every member,
+/// point and target orders reach the first 12 entries (CONFIRMED from the decompile). The target order returns true
+/// without issuing when the target is not a live unit (CONFIRMED). The return value is "any member accepted"
+/// (CONFIRMED). The issue path is the one of the single-unit natives (`issue_order`).
+pub const GROUP_NATIVES: &[super::unit_attr::NativeEntry] = &[
+    super::unit_attr::NativeEntry {
+        name: "GroupImmediateOrder",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GroupImmediateOrderById",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GroupPointOrder",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GroupPointOrderById",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GroupPointOrderByIdLoc",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GroupPointOrderLoc",
+        support: super::unit_attr::Support::Confirmed,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GroupTargetOrder",
+        support: super::unit_attr::Support::Likely,
+    },
+    super::unit_attr::NativeEntry {
+        name: "GroupTargetOrderById",
+        support: super::unit_attr::Support::Likely,
+    },
+];
+
 /// Registers the order natives on `reg`, bound to `game`.
 pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
@@ -268,6 +307,216 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let text = order_name(id).unwrap_or("");
         NativeResult::Return(Value::String(ctx.intern(text)))
     });
+
+    register_group(reg, game);
+}
+
+/// The group natives that issue one order to every member: `GroupImmediateOrder*`, `GroupPointOrder*` and
+/// `GroupTargetOrder*`. Their bodies are read in `FUN_6f3f50a0` (immediate), `FUN_6f3f5120` (point) and `FUN_6f3f5280`
+/// (target), with the collector `FUN_6f3efcc0` (CONFIRMED, see the module table [`GROUP_NATIVES`]).
+fn register_group(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
+    let g = Rc::clone(game);
+    reg.register("GroupImmediateOrder", move |ctx, a| {
+        let ok = match (string_id(ctx, a, 1), group_arg(&g, a, 0)) {
+            (Some(id), Some(group)) => group_immediate(&g, ctx, group, id),
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GroupImmediateOrderById", move |ctx, a| {
+        let ok = match group_arg(&g, a, 0) {
+            Some(group) => group_immediate(&g, ctx, group, raw_at(a, 1) as u32),
+            None => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GroupPointOrder", move |ctx, a| {
+        let ok = match (string_id(ctx, a, 1), group_arg(&g, a, 0)) {
+            (Some(id), Some(group)) => {
+                group_point(&g, ctx, group, id, real_at(a, 2), real_at(a, 3))
+            }
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GroupPointOrderById", move |ctx, a| {
+        let ok = match group_arg(&g, a, 0) {
+            Some(group) => group_point(
+                &g,
+                ctx,
+                group,
+                raw_at(a, 1) as u32,
+                real_at(a, 2),
+                real_at(a, 3),
+            ),
+            None => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GroupPointOrderLoc", move |ctx, a| {
+        let ok = match (string_id(ctx, a, 1), group_arg(&g, a, 0), loc_arg(&g, a, 2)) {
+            (Some(id), Some(group), Some(loc)) => group_point(&g, ctx, group, id, loc.x, loc.y),
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GroupPointOrderByIdLoc", move |ctx, a| {
+        let ok = match (group_arg(&g, a, 0), loc_arg(&g, a, 2)) {
+            (Some(group), Some(loc)) => {
+                group_point(&g, ctx, group, raw_at(a, 1) as u32, loc.x, loc.y)
+            }
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GroupTargetOrder", move |ctx, a| {
+        let ok = match (string_id(ctx, a, 1), widget_arg(&g, a, 2)) {
+            (Some(id), Some(widget)) => match group_arg(&g, a, 0) {
+                Some(group) => group_target(&g, ctx, group, id, widget),
+                None => false,
+            },
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("GroupTargetOrderById", move |ctx, a| {
+        let ok = match (widget_arg(&g, a, 2), group_arg(&g, a, 0)) {
+            (Some(widget), Some(group)) => {
+                group_target(&g, ctx, group, raw_at(a, 1) as u32, widget)
+            }
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(ok))
+    });
+}
+
+/// How many entries of a group a point or target order reaches: the collector walks the first 12 entries of the
+/// snapshot (CONFIRMED: both passes of `FUN_6f3f5120` and `FUN_6f3f5280` pass the count 0xC). The immediate order
+/// has no limit (CONFIRMED: `FUN_6f3f50a0` passes 0xFFFFFFFF on its second pass).
+const POINT_TARGET_REACH: usize = 12;
+
+/// The members a group order reaches (`FUN_6f3efcc0`): the first `reach` entries of the group, in insertion order,
+/// minus the entries whose unit is removed (a removed unit is a ghost; it still uses up a slot of the walk).
+fn group_reach(g: &Rc<RefCell<Game>>, group: ObjKey, reach: usize) -> Vec<ObjKey> {
+    let gm = g.borrow();
+    gm.group(group)
+        .members
+        .iter()
+        .take(reach)
+        .map(|m| m.unit)
+        .filter(|&u| !gm.unit(u).removed)
+        .collect()
+}
+
+/// Issues `order` to each unit of the group reach, in order, and fires the issued-order events of each accepted one.
+/// Returns whether any unit's validator accepted the order (CONFIRMED: the flag is set by the accepting callback and
+/// never breaks the walk, so the result is "any", not "all").
+fn issue_to_group(
+    g: &Rc<RefCell<Game>>,
+    rt: &mut dyn ScriptRuntime,
+    group: ObjKey,
+    reach: usize,
+    order: Order,
+) -> bool {
+    let class = order.class;
+    let mut any = false;
+    for unit in group_reach(g, group, reach) {
+        let (validated, index) = g.borrow_mut().issue_order(unit, order.clone(), true);
+        if let Some(index) = index {
+            fire_issued(g, rt, unit, class, index);
+        }
+        any |= validated;
+    }
+    any
+}
+
+/// `GroupImmediateOrder*` (`FUN_6f3f50a0`): every member, immediate class.
+fn group_immediate(
+    g: &Rc<RefCell<Game>>,
+    rt: &mut dyn ScriptRuntime,
+    group: ObjKey,
+    id: u32,
+) -> bool {
+    let order = Order {
+        id,
+        class: OrderClass::Immediate,
+        point: None,
+        target: 0,
+    };
+    issue_to_group(g, rt, group, usize::MAX, order)
+}
+
+/// `GroupPointOrder*` (`FUN_6f3f5120`): the first 12 entries, point class at `(x, y)`.
+fn group_point(
+    g: &Rc<RefCell<Game>>,
+    rt: &mut dyn ScriptRuntime,
+    group: ObjKey,
+    id: u32,
+    x: F32,
+    y: F32,
+) -> bool {
+    let order = Order {
+        id,
+        class: OrderClass::Point,
+        point: Some((x, y)),
+        target: 0,
+    };
+    issue_to_group(g, rt, group, POINT_TARGET_REACH, order)
+}
+
+/// `GroupTargetOrder*` (`FUN_6f3f5280`): a target that is not a live unit gives `true` and issues nothing
+/// (CONFIRMED: the early exit returns 1). A unit target goes to the first 12 entries of the group.
+fn group_target(
+    g: &Rc<RefCell<Game>>,
+    rt: &mut dyn ScriptRuntime,
+    group: ObjKey,
+    id: u32,
+    widget: u32,
+) -> bool {
+    let target_is_unit = g.borrow().unit_of_handle(widget).is_some();
+    if !target_is_unit {
+        return true;
+    }
+    let order = Order {
+        id,
+        class: OrderClass::Target,
+        point: None,
+        target: widget,
+    };
+    issue_to_group(g, rt, group, POINT_TARGET_REACH, order)
+}
+
+/// The group in handle argument `i`, if it is a live group.
+fn group_arg(g: &Rc<RefCell<Game>>, a: &[Value], i: usize) -> Option<ObjKey> {
+    g.borrow()
+        .handle_of_kind(handle_arg(a, i), HandleKind::Group)
+}
+
+/// The widget in handle argument `i`: a unit, an item or a destructable with a live handle (the original's widget
+/// resolver, UNSURE beyond these three kinds). Returns the handle id, which the order stores as its target.
+fn widget_arg(g: &Rc<RefCell<Game>>, a: &[Value], i: usize) -> Option<u32> {
+    let id = handle_arg(a, i);
+    let gm = g.borrow();
+    let kind = gm.handle_object(id).map(|k| gm.object(k).handle_kind())?;
+    matches!(
+        kind,
+        HandleKind::Unit | HandleKind::Item | HandleKind::Destructable
+    )
+    .then_some(id)
 }
 
 /// `IssueImmediateOrder*`: an immediate order with replace.

@@ -187,13 +187,19 @@ impl Rng {
         } else {
             arith::sub(b, a)
         };
-        let r = self.next_u32(table);
-        let u = arith::add(
-            F32::from_bits((r & 0x007F_FFFF) | 0x3F80_0000),
-            F32::from_bits(0xBF80_0000),
-        );
+        let u = self.random_fraction(table);
         let t = arith::mul(range, u);
         arith::add(a, t)
+    }
+
+    /// The fraction `U` that `GetRandomReal` scales: one step, `(low 23 bits of the output | 1.0) - 1.0`, a float32
+    /// in `[0, 1)`, in soft-float. The pool selection (`natives/pool.rs`) multiplies it by the total weight.
+    pub fn random_fraction(&mut self, table: &RngTable) -> F32 {
+        let r = self.next_u32(table);
+        arith::add(
+            F32::from_bits((r & 0x007F_FFFF) | 0x3F80_0000),
+            F32::from_bits(0xBF80_0000),
+        )
     }
 }
 
