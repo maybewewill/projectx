@@ -4,9 +4,14 @@
 //! Inputs are text in UTF-8 or Windows-1252, with LF or CRLF line endings.
 //! The `parse_bytes` variants decode raw bytes first.
 
+pub mod combat;
+pub mod misc;
 pub mod profile;
+pub mod real;
 pub mod slk;
 
+pub use combat::{ArmorType, DamageType, Defense, UnitCombat, UnitCombatData, Weapon};
+pub use misc::MiscData;
 pub use profile::Profile;
 pub use slk::{Row, Slk, Value};
 

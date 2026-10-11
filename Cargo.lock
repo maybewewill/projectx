@@ -414,6 +414,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 name = "engine"
 version = "0.1.0"
 dependencies = [
+ "gamedata",
  "jass",
  "mpq",
  "sim",
@@ -525,6 +526,7 @@ dependencies = [
 name = "gamedata"
 version = "0.1.0"
 dependencies = [
+ "softfloat",
  "thiserror 2.0.21",
 ]
 

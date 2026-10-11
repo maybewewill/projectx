@@ -93,6 +93,7 @@ fn boot(map_bytes: Vec<u8>, dll: Option<Vec<u8>>) -> Engine {
         rng_seed: 0,
         ai_common: None,
         ai_scripts: Vec::new(),
+        game_archives: Vec::new(),
     };
     match Engine::boot(inputs) {
         Ok(e) => e,

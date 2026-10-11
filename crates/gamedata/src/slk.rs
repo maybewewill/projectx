@@ -68,6 +68,9 @@ struct RowData {
     key: String,
     /// Aligned with `Slk::columns`; `None` for empty cells.
     cells: Vec<Option<Value>>,
+    /// The raw text of each `K` value, aligned with `cells` (for example `0.06` or `"text"`). Real values are
+    /// parsed from it with the original's text rules, not from the `f64` above.
+    raw: Vec<Option<String>>,
 }
 
 /// A parsed SLK table: named columns and keyed rows.
@@ -98,6 +101,12 @@ impl<'a> Row<'a> {
         self.data.cells[idx].as_ref()
     }
 
+    /// The raw text of the value in the given column (see [`Slk::raw`]).
+    pub fn raw(self, column: &str) -> Option<&'a str> {
+        let idx = *self.slk.column_index.get(column)?;
+        self.data.raw[idx].as_deref()
+    }
+
     /// All columns of this row in table order, with `None` for empty cells.
     pub fn iter(self) -> impl Iterator<Item = (&'a str, Option<&'a Value>)> {
         self.slk
@@ -112,7 +121,7 @@ impl Slk {
     /// Parses SYLK text. Parsing stops at the `E` record.
     pub fn parse(src: &str) -> Result<Slk, Error> {
         let src = src.strip_prefix('\u{feff}').unwrap_or(src);
-        let mut cells: BTreeMap<(usize, usize), Value> = BTreeMap::new();
+        let mut cells: BTreeMap<(usize, usize), (Value, String)> = BTreeMap::new();
         let (mut bound_x, mut bound_y) = (0, 0);
         let (mut last_x, mut last_y) = (0_usize, 1_usize);
 
@@ -131,7 +140,10 @@ impl Slk {
                 match chars.next() {
                     Some('X') => x = Some(parse_coord(chars.as_str(), line_no)?),
                     Some('Y') => y = Some(parse_coord(chars.as_str(), line_no)?),
-                    Some('K') => k = Some(parse_value(chars.as_str())),
+                    Some('K') => {
+                        let text = chars.as_str();
+                        k = Some((parse_value(text), text.trim().to_owned()));
+                    }
                     _ => {}
                 }
             }
@@ -169,19 +181,27 @@ impl Slk {
 
         let mut slk = Slk::default();
         for x in 1..=max_x {
-            let name = cells.get(&(1, x)).map(Value::to_string).unwrap_or_default();
+            let name = cells
+                .get(&(1, x))
+                .map(|(value, _)| value.to_string())
+                .unwrap_or_default();
             slk.push_column(name);
         }
         for y in 2..=max_y {
-            let Some(key) = cells.get(&(y, 1)) else {
+            let Some((key, _)) = cells.get(&(y, 1)) else {
                 continue;
             };
             let key = key.to_string();
             if slk.row_index.contains_key(&key) {
                 return Err(Error::DuplicateRowKey { key });
             }
-            let row_cells = (1..=max_x).map(|x| cells.get(&(y, x)).cloned()).collect();
-            slk.push_row(key, row_cells);
+            let (row_cells, raw_cells): (Vec<_>, Vec<_>) = (1..=max_x)
+                .map(|x| match cells.get(&(y, x)) {
+                    Some((value, raw)) => (Some(value.clone()), Some(raw.clone())),
+                    None => (None, None),
+                })
+                .unzip();
+            slk.push_row(key, row_cells, raw_cells);
         }
         Ok(slk)
     }
@@ -213,6 +233,14 @@ impl Slk {
         self.rows[row].cells[col].as_ref()
     }
 
+    /// The raw text of the value at `row_key` and `column` (the characters after `K`, trimmed; quotes kept), if the
+    /// cell is non-empty. Use it to parse reals with the original's text rules.
+    pub fn raw(&self, row_key: &str, column: &str) -> Option<&str> {
+        let row = *self.row_index.get(row_key)?;
+        let col = *self.column_index.get(column)?;
+        self.rows[row].raw[col].as_deref()
+    }
+
     /// The row with the given key.
     pub fn row(&self, row_key: &str) -> Option<Row<'_>> {
         let idx = *self.row_index.get(row_key)?;
@@ -238,9 +266,10 @@ impl Slk {
             .collect();
         for orow in &other.rows {
             let row = self.row_or_insert(&orow.key);
-            for (ocol, cell) in orow.cells.iter().enumerate() {
+            for (ocol, (cell, raw)) in orow.cells.iter().zip(&orow.raw).enumerate() {
                 if let Some(value) = cell {
                     self.rows[row].cells[map[ocol]] = Some(value.clone());
+                    self.rows[row].raw[map[ocol]] = raw.clone();
                 }
             }
         }
@@ -252,6 +281,7 @@ impl Slk {
         self.columns.push(name);
         for row in &mut self.rows {
             row.cells.push(None);
+            row.raw.push(None);
         }
         idx
     }
@@ -263,10 +293,15 @@ impl Slk {
         }
     }
 
-    fn push_row(&mut self, key: String, cells: Vec<Option<Value>>) -> usize {
+    fn push_row(
+        &mut self,
+        key: String,
+        cells: Vec<Option<Value>>,
+        raw: Vec<Option<String>>,
+    ) -> usize {
         let idx = self.rows.len();
         self.row_index.insert(key.clone(), idx);
-        self.rows.push(RowData { key, cells });
+        self.rows.push(RowData { key, cells, raw });
         idx
     }
 
@@ -275,7 +310,8 @@ impl Slk {
             Some(&idx) => idx,
             None => {
                 let cells = vec![None; self.columns.len()];
-                self.push_row(key.to_owned(), cells)
+                let raw = vec![None; self.columns.len()];
+                self.push_row(key.to_owned(), cells, raw)
             }
         }
     }

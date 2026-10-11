@@ -57,6 +57,7 @@ fn inputs(map: Vec<u8>) -> Inputs {
         rng_seed: 0,
         ai_common: None,
         ai_scripts: Vec::new(),
+        game_archives: Vec::new(),
     }
 }
 
