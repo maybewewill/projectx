@@ -68,7 +68,10 @@ const HOLD: i32 = 0xD0019;
 const NOTE_STOP: u32 = 0xD0144;
 const NOTE_STARTED_OR_CLEARED: u32 = 0xD02A6;
 /// Facing after the straight move (radians), the model's value (see `straight_moves_arrive_with_model_positions`).
-const FACING_BITS: u32 = 0x3BA2_5E5E;
+/// Zero: the move is due east (y stays 0), and the heading of the last walk that stepped is below the
+/// arccosine epsilon. With the 0.03 s walk the earlier value (0.005 rad, from the 0.1 s model) was rounding
+/// noise of `vx / r` at the old positions (lockstep.md section 11.3).
+const FACING_BITS: u32 = 0x0000_0000;
 
 fn tables() -> Option<Tables> {
     let path = std::env::var("GAME_DLL").ok()?;
@@ -223,7 +226,7 @@ fn replace_clears_then_queues_and_append_keeps_the_head() {
         0,
         0,
         r#"set gOk = IssuePointOrder(gU, "move", I2R(100), I2R(0))
-  set gOk2 = IssuePointOrder(gU, "attack", I2R(10), I2R(10))
+  set gOk2 = IssuePointOrder(gU, "attack", I2R(400), I2R(400))
   set gInt = GetUnitCurrentOrder(gU)"#,
     ));
     host.start("Main", &[]).expect("start");
@@ -484,15 +487,17 @@ fn straight_moves_arrive_with_model_positions() {
             break;
         }
     }
-    // The model's own output (UNVERIFIED against the original): 26.999 world units per step (270 per second
-    // times 0.1, rounded by the softfloat multiply), the last step cut to the remaining distance, and the
-    // order completes on the fourth step, when the unit is within the arrival radius of the goal.
-    let golden: [(u32, u32); 5] = [
-        (0x41D7_FEFB, 0x0000_0000),
-        (0x4257_FEFE, 0x0000_0000),
-        (0x42A1_FF39, 0x0000_0000),
-        (0x42C8_0000, 0x0000_0000),
-        (0x42C8_0000, 0x0000_0000),
+    // The model's own output (UNVERIFIED against the original): the movement walk fires every 0.03 s of
+    // agile clock (lockstep.md section 11.2), so a batch of 20 ticks holds three or four walks, each moving
+    // 8.1 world units (270 per second times 0.03). The orders are issued at the first batch boundary (tick
+    // 20), so the first recorded batch holds three walks (24.3). The last step is cut to the remaining
+    // distance, and the order completes on the fourth recorded step, when the unit is within the arrival
+    // radius (6.4 world units) of the goal.
+    let golden: [(u32, u32); 4] = [
+        (0x41C2_6605, 0x0000_0000),
+        (0x4242_660E, 0x0000_0000),
+        (0x42A1_FFC0, 0x0000_0000),
+        (0x42C2_6619, 0x0000_0000),
     ];
     let bits: Vec<(u32, u32)> = positions
         .iter()

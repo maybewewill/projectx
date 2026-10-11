@@ -48,6 +48,9 @@ pub enum Payload {
         unit: ObjKey,
         msg: crate::combat::AttackMsg,
     },
+    /// The unit movement walk (message 0x8026A): a repeating timer with period
+    /// [`crate::lockstep::MOVE_PERIOD_BITS`] (0.03 s), lockstep.md section 11.2.
+    Movement,
 }
 
 /// The timer or trigger that a script thread runs for.
@@ -1034,6 +1037,10 @@ pub struct Game {
     caches: BTreeMap<String, ObjKey>,
     /// The playable area that rect coordinates are clamped to, or `None` (no clamp) until a host sets it.
     playable: Option<Playable>,
+    /// Whether the movement timer (0x8026A, [`Payload::Movement`]) has been armed. Armed once per game.
+    pub movement_armed: bool,
+    /// Movement walks run so far (one per firing of the movement timer).
+    pub movement_calls: u64,
     /// The player index of `GetLocalPlayer`. Set by the host (see [`Game::set_local_player`]).
     local_player: u32,
     /// Player handles of the running `GetEnumPlayer` scopes, innermost last. Empty outside a scope.
@@ -1120,6 +1127,8 @@ impl Game {
             objects,
             handles: HandleTable::new(),
             timers: TimerQueue::new(),
+            movement_armed: false,
+            movement_calls: 0,
             contexts: Vec::new(),
             context_keys: BTreeMap::new(),
             caches: BTreeMap::new(),

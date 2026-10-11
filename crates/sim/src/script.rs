@@ -17,16 +17,21 @@
 //!    `<= target` are popped in the same tick. When the pump ends, the queue time and the VM time are
 //!    `target`.
 //!
+//! The unit movement walk is not a tick step: it is the repeating timer of message 0x8026A, which
+//! fires in the pump at its own expiry every [`lockstep::MOVE_PERIOD_BITS`] = 0.03 s of agile clock
+//! (six ticks; lockstep.md section 11.2). Its callback is [`Game::tick_movement`].
+//!
 //! Every [`lockstep::TICKS_PER_BATCH`] ticks (the boundary is counted from the host's creation, so
 //! the first batch ends at tick 20), the host also runs its per-step work at `target`:
 //!
-//! 3. The order and movement tick ([`Game::tick_orders`]).
+//! 3. The combat tick of units with orders ([`Game::tick_combat`]).
 //! 4. One JASS scheduler pass ([`Vm::step`]): every runnable thread (budget exhausted, yielded, or
 //!    started during the step) runs once, in list order. Sleeping threads that are not due are skipped.
 //!
-//! UNSURE: the cadence of steps 3 and 4 is not in the spec. The original calls the interpreter only
-//! from the wake-up paths (game-loop-2 4.5), so the batch is a model of the old 0.1 s step, kept at
-//! 100 ms. The AI host runs at the same boundaries (see `crate::ai` and `engine`).
+//! UNSURE: the cadence of steps 3 and 4 is not in the original (lockstep.md sections 11.6-11.7). The
+//! original runs threads from their starts, wake-ups and events (no batch pass was found), so step 4 is
+//! kept as a model for budget-exhausted threads. The AI host runs at the same boundaries (see
+//! `crate::ai` and `engine`).
 //!
 //! A thread that was resumed in step 2 and used up its budget gets one more budget slice in step 4
 //! of the same batch. This follows from the order above, and it is deterministic. It is UNVERIFIED
@@ -79,6 +84,19 @@ impl ScriptHost {
     ) -> Result<Self, VmError> {
         game.borrow_mut().set_tables(tables.clone());
         natives::register(&mut natives, &game);
+        {
+            // The movement walk is a repeating timer (message 0x8026A, lockstep.md section 11.2), armed once per
+            // game: a second host on the same game does not arm it again.
+            let mut g = game.borrow_mut();
+            if !g.movement_armed {
+                g.movement_armed = true;
+                g.timers.start(
+                    f32::from_bits(lockstep::MOVE_PERIOD_BITS),
+                    true,
+                    Payload::Movement,
+                );
+            }
+        }
         let vm = Vm::new(module, natives, tables)?;
         Ok(ScriptHost {
             vm,
@@ -217,7 +235,10 @@ impl ScriptHost {
             let Some(event) = next else {
                 break;
             };
-            fired += 1;
+            // The movement walk is counted separately (`Game::movement_calls`), not as a script event.
+            if !matches!(event.payload, Payload::Movement) {
+                fired += 1;
+            }
             let expiry = F32::from_bits(event.expiry.to_bits());
             match event.payload {
                 Payload::Sleep(thread) => {
@@ -247,15 +268,21 @@ impl ScriptHost {
                     self.vm.set_now(expiry);
                     combat::expire_attack_timer(&self.game, &mut self.vm, unit, msg);
                 }
+                Payload::Movement => {
+                    // The movement walk runs at its own expiry (the game time during the callback).
+                    self.vm.set_now(expiry);
+                    self.game.borrow_mut().tick_movement();
+                }
             }
         }
         self.vm.set_now(F32::from_bits(target.to_bits()));
         fired
     }
 
-    /// The per-step work at a batch boundary: the order and movement tick, then one scheduler pass.
+    /// The per-step work at a batch boundary: the combat tick of units with orders, then one scheduler pass.
+    /// Movement is not here: it is the movement timer in [`ScriptHost::pump`].
     fn batch(&mut self, target: f32) {
-        self.game.borrow_mut().tick_orders();
+        self.game.borrow_mut().tick_combat();
         self.vm.step(F32::from_bits(target.to_bits()));
     }
 }

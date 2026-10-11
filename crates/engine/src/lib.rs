@@ -22,10 +22,11 @@
 //!    ([`Engine::run_config`], [`Engine::start_main`]).
 //!
 //! [`Engine::step_ticks`] advances the game clock one game tick (0.005 s, one soft-float add) at a
-//! time, with the timer pump after each tick (`sim::ScriptHost::step_ticks`). Every
-//! [`TICKS_PER_BATCH`] ticks (100 ms, UNSURE cadence, lockstep.md section 10) the main host runs its
-//! order tick and scheduler pass, and then the AI host runs once at the same game time
-//! (`sim::ai::AiHost::step`). [`Engine::step`] is one batch.
+//! time, with the timer pump after each tick (`sim::ScriptHost::step_ticks`). Unit movement is a timer
+//! in that pump: the walk fires every 0.03 s of game time (`sim::lockstep::MOVE_PERIOD_BITS`, lockstep.md
+//! section 11.2). Every [`TICKS_PER_BATCH`] ticks (100 ms, UNSURE cadence, lockstep.md sections 11.5-11.7)
+//! the main host runs its combat tick and scheduler pass, and then the AI host runs once at the same game
+//! time (`sim::ai::AiHost::step`). [`Engine::step`] is one batch.
 //!
 //! Missing natives: a native that is declared but has no implementation is reported, and a
 //! script call to it aborts the calling thread (`RunStatus::FunctionNotFound`). The report lists

@@ -37,11 +37,19 @@ pub const SPEED_TICKS: [u64; 3] = [3, 4, 5];
 /// Increment of the per-tick counter `+0x1C70` (CONFIRMED). Read as 5 ms of game time per tick (LIKELY).
 pub const TICK_GAME_MS: u64 = 5;
 
-/// Game ticks per batch of the per-step work of the host: the JASS scheduler pass, the order and
-/// movement tick, and the AI pass. UNSURE: the original's cadence for these is not in the spec
-/// (lockstep.md section 10). 20 ticks = 100 ms of game time keeps the cadence of the old 0.1 s step
-/// and of the AI dispatcher's +100 ms rhythm (AGENTS.md 4.3s/AI notes).
+/// Game ticks per batch of the per-step work of the host: the combat tick of units with orders, the
+/// JASS scheduler pass and the AI pass. UNSURE for all three (lockstep.md sections 10.2 and 11.5-11.7):
+/// the original runs threads from their events and timers, not from a batch (11.6), and the AI
+/// dispatcher's rhythm is not the 100 ms of the old model. Unit movement is NOT batched: it runs from
+/// its own timer, [`MOVE_PERIOD_BITS`] (lockstep.md section 11.2).
 pub const TICKS_PER_BATCH: u64 = 20;
+
+/// Period of the unit movement walk (message 0x8026A), f32 0.03 (`0x3CF5C290`). CONFIRMED value:
+/// the static initializer `0x6F85F650` converts the text `"0.03"` at `0x6F942DD8` with S2R into the
+/// f32 at `0x6FAB7370`, which is the timeout of the repeating agent timer that posts 0x8026A
+/// (`0x6F426BF0`, `CAgentTimer::vf2`), and Unicorn gives `0x3CF5C290` (lockstep.md section 11.2).
+/// The period is the same as the timeout (LIKELY). 0.03 s is six game ticks of 0.005 s.
+pub const MOVE_PERIOD_BITS: u32 = 0x3CF5_C290;
 
 /// Agile-clock increment per game tick, f32 0.005 (`0x3BA3D70A`). CONFIRMED: the tick event built by
 /// the frame driver carries `[0x6FACC8CC]` at +0x14, the static initializer `0x6F8621C0` stores
