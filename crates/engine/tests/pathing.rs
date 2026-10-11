@@ -91,6 +91,8 @@ fn boot(map_bytes: Vec<u8>, dll: Option<Vec<u8>>) -> Engine {
         common_j: COMMON_J.to_string(),
         blizzard_j: BLIZZARD_J.to_string(),
         rng_seed: 0,
+        ai_common: None,
+        ai_scripts: Vec::new(),
     };
     match Engine::boot(inputs) {
         Ok(e) => e,

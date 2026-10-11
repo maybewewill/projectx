@@ -55,6 +55,8 @@ fn inputs(map: Vec<u8>) -> Inputs {
         common_j: COMMON_J.to_string(),
         blizzard_j: BLIZZARD_J.to_string(),
         rng_seed: 0,
+        ai_common: None,
+        ai_scripts: Vec::new(),
     }
 }
 

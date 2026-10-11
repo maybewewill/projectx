@@ -1,5 +1,5 @@
 //! Script sources: `Scripts\common.j` and `Scripts\Blizzard.j` from the user's War3.mpq and
-//! War3x.mpq, and the map's `war3map.j`.
+//! War3x.mpq, the map's `war3map.j`, and the AI scripts (`Scripts\common.ai` and the race scripts).
 //!
 //! Archives are searched in the order given, and a later archive overrides an earlier one, so pass
 //! `War3.mpq` then `War3x.mpq` (the TFT archive overrides RoC files). Sources are decoded as UTF-8
@@ -26,6 +26,32 @@ fn read_last(archives: &[&[u8]], name: &str) -> Result<Option<String>, Error> {
         }
     }
     Ok(found)
+}
+
+/// The archive path of the common AI script (`common.ai`).
+pub const COMMON_AI: &str = "Scripts\\common.ai";
+/// The race AI scripts that the archives are searched for, by file name (lower case).
+pub const RACE_AI_SCRIPTS: [&str; 4] = ["human.ai", "orc.ai", "undead.ai", "elf.ai"];
+
+/// The AI sources read from the archives: `common.ai` (if the archives have it) and the race scripts
+/// that they have, as `(file name, source)` in [`RACE_AI_SCRIPTS`] order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AiSources {
+    pub common: Option<String>,
+    pub scripts: Vec<(String, String)>,
+}
+
+/// Reads `Scripts\common.ai` and the race AI scripts from the archives (later archives override
+/// earlier ones). A missing file is not an error: it is left out.
+pub fn ai_scripts_from_archives(archives: &[&[u8]]) -> Result<AiSources, Error> {
+    let common = read_last(archives, COMMON_AI)?;
+    let mut scripts = Vec::new();
+    for name in RACE_AI_SCRIPTS {
+        if let Some(source) = read_last(archives, &format!("Scripts\\{name}"))? {
+            scripts.push((name.to_string(), source));
+        }
+    }
+    Ok(AiSources { common, scripts })
 }
 
 /// Returns `(common.j, blizzard.j)` from the archives (later archives override earlier ones).

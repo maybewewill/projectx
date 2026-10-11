@@ -12,13 +12,17 @@
 //! 3. Create the [`sim::ScriptHost`]. Map setup (playable area, player slots, local player) is applied
 //!    before any script code runs. With a `Game.dll`, the RNG table is handed to the host and the
 //!    generator is seeded with [`Inputs::rng_seed`] (game start, `sim::Streams::start_game`).
-//! 4. Run `config` synchronously, then queue `main` as a thread that starts on the first
+//! 4. Create the AI host ([`sim::ai::AiHost`]) over the same game. The main VM is built with the AI natives
+//!    of `sim::natives::ai::register_main`. The AI library holds the `common.ai` script and the race scripts
+//!    from [`Inputs`], and `common.j` is compiled in front of `common.ai` in every AI VM.
+//! 5. Run `config` synchronously, then queue `main` as a thread that starts on the first
 //!    [`Engine::step`]. UNSURE: in the real game `config` runs when the map is loaded (lobby to
 //!    game start), and `main` runs at game start, where it calls `InitBlizzard`, `InitGlobals`,
 //!    `InitCustomTriggers` and `RunInitializationTriggers`. Both are also callable separately
 //!    ([`Engine::run_config`], [`Engine::start_main`]).
 //!
-//! [`Engine::step`] advances the game clock by 0.1 s (see `sim::ScriptHost::step`).
+//! [`Engine::step`] advances the game clock by 0.1 s: first the main host step (see
+//! `sim::ScriptHost::step`), then the AI host step at the same time (see `sim::ai::AiHost::step`).
 //!
 //! Missing natives: a native that is declared but has no implementation is reported, and a
 //! script call to it aborts the calling thread (`RunStatus::FunctionNotFound`). The report lists
@@ -26,15 +30,18 @@
 //!
 //! Nothing from the game is committed: the tests build synthetic archives in memory.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt;
+use std::rc::Rc;
 
 use jass::bytecode::Op;
 use jass::compile::{compile, CompileError};
 use jass::vm::{NativeRegistry, RunStatus, ThreadId, VmError};
 use mpq::Archive;
-use sim::{RngTable, ScriptHost};
-use softfloat::Tables;
+use sim::ai::{AiEvent, AiHost, AiLibrary};
+use sim::{Game, RngTable, ScriptHost};
+use softfloat::{Tables, F32};
 use w3map::MapInfo;
 
 pub mod map;
@@ -43,7 +50,9 @@ pub mod scripts;
 
 pub use map::{apply_players, controller_of, playable_area};
 pub use pathing::PathingSummary;
-pub use scripts::{scripts_from_archives, BLIZZARD_J, COMMON_J};
+pub use scripts::{
+    ai_scripts_from_archives, scripts_from_archives, AiSources, BLIZZARD_J, COMMON_J,
+};
 
 /// Errors while booting a map.
 #[derive(Debug, thiserror::Error)]
@@ -87,11 +96,20 @@ pub struct Inputs {
     /// slots (`docs/spec/rng.md` section 4.1), which is not implemented, so the caller supplies `S`.
     /// Only used when `game_dll` is given (the generator needs its table).
     pub rng_seed: u32,
+    /// The `common.ai` source (the common AI script of the AI VMs), or `None`. Without it an AI VM
+    /// is built from `common.j` and the named script alone, so a script that uses the AI natives
+    /// declared in `common.ai` fails to compile (`StartMeleeAI` then reports a build failure).
+    pub ai_common: Option<String>,
+    /// The named AI scripts, as `(name, source)`, for example `("human.ai", source)`. A
+    /// `StartMeleeAI(player, "human.ai")` runs the script with that name (case-insensitive). A later
+    /// entry with the same name replaces an earlier one.
+    pub ai_scripts: Vec<(String, String)>,
 }
 
 /// A booted map: the script host, the map info and the boot results.
 pub struct Engine {
     host: ScriptHost,
+    ai: AiHost,
     info: MapInfo,
     rng: Option<RngTable>,
     functions: usize,
@@ -105,6 +123,21 @@ pub struct Engine {
     steps: u64,
     timers_fired: u64,
     notes: Vec<String>,
+}
+
+/// What the AI host did, as the report shows it (see [`sim::ai::AiShared`] for the full logs).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AiReport {
+    /// The players that have an AI VM, ascending.
+    pub started: Vec<u32>,
+    /// The start events, in order (refused starts, build failures, started AIs).
+    pub events: Vec<AiEvent>,
+    /// AI-table natives that were called but are not implemented: `(name, calls)`, sorted by name.
+    pub unimplemented: Vec<(String, u32)>,
+    /// Entries in the AI command log (calls the AI VMs made that the model records).
+    pub logged_calls: usize,
+    /// AI threads that aborted, with the player that ran them.
+    pub failures: Vec<(u32, RunStatus)>,
 }
 
 /// What the report shows for one player slot (from `w3i`, with the state the host set).
@@ -139,6 +172,8 @@ pub struct Report {
     pub game_time: f32,
     /// The pathing data installed at boot, or `None` (straight-line movement).
     pub pathing: Option<PathingSummary>,
+    /// The AI host's summary (no AI players when no AI was started).
+    pub ai: AiReport,
     pub notes: Vec<String>,
 }
 
@@ -188,7 +223,21 @@ impl Engine {
         let globals = module.globals.len();
         let natives_declared = module.natives.len();
 
-        let host = ScriptHost::new(module, NativeRegistry::with_builtins(), tables)?;
+        // The main VM's AI natives (StartMeleeAI, CommandAI, ...) share the game and the AI state with the AI host.
+        let game = Rc::new(RefCell::new(Game::new()));
+        let ai_shared = sim::ai::new_shared();
+        let mut natives = NativeRegistry::with_builtins();
+        sim::natives::ai::register_main(&mut natives, &game, &ai_shared);
+        let host = ScriptHost::with_game(module, natives, tables.clone(), Rc::clone(&game))?;
+        let mut library = AiLibrary::new(inputs.ai_common.as_deref().unwrap_or(""));
+        if inputs.ai_common.is_none() {
+            notes.push("no common.ai: AI VMs are built without it".to_string());
+        }
+        library.set_prelude(&inputs.common_j);
+        for (name, source) in &inputs.ai_scripts {
+            library.add_script(name, source);
+        }
+        let ai = AiHost::new(game, ai_shared, library, tables);
         let playable = playable_area(&info);
         host.set_playable(Some(playable));
         apply_players(&mut host.game_mut(), &info, &mut notes);
@@ -232,6 +281,7 @@ impl Engine {
             steps: 0,
             timers_fired: 0,
             notes,
+            ai,
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
@@ -258,9 +308,12 @@ impl Engine {
         result
     }
 
-    /// Advances the game by one 0.1 s step. Returns the number of queue entries that fired.
+    /// Advances the game by one 0.1 s step: the main host step, then the AI host step at the same game time.
+    /// Returns the number of queue entries of the main host that fired.
     pub fn step(&mut self) -> usize {
         let fired = self.host.step();
+        let now = F32::from_bits(self.host.clock().now().to_bits());
+        self.ai.step(now);
         self.steps += 1;
         self.timers_fired += fired as u64;
         fired
@@ -274,6 +327,16 @@ impl Engine {
     /// Mutable access to the script host.
     pub fn host_mut(&mut self) -> &mut ScriptHost {
         &mut self.host
+    }
+
+    /// The AI host (one JASS VM per AI player, and the shared AI state).
+    pub fn ai(&self) -> &AiHost {
+        &self.ai
+    }
+
+    /// Mutable access to the AI host.
+    pub fn ai_mut(&mut self) -> &mut AiHost {
+        &mut self.ai
     }
 
     /// The map info read from `war3map.w3i`.
@@ -330,7 +393,28 @@ impl Engine {
             timers_fired: self.timers_fired,
             game_time: self.host.clock().now(),
             pathing: self.pathing.clone(),
+            ai: self.ai_report(),
             notes: self.notes.clone(),
+        }
+    }
+
+    fn ai_report(&self) -> AiReport {
+        let shared = self.ai.shared().borrow();
+        AiReport {
+            started: self.ai.players(),
+            events: shared.events.clone(),
+            unimplemented: shared
+                .unimplemented
+                .iter()
+                .map(|(name, calls)| ((*name).to_string(), *calls))
+                .collect(),
+            logged_calls: shared.commands.len(),
+            failures: self
+                .ai
+                .failures()
+                .iter()
+                .map(|(player, _, status)| (*player, *status))
+                .collect(),
         }
     }
 }
@@ -429,6 +513,37 @@ impl fmt::Display for Report {
             "steps: {} (game time {:.1} s), timer and sleep entries fired: {}",
             self.steps, self.game_time, self.timers_fired
         )?;
+        if self.ai.started.is_empty() {
+            writeln!(f, "AI players started: none")?;
+        } else {
+            let list: Vec<String> = self.ai.started.iter().map(u32::to_string).collect();
+            writeln!(
+                f,
+                "AI players started ({}): {}",
+                self.ai.started.len(),
+                list.join(", ")
+            )?;
+        }
+        for event in &self.ai.events {
+            writeln!(f, "AI event: {event:?}")?;
+        }
+        writeln!(
+            f,
+            "AI natives called but not implemented ({}):",
+            self.ai.unimplemented.len()
+        )?;
+        for (name, calls) in &self.ai.unimplemented {
+            writeln!(f, "  {name} x{calls}")?;
+        }
+        writeln!(
+            f,
+            "AI: {} logged calls, {} aborted threads",
+            self.ai.logged_calls,
+            self.ai.failures.len()
+        )?;
+        for (player, status) in &self.ai.failures {
+            writeln!(f, "AI thread failed (player {player}): {status:?}")?;
+        }
         for note in &self.notes {
             writeln!(f, "note: {note}")?;
         }

@@ -20,7 +20,7 @@
 //!
 //! * The start loads `common.j`, `common.ai` and the race script into one VM for the player and starts one thread with
 //!   code 0 (CONFIRMED: one `StartThread` call on the start path). The model starts `config` and then `main`. Whether
-//!   the engine runs `config` is UNSURE, and the model does not load `common.j` (open: the host has no such input).
+//!   the engine runs `config` is UNSURE, and the host compiles `common.j` before `common.ai` when the library has a prelude (`AiLibrary::set_prelude`).
 //! * Each AI has six thread slots (`+0x254`, index 0 to 5, LIKELY): a `StartThread` takes a free slot and is dropped when
 //!   none is free. The model does not cap threads (the freeing rule is UNSURE).
 //! * `Sleep` passes its duration to the thread's agent timer (`FUN_6f2d0f90`, a virtual call with the duration). The
@@ -179,6 +179,7 @@ impl AiShared {
 /// The AI script sources the host provides: the common script and the named scripts. Names are case-insensitive.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AiLibrary {
+    prelude: String,
     common: String,
     scripts: BTreeMap<String, String>,
 }
@@ -187,9 +188,18 @@ impl AiLibrary {
     /// A library whose common script is `common` (the user's `common.ai`).
     pub fn new(common: &str) -> Self {
         AiLibrary {
+            prelude: String::new(),
             common: common.to_string(),
             scripts: BTreeMap::new(),
         }
+    }
+
+    /// Sets the source compiled before the common script in every AI VM: the map's `common.j`, which declares the
+    /// natives and types that `common.ai` and the race scripts use (the AI VM is built from `common.j`,
+    /// `common.ai` and the named script). Empty by default, which compiles the common script and the named script
+    /// alone.
+    pub fn set_prelude(&mut self, source: &str) {
+        self.prelude = source.to_string();
     }
 
     /// Adds (or replaces) the named script `name`, for example `human.ai`.
@@ -209,13 +219,27 @@ impl AiLibrary {
     pub fn common(&self) -> &str {
         &self.common
     }
+
+    /// The prelude source (`common.j`), empty when none was set.
+    pub fn prelude(&self) -> &str {
+        &self.prelude
+    }
 }
 
-/// Parses and compiles the common script and one named script as one module.
-fn build_module(common: &str, script: &str, tables: Option<&Tables>) -> Result<Module, String> {
-    let c = jass::parse_with(common, tables).map_err(|e| format!("common: {e:?}"))?;
-    let s = jass::parse_with(script, tables).map_err(|e| format!("script: {e:?}"))?;
-    compile(&[c, s]).map_err(|e| format!("{e:?}"))
+/// Parses and compiles the prelude (when not empty), the common script and one named script as one module.
+fn build_module(
+    prelude: &str,
+    common: &str,
+    script: &str,
+    tables: Option<&Tables>,
+) -> Result<Module, String> {
+    let mut programs = Vec::with_capacity(3);
+    if !prelude.is_empty() {
+        programs.push(jass::parse_with(prelude, tables).map_err(|e| format!("prelude: {e:?}"))?);
+    }
+    programs.push(jass::parse_with(common, tables).map_err(|e| format!("common: {e:?}"))?);
+    programs.push(jass::parse_with(script, tables).map_err(|e| format!("script: {e:?}"))?);
+    compile(&programs).map_err(|e| format!("{e:?}"))
 }
 
 /// Runs one JASS VM per AI player, stepped after the main VM.
@@ -323,7 +347,12 @@ impl AiHost {
                 return;
             }
         };
-        let module = match build_module(self.library.common(), &source, self.tables.as_ref()) {
+        let module = match build_module(
+            self.library.prelude(),
+            self.library.common(),
+            &source,
+            self.tables.as_ref(),
+        ) {
             Ok(m) => m,
             Err(error) => {
                 self.event(AiEvent::BuildFailed {
