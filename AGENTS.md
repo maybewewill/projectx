@@ -304,7 +304,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] `_control87` mode: PC_53 / RC_NEAR (see 4.3)
 - [ ] Find the software sin/cos/sqrt (NTempest math) and the float→int conversion functions (`fldcw` + `fistp`)
 - [x] `crates/w3g` v0.1: header v0/v1, zlib blocks, players, stat string, slots, **seed**, time slots, chat, leave, 0x22 checksum blocks. Synthetic test only.
-- [ ] `crates/w3g`: check on real 1.26a replays (`cargo run -p w3g --example dump -- file.w3g`), parse actions (0x10–0x1E ability/order, 0x16 selection, etc.)
+- [~] `crates/w3g`: check on real 1.26a replays (one DotA replay parses fully and all actions decode, 2026-10-11) (`cargo run -p w3g --example dump -- file.w3g`), parse actions (0x10–0x1E ability/order, 0x16 selection, etc.)
 - [x] `crates/mpq` v0.1: header search (512-byte aligned, HM3W prefix, MPQ\x1B user data), hash/block tables, encryption + FIX_KEY, single-unit/sectored, zlib/bzip2/PKWARE DCL, `(listfile)`. Synthetic tests (5).
 - [x] `crates/mpq` v0.2: Huffman + ADPCM (Haiku agent, port from OpenRealm, see THIRD_PARTY_NOTICES.md). Checked only by round-trips with a test encoder.
 - [ ] `crates/mpq`: check codecs on real WAVs (the Huffman model updates the tree only on escape, as in the reference; check first if decoding fails), check on real War3.mpq/War3x.mpq (`cargo run -p mpq --example mpqls -- War3.mpq`), streaming instead of loading the whole file
@@ -354,6 +354,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (41)**: ✅ **first real 1.26a replay** (user-supplied, DotA Imba v6.63z10, 10 players + 1 observer, build 6059, 162 min, NOT committed; tests use `W3G_REPLAY=/path`). Bug fixed: real blocks end with a zlib **sync flush** (no stream end) → `decompress_blocks` now inflates until `dsize` bytes (unit test `sync_flushed_block_inflates`). After that `w3g` parses the whole file with the **GameInfo layout** (body starts `10 01 00 00`, host record 0x00, name …; seed 0x08f1814a; 11 slots; 89,259 ticks; 89,259 0x22 checksum blocks) and **all 7,809 command blocks / 15,721 actions decode** (ids 0x10–0x1B, 0x60–0x68, 0x6B; `examples/actions.rs`, `tests/real_replay.rs`). → Conflict (40) resolved: GameInfo is right for files; `0x6F443860`/`read_leading` read a different (in-memory/network) stream, so the replay loader is still to be located. Per-tick 0x22 checksums are present → a future per-tick oracle. Booting this replay needs the map file and War3/War3x MPQs.
 
 - **2026-10-11 (40)**: ⚠ **Open layout conflict**: the setup builder `0x6F443860` reads the decompressed replay body positionally (strings, a 184-byte settings block, u16 start blob, dwords, 20 raw bytes for build ≥ 0x17AA …) with no 0x16/0x19 record ids; `w3g::leading::read_leading` ports it (Unicorn 400+300 bodies, 0 mismatches). Our `w3g::GameInfo` layout (host record, 0x16 players, 0x19 id) is **refused** by that reader. Either GameInfo is wrong for real 1.26a files or the setup builder is not the replay loader — settle on a real 1.26a .w3g (needed from the user). GameInfo unchanged.
 

@@ -1,5 +1,3 @@
-use std::io::Read;
-
 use crate::reader::Reader;
 use crate::Error;
 
@@ -107,12 +105,33 @@ pub(crate) fn decompress_blocks(file: &[u8], header: &Header) -> Result<Vec<u8>,
         let _checksum = r.u32()?;
         let data = r.bytes(csize)?;
         let start = out.len();
-        flate2::read::ZlibDecoder::new(data)
-            .read_to_end(&mut out)
-            .map_err(|e| Error::Inflate {
-                block: index,
-                source: e,
-            })?;
+        // Real 1.26a blocks end with a sync flush, not a finished zlib stream, so inflate
+        // until `dsize` bytes are out instead of requiring the stream end.
+        out.reserve(dsize);
+        let mut z = flate2::Decompress::new(true);
+        loop {
+            let before = (z.total_in(), z.total_out());
+            let status = z
+                .decompress_vec(
+                    &data[z.total_in() as usize..],
+                    &mut out,
+                    flate2::FlushDecompress::Sync,
+                )
+                .map_err(|e| Error::Inflate {
+                    block: index,
+                    source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+                })?;
+            let produced = out.len() - start;
+            if status == flate2::Status::StreamEnd || produced >= dsize {
+                break;
+            }
+            if out.capacity() == out.len() {
+                out.reserve(dsize.max(4096));
+            }
+            if (z.total_in(), z.total_out()) == before {
+                break;
+            }
+        }
         if out.len() - start < dsize {
             return Err(Error::ShortBlock {
                 block: index,
@@ -130,6 +149,37 @@ pub(crate) fn decompress_blocks(file: &[u8], header: &Header) -> Result<Vec<u8>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real 1.26a blocks end with a zlib sync flush (no stream end); they must still inflate.
+    #[test]
+    fn sync_flushed_block_inflates() {
+        let payload: Vec<u8> = (0..8192u32).map(|i| (i * 7 % 251) as u8).collect();
+        let mut z = flate2::Compress::new(flate2::Compression::default(), true);
+        let mut block = Vec::with_capacity(16384);
+        z.compress_vec(&payload, &mut block, flate2::FlushCompress::Sync)
+            .unwrap();
+        let mut file = vec![0u8; 0x44];
+        file.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        file.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&block);
+        let header = Header {
+            header_size: 0x44,
+            compressed_size: file.len() as u32,
+            header_version: 1,
+            decompressed_size: payload.len() as u32,
+            block_count: 1,
+            sub: SubHeader {
+                product: Some(*b"W3XP"),
+                version: 26,
+                build: 6059,
+                flags: 0x8000,
+                length_ms: 0,
+                header_crc32: 0,
+            },
+        };
+        assert_eq!(decompress_blocks(&file, &header).unwrap(), payload);
+    }
 
     /// The header size must match the version (`FUN_6f534750`: 0x40 for version 0, 0x44 for version 1).
     #[test]
