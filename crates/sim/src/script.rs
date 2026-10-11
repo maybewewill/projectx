@@ -22,20 +22,17 @@
 //! (six ticks; lockstep.md section 11.2). Its callback is [`Game::tick_movement`].
 //!
 //! Every [`lockstep::TICKS_PER_BATCH`] ticks (the boundary is counted from the host's creation, so
-//! the first batch ends at tick 20), the host also runs its per-step work at `target`:
+//! the first batch ends at tick 20), the host also runs its combat tick of units with orders
+//! ([`Game::tick_combat`]). This is the only per-batch work left; its cadence is UNSURE (lockstep.md 11.7).
 //!
-//! 3. The combat tick of units with orders ([`Game::tick_combat`]).
-//! 4. One JASS scheduler pass ([`Vm::step`]): every runnable thread (budget exhausted, yielded, or
-//!    started during the step) runs once, in list order. Sleeping threads that are not due are skipped.
+//! 3. Continuation (lockstep.md section 12.3). After the pump, every tick, the threads that stopped on
+//!    their budget or yielded run again, but only when some thread is runnable ([`Vm::continue_runnable`]).
+//!    Sleeping threads are never run here.
 //!
-//! UNSURE: the cadence of steps 3 and 4 is not in the original (lockstep.md sections 11.6-11.7). The
-//! original runs threads from their starts, wake-ups and events (no batch pass was found), so step 4 is
-//! kept as a model for budget-exhausted threads. The AI host runs at the same boundaries (see
-//! `crate::ai` and `engine`).
-//!
-//! A thread that was resumed in step 2 and used up its budget gets one more budget slice in step 4
-//! of the same batch. This follows from the order above, and it is deterministic. It is UNVERIFIED
-//! against the original, whose exact resume order is not in the spec (game-loop-2 4.5).
+//! JASS threads run at once in three cases (lockstep.md section 12): when they are started
+//! ([`ScriptHost::start`], [`Vm::start_now`]), when a sleep or timer or trigger event fires in the
+//! pump at its expiry, and when a native starts a trigger (the native's own chain, run as it returns).
+//! There is no JASS pass on a batch cadence.
 
 use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
@@ -179,9 +176,12 @@ impl ScriptHost {
         &self.misfires
     }
 
-    /// Queues a thread running `name`. It first runs on the next [`ScriptHost::step`].
+    /// Starts a thread running `name` and runs it at once, at the current game time, until its first
+    /// stop (lockstep.md section 12.1). The original runs a started script from the calling site, not at
+    /// a later batch. Threads it starts run after it, in the same call.
     pub fn start(&mut self, name: &str, args: &[Value]) -> Result<ThreadId, RunStatus> {
-        self.vm.start(name, args)
+        let now = F32::from_bits(self.clock.now().to_bits());
+        self.vm.start_now(name, args, now)
     }
 
     /// Game ticks run since the host was created.
@@ -219,8 +219,9 @@ impl ScriptHost {
             self.ticks = self.ticks.saturating_add(1);
             let target = self.clock.now();
             fired += self.pump(target);
+            self.continue_threads(target);
             if self.at_batch_boundary() {
-                self.batch(target);
+                self.batch();
             }
         }
         fired
@@ -279,10 +280,19 @@ impl ScriptHost {
         fired
     }
 
-    /// The per-step work at a batch boundary: the combat tick of units with orders, then one scheduler pass.
-    /// Movement is not here: it is the movement timer in [`ScriptHost::pump`].
-    fn batch(&mut self, target: f32) {
+    /// The per-step work at a batch boundary: the combat tick of units with orders. Movement is the
+    /// movement timer in [`ScriptHost::pump`]; JASS threads run in the pump (sleep wake-ups, events,
+    /// timer handlers) and when they start (section 12).
+    fn batch(&mut self) {
         self.game.borrow_mut().tick_combat();
-        self.vm.step(F32::from_bits(target.to_bits()));
+    }
+
+    /// Continues the threads that stopped on their budget or yielded (section 12.3). Runs at the end of
+    /// every tick, only when some thread is runnable, and never touches sleeping threads (their wake-up
+    /// is the pump's [`Vm::resume`]).
+    fn continue_threads(&mut self, target: f32) {
+        if self.vm.has_runnable() {
+            self.vm.continue_runnable(F32::from_bits(target.to_bits()));
+        }
     }
 }

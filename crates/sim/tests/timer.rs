@@ -287,45 +287,34 @@ fn clock_at_tick(ticks: u64) -> f32 {
 
 #[test]
 fn trigger_sleep_resumes_at_the_expected_step() {
+    // Main starts at once, at tick 0 (clock 0.0): `start` no longer waits for a batch (lockstep.md
+    // section 12.1). Its sleep of 0.25 s is due at the soft-float `0 + 0.25`; the thread resumes in the
+    // pump of the first tick whose clock reaches that value, not at a batch boundary.
     let mut host = host_for(SLEEP_SCRIPT);
     host.start("Main", &[]).expect("start");
+    let until = f32::from_bits(sfadd(clock_at_tick(0).to_bits(), 0.25f32.to_bits()));
+    let want_tick = (1..)
+        .find(|&t| clock_at_tick(t) >= until)
+        .expect("resume within the search range");
+    assert!(clock_at_tick(want_tick - 1) < until, "the tick before does not reach it");
 
-    // Main runs in batch 1, at tick 20 (TICKS_PER_BATCH), when the clock is the 20-tick fold of
-    // 0.005 s. Its sleep of 0.25 s wakes at the VM's soft-float `now + seconds`, which is the value
-    // the host schedules as the timer expiry.
-    let start = clock_at_tick(TICKS_PER_BATCH);
-    let until = f32::from_bits(sfadd(start.to_bits(), 0.25f32.to_bits()));
-
-    // The resume batch is the first batch whose end clock reaches `until`. The pump fires inside
-    // the tick where the clock first reaches it, so the batch end is the first observable point.
-    let expected_step = (2..=20u64)
-        .find(|&k| clock_at_tick(TICKS_PER_BATCH * k) >= until)
-        .expect("resume within 20 batches");
-
-    let mut resumed_at = None;
-    for k in 1..=20u64 {
-        let fired = host.step();
+    let mut resumed_tick = None;
+    for _ in 0..200u64 {
+        let fired = host.step_ticks(1);
         let done = host.vm().global("gDone").expect("gDone");
-        if k == 1 {
-            assert_eq!(fired, 0, "no timer before the first sleep");
+        if host.ticks() == 1 {
+            assert_eq!(fired, 0, "no timer before the first sleep is due");
         }
         if done == Value::Integer(1) {
-            resumed_at = Some((k, fired));
+            resumed_tick = Some((host.ticks(), fired));
             break;
         }
     }
-    let (step, fired) = resumed_at.expect("thread resumed");
-    assert_eq!(step, expected_step);
-    assert_eq!(fired, 1, "one sleep timer fires in the resume batch");
-    // The host ends each batch with the clock at that batch's boundary, so the VM reads that value.
-    assert_eq!(
-        host.vm().now().to_bits(),
-        clock_at_tick(TICKS_PER_BATCH * step).to_bits()
-    );
-    // The thread itself ran at the timer's expiry (`until`), which the pump passed to `Vm::resume`.
-    assert!(until <= clock_at_tick(TICKS_PER_BATCH * step));
-    // Four batches after the start (batch 1), as the spec scenario requires.
-    assert_eq!(step, 4);
+    let (tick, fired) = resumed_tick.expect("thread resumed");
+    assert_eq!(tick, want_tick, "resumes on the first tick that reaches the wake time");
+    assert_eq!(fired, 1, "one sleep entry fires in that tick");
+    // The thread ran at the expiry: the VM read the wake time as the game time.
+    assert!(until <= clock_at_tick(tick));
 }
 
 #[test]
@@ -370,11 +359,10 @@ endfunction
 "#;
     let mut host = host_for(src);
     host.start("Main", &[]).expect("start");
-    // Main starts the timer in batch 1, at tick 20, so its expiry is that clock plus 0.1 (soft add).
-    let started = clock_at_tick(TICKS_PER_BATCH);
-    let expiry = f32::from_bits(sfadd(started.to_bits(), 0.1f32.to_bits()));
-    // The first tick whose clock reaches the expiry, counted after tick 20.
-    let want = (TICKS_PER_BATCH + 1..)
+    // Main starts at tick 0 (clock 0.0), so the expiry is the soft-float `0 + 0.1`.
+    let expiry = f32::from_bits(sfadd(clock_at_tick(0).to_bits(), 0.1f32.to_bits()));
+    // The first tick whose clock reaches the expiry.
+    let want = (1..)
         .find(|&t| clock_at_tick(t) >= expiry)
         .expect("expiry reached");
     assert!(clock_at_tick(want - 1) < expiry, "the tick before does not reach it");
@@ -388,7 +376,9 @@ endfunction
         }
     }
     assert_eq!(fired_at, Some(want), "fires on the first tick that reaches the expiry");
-    assert!(want > TICKS_PER_BATCH, "not at the batch boundary that started it");
+    // 0.1 s is 20 ticks of 0.005 s, give or take the soft-float drift: the expiry is at tick 20 or 21,
+    // not at the end of the first batch's wait (the old model added one batch of delay).
+    assert!((TICKS_PER_BATCH..=TICKS_PER_BATCH + 1).contains(&want), "want = {want}");
 }
 
 #[test]

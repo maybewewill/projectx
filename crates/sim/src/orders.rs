@@ -28,7 +28,8 @@
 //!   per movement walk (the walk is the repeating timer of message 0x8026A, period 0.03 s of agile clock,
 //!   lockstep.md section 11.2; [`Game::tick_movement`]). The facing becomes the heading of the step vector
 //!   before the move (CONFIRMED order), the step length is `speed * 0.03` capped at the remaining distance
-//!   (the cap `unit+0x88` and the speed unit are UNSURE, lockstep.md section 11.3), and a waypoint counts as reached when the distance is at most `0.2` cells
+//!   (the speed unit is UNSURE; movement-4.md found no 0.03 multiply in the original, so this is a model),
+//!   and a waypoint counts as reached when the distance is at most `0.2` cells
 //!   (`6.4` world units with a cell size of 32, UNVERIFIED scale). Without tables (the softfloat division,
 //!   square root and arccosine need them) the mover does not move anything.
 //!
@@ -751,8 +752,10 @@ impl Game {
         }
         let heading = heading(vx, vy, r, t);
         let speed = move_speed;
-        // Per-call distance: speed (per second) times the movement period. The cap at unit+0x88 is
-        // not identified in the original (lockstep.md section 11.3, UNSURE); this is the model.
+        // Per-call distance: speed (per second) times the movement period. This is the model only.
+        // movement-4.md (sections 1-2, 6) found that the original takes the step length from the owner's
+        // vector `unit+0x80/+0x84`, capped at `unit+0x88` (set from the unit type at creation), and that no
+        // multiply by the 0.03 period exists in the mover chain. The speed-to-step conversion is open (UNSURE).
         let speed_step = arith::mul(speed, F32::from_bits(MOVE_PERIOD_BITS));
         let step = if arith::lt(speed_step, r) {
             speed_step

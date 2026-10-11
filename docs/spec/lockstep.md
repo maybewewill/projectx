@@ -723,3 +723,105 @@ the 0.03 period (CONFIRMED value); the cap formula is UNSURE. No multiply by 0.0
   (0.03 is far below any horizon, so no clamp is expected).
 - Which object owns the 1.0 s 0xD01C2 timer (the AI dispatcher's real owner) and the period of `6F2DB4B0`'s rearm.
 - The horizon branch of the four templates (`tmp >= horizon`).
+
+---
+
+## 12. Pass 8 (2026-10-11): JASS start timing and the batch pass
+
+Question: when does a script thread run after it is started, and is the 20-tick batch pass (`Vm::step`,
+section 10.1 step 3b, section 11.6) in the original? Implementation: `crates/sim/src/script.rs`
+(`ScriptHost::start`, `ScriptHost::step_ticks`, `ScriptHost::continue_threads`), `crates/jass/src/vm.rs`
+(`Vm::start_now`, `Vm::continue_runnable`, `Vm::has_runnable`), `crates/engine/src/lib.rs` (`start_main`).
+This section supersedes section 10.1 step 3b and the "JASS scheduler pass" rows of 10.2 and 11.7.
+
+### 12.1 A started thread runs at once (CONFIRMED callers, LIKELY timing)
+
+The interpreter entry points are `0x6F44B640` (flags, budget 300000 or 0) and `0x6F44B6A0` (budget 300000); the
+interpreter itself is `0x6F45F8B0` / `0x6F45FA30` / `0x6F45FD00` (section 11.6). Their callers, found by a
+call-site scan, are all events or natives:
+
+| Caller | What starts the script | Confidence |
+|---|---|---|
+| `0x6F3A8340` | trigger execution | CONFIRMED call; LIKELY immediate |
+| `0x6F3B5470`, `0x6F3B54B0` | map and game natives that run script code | CONFIRMED call |
+| `0x6F2DE1D0` | AI thread start, `0x6F44B6A0(0, ..., 300000, 0, 0)` | CONFIRMED call |
+| `0x6F2E0B70` | AI command run | CONFIRMED call |
+
+None of these callers stores a request for a later pass. So a started script runs from the calling site, before
+the caller continues. Model: `ScriptHost::start` calls `Vm::start_now` with the current agile clock. The thread
+runs until its first stop (sleep, yield, end, or exhausted budget) before `start` returns. Threads it starts run
+after it in the same call. The engine's `main` is queued by `Engine::boot` and started at the first `step_ticks`
+(`Engine::start_main`), so the host is set up first. UNSURE: the real game's start of `main` at map load is not
+traced.
+
+Before this pass `start` only queued the thread, and the first batch pass ran it up to 100 ms later.
+Section 12.5 lists the consequences for the tests.
+
+### 12.2 Sleeps, timers and trigger events resume in the pump at their expiry (LIKELY)
+
+The pump (`ScriptHost::pump`, section 10.1 step 2) pops every queue entry with expiry `<= clock`. A sleep calls
+`Vm::resume` for its own thread only (`Payload::Sleep`). A timer expiry runs its handler
+(`natives::expire_timer`, through `Vm::run_chain`), and a trigger event runs its trigger
+(`natives::fire_trigger`), both as immediate chains. This agrees with game-loop-2 4.5 (CONFIRMED: no polling of
+sleeping threads; TriggerSleepAction stores status 3 and a timer wakes the thread).
+
+### 12.3 Budget-exhausted and yielded threads: continuation (UNSURE, a model)
+
+A thread that stops on its budget (300000 instructions) or yields has no continuation rule in the original that
+this analysis found (section 11.6). The model keeps one rule and makes it cheap:
+
+- `ScriptHost::step_ticks` calls `continue_threads` after the pump of every tick. It runs
+  `Vm::continue_runnable` only when `Vm::has_runnable` is true (some thread is runnable, which means budget-exhausted
+  or yielded). Sleeping threads are never run here: their wake-up is `Vm::resume` from the pump.
+- Before this pass the same threads ran once per 20 ticks inside `Vm::step`, which also ran every due sleeper. That
+  pass is removed. Its only remaining job was continuation.
+- Cost: a thread that exhausts its budget on every run (an endless loop) runs 300000 instructions on each tick. The
+  original's behaviour here is unknown, so the cadence is UNSURE.
+
+### 12.4 What still runs on the batch cadence (UNSURE)
+
+Only `ScriptHost::batch`: the combat tick of units with orders (`Game::tick_combat`), every `TICKS_PER_BATCH` = 20
+ticks counted from host creation. Movement is not on this cadence (section 11.2: its own repeating timer). The AI
+host still runs at the batch boundaries from the engine (`crates/engine`), with the same UNSURE status as in
+section 11.7.
+
+### 12.5 Expectations changed by this pass (and why)
+
+Each change is a test whose model used the batch (tick 20) as the start time of a script. With immediate starts the
+script's first action happens at tick 0 (clock 0.0), so the timer, sleep and event times move earlier by one batch.
+Each value was re-derived from the agile clock (`clock_at_tick`, soft-float adds), not copied from the new output,
+except where noted.
+
+| Test file | Test | Change and reason |
+|---|---|---|
+| `sim/tests/timer.rs` | `trigger_sleep_resumes_at_the_expected_step` | Start at tick 0. The sleep wakes at the first tick whose clock reaches the soft-float `0 + 0.25`. Checked tick by tick. |
+| `sim/tests/timer.rs` | `point_one_second_timer_fires_on_the_first_tick_whose_clock_reaches_expiry` | Expiry `0 + 0.1`. Fires at tick 20 or 21 (soft-float drift), not at tick 41 (the old start at tick 20 plus a batch). The test source also gained the `type timer` line the original had. |
+| `sim/tests/timer_natives.rs` | `start()` helper | Clock 0.0 instead of tick 20. The other timer tests keep their meaning. |
+| `sim/tests/timer_natives.rs` | `negative_timeout_is_clamped_to_zero_and_fires_at_once` | The zero-length timer fires in the first pump (tick 1), not in the second step. |
+| `sim/tests/ability_natives.rs` | timed-life expiry, pause, zero-duration (3 tests) | The buff is applied at clock 0.0 (start), so the expiry base is 0.0 (the old tests read the queue time after the first step). The zero-duration unit dies at tick 1, so the test steps one tick. |
+| `sim/tests/trigger_natives.rs` | `start()` helper | Clock 0.0; the gate and expiries are derived from it. |
+| `sim/tests/ai_natives.rs` | `unit_and_gold_queries_read_the_game` | The main script starts inside `rig`, before the test inserted the unit type it reads. A `rig_with` setup hook now inserts the type before start. The start is immediate, so the setup must come first. |
+| `sim/tests/combat_natives.rs` | `mutual_attack_hits_at_pinned_steps` | `duel` is ordered at clock 0.1 (the end of the setup step), one step earlier than before. Hits move from steps 7, 17, 27, 37 to 6, 16, 26, 36. The 0.6 s from the order to the first hit is unchanged. |
+| `sim/tests/combat_natives.rs` | `first_acquire_step` (idle acquisition) | The scan timer is armed at setup, which now runs at tick 0, so the model's base is clock(0). The new step value (5) comes from the same model. |
+| `sim/tests/combat_natives.rs` | `reaction_delay_draws_from_stream_nine` | The reaction is armed at the order's game time. The test now reads the queue time before the step; it used to read it after the step (one batch later). |
+| `sim/tests/order_natives.rs` | `straight_moves_arrive_with_model_positions` | The order is issued at tick 0, so the walks of batch 1 (ticks 6, 12, 18) happen before the first recorded step. Recorded positions are now 48.6, 72.9 and 97.2 (3 walks per batch, since the soft-float sum of the 0.03 period drifts). The old first entry is gone. |
+| `engine/src/lib.rs` | `Engine::boot` | No change in the tests: `main` is still queued by boot and starts at the first `step_ticks`, now at once (so it sees the unit types the caller registered after boot; starting it inside boot broke `engine/tests/pathing.rs`). The status text is "started as thread N" after the start. |
+
+### 12.6 Verification
+
+- `cargo test --workspace` without `GAME_DLL`: 732 passed, 0 failed. With `GAME_DLL`: 732 passed, 0 failed (the
+  table-dependent tests in `order_natives`, `combat_natives`, `timer` and `engine/tests/pathing.rs` included).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- Not checked against the original: the immediate-start timing. The evidence is the call-site scan in 12.1 (the
+  callers are CONFIRMED) and the absence of a deferred request in those callers. A dynamic check (break on
+  `0x6F44B6A0` during a trigger execution and compare the agile clock before and after) would settle it.
+
+### 12.7 Summary
+
+| Piece | Model after this pass | Confidence |
+|---|---|---|
+| Start of a script (trigger, AI, map natives) | runs at once, at the calling time | CONFIRMED callers, LIKELY timing |
+| Sleep, timer expiry, trigger event | run in the pump at their expiry | LIKELY (game-loop-2 4.5) |
+| Budget-exhausted or yielded thread | continues once per tick, only when runnable | UNSURE |
+| Combat tick of units with orders | every 20 ticks | UNSURE |
+| AI dispatch | batch boundaries (engine) | UNSURE (section 11.5) |

@@ -89,9 +89,10 @@ fn clock_after(k: usize) -> f32 {
     clock_at_tick(TICKS_PER_BATCH * k as u64)
 }
 
-/// The start time: Main runs in batch 1, at the boundary tick 20, so timers start from that clock.
+/// The start time: `start` runs Main at once, before any tick, so timers start from clock 0.0
+/// (lockstep.md section 12.1). Before this change Main waited for the first batch (tick 20).
 fn start() -> f32 {
-    clock_at_tick(TICKS_PER_BATCH)
+    clock_at_tick(0)
 }
 
 #[test]

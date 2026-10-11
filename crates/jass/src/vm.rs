@@ -1416,6 +1416,57 @@ impl Vm {
         Ok(id)
     }
 
+    /// Starts a new thread running `name` with `args` at game time `now` and runs it at once, until
+    /// its first stop (a sleep, a yield, its end, or an exhausted budget). The other threads do not
+    /// run. Threads it starts are queued after it. Returns the thread id; `Err` only when the function
+    /// is unknown or the arguments do not match (nothing is started then).
+    pub fn start_now(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        now: F32,
+    ) -> Result<ThreadId, RunStatus> {
+        let func = *self
+            .m
+            .module
+            .function_index
+            .get(&ident_key(name))
+            .ok_or(RunStatus::FunctionNotFound)?;
+        self.check_args(func, args)?;
+        let id = self.m.alloc_id();
+        let t = new_thread(&self.m.module, id, func, args);
+        self.threads.push(t);
+        self.m.now = now;
+        let last = self.threads.len() - 1;
+        self.run_slot(last);
+        self.finish_pass();
+        Ok(id)
+    }
+
+    /// Runs every thread that is runnable at `now` but not sleeping: threads that exhausted their
+    /// budget or yielded. Sleeping threads are not touched (their wake-up is [`Vm::resume`]).
+    /// Returns the number of threads that ran.
+    pub fn continue_runnable(&mut self, now: F32) -> usize {
+        self.m.now = now;
+        let mut ran = 0;
+        for i in 0..self.threads.len() {
+            if matches!(self.threads[i].state, State::Runnable) {
+                self.run_slot(i);
+                ran += 1;
+            }
+        }
+        self.finish_pass();
+        ran
+    }
+
+    /// Whether some thread is runnable (budget exhausted or yielded) and waiting for
+    /// [`Vm::continue_runnable`].
+    pub fn has_runnable(&self) -> bool {
+        self.threads
+            .iter()
+            .any(|t| matches!(t.state, State::Runnable))
+    }
+
     /// Runs one scheduler pass at game time `now`.
     ///
     /// Threads run in list order (insertion order). A sleeping thread is skipped until
