@@ -14,6 +14,7 @@ use std::rc::Rc;
 use jass::vm::{clamp_sleep, NativeRegistry, NativeResult};
 use softfloat::F32;
 
+mod ability;
 mod destructable;
 pub mod fog;
 mod force;
@@ -37,6 +38,7 @@ mod unit;
 pub mod unit_attr;
 mod unit_event;
 
+pub use ability::expire_timed_life;
 pub use game::{
     Ctx, Game, HandleKind, ObjKey, Payload, Playable, ScriptRuntime, UnitEvent, UnitObj, UnitType,
     UnitTypes,
@@ -75,6 +77,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     item::register(reg, game);
     destructable::register(reg, game);
     unit_attr::register(reg, game);
+    ability::register(reg, game);
     hero::register(reg, game);
     gamestate::register(reg, game);
     fog::register(reg, game);

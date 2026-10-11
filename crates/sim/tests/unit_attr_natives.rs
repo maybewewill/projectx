@@ -508,7 +508,7 @@ endfunction
 /// them unbound.
 #[test]
 fn support_tables_cover_the_work_list() {
-    assert_eq!(UNIT_NATIVES.len() + HERO_NATIVES.len(), 122);
+    assert_eq!(UNIT_NATIVES.len() + HERO_NATIVES.len(), 123);
     let mut names: Vec<&str> = UNIT_NATIVES
         .iter()
         .chain(HERO_NATIVES.iter())
@@ -516,19 +516,19 @@ fn support_tables_cover_the_work_list() {
         .collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 122, "no name appears twice");
+    assert_eq!(names.len(), 123, "no name appears twice");
     let implemented = UNIT_NATIVES
         .iter()
         .chain(HERO_NATIVES.iter())
         .filter(|e| !matches!(e.support, Support::NotImplemented(_)))
         .count();
-    assert_eq!(implemented, 47);
+    assert_eq!(implemented, 54);
 
     let host = host_for(
         r#"
 native GetUnitName takes unit whichUnit returns string
 native SetHeroXP takes unit whichUnit, integer newXPVal, boolean showEyeCandy returns nothing
-native SetUnitInvulnerable takes unit whichUnit, boolean flag returns nothing
+native UnitAddSleep takes unit whichUnit, boolean add returns nothing
 native GetUnitLevel takes unit whichUnit returns integer
 native GetHeroXP takes unit whichUnit returns integer
 function unused takes nothing returns nothing
@@ -536,7 +536,7 @@ function unused takes nothing returns nothing
     local unit u
     set s = GetUnitName(u)
     call SetHeroXP(u, 5, true)
-    call SetUnitInvulnerable(u, true)
+    call UnitAddSleep(u, true)
     set s = null
 endfunction
 function main takes nothing returns nothing
@@ -546,6 +546,6 @@ endfunction
     let unbound = host.vm().unbound_natives();
     assert!(unbound.contains(&"GetUnitName"));
     assert!(unbound.contains(&"SetHeroXP"));
-    assert!(unbound.contains(&"SetUnitInvulnerable"));
+    assert!(unbound.contains(&"UnitAddSleep"));
     assert!(!unbound.contains(&"GetHeroXP"), "GetHeroXP is registered");
 }

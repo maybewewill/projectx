@@ -54,11 +54,12 @@ use std::rc::Rc;
 use jass::vm::{NativeRegistry, NativeResult, Value};
 use softfloat::{arith, F32};
 
-use super::game::{Game, HeroObj, LocationObj, ObjKey, Object, UnitAbility, UnitEvent, UnitObj};
+use super::game::{Game, HeroObj, LocationObj, ObjKey, Object, UnitEvent, UnitObj};
 use super::hero::is_hero_id;
 use super::player::raw_at;
 use super::region;
 use super::unit_event;
+use crate::abilities::{Ability, UnitAbilities};
 
 /// `SetLife`'s event: the life changed (CONFIRMED value `0xD01E6`).
 pub const EVENT_LIFE_CHANGED: u32 = 0x000D_01E6;
@@ -415,6 +416,20 @@ fn create(gm: &mut Game, owner_handle: u32, type_id: u32, x: F32, y: F32, face: 
     let Some(ty) = gm.unit_types().get(type_id).cloned() else {
         return 0;
     };
+    // The move and attack abilities of the type's order data go to their fixed slots, then the type's list
+    // (CONFIRMED structure: the setup attaches them when the unit is built).
+    let mut abilities = UnitAbilities::default();
+    if let Some(data) = gm.orders().type_data(type_id) {
+        for kind in &data.abilities {
+            let base = kind.base_code();
+            abilities.attach(Ability::new(base, gm.ability_types().get(base).copied()));
+        }
+    }
+    for &id in &ty.abilities {
+        if !abilities.contains(id) {
+            abilities.attach(Ability::new(id, gm.ability_types().get(id).copied()));
+        }
+    }
     let unit = UnitObj {
         type_id,
         owner,
@@ -443,11 +458,8 @@ fn create(gm: &mut Game, owner_handle: u32, type_id: u32, x: F32, y: F32, face: 
         exploded: false,
         illusion: false,
         loaded: false,
-        abilities: ty
-            .abilities
-            .iter()
-            .map(|&id| (id, UnitAbility::default()))
-            .collect(),
+        abilities,
+        buffs: Vec::new(),
         hero: is_hero_id(type_id).then(HeroObj::default),
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
@@ -470,7 +482,7 @@ fn remove(gm: &mut Game, k: ObjKey) {
 /// `SetLife` (CONFIRMED, spec 6.5): a value at or below zero is stored as `+0.0`, then the life-changed
 /// event fires. A change to zero of a unit that was alive also records its death. Returns `true` when that
 /// death happened, so the native can run the death dispatch (see `unit_event.rs`).
-fn set_life(gm: &mut Game, k: ObjKey, value: F32) -> bool {
+pub(crate) fn set_life(gm: &mut Game, k: ObjKey, value: F32) -> bool {
     let stored = if value.to_f32() <= 0.0 {
         F32::ZERO
     } else {
