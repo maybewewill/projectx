@@ -212,3 +212,67 @@ the read-back sees.
   (`playable_clamp_matches_the_original_embedded`).
 - `tools/emu/unit_position_emu.py`: 2,000 cases (seed 11), setter comparison `unit_position_vectors` passes.
 - Unit tests in `unit_position.rs` (margin, inside points, below-min rule) pass.
+
+## 9. Pass 3 (2026-10-11): creation placement, the vf107 frame, and the walk (partial; no sim change)
+
+Harness: `tools/emu/unit_create_emu.py` (Unicorn, real `0x6F29F990` and real `vf107` `0x6F2A0E30`; stubs listed in
+the harness; run with `GAME_DLL=... python3 tools/emu/unit_create_emu.py`). No vectors were committed and no sim code
+changed in this pass. Labels as above.
+
+### 9.1 What the placement body does (CONFIRMED by disassembly and by the run)
+
+- `0x6F29F990` takes ECX = player/owner, EDX = unit type (`ebp`), stack: x*, y*, facing*, flags, p7, p8. The return
+  value is the new unit object (`mov eax, esi` at `0x6F29FD26`), not a bool.
+- The unit object is `[esp+0x14]` of the body. **No store to `[esp+0x14]` exists in the body**; the writer is inside a
+  callee (UNSURE which one; the type copy `0x6F29F3E0` is the prime suspect). The harness stores the synthetic unit
+  there at `0x6F29FB8F` and says so.
+- The frame block passed to `vf107` is `body+0x54` (`lea edx,[esp+0x5c]` after two pushes). Inside `vf107`, with
+  `ebp` = the block: `[ebp+0x60]` = x, `[ebp+0x64]` = y (read at `0x6F2A120F`/`0x6F2A1220` as the pointers passed to
+  `0x6F477400`/`0x6F477350`), `[ebp+0x6C]`, `[ebp+0x70]`, `[ebp+0x74]` are read later (facing/z-like), `[ebp+0x78]`,
+  `[ebp+0x7C]`, `[ebp+0x80]`, `[ebp+0x84]` are the type copy's cell and bound fields.
+- `vf107` writes the unit's position through three **lookup-based writers**, each of which first calls
+  `0x6F03FA30` with the ECX of the caller (`[ecx+8]` index, `[ecx+0xC]` tag) to find an object:
+  - `0x6F477400(ECX = unit+0xB8, [ebp+0x60])` (x) and `0x6F477350(ECX = unit+0xB8, [ebp+0x64])` (y);
+  - `0x6F477460(ECX = unit+0x214, [ebp+0x74])` and `0x6F477400(ECX = unit+0x214, [0x6FAB4438])`;
+  - `0x6F476250(ECX = unit+0x164)` → lookup + `0x6F49DFF0` (position reference init, not a cell write).
+- `0x6F477400`/`0x6F477460` build the pair `(U+0x80, x)` / `(y, U+0x84)` and call `0x6F4A9390`, which sets the
+  **step/bound pair** `U+0x80 = p0`, `U+0x84 = p1` and then **clamps** the cell `U+0x78` into `[U+0x80, U+0x84]`
+  (`lo <= c <= hi` keeps `c`; `c < lo` gives `lo`; `c > hi` gives `hi`; then `0x6F4A9230` notifies). `0x6F4A92B0`
+  (`0x6F477350` path) and `0x6F4A9320` do the same for the other axis / `U+0x7C`. (CONFIRMED by decompile; NOT yet
+  checked in Unicorn.)
+- `0x6F477180`/`0x6F4773A0` (the getters used by `0x6F477350`) read the bound pair with the same clamp rule.
+- The read-back at the end (`0x6F2A1E9E`, `call 0x6F474250` with ECX = unit+0x164, after `vf46` `0x6F2A1E74`) is
+  the setter of section 3; the harness stops there (`READBACK_RET = 0x6F2A1EA3`) and records the cells.
+
+### 9.2 Result of the run (UNSURE as a model of the original, because of the stubs)
+
+With the type copy stubbed to success (no block fields written), the read-back pair is `(0, 0)` and the stored cells
+are `-0.0` (`0x80000000`) for a request of (100, 200) on a `[0, 4096]` playable rectangle. The placement coordinate
+does not reach `U+0x78` in this run, because the clamp keeps `U+0x78` (zero) inside the bounds `[U+0x80, U+0x84]` that
+the placement itself sets. **This is a stub artifact until the type copy is run for real**: the type copy writes
+`U+0x78` (`block+0x78`, from `FUN_6F29C2D0`), `U+0x7C/80/84` (from `FUN_6F29C790`) and the bound fields, all of them
+read from the unit-type table at `0x6FAB445C`. The current sim (`place_new_unit`, store then read back) therefore has
+**no verified initial write**; section 8.2 still stands.
+
+### 9.3 Stubs that the run depends on (UNSURE)
+
+- Type copy `0x6F29F3E0` answered 1 (block fields not written).
+- Lookup `0x6F03FA30` answered with the synthetic unit for every reference (the real lookup may resolve `unit+0xB8`,
+  `unit+0x214` to other objects; this matters for which object the axis writers change).
+- `vtable` of the unit: slot 46 = real `vf46`, slot 107 = real `vf107`, notify (+0x54) answered, others 0 (pop 0).
+  Callees of `vf107` are stubbed with their own `ret imm` pop; `0x6F7E1059` (stack cookie) returns at once.
+- Softfloat and math helpers (`0x6F6E0000..0x6F6FFFFF`), the cell setter chain, the normaliser and the clamps run for real.
+
+### 9.4 Walk step (goal 1): not resolved in this pass
+
+- `0x6F497080` (decompiled, `chunk_019.c`) is the **move setup**, not the per-step walk: it resets the mover record
+  (`+0x40..+0x5C`, origin from the grid, the step length `min(|*param_5|, local_1c)` and a heading), and calls
+  `0x6F4737D0(P, 1)` (the cell setter) only when `|*pfVar4| < DAT_6faae47c` (a near-zero speed case). It does not
+  advance a unit per call.
+- The per-call writes of the walk are therefore in `0x6F494EE0` / `0x6F496EB0` / `0x6F495320` (not run). No Unicorn
+  vectors for the step were produced, so `orders.rs::step_unit` is unchanged and remains a model.
+
+### 9.5 Tests
+
+No sim code changed in this pass. The probe runs once per process; the results above are printed by
+`tools/emu/unit_create_emu.py` and are not committed as vectors.
