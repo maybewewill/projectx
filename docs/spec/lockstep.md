@@ -565,7 +565,7 @@ turn's commands are applied (section 3 order).
 - **Batch length 20 ticks** for the order/movement, JASS-scheduler and AI work: no source in the spec.
   It is kept at the old 100 ms so the per-step behaviour does not change. Change `TICKS_PER_BATCH` when
   the original's cadence is known.
-- **Horizon branch.** `0x6F46E520` advances only if `tmp < queue+0x48` (the limit); otherwise it takes a
+- **Horizon branch (resolved in section 14, 2026-10-11).** `0x6F46E520` advances only if `tmp < queue+0x48` (the limit); otherwise it takes a
   branch not analysed (section 9.3). The driver always advances: no limit is modelled.
 - **Movement step.** A move step is `speed * 0.1` per `tick_orders` call. Under the 20-tick batch that is
   per 100 ms of game time; the original's per-tick movement (`0x8026A`) may move `speed * 0.005` per tick.
@@ -1050,3 +1050,128 @@ Labels as above. Addresses are Game.dll 1.26a. Tools: `scratchpad` disassembly s
 
 **Verification (this pass)**: `crates/sim/src/sync.rs` 11 unit tests pass (`cargo test -p sim --lib sync`); the real
 replay export (89,259 records) and `sync_stream.py` run without error (values above).
+
+---
+
+## 14. Pass 8 (2026-10-11): the agile clock restart at 300 s
+
+Question: how does the original keep agile time bounded, and what does the restart do to pending timers, sleeps,
+`TimerGetElapsed/Remaining` and the mover's `(t - snapshot)`. Sources: disassembly of `0x6F46E520`, `0x6F46E370`,
+`0x6F469D40`, `0x6F46CC80`, `0x6F477FF0`, `0x6F477F80`, `0x6F477EF0`, `0x6F4779F0`, `0x6F4775D0`, `0x6F46A030`,
+`0x6F46C9C0`; the real routines run in Unicorn (`tools/emu/agile_clock_emu.py`). All addresses are in the original image.
+
+### 14.1 The queue object (CONFIRMED)
+
+A timer queue ("Agile/Timer Dispatch/Queue", built by `0x6F46C590`, called from `0x6F46DA10` for queue A at
+`manager+0x40` and the long-timer queue "(l)" at `manager+0x44`; the world queues G1/G2/G3 use the same constructor
+and template, section 11.1):
+
+| Offset | Field |
+|---|---|
+| `+0x10` / `+0x1C` / `+0x20` | heap array / capacity / count (1-based, the count includes the unused slot 0) |
+| `+0x38` / `+0x3C` | free list of element blocks (block = 4-byte link + element) / blocks in use |
+| `+0x40` | the **clock**, an f32 (seconds within the current row) |
+| `+0x44` | the **row**, a u32 (number of restarts), starts at 0 |
+| `+0x48` | the **horizon**, a copy of the float at `0x6FAAE594` = **300.0** (set by the start-up initialisers) |
+| `+0x4C` | flags: bit 0 = the clock does not advance (`0x6F46E520` returns at once) |
+| `+0x50` | sequence counter, incremented by every timer start |
+
+A heap element: `+4` expiry (f32), `+8` the clamped timeout (also the period), `+0xC` the queue, `+0x10` flags (bit 0
+repeat, bit 16 cancelled, `0x20000` queued), `+0x14` the sequence number, `+0x18` the owner (called through its
+vtable slot 3). The heap orders by expiry (an x87 float compare, not the soft float), then by the sequence number.
+
+### 14.2 The advance and the restart (`0x6F46E520`, CONFIRMED; Unicorn-checked)
+
+```
+tmp = softadd(clock, inc)                        ; inc = the tick float 0.005 (section 9)
+if tmp < horizon:                                ; fcompp, NaN or equal goes to the restart branch
+    clock = tmp ; pump(queue)                    ; 0x6F46E370
+else:
+    excess = softsub(tmp, horizon)
+    if |softsub(excess, 0.0)| < 8e-7 (0x6FAAE61C): excess = 0      ; unreachable in practice: floats near 300 are 3e-5 apart
+    clock = horizon ; pump(queue)                ; everything due up to 300.0 fires first, at its own expiry
+    for every heap element: expiry = softsub(expiry, horizon)     ; 0x6F469D40, array order
+    row = row + 1
+    clock = excess ; pump(queue)
+```
+
+* The pump (`0x6F46E370`) pops while `clock >= top.expiry`; during each callback the clock is the popped expiry; at the
+  end the clock is restored to what it was on entry. A periodic element is re-armed after its callback with
+  `expiry = softadd(clock, elem+8)` (`0x6F46CC80`) and keeps its sequence number (the sim assigned a new one before;
+  fixed). Tie order among equal expiries is therefore the order of the original starts.
+* Every pending expiry is above the horizon at the rebase (the pump to 300.0 popped the rest) and below twice of it
+  (a start cuts the timeout, 14.3), so the subtraction is exact (Sterbenz) and the heap order stays valid.
+* The rebase is the only place that subtracts anything. **Nothing else is rebased**: elements store absolute times in the
+  queue's frame, a callback that starts a timer adds to the clock as it stands (the popped expiry), and the clock of a
+  fresh row starts at the excess. Which frame a stored time belongs to is told by the row.
+* The restart is the same for all queues that use the template (A, G1, G2, G3). They are advanced by the same float
+  from the same start, so their clocks and rows agree (LIKELY, not run together).
+* Game time is therefore `300 * row + clock`. Each row loses precision again from zero (the truncating add
+  loses at most one unit in the last place per tick, and the unit grows with the clock), so 120,000 ticks of 0.005 s no
+  longer read 597.39 s: the sim now reads **598.91 s** (the previous reading was one 600 s row without a restart).
+  The remaining 1.09 s is the original's own truncation inside a row (the adds are the real routine).
+
+### 14.3 Timer start (`0x6F477FF0` -> `0x6F477F80` -> `0x6F477EF0`, CONFIRMED; Unicorn-checked)
+
+TimerStart and the sleep wake-up (`0x6F2DC6C0`) both pass a zero long-timer argument, so both use queue A. The timeout is:
+
+1. **at or above the horizon** (300.0, infinity included; NaN is kept): replaced by `softsub(horizon, 0.001)` =
+   **299.999** (`0x6FAAE47C`). Probe results on the real routine: timeouts 300, 600, 1e6 all start with expiry
+   `clock + 299.999`, period 299.999.
+2. **below 1e-4** (`0x6FAAE478`, zero and negatives included): replaced by exactly 1e-4.
+
+then `expiry = softadd(clock, timeout)`, the sequence number is `++queue+0x50`, `elem+8` stores the clamped timeout.
+This was not in the sim (it only clamped below). A sleep of 1000 s, or a 1000 s TimerStart, wakes after 299.999 s at
+this level. Whether the JASS timer object above it restarts the remainder is **UNSURE**: its message handler
+`0x6F3F6970` runs `0x6F3E8E70` for 0x80204 and restarts the timer for the stored timeout on 0x80272 (`0x6F3F6940`, only
+the periodic flag read), and the sleep handler `0x6F2E3320` just resumes the thread (or re-posts 1.0 s when a flag at
+`+0x1D8` of an agent is set). No code that continues a cut timeout was found. The sim follows the engine level.
+
+### 14.4 Remaining and elapsed (CONFIRMED; Unicorn-checked, 2,385 queries in one run, plus 1,158 in the vectors)
+
+* `TimerGetRemaining` (`0x6F4779F0`): `softsub(elem.expiry, elem.queue.clock)`, both in the queue's current frame, so a
+  restart changes neither (the expiry lost 300.0 and so did the clock). Result is bit-equal to the sim's formula.
+* `TimerGetElapsed` (`0x6F4775D0`): `softsub(elem+8, remaining)` with the **clamped** timeout of 14.3. The sim used the raw
+  timeout (clamped to 0 below); fixed in `natives/timer.rs`. `TimerGetTimeout` is the raw stored value (unchanged).
+* A timer whose element is gone (expired one-shot, paused) answers from the JASS object (paused value); unchanged.
+
+### 14.5 What the restart does to the other holders of time
+
+* **Movers** (movement-6.md section 1): a mover stores `(snap_t, snap_row)`; elapsed time is
+  `snap(T - T0) + horizon * (row - row0)` with the layer's current time `T` and row, so a unit that started walking
+  before a restart keeps its position. The sim now passes the clock row to the layer (`Game::game_row`,
+  `set_game_clock`); before, it used row 0 and `T` jumped back by 300 s.
+* **JASS sleeps**: the VM keeps each sleeping thread's wake time; at a restart it loses the horizon with the same soft
+  sub as the paired timer expiry (`Vm::rebase_sleeps`), so `wake == expiry` bit for bit. The AI VMs follow when the next
+  AI step runs (`AiHost::rebase_sleeps`).
+* **Timers, attack/point-damage timers, timed life, vision refresh, movement timer**: they live in the queue and shift
+  with it. Attack cooldowns are timers (relative). Nothing in the sim kept an absolute time except the stand-in
+  production model (training/building/upgrade completion times, the harvest cycle), which now gets
+  `AgileClock::absolute()` = `300 * row + clock` as an f32 (monotone; it is a model, not the original's clock).
+* The engine report and `w3boot` print `300 * row + clock`.
+
+### 14.6 Verification
+
+* `tools/emu/agile_clock_emu.py` runs the real advance, pump, rebase, re-arm, start and remaining/elapsed routines on a
+  synthetic queue (element pool as a prefilled free list; the owner callback and the base tail `0x6F022AA0` stubbed) and a
+  Python model of the control flow (add/sub are the real routines): `check 200000 1` = 200,000 ticks, **6 restarts, 1,376,927
+  fires, 2,385 remaining/elapsed queries, every start (expiry, period, flags, sequence), the state every tick and the full fire
+  log: 0 mismatches**; `check 20000 1`: 0 mismatches. The scenario mixes one-shot and periodic timers (0.02 s to 2,000 s,
+  timeouts of 0, 5e-5, 1e-4, 299.999, 300, 600, 1800) and increments of 0.005 s with occasional 0.001 to 20 s steps.
+* `crates/sim/tests/agile_clock_vectors.txt` (85 kB, written by `vectors`, no game bytes) holds three scenarios (150,000
+  plain ticks with 2 natural restarts, 90,000 and 150,000 ticks with 2 and 4 restarts; 1,428,691 fires in all);
+  `crates/sim/tests/agile_clock.rs` replays them on `AgileClock` + `TimerQueue` (checkpoints, queries, the first 100 fires,
+  a hash of all fires): 0 mismatches. `tests/timer.rs`: a thread sleeping 100 s keeps waking across two restarts (7 wakes in
+  150,000 ticks, no misfires); a 1000 s sleep wakes at 299.999.
+* `w3boot --computer 1:orc --steps 6000` on (2)Circumvention: 120,000 ticks, **game time 598.91 s**, 82,585 timer/sleep
+  entries, the orc AI plays the same economy as before (14 peons, 6 grunts, 3 head hunters, a blademaster, 4,580 gold
+  deposited by 600 s), 0 aborted AI threads.
+
+### 14.7 Still UNSURE
+
+* The long-timer queue "(l)" (`manager+0x44`, chosen by a non-zero last argument of the start routine) is never pumped by `0x6F470C70` as far as read;
+  nothing in the sim uses it.
+* Whether the world queues' rows move exactly with queue A (same adds from the same start: LIKELY).
+* The flag bit 0 of `+0x4C` (clock paused): never set in the sim.
+* The cut of long timeouts at the JASS level (14.3).
+* `GetGameTime`-style readers: the native `TimerGetElapsed(bj_gameTimer)` style use is the same getter; no separate game clock.

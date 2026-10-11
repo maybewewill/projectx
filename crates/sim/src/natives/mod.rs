@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jass::vm::{clamp_sleep, NativeRegistry, NativeResult};
+use jass::vm::{NativeRegistry, NativeResult};
 use softfloat::F32;
 
 mod ability;
@@ -69,7 +69,7 @@ pub(crate) use unit_event::dispatch_unit_death_by;
 pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
     reg.register("TriggerSleepAction", move |ctx, a| {
-        let seconds = clamp_sleep(a.first().and_then(|v| v.as_real()).unwrap_or(F32::ZERO));
+        let seconds = crate::timer::sleep_seconds(a.first().and_then(|v| v.as_real()).unwrap_or(F32::ZERO));
         let wake = ctx.wake_time(seconds);
         g.borrow_mut()
             .timers

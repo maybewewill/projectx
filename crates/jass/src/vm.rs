@@ -1505,6 +1505,16 @@ impl Vm {
         Ok(())
     }
 
+    /// The agile clock restarted (lockstep.md section 14): every sleeping thread's wake time loses `horizon` with the
+    /// soft-float sub, exactly as the timer expiry it is paired with does. The VM's own `now` is set by the host.
+    pub fn rebase_sleeps(&mut self, horizon: F32) {
+        for th in self.threads.iter_mut().chain(self.m.spawned.iter_mut()) {
+            if let State::Sleeping { until } = &mut th.state {
+                *until = arith::sub(*until, horizon);
+            }
+        }
+    }
+
     /// Whether thread `i` may run at `now` (runnable, or sleeping and its wake time has come).
     fn is_due(&self, i: usize, now: F32) -> bool {
         match self.threads[i].state {

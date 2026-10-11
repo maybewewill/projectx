@@ -314,6 +314,14 @@ impl AiHost {
         &self.game
     }
 
+    /// The main clock restarted: every sleeping AI thread loses `horizon`, as the main VM's sleeps do
+    /// (`Vm::rebase_sleeps`, lockstep.md section 14).
+    pub fn rebase_sleeps(&mut self, horizon: F32) {
+        for vm in self.vms.values_mut() {
+            vm.rebase_sleeps(horizon);
+        }
+    }
+
     /// Runs one AI step at game time `now`: builds the VMs of the pending start requests, then runs each AI VM once
     /// in ascending player index. Returns the number of AI VMs that ran.
     pub fn step(&mut self, now: F32) -> usize {

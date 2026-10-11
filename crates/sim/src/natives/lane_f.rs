@@ -362,7 +362,7 @@ pub fn register_sleeping(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("TriggerWaitForSound", move |ctx, a| {
         let seconds = {
             let mut gm = g.borrow_mut();
-            sound_wait_seconds(&mut gm, handle_arg(a, 0), real_arg(a, 1))
+            crate::timer::sleep_seconds(sound_wait_seconds(&mut gm, handle_arg(a, 0), real_arg(a, 1)))
         };
         let wake = ctx.wake_time(seconds);
         g.borrow_mut()

@@ -40,7 +40,7 @@ disappears: `U+0x88 = min(speed, 522.67) / 32` is a cap in cells **per second**.
 (`0x6F46E520`) advances the time; at the horizon it re-bases the queue (`0x6F469D40`: row + 1, time to 0). Elapsed time is
 `snap(T - T0) + horizon * (row - row0)` (`0x6F483E70`, `crate::heroes::cell_term`). During a timer callback the queue time
 is the timer's expiry. `crates/sim` evaluates positions at `Game::game_time` (set to the expiry before every callback) with
-rows fixed at zero; the 300 s restart is not modelled (UNSURE: only the rounding of very late times differs).
+the layer row is the clock row (`Game::game_row`); the 300 s restart is modelled since 2026-10-11 (lockstep.md section 14).
 
 ## 2. The kernels (all CONFIRMED in Unicorn unless noted)
 
@@ -135,7 +135,7 @@ units because the heading of V comes from the softfloat arccosine near 1 (3.4e-4
    flags and `U+0xB0` override are not modelled (solo records only).
 4. **Unit push-apart found**: `0x6F4961C0` (called from `0x6F483300`, every second walk for alternating records) applies a
    separation vector (`R+0x18/0x1C`) through `0x6F494EE0` -> `0x6F4737D0`. Not modelled.
-5. **Layer rollover** at 300 s (section 1), and whether the layers A and B have the same time (assumed).
+5. ~~Layer rollover at 300 s~~ (done, lockstep.md section 14), and whether the layers A and B have the same time (assumed).
 6. **Propulsion window units.** SetUnitPropWindow takes radians; the type value (`propWin` 60) is assumed converted to radians
    at load (the conversion site is not located); `UnitObj::prop_window` is radians in the sim (engine data converts).
 7. The radius argument of the move issue (`a9`) is 0 in the sim (arrival radius 0.49 cells); what the original passes for a

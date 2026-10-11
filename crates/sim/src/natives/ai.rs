@@ -25,7 +25,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jass::vm::{clamp_sleep, NativeCtx, NativeRegistry, NativeResult, Value};
+use jass::vm::{NativeCtx, NativeRegistry, NativeResult, Value};
 use softfloat::F32;
 
 use super::game::{Game, ObjKey, Object, PLAYER_SLOTS};
@@ -118,7 +118,7 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "DisplayTextIII", sig: "(ISIII)V", addr: 0x6F2D_C090, level: Level::Confirmed, implemented: true, note: "empty body; recorded only" },
     AiNative { name: "SuicideUnit", sig: "(II)V", addr: 0x6F2D_E330, level: Level::Likely, implemented: true, note: "does nothing when the count is 0 or less (CONFIRMED); otherwise the engine sends up to count units of the type to suicide (FUN_6f2d4e00, not modelled): recorded" },
     AiNative { name: "SuicideUnitEx", sig: "(III)V", addr: 0x6F2D_E2E0, level: Level::Likely, implemented: true, note: "as SuicideUnit; the third argument goes to the unit record (+0x54) of each unit, not modelled: recorded" },
-    AiNative { name: "Sleep", sig: "(R)V", addr: 0x6F2D_E380, level: Level::Likely, implemented: true, note: "hands the duration to the thread's agent timer (FUN_6f2d0f90: a virtual call with the duration); the model sleeps with clamp_sleep (the AI's clamp of a negative value: UNSURE)" },
+    AiNative { name: "Sleep", sig: "(R)V", addr: 0x6F2D_E380, level: Level::Likely, implemented: true, note: "hands the duration to the thread's agent timer (FUN_6f2d0f90: a virtual call with the duration); the model sleeps with timer::sleep_seconds (the AI's clamp of a negative value: UNSURE)" },
     AiNative { name: "StartThread", sig: "(C)V", addr: 0x6F2D_E2A0, level: Level::Likely, implemented: true, note: "starts the code as a thread of this AI (FUN_6f2da590). The binary keeps 6 thread slots (+0x254, index 0 to 5) and drops a thread when none is free; the slot freeing rule is UNSURE, so no cap is enforced" },
     AiNative { name: "GetAiPlayer", sig: "()I", addr: 0x6F2D_CFE0, level: Level::Confirmed, implemented: true, note: "returns the AI state's player index (+0x24); -1 outside an AI context (not reachable from an AI VM)" },
     AiNative { name: "DoAiScriptDebug", sig: "()B", addr: 0x6F2D_C0D0, level: Level::Confirmed, implemented: true, note: "body is 'return 0': always false" },
@@ -463,7 +463,7 @@ fn ai_call(
     match name {
         // Identity and time.
         "GetAiPlayer" => ret(Value::Integer(env.player as i32)),
-        "Sleep" => Some(NativeResult::Sleep(clamp_sleep(real_arg(a, 0)))),
+        "Sleep" => Some(NativeResult::Sleep(crate::timer::sleep_seconds(real_arg(a, 0)))),
         "StartThread" => {
             if let Some(Value::Code(f)) = a.first() {
                 ctx.spawn(*f);

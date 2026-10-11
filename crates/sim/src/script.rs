@@ -45,7 +45,7 @@ use crate::combat;
 use crate::lockstep;
 use crate::natives::{self, Game, Payload};
 use crate::rng::{RngTable, Streams};
-use crate::timer::{AgileClock, TimerQueue};
+use crate::timer::{self, Advance, AgileClock, TimerQueue};
 
 /// A JASS VM driven by the agile clock, the timer queue and the trigger state.
 pub struct ScriptHost {
@@ -225,11 +225,24 @@ impl ScriptHost {
     pub fn step_ticks(&mut self, n: u64) -> usize {
         let mut fired = 0usize;
         for _ in 0..n {
-            self.clock.advance(lockstep::TICK_INCREMENT_BITS);
+            let target = match self.clock.plan(lockstep::TICK_INCREMENT_BITS) {
+                Advance::Within(bits) => {
+                    self.clock.commit(Advance::Within(bits));
+                    f32::from_bits(bits)
+                }
+                Advance::Rollover { excess } => {
+                    // The clock reaches the horizon (300 s): fire everything due up to it, shift every pending
+                    // expiry and sleep by it, and restart from the excess (`0x6F46E520`, lockstep.md section 14).
+                    fired += self.pump(f32::from_bits(timer::HORIZON_BITS));
+                    self.game.borrow_mut().timers.rebase(f32::from_bits(excess));
+                    self.vm.rebase_sleeps(F32::from_bits(timer::HORIZON_BITS));
+                    self.clock.commit(Advance::Rollover { excess });
+                    f32::from_bits(excess)
+                }
+            };
             self.ticks = self.ticks.saturating_add(1);
-            let target = self.clock.now();
             fired += self.pump(target);
-            self.game.borrow_mut().production_tick(target);
+            self.game.borrow_mut().production_tick(self.clock.absolute());
             self.continue_threads(target);
             if self.at_batch_boundary() {
                 self.batch();
@@ -242,6 +255,7 @@ impl ScriptHost {
     /// entries that fired. The VM time is `target` when it returns.
     fn pump(&mut self, target: f32) -> usize {
         let mut fired = 0usize;
+        let row = self.clock.row() as i32;
         loop {
             let next = self.game.borrow_mut().timers.pop_due(target);
             let Some(event) = next else {
@@ -253,7 +267,7 @@ impl ScriptHost {
             }
             let expiry = F32::from_bits(event.expiry.to_bits());
             // Positions are evaluated at the queue time of the callback (movement-6.md section 6).
-            self.game.borrow_mut().set_game_time(expiry);
+            self.game.borrow_mut().set_game_clock(expiry, row);
             match event.payload {
                 Payload::Sleep(thread) => {
                     if let Err(e) = self.vm.resume(thread, expiry) {
@@ -299,7 +313,7 @@ impl ScriptHost {
             }
         }
         self.vm.set_now(F32::from_bits(target.to_bits()));
-        self.game.borrow_mut().set_game_time(F32::from_bits(target.to_bits()));
+        self.game.borrow_mut().set_game_clock(F32::from_bits(target.to_bits()), row);
         fired
     }
 
