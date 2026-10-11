@@ -17,9 +17,12 @@ use jass::vm::{RunStatus, ThreadId, Value};
 use softfloat::F32;
 
 use super::presentation::{PresObj, PresentationState};
+use crate::abilities::{Buff, UnitAbilities};
 use crate::handles::HandleTable;
 use crate::rng::{RngTable, Streams};
 use crate::timer::{TimerId, TimerQueue};
+
+pub use crate::abilities::{AbilityType, AbilityTypes};
 
 /// Index of a game object in the arena. The handle table keys objects by it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -34,6 +37,8 @@ pub enum Payload {
     Timer(ObjKey),
     /// A timer event registered with `TriggerRegisterTimerEvent` fires its trigger.
     Event(ObjKey),
+    /// The duration of a timed life buff ends: the unit dies (`natives/ability.rs`). `serial` names the buff.
+    TimedLife { unit: ObjKey, serial: u32 },
 }
 
 /// The timer or trigger that a script thread runs for.
@@ -476,19 +481,12 @@ pub struct UnitObj {
     pub illusion: bool,
     /// Loaded flag (object `+0x5C` bit 4). Read by `IsUnitLoaded`; no transport system sets it yet.
     pub loaded: bool,
-    /// The unit's abilities by raw id (the ability list of the original).
-    pub abilities: BTreeMap<u32, UnitAbility>,
+    /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
+    pub abilities: UnitAbilities,
+    /// The unit's buffs in the order they were added (see [`crate::abilities`]).
+    pub buffs: Vec<Buff>,
     /// Hero state, present for a hero type (see `natives/hero.rs`).
     pub hero: Option<HeroObj>,
-}
-
-/// An ability a unit has (the ability object of the original).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct UnitAbility {
-    /// Level minus one (the original's `+0x50`). `GetUnitAbilityLevel` returns this plus one.
-    pub level0: i32,
-    /// Permanent counter (`+0x38`), changed by `UnitMakeAbilityPermanent`.
-    pub permanent: i32,
 }
 
 /// The hero state of a unit (the hero sub-object of the original, reached through `+0x1F0`).
@@ -512,39 +510,6 @@ impl Default for HeroObj {
             skill_points: 0,
             xp_suspended: false,
         }
-    }
-}
-
-/// An ability type as the simulation needs it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AbilityType {
-    /// The maximum level from the ability record (its `+0x3C`, read only when the record's flag `+0x2C` is set).
-    /// `None` means no limit data: the original's max then is 1 (`natives/unit_attr.rs`).
-    pub max_level: Option<i32>,
-}
-
-/// The ability type registry, keyed by the raw ability id. An id that is not registered cannot be added to a
-/// unit (`UnitAddAbility` fails, LIKELY: the original's factory finds no record).
-///
-/// TODO(gamedata): the engine should load it from the ability rows of the SLK data at map load.
-#[derive(Debug, Clone, Default)]
-pub struct AbilityTypes {
-    by_id: BTreeMap<u32, AbilityType>,
-}
-
-impl AbilityTypes {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds or replaces the ability type `id`. Returns the type it replaced.
-    pub fn insert(&mut self, id: u32, ty: AbilityType) -> Option<AbilityType> {
-        self.by_id.insert(id, ty)
-    }
-
-    /// The ability type with raw id `id`.
-    pub fn get(&self, id: u32) -> Option<&AbilityType> {
-        self.by_id.get(&id)
     }
 }
 
@@ -1029,6 +994,8 @@ pub struct Game {
     pub(crate) misc: super::misc::MiscState,
     /// The order system: unit order lists, the issued-order records and the mover (see `orders.rs`).
     pub(crate) orders: crate::orders::OrderSystem,
+    /// The last buff serial handed out (see [`Buff::serial`]).
+    pub(crate) buff_serial: u32,
 }
 
 impl Default for Game {
@@ -1075,6 +1042,7 @@ impl Game {
             fog: super::fog::FogState::default(),
             misc: super::misc::MiscState::default(),
             orders: crate::orders::OrderSystem::new(),
+            buff_serial: 0,
         }
     }
 
