@@ -306,7 +306,13 @@ impl Game {
 
     /// The defense of `unit`, from its type; the default for an unregistered type.
     pub fn unit_defense(&self, unit: ObjKey) -> Defense {
-        self.defense_of_type(self.unit(unit).type_id)
+        let u = self.unit(unit);
+        let mut defense = self.defense_of_type(u.type_id);
+        // The hero armor bonus (total, `docs/spec/heroes.md` section 10) is added to the type armor.
+        if u.hero_armor.to_bits() & 0x7fff_ffff != 0 {
+            defense.armor = softfloat::arith::add(defense.armor, u.hero_armor);
+        }
+        defense
     }
 
     /// The defense registered for unit type `type_id`; the default for an unregistered type.

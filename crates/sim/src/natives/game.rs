@@ -558,6 +558,15 @@ pub struct UnitObj {
     pub exploded: bool,
     /// Illusion flag (object `+0x5C` bit 30). Read by `IsUnitIllusion`; no native sets it yet.
     pub illusion: bool,
+    /// Hero armor bonus, the total of the derived armor (`heroes::DerivedBonuses::armor`, section 10 of
+    /// `docs/spec/heroes.md`). Added to the type armor by `combat::unit_defense`. Zero for non-heroes.
+    pub hero_armor: F32,
+    /// Hero life regeneration bonus (total, stored only: the simulation has no regeneration tick, LIKELY).
+    pub hero_regen: F32,
+    /// Hero attack speed bonus (total, stored only: its use in the attack cycle is not decoded, section 10).
+    pub hero_attack_speed: F32,
+    /// Hero attack damage bonus (total). Added to the dice bonus of the attacker's strikes by `damage::SpecDamage`.
+    pub hero_attack: F32,
     /// Loaded flag (object `+0x5C` bit 4). Read by `IsUnitLoaded`; no transport system sets it yet.
     pub loaded: bool,
     /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
