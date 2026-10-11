@@ -760,8 +760,9 @@ impl Game {
             };
             !(u.dead || u.removed)
         };
-        if !live {
-            // A dead or removed unit stops where it is (its velocity would otherwise carry it on).
+        if !live || self.is_stunned(unit) {
+            // A dead or removed unit stops where it is (its velocity would otherwise carry it on); so does a stunned one
+            // (`CBuffStun` counts a disable on the unit, `crate::auras`), and its route stays for when the stun ends.
             self.mover_halt(unit);
             return;
         }

@@ -502,8 +502,11 @@ endfunction
     assert!(died, "the unit dies once the remaining time has run out");
 }
 
+/// Removing a timed life buff that has a running duration kills the unit at once: the removal notify of the timed life
+/// class (slot 106, `0x6F0D5F10`) calls the owner's `SetLife(0.0)`, the same call as `KillUnit` (CONFIRMED,
+/// `docs/spec/buffs.md` section 5). The cancelled expiry timer does not fire again, so the death happens once.
 #[test]
-fn removing_timed_life_cancels_its_expiry() {
+fn removing_timed_life_kills_the_unit_once_and_cancels_its_expiry() {
     let mut host = host_for(
         r#"
 function main takes nothing returns nothing
@@ -517,15 +520,42 @@ endfunction
     );
     call(&mut host, "main", 1);
     let k = unit_key(&host, "u1");
+    assert!(!is_dead(&host, k));
     call(&mut host, "remove_timed", 1);
     assert!(host.game().buffs(k).is_empty());
+    assert!(is_dead(&host, k), "the removal sets the life to zero");
     for _ in 0..30 {
         host.step();
     }
-    assert!(
-        !is_dead(&host, k),
-        "the cancelled timer does not kill the unit"
+    let deaths = host
+        .game_mut()
+        .take_unit_events()
+        .iter()
+        .filter(|e| matches!(e, UnitEvent::Death(u) if *u == k))
+        .count();
+    assert_eq!(deaths, 1, "one death: the cancelled timer does not kill again");
+}
+
+/// A timed life buff without a running duration (a zero duration starts no timer, flag `0x80` clear) does not kill the
+/// unit when it is removed.
+#[test]
+fn removing_unlimited_timed_life_does_not_kill() {
+    let mut host = host_for(
+        r#"
+function main takes nothing returns nothing
+    set u1 = CreateUnit(Player(0), 'hfoo', I2R(0), I2R(0), I2R(0))
+    call UnitApplyTimedLife(u1, 'BTLF', I2R(0))
+endfunction
+function remove_timed takes nothing returns nothing
+    call UnitRemoveBuffs(u1, false, true)
+endfunction
+"#,
     );
+    call(&mut host, "main", 1);
+    let k = unit_key(&host, "u1");
+    call(&mut host, "remove_timed", 1);
+    assert!(host.game().buffs(k).is_empty());
+    assert!(!is_dead(&host, k));
 }
 
 /// A zero duration starts no expiry timer (CONFIRMED by Unicorn, `docs/spec/abilities-2.md` section 2.1): the buff

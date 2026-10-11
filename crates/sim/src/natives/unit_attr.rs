@@ -1080,6 +1080,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
                 gm.unit_mut(k)
                     .abilities
                     .attach(Ability::new(id, definition));
+                gm.sync_auras(k);
                 true
             }
             _ => false,
@@ -1092,7 +1093,13 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 1) as u32;
         let removed = match unit_at(&gm, a, 0) {
-            Some(k) => gm.unit_mut(k).abilities.remove(id).is_some(),
+            Some(k) => {
+                let removed = gm.unit_mut(k).abilities.remove(id).is_some();
+                if removed {
+                    gm.sync_auras(k);
+                }
+                removed
+            }
             None => false,
         };
         NativeResult::Return(Value::Boolean(removed))

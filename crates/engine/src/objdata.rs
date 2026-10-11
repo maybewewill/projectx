@@ -120,6 +120,9 @@ pub struct ObjectText {
     pub gold_mine_amount: Option<i32>,
     /// The level records of the spells the cast core knows (`sim::cast`), by raw code.
     pub spell_levels: BTreeMap<u32, Vec<sim::cast::SpellLevel>>,
+    /// The levels of the aura abilities the model knows (`sim::auras::AuraKind`), by raw code: `Area`, `DataA` to
+    /// `DataD`, the first `BuffID` and `targs`.
+    pub auras: BTreeMap<u32, Vec<sim::auras::AuraLevel>>,
     /// What each unit type trains, builds and researches, and what it requires (`Trains`, `Builds`, `Researches`,
     /// `Requires`, `Upgrade` of the unit profiles), by raw code.
     pub tech: BTreeMap<u32, sim::production::TypeTech>,
@@ -318,6 +321,16 @@ pub fn item_stock(stock_max: Option<&str>, stock_regen: Option<&str>) -> TypeSto
     TypeStock { stock_max: max, regen: F32::from_bits(regen.to_bits()) }
 }
 
+/// The aura classes whose levels are read from the ability table (`sim::auras`).
+const AURA_KINDS: [sim::auras::AuraKind; 6] = [
+    sim::auras::AuraKind::Devotion,
+    sim::auras::AuraKind::Endurance,
+    sim::auras::AuraKind::Unholy,
+    sim::auras::AuraKind::Brilliance,
+    sim::auras::AuraKind::Command,
+    sim::auras::AuraKind::Trueshot,
+];
+
 fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
     let Some(bytes) = read_last(archives, ABILITY_DATA_FILE)? else {
         out.notes.push(format!("{ABILITY_DATA_FILE} missing: gold mines start at 0"));
@@ -360,6 +373,24 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
             out.spell_levels.insert(code, levels);
         }
     }
+    for kind in AURA_KINDS {
+        let base = kind.ability();
+        let key = String::from_utf8_lossy(&base.to_be_bytes()).into_owned();
+        if let Some(data) = gamedata::abilitytype::read_ability(&slk, &key) {
+            let f = |x: f32| F32::from_bits(x.to_bits());
+            let levels = data
+                .levels
+                .iter()
+                .map(|l| sim::auras::AuraLevel {
+                    area: f(l.area),
+                    data: [f(l.data[0]), f(l.data[1]), f(l.data[2]), f(l.data[3])],
+                    buff: l.buff_ids.first().copied().unwrap_or(0),
+                    targs: l.targs.clone(),
+                })
+                .collect();
+            out.auras.insert(base, levels);
+        }
+    }
     if slk.row(GOLD_MINE_ABILITY).is_some() {
         let level = gamedata::abilitytype::read_level(&slk, GOLD_MINE_ABILITY, 1);
         out.gold_mine_amount = Some(level.data[0] as i32);
@@ -398,6 +429,9 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     }
     for (&code, levels) in &text.spell_levels {
         game.set_spell_levels(code, levels.clone());
+    }
+    for (&base, levels) in &text.auras {
+        game.aura_types_mut().insert(base, levels.clone());
     }
     if let Some(amount) = text.gold_mine_amount {
         if let Some(code) = raw_code(GOLD_MINE_ABILITY) {

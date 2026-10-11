@@ -179,7 +179,7 @@ impl Game {
     pub(crate) fn mover_issue(&mut self, unit: ObjKey, radius: F32, t: &Tables) {
         let g = self.layer();
         let bound = mover::speed_bound(t);
-        let speed = self.unit(unit).move_speed;
+        let speed = self.effective_move_speed(unit);
         let mut kin = self.kin_of(unit);
         let cap = mover::speed_to_cap(speed, bound);
         kin.set_cap(&g, cap, t);
@@ -218,7 +218,7 @@ impl Game {
             return;
         };
         let g = self.layer();
-        let cap = mover::speed_to_cap(self.unit(unit).move_speed, mover::speed_bound(&t));
+        let cap = mover::speed_to_cap(self.effective_move_speed(unit), mover::speed_bound(&t));
         let mut kin = self.kin_of(unit);
         kin.set_cap(&g, cap, &t);
         self.orders.tables = Some(t);

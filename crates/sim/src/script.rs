@@ -262,7 +262,10 @@ impl ScriptHost {
                 break;
             };
             // The movement walk and the vision refresh are engine passes, not script events: not counted.
-            if !matches!(event.payload, Payload::Movement | Payload::Vision) {
+            if !matches!(
+                event.payload,
+                Payload::Movement | Payload::Vision | Payload::AuraPulse { .. } | Payload::AuraScan { .. }
+            ) {
                 fired += 1;
             }
             let expiry = F32::from_bits(event.expiry.to_bits());
@@ -291,6 +294,18 @@ impl ScriptHost {
                 Payload::TimedLife { unit, serial } => {
                     self.vm.set_now(expiry);
                     natives::expire_timed_life(&self.game, &mut self.vm, unit, serial);
+                }
+                Payload::BuffExpire { unit, serial } => {
+                    self.vm.set_now(expiry);
+                    self.game.borrow_mut().expire_buff(unit, serial);
+                }
+                Payload::AuraPulse { unit, base } => {
+                    self.vm.set_now(expiry);
+                    self.game.borrow_mut().aura_pulse(unit, base);
+                }
+                Payload::AuraScan { unit, base } => {
+                    self.vm.set_now(expiry);
+                    self.game.borrow_mut().aura_scan(unit, base);
                 }
                 Payload::Attack { unit, msg } => {
                     self.vm.set_now(expiry);

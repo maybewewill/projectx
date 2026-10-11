@@ -368,7 +368,7 @@ impl Game {
     }
 
     /// Whether `unit` is under an active stun from a spell (the buff entry still exists).
-    pub fn is_stunned(&self, unit: ObjKey) -> bool {
+    pub fn is_spell_stunned(&self, unit: ObjKey) -> bool {
         self.spells.buffs.iter().any(|(serial, b)| {
             b.unit == unit
                 && matches!(b.effect, BuffEffect::Stun)

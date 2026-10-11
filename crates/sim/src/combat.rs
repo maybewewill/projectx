@@ -354,6 +354,10 @@ impl Game {
         if u.hero_armor.to_bits() & 0x7fff_ffff != 0 {
             defense.armor = softfloat::arith::add(defense.armor, u.hero_armor);
         }
+        // The armor that buffs add (Devotion Aura: `0x6F2769C0` adds to the armor cell `+0xE0`).
+        if u.bonuses.armor.to_bits() & 0x7fff_ffff != 0 {
+            defense.armor = softfloat::arith::add(defense.armor, u.bonuses.armor);
+        }
         defense
     }
 
@@ -548,7 +552,7 @@ impl Game {
 
     /// Starts a swing: the cooldown, the execute point and the swing end.
     fn start_swing(&mut self, unit: ObjKey, ty: &AttackType) {
-        let cooldown = self.arm(ty.cooldown, unit, AttackMsg::Cooldown);
+        let cooldown = self.arm(self.swing_cooldown(unit, ty.cooldown), unit, AttackMsg::Cooldown);
         let execute = self.arm(ty.damage_point, unit, AttackMsg::Execute);
         let swing = arith::add(ty.damage_point, ty.backswing);
         let swing_end = self.arm(swing, unit, AttackMsg::SwingEnd);
@@ -556,6 +560,21 @@ impl Game {
         st.cooldown = Some(cooldown);
         st.execute = Some(execute);
         st.swing_end = Some(swing_end);
+    }
+
+    /// The cooldown of a new swing for `unit`: the weapon cooldown divided by the attack speed multiplier that buffs
+    /// maintain (`crate::auras`; the multiplier is 1.0 without buffs, and the division needs the softfloat tables, so
+    /// without them the cooldown is unscaled). LIKELY direction; the original also rescales the timers of a swing in
+    /// progress (`0x6F0C9090` re-arms them in proportion), which is not modelled.
+    fn swing_cooldown(&self, unit: ObjKey, cooldown: F32) -> F32 {
+        let mult = self.unit(unit).bonuses.attack_mult;
+        if mult == F32::ONE {
+            return cooldown;
+        }
+        match self.order_tables() {
+            Some(t) => arith::div(cooldown, mult, t),
+            None => cooldown,
+        }
     }
 
     /// Runs the handler of an attack timer. Returns the target that died from it, so the caller can run the death
@@ -919,7 +938,7 @@ impl Game {
 
     /// Whether unit `unit` may still act: alive and not removed.
     fn attacker_live(&self, unit: ObjKey) -> bool {
-        matches!(self.object(unit), Object::Unit(u) if !u.dead && !u.removed)
+        matches!(self.object(unit), Object::Unit(u) if !u.dead && !u.removed && u.bonuses.stun == 0)
     }
 
     /// Whether `target` is a live unit other than `unit`.

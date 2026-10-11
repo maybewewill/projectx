@@ -73,6 +73,12 @@ pub enum Payload {
     DamagePoint(u32),
     /// A spell timer: cast stages, cooldown end, missile arrival, buff expiry (`cast.rs`).
     Spell(crate::cast::SpellMsg),
+    /// The duration of a buff other than timed life ends (message 0xD01C4, `auras.rs`): the buff is removed.
+    BuffExpire { unit: ObjKey, serial: u32 },
+    /// The 2.0 s repeating timer of an aura ability (message 0xD01C1): the aura is applied to its owner again.
+    AuraPulse { unit: ObjKey, base: u32 },
+    /// The 0.5 s proximity scan of an aura ability (message 0xD01C7 per unit in range).
+    AuraScan { unit: ObjKey, base: u32 },
 }
 
 /// The timer or trigger that a script thread runs for.
@@ -678,6 +684,9 @@ pub struct UnitObj {
     pub abilities: UnitAbilities,
     /// The unit's buffs in the order they were added (see [`crate::abilities`]).
     pub buffs: Vec<Buff>,
+    /// The stat modifiers that buffs write (armor, speed multipliers, regeneration, damage, stun count), see
+    /// [`crate::auras::StatBonuses`].
+    pub bonuses: crate::auras::StatBonuses,
     /// Hero state, present for a hero type (see `natives/hero.rs`).
     pub hero: Option<HeroObj>,
 }
@@ -1304,6 +1313,10 @@ pub struct Game {
     pub(crate) orders: crate::orders::OrderSystem,
     /// The last buff serial handed out (see [`Buff::serial`]).
     pub(crate) buff_serial: u32,
+    /// The aura ability data (`crate::auras`).
+    pub(crate) aura_types: crate::auras::AuraTypes,
+    /// The running aura emitters by (unit, ability code).
+    pub(crate) aura_emitters: BTreeMap<(ObjKey, u32), crate::auras::AuraEmitter>,
     /// Strings that event records refer to by index: chat patterns and global variable names (see
     /// `event.rs`). Never removed.
     pub strings: Vec<String>,
@@ -1398,6 +1411,8 @@ impl Game {
             misc: super::misc::MiscState::default(),
             orders: crate::orders::OrderSystem::new(),
             buff_serial: 0,
+            aura_types: crate::auras::AuraTypes::new(),
+            aura_emitters: BTreeMap::new(),
             strings: Vec::new(),
             firings: Vec::new(),
             waygates: BTreeMap::new(),

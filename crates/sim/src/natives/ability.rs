@@ -11,16 +11,17 @@
 //! * `UnitApplyTimedLife(unit, id, duration)` (CONFIRMED dispatch): adds the timed life buff `id` with a duration timer
 //!   from the current queue time. The seven special ids and `BTLF` use the same timer here (UNSURE: the special ids'
 //!   classes are not read, so their duration behaviour may differ).
-//! * Timed life expiry (UNSURE, the spec only says the unit dies): when the timer fires, the buff is removed and the
-//!   unit gets the life-zero path of `KillUnit` (the same `set_life` call and death dispatch). A removed unit is not
-//!   killed. The expiry runs at the timer's expiry time, which is the game time during the callback.
+//! * Timed life expiry (CONFIRMED, `docs/spec/buffs.md` section 5): when the timer fires, the buff is removed and its
+//!   removal notify sets the owner's life to zero, exactly the `KillUnit` call (`set_life` and the death dispatch). A
+//!   removed unit is not killed. The expiry runs at the timer's expiry time, which is the game time during the callback.
 //! * `UnitPauseTimedLife(unit, flag)` (LIKELY from the spec's slots 58 and 59): `true` pauses the running timed life
 //!   timers and keeps the time left; `false` resumes them with that time.
 //! * `UnitHasBuffsEx`, `UnitCountBuffsEx`, `UnitRemoveBuffsEx` take the seven selection booleans in WC3 order (CONFIRMED,
 //!   see `BuffSelect`). `UnitRemoveBuffs(unit, removePositive, removeNegative)` uses the fixed filters the spec gives
 //!   for it (timed life and aura included, magic, physical and dispellable not checked; CONFIRMED).
-//! * Removing a buff cancels its duration timer, so a removed timed life buff does not kill the unit (UNSURE: the
-//!   original's removal path is not read in full).
+//! * Removing a timed life buff that has a running duration sets the unit's life to zero (CONFIRMED: the removal
+//!   notify of the timed life class, slot 106 at `0x6F0D5F10`, calls the owner's slot 73 with 0.0, the same call as
+//!   `KillUnit`). The expiry of the timer is the same removal (`docs/spec/buffs.md` section 5).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -90,9 +91,9 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 
     let g = Rc::clone(game);
-    reg.register("UnitRemoveBuffs", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let Some(k) = unit_at(&gm, a, 0) {
+    reg.register("UnitRemoveBuffs", move |ctx, a| {
+        let unit = unit_at(&g.borrow(), a, 0);
+        if let Some(k) = unit {
             let select = BuffSelect {
                 remove_positive: bool_arg(a, 1),
                 remove_negative: bool_arg(a, 2),
@@ -102,19 +103,37 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
                 aura: true,
                 dispellable: false,
             };
-            gm.remove_buffs(k, select);
+            remove_and_kill(&g, ctx, k, select);
         }
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
-    reg.register("UnitRemoveBuffsEx", move |_, a| {
-        let mut gm = g.borrow_mut();
-        if let Some(k) = unit_at(&gm, a, 0) {
-            gm.remove_buffs(k, select_ex(a));
+    reg.register("UnitRemoveBuffsEx", move |ctx, a| {
+        let unit = unit_at(&g.borrow(), a, 0);
+        if let Some(k) = unit {
+            remove_and_kill(&g, ctx, k, select_ex(a));
         }
         NativeResult::Return(Value::Null)
     });
+}
+
+/// Removes the selected buffs of `k`; when a timed life buff with a running duration goes, the unit's life is set to
+/// zero (the removal notify of the timed life class, CONFIRMED) and the death dispatch runs.
+fn remove_and_kill(
+    game: &RefCell<Game>,
+    rt: &mut dyn ScriptRuntime,
+    k: ObjKey,
+    select: BuffSelect,
+) {
+    let died = {
+        let mut gm = game.borrow_mut();
+        let removed = gm.remove_buffs(k, select);
+        removed.kill && !gm.unit(k).removed && set_life(&mut gm, k, F32::ZERO)
+    };
+    if died {
+        dispatch_unit_death(game, rt, k);
+    }
 }
 
 /// The seven selection booleans of the `Ex` natives, arguments 1 to 7 (after the unit).

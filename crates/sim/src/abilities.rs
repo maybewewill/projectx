@@ -477,8 +477,17 @@ pub enum TimedLifeState {
     Unlimited,
 }
 
+/// The outcome of [`Game::remove_buffs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedBuffs {
+    /// The number of buffs removed.
+    pub count: usize,
+    /// A removed timed life buff had a running duration: the unit's life must be set to zero.
+    pub kill: bool,
+}
+
 /// A buff on a unit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Buff {
     /// Identifies the buff on its unit (unique per game). The timer payload refers to it.
     pub serial: u32,
@@ -487,6 +496,10 @@ pub struct Buff {
     pub predicates: BuffPredicates,
     /// The duration state, for a timed life buff.
     pub timed_life: Option<TimedLifeState>,
+    /// What the buff does to its unit (aura, slow, stun), see `crate::auras`.
+    pub effect: Option<crate::auras::BuffEffect>,
+    /// The expiry timer of a buff with a duration other than timed life (`crate::auras`).
+    pub expiry: Option<TimerId>,
 }
 
 impl Game {
@@ -524,6 +537,8 @@ impl Game {
             base,
             predicates,
             timed_life: None,
+            effect: None,
+            expiry: None,
         });
         serial
     }
@@ -552,6 +567,8 @@ impl Game {
             base,
             predicates: buff_predicates(base),
             timed_life: Some(timed_life),
+            effect: None,
+            expiry: None,
         });
         serial
     }
@@ -599,24 +616,36 @@ impl Game {
             .count()
     }
 
-    /// Removes the buffs of unit `k` that `select` removes, cancelling their duration timers, and returns how many
-    /// were removed (the notifications of the original are not modelled).
-    pub(crate) fn remove_buffs(&mut self, k: ObjKey, select: BuffSelect) -> usize {
+    /// Removes the buffs of unit `k` that `select` removes (the removal routine `0x6F079CC0`): their timers are
+    /// cancelled and their effects undone (`CBuff::vf41` -> `vf207`, `crate::auras`). Returns how many were removed and
+    /// whether the unit must die: the removal notify of the timed life class (slot 106, `0x6F0D5F10`) sets the owner's
+    /// life to zero when the buff had a running duration (flag `0x80`, running or paused), which is the same call as
+    /// `KillUnit` (CONFIRMED, `docs/spec/buffs.md` section 5). Dispel Magic killing a summoned unit is this path.
+    pub(crate) fn remove_buffs(&mut self, k: ObjKey, select: BuffSelect) -> RemovedBuffs {
         let buffs = std::mem::take(&mut self.unit_mut(k).buffs);
         let (gone, keep): (Vec<Buff>, Vec<Buff>) = buffs
             .into_iter()
             .partition(|b| select.removes(&b.predicates));
-        for b in &gone {
+        self.unit_mut(k).buffs = keep;
+        let mut kill = false;
+        let count = gone.len();
+        for mut b in gone {
+            if matches!(
+                b.timed_life,
+                Some(TimedLifeState::Running(_)) | Some(TimedLifeState::Paused(_))
+            ) {
+                kill = true;
+            }
             if let Some(TimedLifeState::Running(id)) = b.timed_life {
                 self.timers.cancel(id);
             }
+            self.finish_buff(k, &mut b);
         }
-        self.unit_mut(k).buffs = keep;
-        gone.len()
+        RemovedBuffs { count, kill }
     }
 
     /// The next buff serial.
-    fn next_buff_serial(&mut self) -> u32 {
+    pub(crate) fn next_buff_serial(&mut self) -> u32 {
         self.buff_serial = self.buff_serial.wrapping_add(1);
         self.buff_serial
     }
