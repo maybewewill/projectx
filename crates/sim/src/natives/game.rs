@@ -1327,6 +1327,8 @@ pub struct Game {
     /// The day cycle (`[Misc]` DayLength, DayHours, Dawn, Dusk; `crate::daynight`). The default is the usual cycle until
     /// the engine installs the map's Misc values.
     pub(crate) day_cycle: crate::daynight::DayCycle,
+    /// Training queues, constructions, research and worker cycles (see `production.rs`).
+    pub(crate) production: crate::production::Production,
 }
 
 impl Default for Game {
@@ -1395,6 +1397,7 @@ impl Game {
             hero_rates: crate::heroes::BonusRates::default(),
             hero_attributes: BTreeMap::new(),
             day_cycle: crate::daynight::DayCycle::default(),
+            production: crate::production::Production::default(),
         }
     }
 

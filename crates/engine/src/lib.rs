@@ -324,6 +324,8 @@ impl Engine {
                 None
             }
         };
+        let tree_count = objdata::install_trees(&mut host.game_mut(), &archive, &mut notes);
+        notes.push(format!("{tree_count} trees for the harvest model"));
         if let Some(table) = &rng {
             host.set_rng_table(table.clone());
             // Game start: the global generator and the streams are seeded from the game seed.

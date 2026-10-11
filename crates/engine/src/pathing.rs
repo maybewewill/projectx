@@ -55,6 +55,14 @@ pub fn install(
             return None;
         }
     };
+    // The buildable-area grid of the production model: the pathing type byte of every cell.
+    game.production_mut().grid = Some(sim::production::BuildGrid {
+        width: map.width as i32,
+        height: map.height as i32,
+        origin_x: origin.0.to_f32(),
+        origin_y: origin.1.to_f32(),
+        types: words.iter().map(|&w| (w >> 24) as u8).collect(),
+    });
     let pyramid = match build_pyramid(&words, map.width, map.height) {
         Ok(pyramid) => pyramid,
         Err(e) => {

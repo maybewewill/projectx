@@ -162,6 +162,15 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         // `isbldg` marks structures: IsUnitType(STRUCTURE) and the structure counters read it (the original reads the
         // type's `IsStructure` meta value, LIKELY the same column).
         game.unit_types_mut().set_building(id, ty.is_building != 0);
+        // Production data: the build time, and the harvest abilities (`Ahar` gold and lumber, `Aaha` the acolyte's gold,
+        // `Awha` the wisp's lumber).
+        game.production_mut().build_seconds.insert(id, ty.build_time);
+        let has = |c: &str| ty.abil_list.iter().any(|a| a.eq_ignore_ascii_case(c));
+        if has("Ahar") || has("Aaha") || has("Awha") {
+            let t = game.production_mut().tech.entry(id).or_default();
+            t.harvest_gold = has("Ahar") || has("Aaha");
+            t.harvest_wood = has("Ahar") || has("Awha");
+        }
         // The order data (the fixed move and attack ability slots) is set before any unit of the type can be
         // created: units take their abilities at creation (`natives/unit.rs`).
         game.set_type_orders(id, type_order_data(ty));

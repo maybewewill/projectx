@@ -34,6 +34,8 @@ use crate::Error;
 pub const FRAMEDEF_TOC: &str = "UI\\FrameDef\\FrameDef.toc";
 /// The item table.
 pub const ITEM_DATA_FILE: &str = "Units\\ItemData.slk";
+/// The upgrade (research) table.
+pub const UPGRADE_DATA_FILE: &str = "Units\\UpgradeData.slk";
 /// The ability table.
 pub const ABILITY_DATA_FILE: &str = "Units\\AbilityData.slk";
 /// The gold mine ability.
@@ -116,6 +118,11 @@ pub struct ObjectText {
     pub item_stock: BTreeMap<u32, TypeStock>,
     /// The starting gold of `Agld` (level 1 `DataA`), when the ability table has the row.
     pub gold_mine_amount: Option<i32>,
+    /// What each unit type trains, builds and researches, and what it requires (`Trains`, `Builds`, `Researches`,
+    /// `Requires`, `Upgrade` of the unit profiles), by raw code.
+    pub tech: BTreeMap<u32, sim::production::TypeTech>,
+    /// The upgrade rows (`UpgradeData.slk`) by raw code.
+    pub upgrades: BTreeMap<u32, sim::production::UpgradeType>,
     /// Missing or malformed files, one line each.
     pub notes: Vec<String>,
 }
@@ -146,6 +153,7 @@ pub fn load(archives: &[&[u8]]) -> Result<ObjectText, Error> {
     load_profiles(archives, &mut out)?;
     load_items(archives, &mut out)?;
     load_gold_mine(archives, &mut out)?;
+    load_upgrades(archives, &mut out)?;
     Ok(out)
 }
 
@@ -192,6 +200,42 @@ fn load_profiles(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> 
         if let Some(name) = merged.get_list_ci(section, "Name").into_iter().next() {
             out.names.insert(code, name);
         }
+        let codes = |key: &str| -> Vec<u32> {
+            merged
+                .get_list_ci(section, key)
+                .iter()
+                .filter_map(|c| raw_code(c.trim()))
+                .collect()
+        };
+        let mut tech = sim::production::TypeTech {
+            trains: codes("Trains"),
+            builds: codes("Builds"),
+            researches: codes("Researches"),
+            upgrade_to: codes("Upgrade"),
+            ..Default::default()
+        };
+        let amounts: Vec<i32> = merged
+            .get_list_ci(section, "Requiresamount")
+            .iter()
+            .map(|a| a.trim().parse().unwrap_or(1))
+            .collect();
+        tech.requires = codes("Requires")
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| (c, amounts.get(i).copied().unwrap_or(1)))
+            .collect();
+        // A hero type lists one requirement set per hero already owned: `Requires`, `Requires1`, ...
+        let tiers = merged
+            .get_ci(section, "Requirescount")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        for n in 0..tiers {
+            let key = if n == 0 { "Requires".to_string() } else { format!("Requires{n}") };
+            tech.hero_requires.push(codes(&key));
+        }
+        if tech != sim::production::TypeTech::default() {
+            out.tech.insert(code, tech);
+        }
         for (kind, key) in ART_KEYS.iter().enumerate() {
             let list = merged.get_list_ci(section, key);
             if !list.is_empty() {
@@ -223,6 +267,39 @@ fn load_items(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
     for row in slk.rows() {
         let Some(code) = raw_code(row.key()) else { continue };
         out.item_stock.insert(code, item_stock(row.raw("stockMax"), row.raw("stockRegen")));
+    }
+    Ok(())
+}
+
+fn load_upgrades(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
+    let Some(bytes) = read_last(archives, UPGRADE_DATA_FILE)? else {
+        out.notes.push(format!("{UPGRADE_DATA_FILE} missing: no research data"));
+        return Ok(());
+    };
+    let slk = match Slk::parse_bytes(&bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            out.notes.push(format!("{UPGRADE_DATA_FILE}: {e}; treated as missing"));
+            return Ok(());
+        }
+    };
+    for row in slk.rows() {
+        let Some(code) = raw_code(row.key()) else { continue };
+        let int = |col: &str| -> i32 {
+            row.raw(col).and_then(|t| t.trim().trim_matches('"').parse::<i32>().ok()).unwrap_or(0)
+        };
+        out.upgrades.insert(
+            code,
+            sim::production::UpgradeType {
+                gold_base: int("goldbase"),
+                gold_mod: int("goldmod"),
+                lumber_base: int("lumberbase"),
+                lumber_mod: int("lumbermod"),
+                time_base: int("timebase"),
+                time_mod: int("timemod"),
+                max_level: int("maxlevel"),
+            },
+        );
     }
     Ok(())
 }
@@ -274,9 +351,53 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
             .unit_stock
             .insert(code, TypeStock { stock_max: max, regen: F32::from_bits(regen.to_bits()) });
     }
+    // The tech data merges into what `data::install` set (the harvest flags).
+    for (&code, t) in &text.tech {
+        let e = game.production_mut().tech.entry(code).or_default();
+        e.trains = t.trains.clone();
+        e.builds = t.builds.clone();
+        e.researches = t.researches.clone();
+        e.requires = t.requires.clone();
+        e.hero_requires = t.hero_requires.clone();
+        e.upgrade_to = t.upgrade_to.clone();
+    }
+    for (&code, &u) in &text.upgrades {
+        game.production_mut().upgrades.insert(code, u);
+    }
     if let Some(amount) = text.gold_mine_amount {
         if let Some(code) = raw_code(GOLD_MINE_ABILITY) {
             game.set_ability_resource_amount(code, amount);
         }
     }
+}
+
+/// Installs the trees of the map for the production model: the doodads of `war3map.doo` whose type is a tree.
+/// A type is a tree when its second letter is `T`, as in `LTlt`, `ATtr`, `ZTtw` (UNSURE heuristic: the category
+/// column of `DestructableData.slk` is `D` for these rows, so it cannot tell trees apart). Each tree holds a fixed amount of lumber
+/// (`sim::production::TREE_WOOD`, a stand-in). Returns the number of trees installed.
+pub fn install_trees(
+    game: &mut Game,
+    map: &mpq::Archive<'_>,
+    notes: &mut Vec<String>,
+) -> usize {
+    let Ok(bytes) = map.read("war3map.doo") else {
+        notes.push("no war3map.doo: workers find no trees".to_string());
+        return 0;
+    };
+    let doodads = match w3map::Doodads::parse(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            notes.push(format!("war3map.doo not used: {e}"));
+            return 0;
+        }
+    };
+    let mut n = 0usize;
+    let trees = &mut game.production_mut().trees;
+    for d in &doodads.doodads {
+        if d.id[1] == b'T' {
+            trees.push(sim::production::Tree { x: d.position[0], y: d.position[1], wood: sim::production::TREE_WOOD });
+            n += 1;
+        }
+    }
+    n
 }
