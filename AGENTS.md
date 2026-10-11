@@ -271,7 +271,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~41.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~42%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -341,6 +341,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (24)**: abilities pass 3 (abilities-3.md): builder `0x6F2657A0` fills the definition + 0x68-byte level record (targs +0x00, Cast +0x04, Dur +0x08, HeroDur +0x0C, Cost +0x10 int, Cool +0x14 (negative/NaN → 0), Area +0x18, Rng +0x1C, DataA..I +0x20..+0x40, UnitID +0x44, BuffID/EfctID lists), getter per offset (Unicorn 94/94, lead re-ran). Correction: ability +0x4C is the targs flag word, not a record pointer. `gamedata::abilitytype`. Still NOT FOUND: cooldown countdown/ready check, mana payment, Dur vs HeroDur choice (the sim has a model, marked as such).
 
 - **2026-10-11 (23)**: merged economy pass 3 (changer/tax/carry/deposit/refund; Unicorn 2,961+152), missile gates (slots 45/47, Unicorn 3,000; flight still a distance/speed model), hero progression (XP tables 11,336 values + Str/Agi 800 cases in Unicorn). Lead verified the merged tree: 803 tests with and without GAME_DLL, clippy clean. Disk filled once (5 parallel target dirs) — agents now build with -j 2 and `cargo clean` at the end. ~40.5%.
 
