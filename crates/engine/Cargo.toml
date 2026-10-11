@@ -16,4 +16,5 @@ mpq = { path = "../mpq" }
 sim = { path = "../sim" }
 softfloat = { path = "../softfloat" }
 thiserror = "2.0.21"
+w3g = { path = "../w3g" }
 w3map = { path = "../w3map" }
