@@ -30,6 +30,7 @@ native UnitRemoveAbility takes unit whichUnit, integer abilityId returns boolean
 native SetUnitInvulnerable takes unit whichUnit, boolean flag returns nothing
 native UnitApplyTimedLife takes unit whichUnit, integer buffId, real duration returns nothing
 native UnitPauseTimedLife takes unit whichUnit, boolean flag returns nothing
+native UnitResetCooldown takes unit whichUnit returns nothing
 native UnitHasBuffsEx takes unit whichUnit, boolean removePositive, boolean removeNegative, boolean magic, boolean physical, boolean timedLife, boolean aura, boolean dispellable returns boolean
 native UnitCountBuffsEx takes unit whichUnit, boolean removePositive, boolean removeNegative, boolean magic, boolean physical, boolean timedLife, boolean aura, boolean dispellable returns integer
 native UnitRemoveBuffs takes unit whichUnit, boolean removePositive, boolean removeNegative returns nothing
@@ -527,8 +528,11 @@ endfunction
     );
 }
 
+/// A zero duration starts no expiry timer (CONFIRMED by Unicorn, `docs/spec/abilities-2.md` section 2.1): the buff
+/// stays on the unit, and the unit does not die on later steps. The earlier model, which expired it on the next
+/// step, was wrong.
 #[test]
-fn zero_duration_timed_life_expires_on_the_next_step() {
+fn zero_duration_timed_life_starts_no_timer_and_stays() {
     let mut host = host_for(
         r#"
 function main takes nothing returns nothing
@@ -537,15 +541,80 @@ function main takes nothing returns nothing
 endfunction
 "#,
     );
-    // The apply runs at once at clock 0.0. Its zero-length timer is due at that time, so the first
-    // pump (tick 1) fires it: the expiry goes through the queue, not directly.
     host.start("main", &[]).expect("main starts");
     let k = unit_key(&host, "u1");
-    assert!(
-        !is_dead(&host, k),
-        "the expiry goes through the queue, not directly"
+    assert_eq!(host.game().buffs(k).len(), 1, "the buff is applied");
+    host.step_ticks(200);
+    assert!(!is_dead(&host, k), "no expiry without a timer");
+    assert_eq!(host.game().buffs(k).len(), 1, "the buff stays");
+}
+
+/// A negative duration behaves like zero (CONFIRMED by Unicorn): no timer, no expiry.
+#[test]
+fn negative_duration_timed_life_starts_no_timer() {
+    let mut host = host_for(
+        r#"
+function main takes nothing returns nothing
+    set u1 = CreateUnit(Player(0), 'hfoo', I2R(0), I2R(0), I2R(0))
+    call UnitApplyTimedLife(u1, 'BTLF', I2R(-1))
+endfunction
+"#,
     );
-    host.step_ticks(1);
-    assert!(is_dead(&host, k));
-    assert!(host.game().buffs(k).is_empty());
+    host.start("main", &[]).expect("main starts");
+    let k = unit_key(&host, "u1");
+    host.step_ticks(200);
+    assert!(!is_dead(&host, k));
+    assert_eq!(host.game().buffs(k).len(), 1);
+}
+
+/// Applying the same timed life twice adds two entries (CONFIRMED: the creator does not search the unit's list),
+/// and each has its own expiry: the first one to run out removes only its own entry.
+#[test]
+fn second_timed_life_adds_an_entry_with_its_own_expiry() {
+    let mut host = host_for(
+        r#"
+function main takes nothing returns nothing
+    set u1 = CreateUnit(Player(0), 'hfoo', I2R(0), I2R(0), I2R(0))
+    call UnitApplyTimedLife(u1, 'BTLF', I2R(1))
+    call UnitApplyTimedLife(u1, 'BTLF', I2R(3))
+endfunction
+"#,
+    );
+    host.start("main", &[]).expect("main starts");
+    let k = unit_key(&host, "u1");
+    assert_eq!(
+        host.game().buffs(k).len(),
+        2,
+        "two entries, no stacking rule"
+    );
+    // Past the first expiry (1.0 s = 200 ticks): only the entry of the shorter timer is removed. Whether the unit
+    // dies at that point is not asserted: the death route of the original is UNSURE (abilities-2.md section 3.3).
+    host.step_ticks(220);
+    assert_eq!(
+        host.game().buffs(k).len(),
+        1,
+        "only the shorter one expired"
+    );
+}
+
+/// The unit's life of a `UnitResetCooldown` call is untouched and no timer changes (CONFIRMED: the native is a no-op on
+/// the ability list in the original).
+#[test]
+fn reset_cooldown_leaves_timed_life_and_the_unit_alone() {
+    let mut host = host_for(
+        r#"
+function main takes nothing returns nothing
+    set u1 = CreateUnit(Player(0), 'hfoo', I2R(0), I2R(0), I2R(0))
+    call UnitApplyTimedLife(u1, 'BTLF', I2R(1))
+    call UnitResetCooldown(u1)
+endfunction
+"#,
+    );
+    host.start("main", &[]).expect("main starts");
+    let k = unit_key(&host, "u1");
+    assert_eq!(host.game().buffs(k).len(), 1);
+    assert!(!is_dead(&host, k));
+    // The timer set by UnitApplyTimedLife still runs out at its expiry.
+    host.step_ticks(220);
+    assert!(is_dead(&host, k), "the timed life expiry is unchanged");
 }

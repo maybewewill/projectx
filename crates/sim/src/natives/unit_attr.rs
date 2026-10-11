@@ -547,9 +547,10 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitResetCooldown",
-        support: Support::NotImplemented(
-            "N:ability cooldowns are not modelled",
-        ),
+        // CONFIRMED by disassembly (abilities-2.md section 1.2): the native walks the unit's ability list and
+        // changes no ability field; its only other call is the local-player UI refresh. The simulation has no
+        // cooldowns to reset, so the registered native is a no-op.
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitSetConstructionProgress",

@@ -55,6 +55,12 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         NativeResult::Return(Value::Null)
     });
 
+    // UnitResetCooldown: a no-op in the simulation (CONFIRMED by disassembly, abilities-2.md section 1.2). The
+    // original only refreshes the local player's cooldown display.
+    reg.register("UnitResetCooldown", |_, _| {
+        NativeResult::Return(Value::Null)
+    });
+
     let g = Rc::clone(game);
     reg.register("UnitPauseTimedLife", move |_, a| {
         let mut gm = g.borrow_mut();
@@ -121,8 +127,10 @@ fn select_ex(a: &[Value]) -> BuffSelect {
 
 /// The timed life buff `serial` of unit `unit` has run out (the timer payload of `Payload::TimedLife`).
 ///
-/// The buff is removed, and the unit's life is set to zero through the `KillUnit` path: the life change, then the
-/// death dispatch when the unit was alive. Called by the host after its clock reaches the expiry, with the game time
+/// The buff is removed (CONFIRMED path: the handler of message `0xD01C4` calls the removal routine,
+/// `docs/spec/abilities-2.md` section 3), and the unit's life is set to zero through the `KillUnit` path: the life
+/// change, then the death dispatch when the unit was alive. The death step is UNSURE: the removal notify of the
+/// timed life class does not call a kill itself (abilities-2.md section 3.3). Called by the host after its clock reaches the expiry, with the game time
 /// set to that expiry. A removed unit, or a buff that is no longer on the unit, does nothing.
 pub fn expire_timed_life(
     game: &RefCell<Game>,
