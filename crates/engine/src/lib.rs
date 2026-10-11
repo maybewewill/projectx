@@ -139,6 +139,7 @@ pub struct Engine {
     timers_fired: u64,
     notes: Vec<String>,
     combat: data::CombatSetup,
+    economy: data::EconomySetup,
 }
 
 /// What the AI host did, as the report shows it (see [`sim::ai::AiShared`] for the full logs).
@@ -193,6 +194,8 @@ pub struct Report {
     pub pathing: Option<PathingSummary>,
     /// The combat setup: the damage model in use (and why the placeholder is kept, if it is), and the unit rows.
     pub combat: data::CombatSetup,
+    /// The economy constants: read from `[Misc]`, or the built-in defaults when no `[Misc]` layer exists.
+    pub economy: data::EconomySetup,
     /// The AI host's summary (no AI players when no AI was started).
     pub ai: AiReport,
     pub notes: Vec<String>,
@@ -291,6 +294,7 @@ impl Engine {
         let game_data = data::load(&game_refs, &archive, tables.as_ref())?;
         notes.extend(game_data.notes.iter().cloned());
         let combat = data::install(&mut host.game_mut(), &game_data, tables.as_ref());
+        let economy = data::install_economy(&mut host.game_mut(), &game_data.misc);
 
         let mut engine = Engine {
             host,
@@ -311,6 +315,7 @@ impl Engine {
             notes,
             ai,
             combat,
+            economy,
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
@@ -455,6 +460,7 @@ impl Engine {
             game_time: self.host.clock().now(),
             pathing: self.pathing.clone(),
             combat: self.combat.clone(),
+            economy: self.economy.clone(),
             ai: self.ai_report(),
             notes: self.notes.clone(),
         }
@@ -570,6 +576,20 @@ impl fmt::Display for Report {
         }
         writeln!(f, "damage model: {}", self.combat.damage_model)?;
         writeln!(f, "unit types with combat rows: {}", self.combat.unit_types)?;
+        if self.economy.from_misc {
+            writeln!(
+                f,
+                "economy constants: from [Misc] ({} layers); absent keys: {}",
+                self.economy.layers,
+                if self.economy.absent.is_empty() {
+                    "none".to_string()
+                } else {
+                    self.economy.absent.join(", ")
+                }
+            )?;
+        } else {
+            writeln!(f, "economy constants: built-in defaults (no [Misc] layer)")?;
+        }
         writeln!(f, "config: {}", self.config)?;
         writeln!(f, "main: {}", self.main)?;
         writeln!(

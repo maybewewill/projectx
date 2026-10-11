@@ -251,8 +251,8 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
     reg.register("GetPlayerState", move |_, a| {
         let gm = g.borrow();
-        let v = match (player_at(&gm, a, 0), state_at(a, 1)) {
-            (Some(p), Some(s)) => state_load(s, p.states[s as usize]),
+        let v = match (index_at(&gm, a, 0), state_at(a, 1)) {
+            (Some(p), Some(s)) => state_load(s, stored_state(&gm, p, s)),
             _ => 0,
         };
         NativeResult::Return(Value::Integer(v))
@@ -266,7 +266,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             match (index_at(&gm, a, 0), state_at(a, 1)) {
                 (Some(p), Some(s)) => {
                     let stored = state_store(s, v);
-                    gm.player_mut(p).expect("slot").states[s as usize] = stored;
+                    set_stored_state(&mut gm, p, s, stored);
                     Some((p, s, stored))
                 }
                 _ => None,
@@ -357,6 +357,28 @@ pub(super) fn state_store(state: u32, value: i32) -> i32 {
         return x;
     }
     v
+}
+
+/// The stored value of state `s` of slot `p`. Gold and lumber (states 1 and 2) live in the economy of the slot
+/// (`Game::economy`, shared with the changer); the other states are the slot's state words.
+pub(super) fn stored_state(gm: &Game, p: u32, s: u32) -> i32 {
+    match s {
+        1 | 2 => gm.player_economy(p).map_or(0, |e| e.stock[(s - 1) as usize]),
+        _ => gm.player(p).states[s as usize],
+    }
+}
+
+/// Writes the stored value of state `s` of slot `p` (the inverse of [`stored_state`]). The value is already in the
+/// stored form (see [`state_store`]).
+pub(super) fn set_stored_state(gm: &mut Game, p: u32, s: u32, stored: i32) {
+    match s {
+        1 | 2 => {
+            if let Some(e) = gm.economy.get_mut(p as usize) {
+                e.stock[(s - 1) as usize] = stored;
+            }
+        }
+        _ => gm.player_mut(p).expect("slot").states[s as usize] = stored,
+    }
 }
 
 /// The value of a stored player state, as `GetPlayerState` reads it (the inverse of [`state_store`]):

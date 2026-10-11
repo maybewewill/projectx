@@ -23,8 +23,19 @@
 //! Only the malformed-text case is not seen in the disassembly: S2R on a non-number. Here it is recorded as a note
 //! and takes `0.0` (UNSURE what the original returns for such text).
 //!
+//! Economy keys (`docs/spec/economy-3.md`, sections 2 and 4; read by the same reader family):
+//! - `UpkeepUsage`: a list of integers, the food thresholds of the upkeep tiers (row 0; UNSURE how the original lays
+//!   out more than one race row in the key, so only the first row is read).
+//! - `UpkeepGoldTax`, `UpkeepLumberTax`: a list of reals, the tax fraction of each tier (e.g. `0.3`).
+//! - `TrainRefundRate`, `ResearchRefundRate`, `ReviveRefundRate`, `LowGoldAmount`: one real each.
+//!
+//! An absent key, or a malformed element, gives the reader's default `0.0`. So a missing `UpkeepUsage` is an
+//! all-zero threshold row (tier 0 at any food). The engine uses the built-in economy defaults instead, but only
+//! when no `[Misc]` layer exists at all.
+//!
 //! Reals go through [`crate::real::parse_real`]: the S2R rules when the Game.dll tables are given, `f64` rounding
-//! otherwise.
+//! otherwise. Integers (`UpkeepUsage`) follow `atoi`: leading blanks and a sign, then digits; text with no digits
+//! gives 0 (UNSURE for malformed text).
 
 use softfloat::{Tables, F32};
 
@@ -42,6 +53,8 @@ pub const ETHEREAL_ENTRIES: usize = 7;
 /// For each attack type (row), the element of `EtherealDamageBonus` stored in its slot. CONFIRMED by the store
 /// addresses of the builder: slots `0x6FAB42E4 + 4 * row` hold elements `5, 0, 1, 2, 3, 4, 6`.
 pub const ETHEREAL_ELEMENT_BY_ROW: [usize; ATTACK_ROWS] = [5, 0, 1, 2, 3, 4, 6];
+/// Number of upkeep tiers read from `UpkeepUsage`, `UpkeepGoldTax` and `UpkeepLumberTax` (CONFIRMED: 10 entries).
+pub const UPKEEP_TIERS: usize = 10;
 /// The `DamageBonus*` keys, in row order (binary order, spec section 7).
 pub const DAMAGE_BONUS_KEYS: [&str; ATTACK_ROWS] = [
     "DamageBonusSpells",
@@ -73,6 +86,20 @@ pub struct MiscData {
     pub notes: Vec<String>,
     /// How many of the layers had a `[Misc]` section. Zero means no Misc data at all (every key is a default).
     pub layers_with_misc: usize,
+    /// `UpkeepUsage`: the food thresholds of tiers 0 to 9 (row 0). A zero entry ends the tier walk.
+    pub upkeep_usage: [i32; UPKEEP_TIERS],
+    /// `UpkeepGoldTax`: the gold tax fraction of each tier.
+    pub upkeep_gold_tax: [F32; UPKEEP_TIERS],
+    /// `UpkeepLumberTax`: the lumber tax fraction of each tier.
+    pub upkeep_lumber_tax: [F32; UPKEEP_TIERS],
+    /// `TrainRefundRate`: the fraction of a cancelled training's cost that is refunded. `0.0` when absent.
+    pub train_refund_rate: F32,
+    /// `ResearchRefundRate`. `0.0` when absent.
+    pub research_refund_rate: F32,
+    /// `ReviveRefundRate`. `0.0` when absent.
+    pub revive_refund_rate: F32,
+    /// `LowGoldAmount`, the mine threshold of the low-gold notice. `0.0` when absent.
+    pub low_gold_amount: F32,
 }
 
 impl MiscData {
@@ -109,6 +136,19 @@ impl MiscData {
             .real("ReactionDelay")
             .unwrap_or(defaults.reaction_delay);
         let attack_half_angle = reader.real("AttackHalfAngle");
+        let upkeep_usage = reader
+            .ints::<UPKEEP_TIERS>("UpkeepUsage")
+            .unwrap_or([0; UPKEEP_TIERS]);
+        let upkeep_gold_tax = reader
+            .list::<UPKEEP_TIERS>("UpkeepGoldTax")
+            .unwrap_or([F32::ZERO; UPKEEP_TIERS]);
+        let upkeep_lumber_tax = reader
+            .list::<UPKEEP_TIERS>("UpkeepLumberTax")
+            .unwrap_or([F32::ZERO; UPKEEP_TIERS]);
+        let train_refund_rate = reader.real("TrainRefundRate").unwrap_or(F32::ZERO);
+        let research_refund_rate = reader.real("ResearchRefundRate").unwrap_or(F32::ZERO);
+        let revive_refund_rate = reader.real("ReviveRefundRate").unwrap_or(F32::ZERO);
+        let low_gold_amount = reader.real("LowGoldAmount").unwrap_or(F32::ZERO);
         let Reader {
             defaulted, notes, ..
         } = reader;
@@ -121,6 +161,13 @@ impl MiscData {
             defaulted,
             notes,
             layers_with_misc,
+            upkeep_usage,
+            upkeep_gold_tax,
+            upkeep_lumber_tax,
+            train_refund_rate,
+            research_refund_rate,
+            revive_refund_rate,
+            low_gold_amount,
         }
     }
 
@@ -145,6 +192,13 @@ impl MiscData {
             defaulted: Vec::new(),
             notes: Vec::new(),
             layers_with_misc: 0,
+            upkeep_usage: [0; UPKEEP_TIERS],
+            upkeep_gold_tax: [F32::ZERO; UPKEEP_TIERS],
+            upkeep_lumber_tax: [F32::ZERO; UPKEEP_TIERS],
+            train_refund_rate: F32::ZERO,
+            research_refund_rate: F32::ZERO,
+            revive_refund_rate: F32::ZERO,
+            low_gold_amount: F32::ZERO,
         }
     }
 }
@@ -206,5 +260,45 @@ impl Reader<'_> {
             ));
         }
         Some(out)
+    }
+
+    /// The first `N` elements of a comma list as integers (`atoi`, see the module notes). Absent key: `None`.
+    fn ints<const N: usize>(&mut self, key: &'static str) -> Option<[i32; N]> {
+        if self.profile.get(MISC_SECTION, key).is_none() {
+            self.defaulted.push(key);
+            return None;
+        }
+        let items = self.profile.get_list(MISC_SECTION, key);
+        let mut out = [0i32; N];
+        for (slot, item) in out.iter_mut().zip(items.iter()) {
+            *slot = atoi(item);
+        }
+        if items.len() > N {
+            self.notes.push(format!(
+                "{key}: {} values, only the first {N} are read",
+                items.len()
+            ));
+        }
+        Some(out)
+    }
+}
+
+/// `atoi`: leading blanks, an optional sign, then decimal digits, with the 32-bit wrap of the C result. Text with
+/// no digits gives 0.
+pub fn atoi(text: &str) -> i32 {
+    let t = text.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let (neg, digits) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let mut v: i32 = 0;
+    for b in digits.bytes().take_while(u8::is_ascii_digit) {
+        v = v.wrapping_mul(10).wrapping_add(i32::from(b - b'0'));
+    }
+    if neg {
+        v.wrapping_neg()
+    } else {
+        v
     }
 }

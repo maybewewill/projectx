@@ -242,6 +242,56 @@ impl UpkeepTable {
     }
 }
 
+/// The economy constants that the host reads from Misc (`docs/spec/economy-3.md`, sections 2 and 4), or the built-in
+/// defaults when no `[Misc]` layer exists. The engine chooses between the two and reports which one it used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EconomyConstants {
+    /// `UpkeepUsage`, `UpkeepGoldTax` and `UpkeepLumberTax`.
+    pub upkeep: UpkeepTable,
+    /// `TrainRefundRate`.
+    pub train_refund_rate: F32,
+    /// `ResearchRefundRate`.
+    pub research_refund_rate: F32,
+    /// `ReviveRefundRate`.
+    pub revive_refund_rate: F32,
+    /// `LowGoldAmount` as the integer the mine compare uses (`F2I` of the real, UNSURE: the compare type is not
+    /// traced, the reader family returns a real).
+    pub low_gold_amount: i32,
+}
+
+impl Default for EconomyConstants {
+    /// The built-in defaults: the upkeep table of [`UpkeepTable::default`], zero refund rates, and no low-gold
+    /// threshold (UNSURE: the original's default for `LowGoldAmount` is not traced; 0 is the reader's default).
+    fn default() -> Self {
+        Self {
+            upkeep: UpkeepTable::default(),
+            train_refund_rate: F32::ZERO,
+            research_refund_rate: F32::ZERO,
+            revive_refund_rate: F32::ZERO,
+            low_gold_amount: 0,
+        }
+    }
+}
+
+/// Which cancelled slot a refund comes from: the rate key differs, the arithmetic does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefundKind {
+    Train,
+    Research,
+    Revive,
+}
+
+impl EconomyConstants {
+    /// The refund rate for a cancelled slot of `kind`.
+    pub fn refund_rate(&self, kind: RefundKind) -> F32 {
+        match kind {
+            RefundKind::Train => self.train_refund_rate,
+            RefundKind::Research => self.research_refund_rate,
+            RefundKind::Revive => self.revive_refund_rate,
+        }
+    }
+}
+
 /// The cancel refund of one resource: `F2I(MUL(I2R(cost), rate))` (`0x6F062320`, train branch, CONFIRMED order).
 pub fn refund_units(cost: i32, rate: F32) -> i32 {
     conv::f2i(arith::mul(conv::i2r(cost), rate))
