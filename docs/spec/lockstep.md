@@ -275,3 +275,106 @@ The listener thunk at 0x6F2F4950 has no function entry in Ghidra; it is read fro
 - Next step to close the open link: identify the registered object of the 0x40090092 entry (the
   observer hash at CNetData+0xC/+0x18, entry+0x14) and read the float at its +0x14, then compare with
   the agile step (0x6FAAE4A0 = 0.1). This needs a Unicorn run with the observers populated.
+
+---
+
+## 8. Pass 4 (2026-10-11): the per-tick increment, the listener object, the 0.1 s "step"
+
+Sources: decompile export (chunk_014, chunk_019, chunk_020, chunk_022), capstone disassembly of
+the image (Game.dll SHA1 c5d8624b...), Unicorn start-up values (`tools/emu/runtime_consts.py`).
+Result in one line: the **tick is 5 ms of game time (LIKELY, now with a second independent
+reading)**; **the float that the listener adds per tick is NOT identified** (UNSURE); **there is no
+engine-side "simulation step" event** in the tick path (CONFIRMED by enumeration of the dispatched
+ids).
+
+### 8.1 The divisor DAT_6F957640 is 5.0 in the file (CONFIRMED)
+- The symbol is a **double** (read as `(float)_DAT_6f957640` in the decompile). Its bytes in the
+  image are low dword `0x00000000` at `0x6F957640` and high dword `0x40140000` at `0x6F957644`,
+  i.e. the double **5.0**. It is set in the file; it is not written at start-up.
+- Code references to it (image scan of .text for the absolute address): `0x6F52F393`,
+  `0x6F53E8DB` (speed setter), `0x6F55069E` (CNetData constructor). All three are reads. So the value
+  is 5.0 from the file, not from the initialisers. (`runtime_consts.py` printed only the low dword
+  and showed 0, which is the low half, not the value. Corrected here.)
+- Consequence (CONFIRMED arithmetic): the speed factor stored at +0x22AC by `0x6F53E890` and by the
+  CNetData constructor (`4 / DAT`, the value for normal speed) is `SPEED[idx] / 5`:
+  slow 0.6, normal 0.8, fast 1.0.
+
+### 8.2 Why this points to 5 ms per tick (LIKELY)
+- Per 25 ms of turn time the driver dispatches `SPEED[idx]` ticks (CONFIRMED, lockstep.md 7.1).
+  So game milliseconds per turn millisecond = `SPEED * t / 25` with `t` the tick length. Setting
+  that equal to the stored factor `SPEED / 5` gives **t = 5 ms** exactly. The divisor and the
+  counter increment (+0x1C70 += 5, CONFIRMED) are the same 5 ms.
+- A speed-scaled per-tick increment would make the two clocks disagree: the counter +0x1C70 would
+  advance 5 per tick at every speed while the agile clock advanced `0.8 * 0.005` per tick at normal.
+  So the per-tick float is **not** speed-scaled (LIKELY, from the consistency argument; the float
+  itself is unverified).
+- The multiplier `m` (lockstep 7.2) scales ticks, not the tick length.
+
+### 8.3 The tick dispatch and the listener thunk (CONFIRMED)
+- Frame driver `0x6F553470`, tick branch (disassembly `0x6F553762..0x6F553780`): `ECX = esi + 8`
+  (esi = CNetData), `add [esi+0x1C70], 5`, `call 0x6F5378E0(&event)`, then `add [esi+0x22C0], 5`
+  with wrap at 0xFA. The event object is `CNetEventGameTick` (its `vftable`, built on the stack), id `0x40090092`,
+  with a float payload from `DAT_6FACC8CC`.
+- `0x6F5378E0(this = CNetData+8, event)`: calls slot 0x10 of `[this+4]` and of `[this+0x10]`,
+  returns their OR (CONFIRMED). These are two sub-objects of the per-player observer record.
+- Registration `0x6F301690(enable)` (CONFIRMED bytes): for each of 0x40090092/93/94 it calls
+  `0x6F549620` with **ECX = event id, EDX = handler** (0x6F2F4950 for the tick), and **two stack
+  arguments, both 0**: the context and the player index.
+- `0x6F549620` (CONFIRMED): `this = [manager slot 0xD + 0x10] -> [+8] + player*0x304 + 8`. For player
+  0 this is **CNetData+8 = CNetObserver record 0**. It then calls `0x6F548F70(event, handler, context)`.
+- `0x6F548F70` (CONFIRMED, disassembly): builds the key `(event, handler)` with `0x6F544F80`
+  (64-bucket hash at `this+0x34`, bucket = `event & 0x3F`). If absent, it allocates a node from the pool
+  at `this+0x1C` and stores **node+0x10 = event, node+0x14 = handler, node+0x18 = context**. It then calls
+  `[this+4]`'s vtable slot 2 with `(event, event)` (registration notice). If present it only updates the
+  context.
+  - So the **context stored for all three listeners is 0**, the handler is the function pointer.
+- The handler `0x6F2F4950` (CONFIRMED bytes): `add ecx, 0x14; call 0x6F470C70; mov eax, 1; ret`.
+  So the handler expects **ECX = object O** and reads the float at **T = O + 0x14**.
+- `0x6F470C70 → 0x6F46E9D0 → 0x6F46E520(T)`: `now := now + *T` (LIKELY softfloat add, see 7.3).
+
+### 8.4 Which object is O: NOT identified (UNSURE)
+- The node's context is 0, so the dispatcher cannot pass `node+0x18` as ECX (it would read T = 0x14).
+  The dispatcher walker that calls `node+0x14` with some ECX was **not found**. The obvious linear
+  sweep of .text stops early (about 190k instructions, desync on data), and the observer walker is not
+  among the decompiled `call [reg+0x14]` sites checked (those are vtable slot 5 calls, not handler
+  calls).
+- Candidates, checked:
+  - **O = CNetObserver record 0 (CNetData+8)**: T = CNetData+0x1C. The base constructor
+    `0x6F548EA0` does `this[2] += 1` and `this[5] += 1` (CONFIRMED), so T starts as the **integer 1**
+    (float 1.4e-45), not a time. **Rejected unless overwritten later** (not checked).
+  - O = CNetData: CNetData+0x14 is not written by the constructor `0x6F550460` (CONFIRMED absence in
+    the decompile). Value unknown. UNSURE.
+  - O = a sub-object from `[this+4]`/`[this+0x10]`: unknown.
+- The float value is therefore **not determined**. The 0x6FAAE4A0 constant (0.1f) is used only by the
+  game-start call `0x6F470C70(&0.1)` and by queue B `0x6F46FFE0`, not by the per-tick listener.
+
+### 8.5 Is there a "0.1 s simulation step"? (CONFIRMED negative, LIKELY conclusion)
+- The tick path dispatches only 0x40090092 (per tick), 0x40090093 (idle, once per driver call with
+  `5 * n`) and 0x40090094 (async idle, wall-clock delta). No 100 ms event is sent by the frame driver or
+  registered at `0x6F301690` (CONFIRMED by enumeration of those sites; the replay pump was not enumerated).
+- The agile clock advances by the tick increment per tick, and the timer queues fire exactly at expiry
+  (lockstep 7.3, game-loop-2.md). A "step" is therefore not an engine event. A 0.1 s period (timers,
+  the training tick, AI pacing) is an ordinary timer on that clock (LIKELY).
+- The sim step in `crates/sim/src/lockstep.rs` (`sim_steps` = game ms / 100) is an **accounting value
+  for tests and reports**, not an engine concept (LIKELY). It is kept, documented as such.
+
+### 8.6 Summary (pass 4)
+| Question | Answer | Confidence |
+|---|---|---|
+| DAT_6F957640 | double 5.0, in the file, read-only (3 refs) | CONFIRMED |
+| Speed factor +0x22AC | SPEED / 5 = 0.6 / 0.8 / 1.0 | CONFIRMED arithmetic |
+| Tick length | 5 ms of game time | LIKELY (two readings agree: +0x1C70 += 5, factor = SPEED/5) |
+| Per-tick increment speed-scaled? | No (the clocks would disagree) | LIKELY |
+| Registered listener object | Observer record 0 (CNetObserver, CNetData+8) for the registration; the dispatcher's ECX is unknown | CONFIRMED (registration), UNSURE (dispatch ECX) |
+| Context / player stored | context 0, player 0 | CONFIRMED |
+| Per-tick float value | not found; T = O+0x14 with O unknown | UNSURE |
+| 0.1 s "step" | no engine event; a timer period on the agile clock | LIKELY |
+
+### 8.7 Open work (next steps)
+- Find the observer walker: a function that reads `node+0x10`/`node+0x14`/`node+0x18` and calls the
+  handler. Start from the bucket layout (`this+0x34 + (event & 0x3F) * 4`) and from the dispatcher
+  slot-0x10 functions of the sub-objects at `CNetData+0xC` and `+0x18`. Use a proper function-boundary
+  disassembly (Ghidra per-function), not a linear sweep.
+- Then read the float at O+0x14 in Unicorn, with the observer populated (needs the pool at `this+0x1C`
+  and the manager slot 0xD). Compare with 0.005f (`0x3BA3D70A`, present in .rdata at 8 places, none
+  identified yet).
