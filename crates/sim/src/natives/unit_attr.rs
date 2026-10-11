@@ -923,7 +923,14 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let v = match unit_at(&gm, a, 0) {
             Some(u) => {
                 let (ux, uy) = (gm.unit(u).x, gm.unit(u).y);
-                in_range(ux, uy, real_at(a, 1), real_at(a, 2), real_at(a, 3), origin(&gm))
+                in_range(
+                    ux,
+                    uy,
+                    real_at(a, 1),
+                    real_at(a, 2),
+                    real_at(a, 3),
+                    origin(&gm),
+                )
             }
             None => false,
         };
@@ -1020,7 +1027,10 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 1) as u32;
         let added = match unit_at(&gm, a, 0) {
-            Some(k) if !gm.unit(k).abilities.contains_key(&id) && gm.ability_types().get(id).is_some() => {
+            Some(k)
+                if !gm.unit(k).abilities.contains_key(&id)
+                    && gm.ability_types().get(id).is_some() =>
+            {
                 gm.unit_mut(k).abilities.insert(id, UnitAbility::default());
                 true
             }
@@ -1061,7 +1071,10 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
 /// The max level of ability `id`: its record's max when it has one, and 1 otherwise (CONFIRMED, `FUN_6F02E570`).
 fn ability_max(gm: &Game, id: u32) -> i32 {
-    gm.ability_types().get(id).and_then(|t| t.max_level).unwrap_or(1)
+    gm.ability_types()
+        .get(id)
+        .and_then(|t| t.max_level)
+        .unwrap_or(1)
 }
 
 /// Stores the zero-based level of ability `id` on unit `k`, when the unit has it.

@@ -45,6 +45,8 @@ pub enum Ctx {
         trigger: ObjKey,
         event: Option<ObjKey>,
         unit: Option<ObjKey>,
+        /// Index of the issued-order record of an order event (`GetIssuedOrderId`), if any.
+        order: Option<u32>,
     },
     /// A timer handler started at the timer's expiry.
     Timer(ObjKey),
@@ -1013,6 +1015,8 @@ pub struct Game {
     filter_destructables: Vec<u32>,
     /// The ability type registry the host fills (see [`AbilityTypes`]).
     ability_types: AbilityTypes,
+    /// The order system: unit order lists, the issued-order records and the mover (see `orders.rs`).
+    pub(crate) orders: crate::orders::OrderSystem,
 }
 
 impl Default for Game {
@@ -1055,6 +1059,7 @@ impl Game {
             enum_destructables: Vec::new(),
             filter_destructables: Vec::new(),
             ability_types: AbilityTypes::new(),
+            orders: crate::orders::OrderSystem::new(),
         }
     }
 

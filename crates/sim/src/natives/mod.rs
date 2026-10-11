@@ -23,6 +23,7 @@ mod hashtable;
 pub mod hero;
 mod item;
 mod location;
+mod order;
 mod player;
 pub mod presentation;
 mod region;
@@ -72,4 +73,5 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     destructable::register(reg, game);
     unit_attr::register(reg, game);
     hero::register(reg, game);
+    order::register(reg, game);
 }

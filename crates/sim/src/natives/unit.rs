@@ -54,9 +54,7 @@ use std::rc::Rc;
 use jass::vm::{NativeRegistry, NativeResult, Value};
 use softfloat::{arith, F32};
 
-use super::game::{
-    Game, HeroObj, LocationObj, ObjKey, Object, UnitAbility, UnitEvent, UnitObj,
-};
+use super::game::{Game, HeroObj, LocationObj, ObjKey, Object, UnitAbility, UnitEvent, UnitObj};
 use super::hero::is_hero_id;
 use super::player::raw_at;
 use super::region;

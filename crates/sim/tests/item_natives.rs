@@ -104,6 +104,7 @@ fn ut(name: &str, inventory_size: u32) -> UnitType {
         max_mana: F32::ZERO,
         start_mana: F32::ZERO,
         inventory_size,
+        ..Default::default()
     }
 }
 
