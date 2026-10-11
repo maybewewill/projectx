@@ -14,6 +14,7 @@ use std::rc::Rc;
 use jass::vm::{clamp_sleep, NativeRegistry, NativeResult};
 use softfloat::F32;
 
+mod destructable;
 mod force;
 pub mod game;
 mod gamecache;
@@ -66,4 +67,5 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     region::register(reg, game);
     group::register(reg, game);
     item::register(reg, game);
+    destructable::register(reg, game);
 }

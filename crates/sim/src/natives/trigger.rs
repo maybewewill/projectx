@@ -486,7 +486,8 @@ fn destroy(gm: &mut Game, t: ObjKey) {
             // Observer entries are dropped by `forget_observers_of` below.
             EventSource::UnitEvent { .. }
             | EventSource::PlayerUnitEvent { .. }
-            | EventSource::RegionEvent { .. } => {}
+            | EventSource::RegionEvent { .. }
+            | EventSource::WidgetDeath { .. } => {}
         }
         gm.kill(ev);
     }
