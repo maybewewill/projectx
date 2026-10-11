@@ -55,6 +55,7 @@ pub mod game_start;
 pub mod map;
 pub mod pathing;
 pub mod replay;
+pub mod replay_setup;
 pub mod scripts;
 
 pub use map::{apply_players, controller_of, playable_area};
@@ -85,6 +86,10 @@ pub enum Error {
     Tables(softfloat::TablesError),
     #[error("Game.dll RNG table: {0:?}")]
     Rng(sim::RngError),
+    #[error("replay: {0}")]
+    Replay(#[from] w3g::Error),
+    #[error("replay setup: {0}")]
+    ReplaySetup(#[from] replay_setup::SetupError),
 }
 
 /// The inputs of [`Engine::boot`].
