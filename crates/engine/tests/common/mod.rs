@@ -90,8 +90,9 @@ pub fn w3i(
     for _ in 0..4 {
         o.extend(0i32.to_le_bytes()); // complements
     }
-    o.extend(128u32.to_le_bytes()); // playable width
-    o.extend(128u32.to_le_bytes()); // playable height
+    // Playable size: the camera bounds' extent (no complements), as a real map has it.
+    o.extend(((bounds[1] - bounds[0]) as u32).to_le_bytes()); // playable width
+    o.extend(((bounds[3] - bounds[2]) as u32).to_le_bytes()); // playable height
     o.extend(0u32.to_le_bytes()); // flags
     o.push(0); // main tileset
     o.extend(0u32.to_le_bytes()); // campaign background

@@ -6,6 +6,8 @@
 //! `isqrt` over 115,536 inputs, and the heap state after every operation of 3000 random
 //! sequences (about 241k operations, many with duplicate keys).
 
+mod build_cases;
+mod build_data;
 mod cases;
 mod data;
 mod pyramid_data;

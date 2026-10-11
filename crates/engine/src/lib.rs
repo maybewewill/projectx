@@ -38,9 +38,11 @@ use softfloat::Tables;
 use w3map::MapInfo;
 
 pub mod map;
+pub mod pathing;
 pub mod scripts;
 
 pub use map::{apply_players, controller_of, playable_area};
+pub use pathing::PathingSummary;
 pub use scripts::{scripts_from_archives, BLIZZARD_J, COMMON_J};
 
 /// Errors while booting a map.
@@ -97,6 +99,7 @@ pub struct Engine {
     natives_declared: usize,
     natives_referenced: usize,
     missing_natives: Vec<String>,
+    pathing: Option<PathingSummary>,
     config_status: String,
     main_status: String,
     steps: u64,
@@ -134,6 +137,8 @@ pub struct Report {
     pub steps: u64,
     pub timers_fired: u64,
     pub game_time: f32,
+    /// The pathing data installed at boot, or `None` (straight-line movement).
+    pub pathing: Option<PathingSummary>,
     pub notes: Vec<String>,
 }
 
@@ -161,6 +166,11 @@ impl Engine {
         let info = MapInfo::parse(&info_bytes)?;
         let war3map = read_map_file(&archive, &["war3map.j", "scripts\\war3map.j"], "war3map.j")?;
         let war3map = String::from_utf8_lossy(&war3map).into_owned();
+        let wpm = match archive.read("war3map.wpm") {
+            Ok(data) => Some(data),
+            Err(mpq::Error::NotFound(_)) => None,
+            Err(source) => return Err(Error::Archive { index: 0, source }),
+        };
 
         let programs = [
             ("common.j", inputs.common_j.as_str()),
@@ -179,8 +189,22 @@ impl Engine {
         let natives_declared = module.natives.len();
 
         let host = ScriptHost::new(module, NativeRegistry::with_builtins(), tables)?;
-        host.set_playable(Some(playable_area(&info)));
+        let playable = playable_area(&info);
+        host.set_playable(Some(playable));
         apply_players(&mut host.game_mut(), &info, &mut notes);
+        let pathing = match &wpm {
+            Some(wpm) => pathing::install(
+                &mut host.game_mut(),
+                wpm,
+                (playable.min_x, playable.min_y),
+                (info.playable_width, info.playable_height),
+                &mut notes,
+            ),
+            None => {
+                notes.push("no war3map.wpm: units move in straight lines".to_string());
+                None
+            }
+        };
         if let Some(table) = &rng {
             host.set_rng_table(table.clone());
             // Game start: the global generator and the streams are seeded from the game seed.
@@ -202,6 +226,7 @@ impl Engine {
             natives_declared,
             natives_referenced,
             missing_natives: natives_missing,
+            pathing,
             config_status: String::new(),
             main_status: String::new(),
             steps: 0,
@@ -304,6 +329,7 @@ impl Engine {
             steps: self.steps,
             timers_fired: self.timers_fired,
             game_time: self.host.clock().now(),
+            pathing: self.pathing.clone(),
             notes: self.notes.clone(),
         }
     }
@@ -367,6 +393,14 @@ impl fmt::Display for Report {
             "playable size (w3i): {} x {}",
             self.playable_width, self.playable_height
         )?;
+        match &self.pathing {
+            Some(p) => writeln!(
+                f,
+                "pathing: {} x {} cells (32 units each), origin ({:.1}, {:.1})",
+                p.width, p.height, p.origin.0, p.origin.1
+            )?,
+            None => writeln!(f, "pathing: none")?,
+        }
         writeln!(f, "players ({}):", self.players.len())?;
         for p in &self.players {
             writeln!(

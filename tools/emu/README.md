@@ -79,3 +79,16 @@ GAME_DLL=/path/to/Game.dll PYTHONPATH=<dir with unicorn, pefile> \
 ```
 
 All scripts exit with status 1 on any mismatch and print the coverage counters of the run.
+
+`pyramid_build_vectors.py` (2026-10-11): the pyramid builder from the cell grid. Runs the rect rebuild
+`0x6F488330` (level A from 2x2 cells, levels B to D from the level below) on random grids, including odd
+sizes, and compares every record word of levels A to D with the model of `docs/spec/pathing-build.md`.
+It does not use `emu.call` (its 200,000-instruction cap stops a 40 x 40 rebuild early). Writes
+`crates/sim/tests/pathing/build_data.rs`:
+
+```bash
+GAME_DLL=/path/to/Game.dll EMU_PYLIB=<dir with unicorn, pefile> \
+  python3 tools/emu/pyramid_build_vectors.py --cases 300 --rs crates/sim/tests/pathing/build_data.rs
+```
+
+`EMU_PYLIB` is added to `sys.path` before the emulator is imported (use it instead of `PYTHONPATH`).
