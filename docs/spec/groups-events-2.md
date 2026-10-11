@@ -257,3 +257,7 @@ The distance, threshold and gate arithmetic and the loop itself are the original
 | Cell size and origin | not known | CONFIRMED 32 units, origin W+0x70 / W+0x6C |
 | State-event mapping | UNSURE | LIKELY (states 1 and 3 register nothing: CONFIRMED) |
 | Player-unit observer owner | UNSURE | CONFIRMED target is the player object, LIKELY firing player |
+
+
+## Addendum (lead, 2026-10-11)
+The claim in section 2.2 that composing the public helpers matches 0x6F6EF3B0 in only 78% of cases was an operand-order error: `sub(bx, ax)`, `mul`, `mul`, `add` matches the fused routine on all 12,000 recorded Unicorn cases (crates/softfloat `arith::dist2`, tools/emu/softfloat_vectors.py case `dist2`).
