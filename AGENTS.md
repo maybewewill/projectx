@@ -191,7 +191,8 @@ tools/
 
 ### 4.3s Attack cycle (spec: docs/spec/attack-cycle.md, pass 1)
 - CAbilityAttack (vtable `0x6F8B252C`) is message driven: slot 3 `0x6F0D16E0`; order 0xD000F → start `0x6F0CC090`, timer 0xD01B1 → execute `0x6F0CF660`. Swing gate `0x6F0CD350`: cooldown ≤ 0 → range `0x6F4766E0` (floor 32.0, ε 0.001) → facing vs Misc AttackHalfAngle `0x6F476580`. Reaction delay `0x6F0CB340`: RNG real × Misc ReactionDelay (stream UNSURE). Execute: **the damage roll happens before** the phase switch; phase 1 instant, 2–8 missiles (CMissile `0x6F89147C`, impact slot 45, movement slot 47). UnitDamageTarget `0x6F3C8850` → target slot 0x120 = `0x6F2A40D0`.
-- Not found: the idle target acquisition driver (the acquire range lives at attack+0x244), missile arithmetic, JASS ids for the damaged/attacked events.
+- **Pass 2 (attack-cycle-2.md):** ✅ range predicate `0x6F4766E0` (Unicorn): accepted iff **D < (range/32 + collA + collB)²** (strict, D = squared distance in cells, a tie is rejected). ✅ Reaction delay = **RNG stream 9** × Misc ReactionDelay. Scan: timer 0xD01C1 (1.0 s; the tick `0x6F0D1380` re-arms every 0.5/1.0 s), scan `0x6F0CF210` only for idle units (flag 0x200); group builder `0x6F2A3270` + callback `0x6F0CCFA0` (radius from slot 0xEC with 1500.0); **the first candidate that passes in the range query's enumeration order wins** (no sorting/priority/RNG, LIKELY). Missiles: slot 47/45 = impact checks; flight (speed/arc/homing) is in the engine projectile system `0x6F4E86C0` — not worked out.
+- Still open: missile flight, JASS ids for damaged/attacked, the meaning of the gate count `0x6F2A0210`.
 - ✅ (lead) SetUnitAcquireRange `0x6F26D620`: no attack ability (+0x1E8) → nothing; otherwise stores if `50.0 < v` per the x87 compare (NaN is stored, ≤ 50 is ignored). Our code is fixed accordingly.
 
 ### 4.3t Economy (spec: docs/spec/economy.md, pass 1, partial)
