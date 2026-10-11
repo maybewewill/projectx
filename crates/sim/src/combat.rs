@@ -115,7 +115,8 @@ pub struct AttackType {
     /// Flat bonus added to the dice total (`dmgplus`; the bonus is dropped when `dice` is zero, CONFIRMED).
     pub dice_bonus: i32,
     /// Attack type row of the damage-type table: 0 Spells, 1 Normal, 2 Pierce, 3 Siege, 4 Magic, 5 Chaos, 6 Hero
-    /// (binary order of the spec, section 7).
+    /// (binary order of the spec, section 7). This is the weapon's atkType (CONFIRMED, spec section 12.1); the
+    /// weapon's missile type (`weapTp`) does not select the row.
     pub damage_type: u8,
     /// The damage class word of the attack record (`+0x14`). A basic attack is always `0x10`
     /// ([`crate::damage::ATTACK_DAMAGE_CLASS`], CONFIRMED: the execute routine pushes the literal). The armor factor

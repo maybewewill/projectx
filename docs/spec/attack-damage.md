@@ -373,7 +373,7 @@ answer (`vf 0x11C`), and the Misc keys and player objects the routine reads (set
 - Code: `AttackType::damage_class` = `sim::damage::ATTACK_DAMAGE_CLASS` (0x10). The gamedata heuristic
   `DamageType::is_physical` (Normal, Pierce, Siege, Hero) is removed; it had no basis in the binary.
 
-### 11.2 Damage-type row and ethereal slot (`+0x20`): NOT RESOLVED (UNSURE, the most important open item)
+### 11.2 Damage-type row and ethereal slot (`+0x20`): RESOLVED in section 12.1 (the text below is the earlier analysis)
 
 - The target reads `+0x20` as the table row (`0x6F26D300`, EDX) and as the ethereal slot index (`0x6FAB42E4 + 4k`).
 - The constructor writes 0 there. The execute body writes nothing to the record's `+0x20` (the record is the stack slot
@@ -449,7 +449,7 @@ and type, the record flags `0x100`, the weapon's class, and zero counters, flags
   flag tested for the source and the target.
 - Constant `0x6FAAE574` = 100.0 (start-up value; CONFIRMED value, UNSURE meaning).
 
-### 11.7 Evasion `CAbilityEvasion::EvadeAttack` (`0x6F08BD20`, slot `0x168` of the evasion class, vtable `0x6F89D628`)
+### 11.7 Evasion `CAbilityEvasion::EvadeAttack` (`0x6F08BD20`, slot `0x168` of the evasion class, vtable `0x6F89D628`; the gate polarity and the consultation point are corrected in section 12.2 and 12.3)
 
 CONFIRMED body (disassembly):
 - returns 0 when the ability's `+0x3C` is > 0 (signed);
@@ -486,3 +486,109 @@ chance table and no consultation point. Only the comparison is confirmed.
   `TARGET_DAMAGE_VECTORS`, the output of `tools/emu/target_damage_emu.py`, kept outside the repository).
 - `tools/emu/target_damage_emu.py`: the Unicorn harness (per line: 21 inputs, 56 table cells, 7 ethereal slots, 21
   negative-armor entries, the output and the value sent to the HP change).
+
+## 12. Basic-attack row (atkType) and evasion (2026-10-11, Haiku)
+
+Plain words; addresses are 1.26a. The tags are as before. The Unicorn runs are the ones named in each part. Nothing
+from Game.dll is written into the repository: the harnesses print only counts and addresses.
+
+### 12.1 Row (`+0x20`) of a basic attack: the weapon's atkType (CONFIRMED value, LIKELY which weapon field)
+
+- **Writer.** The execute `0x6F0CF660` writes the record's `+0x20` at `0x6F0CF840`: it loads the unit's weapon
+  field `unit+0xF4+4w` (`mov eax,[esi+edi*4+0xf4]` at `0x6F0CF839`) and stores it into the record. The constructor
+  `0x6F2556E0` has just written `0` there (`0x6F255714`). Then the attack-handler callback `0x6F2763A0` runs. Nothing else
+  on the direct path writes it.
+- **Which value.** The unit field `+0xF4` comes from the weapon data loader (the per-weapon record of `0x6F0D0EA0`,
+  field 0x14). The value range 0..6 and the table rows say it is the **atkType** enum: the name reader `0x6F262B00` maps
+  `unknown`/`spells` (or any unknown name) to 0, `normal` 1, `pierce` 2, `siege` 3, `magic` 4, `chaos` 5, and `hero` to 6
+  (CONFIRMED by decompile). That field's SLK key was not traced: LIKELY atkType, not CONFIRMED.
+- **Unicorn** (`tools/emu/execute_row_emu.py`, real execute code, stubs for the calls outside the path): 56 runs = missile
+  type `weapTp` 1..8 x atkType 0..6. In **56 of 56** the write to record `+0x20` happens before the missile-type switch and
+  equals atkType. On the direct paths (weapTp 1 normal and 4 instant, which call the target routine directly) the target
+  routine receives record `+0x20` equal to atkType in **14 of 14**. For weapTp 2, 3 and 5..8 the run stops at a missile call
+  that is not stubbed; up to that point no other write reaches record `+0x20`.
+- **Missile-type switch** (`unit+0xDC+4w`, values 1..8 = normal, missile, artillery, instant, msplash, mbounce, mline,
+  aline; enum reader `0x6F262D30`, CONFIRMED). It does not change record `+0x20` (the direct paths show no later write;
+  its stores at `[esp+0x18]` are a different slot, 0x20 bytes below the record). So the missile type does **not**
+  select the row. The earlier idea that case 4 sets the row to 1 is wrong.
+- **Missiles** (LIKELY, not run): `0x6F0C54C0` copies record `+0x20` into the attack-info object (`+0x58`). The impact
+  record is then built from that object, so a missile carries the atkType too. UNSURE.
+- **Consequence for the model:** `gamedata` (atkType1 -> `DamageType`) and `SpecDamage` already use this row; no value
+  change is needed. Comments updated in `crates/sim/src/damage.rs` (`TargetSide::category`) and
+  `crates/sim/src/combat.rs` (`AttackType::damage_type`).
+
+### 12.2 The evasion decision (CONFIRMED)
+
+- `CAbilityEvasion::EvadeAttack` `0x6F08BD20` (slot `0x168` of vtable `0x6F89D628`; the body is at `0x6F08BD20`–`0x6F08BD96`):
+  1. `+0x3C > 0` (signed): return 0, no draw.
+  2. Call the object's slot `0x268` with argument 0. **If it returns 0, return 0, no draw.** (Section 11.7 had this
+     backwards; the code tests `test eax,eax; je` at `0x6F08BD41`.)
+  3. Chance `c` = `0x6F02E9E0(level = +0x50)` (section 12.4).
+  4. `r` = one draw from `0x6F2853D0` with **EDX = 2** (stream 2, combat), the same stream as the dice (section 3.4).
+  5. **Evades iff `c > r`** (`fcom` at `0x6F08BD7D`; a strict compare). Unordered (NaN) evades: the parity flag is set.
+     Equal values do not evade.
+  6. On evade: `0x6F052FB0` (the effect, not decoded) and return 1. Otherwise return 0.
+- Unicorn (`tools/emu/evasion_emu.py`): **300** decision cases (random bit patterns including NaN, equal values, random
+  draws in [0,1)), **0 mismatches**; every call used stream 2 with exactly one draw; the effect ran once on each evasion.
+  Gate cases (`+0x3C > 0`, slot `0x268` = 0): **0 draws**, result 0.
+- Code: `sim::damage::evades` (strict `chance > draw`, NaN evades), `sim::damage::EVASION_STREAM` = 2. Tests in
+  `crates/sim/tests/evasion.rs`.
+
+### 12.3 Where evasion is consulted (order CONFIRMED; whose abilities UNSURE)
+
+- **Order** (execute `0x6F0CF660`, the direct paths weapTp 1 and 4, CONFIRMED by the trace and the asm): record and
+  constructor, then the dice (`0x6F0C6940`, stream 2), then the callback `0x6F2763A0`, then the switch, then the **miss gate**
+  `0x6F2BEAC0` (called with ECX = the attack ability's owner `+0x30`, EDX = the target, the first stack argument 0 and the
+  second the flag `flags & 0x400`, which must be 0). Only if the gate returns 1 does the execute call `0x6F2BB970` (miss text)
+  and skip the rest. Otherwise it goes on to the callback `0x6F2764C0` and the target routine. So: **dice first, then the
+  evasion draw; a successful evasion stops the attack before the target routine**, so no armor, damage-type table,
+  ethereal factor or HP change happens for it. (The dice draw is spent either way.)
+- **Gate** `0x6F2BEAC0`: with the second argument 0 it calls `0x6F2BEA20`, which runs the walk `0x6F077360` (score slot
+  `0x158`, execute slot `0x164`; for the evasion class `0x164` writes 0.0 and returns, `0x158` is not checked). Then it
+  calls `0x6F2BB960` -> `0x6F077420` (best-of walk): for each entry, score = slot `0x15C` (`0x6F08BDA0`: the count gate,
+  the enabled test, then the chance of section 12.4), keep the entry with the largest score (strict `<`, so the first one
+  wins ties, starting from 0.0); then slot `0x168` (EvadeAttack) on that entry. The gate returns its result.
+- **Whose entries (UNSURE).** The walk calls the iterator `0x6F4786B0` -> `0x6F03FA30` (ECX = index, EDX = key; it keeps
+  the entry whose key `+0x18` equals EDX). Just before that call the walk loads **EDX = (this+0x1E0) & (this+0x1DC)** and
+  **ECX = this+0x1DC** (`0x6F077421`–`0x6F07743B`). So the key the iterator sees is a mask value, not the target pointer,
+  and the index is an address. How the registry resolves that is not decoded. A Unicorn run that uses the real iterator
+  finds no entries, so the owner that matters is not confirmed. The emulator run below models the iterator as returning
+  the entries (see the tool's notes).
+- **Unicorn, consultation point** (`tools/emu/execute_evade_emu.py`, real gate, walks, decision and effect; the iterator
+  returns the fake entries): case A (one entry owned by the attacker, chance 1.0): evaded, target routine **not** entered,
+  miss text 1, effect on the entry, one draw on stream 2 (after the dice). B (one entry owned by the target, chance 1.0):
+  as A. C (one target entry, chance 0.0): no draw, target routine entered. D (one target entry, chance 0.25, draw 0.5): one
+  draw, not evaded, target routine entered. E (one entry for each owner, chance 1.0): as A, the first entry evades.
+  Five of five as the decision rule predicts. This shows the order and the effect; it does not show which unit's list.
+- **Not known:** whether a miss changes the swing timing or the cooldown (the execute ends early; the timer side is not
+  checked). Whether the target's own evasion is consulted anywhere else (not on this path). What `0x6F2BEA20` does with
+  the real registry.
+
+### 12.4 Evasion chance (`0x6F02E9E0`, CONFIRMED value, LIKELY data field)
+
+- Level `< 0` (signed): 0.0. Otherwise: the definition `d` = ability `+0x54` (if 0, `0x6F265ED0` supplies it; not decoded).
+  If `d+0x2C` is nonzero and `level < d+0x50`: the float at `(d+0x54) + 0x20 + level*0x68`. Else 0.0.
+- So the chance is the **level record's `+0x20` float** (the 0x68-byte level records, section 4.3r). Which SLK field that is
+  is UNSURE (the field name was not traced).
+- Unicorn: **100** table cases (random tables of 1..8 levels, levels -2..count+2, a definition without its flag): **0
+  mismatches**.
+- Code: `sim::damage::evasion_chance(table, level)` (the caller passes an empty table when the definition has no data).
+
+### 12.5 Summary of what is in the code now
+
+- `crates/sim/src/damage.rs`: `EVASION_STREAM`, `evades`, `evasion_chance`; doc updates. **Not wired** into `SpecDamage`:
+  the unit whose evasion entries apply (12.3) is not decoded, so wiring it now would be a guess.
+- `crates/sim/tests/evasion.rs`: 5 synthetic tests (always run).
+- The row (12.1) is the existing model; no value change.
+- Tools (outside the Game.dll data, numbers only): `tools/emu/execute_row_emu.py` (12.1), `tools/emu/evasion_emu.py`
+  (12.2, 12.4), `tools/emu/execute_evade_emu.py` (12.3).
+
+### 12.6 Open items (ordered by value)
+
+1. Which unit's ability entries the miss gate sees (12.3): decode the registry behind `0x6F03FA30`, or find the
+   evasion ability owner's link. Blocks wiring evasion.
+2. The draw conversion of `0x6F2853D0` (the real in [0,1) from stream 2): not decoded to a formula. The GetRandomReal
+   conversion (rng.md) is the candidate (LIKELY), not checked.
+3. Missile impacts (weapTp 2, 3, 5..8): the atkType carried by the attack-info object and the impact's own evasion check
+   (`0x6F2BEAC0` with a missile object, which also runs the `ChanceToMiss` roll, `CMissile.cpp`). Not run.
+4. Chance field name (12.4) and the definition loader `0x6F265ED0`.

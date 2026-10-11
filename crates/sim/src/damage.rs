@@ -15,7 +15,9 @@
 //! (`docs/spec/attack-damage.md` section 4). Not implemented (open in the spec): the attack-handler passes (evasion,
 //! critical, bash and the other abilities; their list walk is not in [`target_side_amount`]), the target's counters
 //! and flags (the model uses zero), and the Gaussian dice path above 16 dice (its constants are UNSURE;
-//! [`SpecDamage`] falls back to the weapon's placeholder value there).
+//! [`SpecDamage`] falls back to the weapon's placeholder value there). The evasion decision ([`evades`]) and the
+//! chance table ([`evasion_chance`]) are implemented, but not consulted by [`SpecDamage`]: which unit's abilities
+//! the original's miss gate walks is not decoded (spec section 12.3).
 //!
 //! The 21-entry negative-armor table at `0x6FAB4300` is in BSS: its values are written by a start-up initialiser
 //! (`0x6F85A4C0`, see `docs/spec/attack-damage.md` section 5.1), so a file read cannot see them.
@@ -263,7 +265,10 @@ pub struct TargetSide {
     pub raw: F32,
     /// Record `+0x14`: the damage class word (`0x10` for a basic attack, `1 << damage type` for a native).
     pub class: u32,
-    /// Record `+0x20`: the attack row of the damage-type table and of the ethereal slots (`0..=6`).
+    /// Record `+0x20`: the attack row of the damage-type table and of the ethereal slots (`0..=6`). For a basic attack
+    /// it is the weapon's atkType index (`0` Spells, `1` Normal, `2` Pierce, `3` Siege, `4` Magic, `5` Chaos, `6` Hero),
+    /// CONFIRMED by Unicorn (spec section 12.1): the execute writes it from the unit's weapon field `+0xF4` before the
+    /// missile-type switch, and the switch does not change it.
     pub category: u32,
     /// Record `+0x00` is not null (a source unit exists).
     pub source_present: bool,
@@ -419,6 +424,30 @@ pub fn target_side_amount(
         return stop;
     }
     sent
+}
+
+/// The RNG stream of the evasion draw (`0x6F08BD20` sets `edx = 2` before the draw, CONFIRMED; spec section 12.2).
+pub const EVASION_STREAM: usize = 2;
+
+/// The evasion decision of `CAbilityEvasion::EvadeAttack` (`0x6F08BD20`, CONFIRMED by disassembly and by Unicorn,
+/// `tools/emu/evasion_emu.py`: 300 decision cases and 0 mismatches). The attack is evaded iff `chance > draw`, a strict
+/// compare. An unordered compare (either operand NaN) also evades: the x87 `fcom` sets the parity flag and the routine
+/// tests it. Equal values do not evade.
+pub fn evades(chance: F32, draw: F32) -> bool {
+    // Evades unless the chance is less than or equal to the draw. `partial_cmp` is `None` for NaN, which evades.
+    let order = f32::from_bits(chance.to_bits()).partial_cmp(&f32::from_bits(draw.to_bits()));
+    !matches!(order, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal))
+}
+
+/// The evasion chance of one level (`0x6F02E9E0`, CONFIRMED by Unicorn: 100 cases, 0 mismatches): the float stored at
+/// the level's record `+0x20` in the level table of the ability's definition, for `0 <= level < count`; `0.0` for a
+/// negative level, a level at or above the count, or a definition without its data flag. `table` is the level table
+/// (one entry per level) and must be empty when the definition has no data.
+pub fn evasion_chance(table: &[F32], level: i32) -> F32 {
+    match usize::try_from(level) {
+        Ok(index) if index < table.len() => table[index],
+        _ => F32::ZERO,
+    }
 }
 
 /// The spec damage model: dice on stream 2, then the target side ([`target_side_amount`]) with the target's armor
