@@ -108,6 +108,7 @@ fn boot() -> Engine {
         ai_common: Some(COMMON_AI.to_string()),
         ai_scripts: vec![("prod.ai".to_string(), AI.to_string())],
         game_archives: vec![game_archive()],
+        check_natives: false,
     })
     .expect("boot")
 }

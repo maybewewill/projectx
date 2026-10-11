@@ -1,5 +1,7 @@
 # JASS front end (scanner, parser, compiler entry): behaviour spec
 
+> **2026-10-11:** section 8 ("Real compile path, name rules, return analysis") supersedes the UNSURE items of sections 1.6, 4 and 7 and corrects the case rule (identifiers are case-sensitive).
+
 Scope: Warcraft III 1.26a Game.dll, decompiled pseudo-C only (chunk_019.c and index.tsv). No PE image or table data is in the workspace, so the flex DFA tables, the yacc action/goto tables and the flex rule text are NOT available. Anything that depends on them is marked UNSURE.
 
 Confidence key: CONFIRMED (seen clearly in code), LIKELY (strong inference from code shape), UNSURE (cannot be determined from this material).
@@ -204,3 +206,152 @@ Keywords the AST printer emits, all confirmed as strings in the decompile: `func
 2. Confirm the 0x130-0x133 identifier classes against the symbol-kind enum.
 3. Confirm whether `%` reaches NodeMod in the surface grammar.
 4. Confirm the NodeAnd / NodeOr virtual codegen (conditional jumps or not) from the vtable.
+
+## 8. Real compile path, name rules, return analysis (lane J, 2026-10-11)
+
+Sections 1-7 were written from one decompile pass without the tables. This section is the result of running the
+**path the game really uses** in Unicorn (harness `tools/emu/jasscomp/realpath.py`) on more than 5,000 probe programs and
+reading the node constructors and validators in IDA. It **corrects** three older claims: identifiers are
+**case-sensitive** (sections 1.6, 4 and `docs/spec/jass-bytecode.md` said case-insensitive), the "return bug" rule
+(which `return` statements are type-checked) is decoded in 8.6, and the entry `0x6F458900` does accept `native`
+lines when the native table is registered first (the earlier harness rejected them for an unrelated reason, 8.9).
+Confidence: CONFIRMED = observed in Unicorn on the real code and covered by the probe corpus; LIKELY = read from the
+decompile; UNSURE = not checked.
+
+### 8.1 Who compiles what
+
+`0x6F458900` (ECX = segment list, EDX = error reporter, stack p4, p5) has exactly four callers. CONFIRMED.
+
+| Caller | Compiles | Reporter | p4 / p5 |
+|---|---|---|---|
+| `0x6F3B1C30` (from `0x6F3B5450`, from the map loader `0x6F3AEF80`) | `common.j`, `blizzard.j`, the map's `war3map.j` (three segments) | `0x6F3B18A0` (formats a message) | 0 / 8.6 |
+| `0x6F2DB0F0` (from `0x6F2DCD40`) | `common.j`, `common.ai`, the race script (`human.ai`, ...) for one AI VM | `0x6F2CFCA0` | 0 / 1 |
+| `0x6F3B5310` | `scripts\common.j` + one script text (script check; the next call is `0x6F44B640(0, 1, 1, 300000)`, the 300k op budget) | `0x6F3B5300` | 0 / 1 |
+| `0x6F737260` | `common.j` + (`common.ai` or `blizzard.j`) + a text (editor side, after `0x6F71D9E0`) | `0x6F72D1F0` | 0 / 1 |
+
+* The input is an array of 8-byte records `{name pointer, text pointer}` ending with a NULL text. The scanner advances to the next record at the
+  end of a text (`0x6F4587D0`); it is **one parse over the concatenation**, but the top-level state restarts at each
+  record: a `globals` block, a `type` or a `native` may follow the functions of the previous record (retail
+  `war3map.j` starts with `globals` after Blizzard.j's functions). Within one record they may not follow a function.
+  CONFIRMED (corpus `b4_x_func_then_globals`, `x_func_then_type`, `x_func_then_native`).
+* Order of use: a name is visible from its declaration on, across records. Calling a function of a later record is an error.
+* The map path also hashes the three files (`0x6F3B1A20`): `c = rol(rol(h(common.j) ^ h(blizzard.j), 3) ^ 0x03F1379E, 3)` then
+  `rol(c ^ h(war3map.j), 3)` with `h` = `0x6F39E5C0` (a script checksum for the lockstep handshake, LIKELY; not used by us yet).
+* **Errors** call the reporter and set a flag in the compile context (`+0x8C`); a flagged compile returns NULL. There is **no partial
+  load**: one error of any kind drops the whole script set, no function is skipped. The reporter only formats text. The map loader
+  (`0x6F3AEF80`) returns 0 and the map does not load; the AI start fails for that player. CONFIRMED (every erroneous probe emitted nothing). After a
+  syntax error the yacc engine goes on and reports follow-up errors, but still nothing is emitted.
+
+### 8.2 Natives are checked against a registry
+
+Before any map script is compiled, game start (`0x6F3A2EC0`, also `0x6F3AFE90`, `0x6F008420`) runs `0x6F3D4020`, which registers
+1,167 common natives with `0x6F455110(name, descriptor, fn)` into a table in slot 5 of the per-thread block
+(`TlsGetValue(dwTlsIndex)`, `dwTlsIndex @ 0x6FAB7BF4`); the AI natives follow with `0x6F2E3D90` (via `0x6F2E4750`, from `0x6F39F360`).
+A `native` declaration in the script must name a registered native with the **exact spelling** and a matching signature descriptor:
+
+| Observation | Error code |
+|---|---|
+| unknown name (`native Zork ...`), or the same name in another case | 34 |
+| parameter count / type / return type differ (matcher `0x6F4572D0`, handle types compare the **exact type name**, not subtyping) | 37 |
+| the same native declared twice | 29 |
+
+The comparison stops after the return letter: four natives are registered with a stray `;` (`GetTournamentFinishSoonTimeRemaining` `()R;`,
+`GetTournamentFinishNowRule` `()I;`, `LoadInteger/Real/Boolean/Str` `(Hhashtable;II)I;` ...) and retail `common.j` declares them without it. CONFIRMED.
+The unmodified real `common.j` (166,690 bytes) compiles with 0 errors, as do `common.j + Blizzard.j`, `+ (6)BomberCommand's war3map.j`
+(673,432 bytes of bytecode) and `common.j + common.ai + undead.ai` (97,816 bytes). `crates/jass` keeps the registry optional
+(`CheckOptions::natives`, `NativeRegistry::from_tsv(docs/spec/natives-1.26a.tsv)`); `engine` passes it.
+
+### 8.3 Identifiers are case-sensitive
+
+The symbol table hashes names with Storm ordinal 590 (case-insensitive hash) but compares with ordinal **508 = `SStrCmp`, case-sensitive**. So
+`native Rect` and `type rect`, `native Player` / `type player`, `native Sleep` / `constant integer SLEEP` (`common.ai`) and
+`function undead_mine` / `constant integer UNDEAD_MINE` (`undead.ai`) are pairs of different names. The three real cases that
+contradicted the checker all had harness causes: (b) and (c) were the case folding of that stub, (a) is the return analysis of 8.6, and the "reject every `native`" symptom was the empty native table. CONFIRMED.
+Keywords are lower case only (`FUNCTION`, `IF`, `True`, `NULL` are plain identifiers and fail).
+
+### 8.4 Name and declaration rules
+
+Every rule below is a probe on the real path (error code in brackets) and a test in `crates/jass/tests/original_probes.rs`.
+
+* **Top level**: `type`, `globals ... endglobals` (any number, may be empty), `native` / `constant native` in any order, then `function` / `constant function`
+  to the end of the record. `constant type` is a syntax error [2]. Anything but variables inside `globals` is an error [25].
+  A function body is `local` lines, then statements; `local` after a statement [16]; one statement per line [12]; no nested function [16].
+* **Types**: `type T extends P`: `P` is `handle` or an earlier user type [33 for unknown / forward / itself / `integer` / `code` / `nothing`]; `T` must not be a
+  builtin name or an earlier type [29]; `Unit` is not `unit`.
+* **One namespace for globals, functions, natives and types** (exact spelling): declaring a name that is already any of these is an error [29 or 12]. This includes
+  the keywords and the builtin type names as variable names (`integer`, `handle`, `code`, `nothing`, ... [29]).
+* **Locals and parameters** may shadow a global and may repeat (the last one wins); a **local** may not take the name of a type [25] or of any function / native declared earlier,
+  **including the function being defined** [25]; a **parameter** may not take the name of a type or an earlier function, but may take the function's own name. A local may use the
+  name of a *later* function.
+* A name is visible only after its declaration: a function body sees functions declared above it and itself (recursion works, mutual recursion does not [30]); a global initializer
+  sees what is above it. `function name` (code reference) needs a declared function or native of any signature [30]. Using a function name as a variable [9].
+* Lexical: identifiers start with a letter and continue with letters, digits and `_` (a leading `_` or digit fails [25]); `//` comments only (no `/* */`); string escapes are exactly
+  `\" \' \\ \b \f \n \r \t` [6 otherwise]; strings may contain raw newlines; rawcodes are `'x'`, `'xxxx'` or one escape (`'\n'`), 2, 3 or 5 characters or escapes inside a 4-character code fail [6];
+  `0x` / `0X` / `$` hex, leading-`0` octal (`089` fails [12]), `1e5` fails, `.5` and `5.` work, decimal literals wrap, `%` is not an operator, `;`, `!`, `&&`, `<>`, `? :` fail,
+  unary `+` works, CR, LF and CRLF all end a line. Calls take no trailing comma [6]; `takes nothing, integer a` fails [20]; parameters cannot be arrays [29]; `constant` arrays fail [48].
+* Arrays: `set A = 1` and `A` without an index fail [13], a scalar with an index [46]; the index must be `integer` [45] (`null` fails); array globals / locals take no initializer [12];
+  `constant` globals need an initializer [11] and cannot be assigned [42].
+
+### 8.5 Expression typing
+
+Result of the full type matrix on the real compiler (integer, real, string, boolean, code, `handle`, `widget`, `unit`, `item`, `player`, null; 2,812 entries in `tests/data/original_matrix.txt`):
+
+| Construct | Accepts |
+|---|---|
+| `==`, `!=` | either side `null`; integer and real with each other; two handle types of **any** relation (unit == player is fine); otherwise equal types |
+| `<`, `<=`, `>`, `>=` | integer / real pairs; `null` next to an integer or real; nothing else (strings, `null < null` fail) |
+| `and`, `or`, `not`, `if`, `elseif`, `exitwhen` | booleans only (`null` fails) |
+| `+` | numbers (result real if either is real); string + string. `-` `*` `/`: numbers only |
+| unary `-` | numbers (same type) |
+| `set` / initializers / global initializers | same type; integer into real; `null` into string, code and handle types; a handle into an **ancestor** type (never a descendant); `null` into integer / real / boolean fails |
+| call arguments | like `set`, **and `null` is accepted for any parameter type** (`call g(null)` for an integer parameter) |
+| array index | integer |
+
+### 8.6 Return analysis (the "return bug")
+
+`return` statements are **not** checked one by one. Every statement node carries `(flag, type code, type ref)`: flag 0 none, 1 `return`, 2 `return value`;
+type codes 2 null, 3 code, 4 integer, 5 real, 6 string, 7 handle (ref = the handle type's node), 8 boolean. The parser merges them while it builds the tree. CONFIRMED by
+disassembly and by 2,000 random programs (strict 1,400 + lenient 600, 0 mismatches against `tools/emu/jasscomp/retmodel.py`).
+
+* **Return node** `0x6F461E30`: flag 2 with the expression's type, or flag 1 for a bare `return`. **Loop** `0x6F461C30` copies its body's triple. **exitwhen** `0x6F461D30` is node kind 48 and carries nothing.
+  Other statements carry nothing.
+* **Statement list** `0x6F4614D0` (a left fold, `S` = the new statement, `P` = the previous statement as modified so far; strict mode):
+  the list flag starts as `S.flag` unless `P` is an `exitwhen`; if neither has a flag, the type is `S`'s. Flags of `S` and `P` that differ: both non-zero -> **conflict** (void `return` mixed with `return value`);
+  only `S` has one -> take `S`'s; only `P` has one -> take `P`'s triple **and write it into `S`** (so the information flows on through statements without returns).
+  If both are `2`: types `null` yield to the other; `integer`/`real` mix keeps `S`'s; any other different pair -> **conflict**; two handles with different type refs -> **conflict** (even inside a `handle` function).
+  A conflict is error 41 at that point (validator `0x6F461720`).
+* **if / elseif / else** `0x6F4617C0`: a `null` branch takes the other branch's string / code / handle type; node flag = then-flag if equal or non-zero, else the else-flag; node type = then's
+  type when its flag is 2 (the else type is **ignored** after that); no `else` -> the node is the then-part. Validator `0x6F461B80` [41]: both branches have flag 2 and different non-zero type codes
+  (integer vs real is reconciled by a conversion node). `elseif` nests to the right.
+* **Function** (`0x6F461260` stores the body list, validator `0x6F4611D0`): a `returns nothing` function fails [39] if the body flag has bit 2. Otherwise the body's type must equal the declared type (integer and real accept
+  each other, a lone `null` takes the declared type when that is string / code / handle, an empty body fails [41]), a handle type must be a subtype of the declared one (strict mode only, `0x6F460760`),
+  and the body flag must contain bit 2, else [38]: some `return value` anywhere, not on every path.
+
+Consequences: `return null` alone in an `integer` function fails; `if c then return null endif ... return 1` passes (retail `(6)BomberCommand`, `GetAirportTrainingPlane`); a value `return` at the very end is not needed if
+one sits inside an `if`; `if c then return 1 else return "a" endif` in an integer function is judged by the then-branch type only (the else type is not compared with the declared type).
+
+**Lenient mode** (p5 = 0): the list takes the last statement's flag only, never reports conflicts, the if node ignores the else flag and keeps `flag = 0` without an `else`, the handle-subtype test is off. The map loader
+switches to it (`v7 = 0` in `0x6F3AEF80`) when the map's 20-byte SHA-1 is in the table at `0x6F9426B8..0x6F942884` (23 entries) or `0x6F00E2D0(map path)` says so (an archive attribute test), and the map is not "original" (`v23 != 1`).
+Our checker supports the mode (`CheckOptions::lenient_returns`) but does not know the hash table (UNSURE: the 23 maps; none of the shipped maps needs it).
+
+### 8.7 Error code table (observed)
+
+2 syntax (declaration level) - 3 stray `;` - 6 syntax in an expression / literal - 9 function name used as a variable - 11 constant needs initializer - 12 syntax / name clash with a function - 13 array without index - 15, 16 block structure
+- 17, 19, 20, 23, 28 statement and `takes` syntax - 25 unknown or reserved type / name - 29 name already declared - 30 undefined function - 31, 32 undeclared variable - 33 bad `extends` - 34 unregistered native -
+35 argument type - 36 argument count - 37 native signature - 38 missing `return` - 39 value returned from a `nothing` function - 40 assignment type - 41 operand / return type or conflict - 42 assign to constant - 45 index type - 46 index on a scalar - 47 `exitwhen` outside a loop - 48 constant array.
+The meanings are inferred from probes (UNSURE for the rarely hit ones); the message texts are in the game's string table, not in Game.dll.
+
+### 8.8 What `crates/jass` does now
+
+`ast::ident_key` is the identity; `check::check_with` implements 8.3-8.6 (return analysis in `RStmt`/`RList`/`if_node`/`function_returns`, ported from `retmodel.py`); the lexer / parser enforce 8.4.
+`tests/original_probes.rs` replays `tests/data/original_probes.txt` (1,270 programs: hand-written, cross-record, random returns) and `original_matrix.txt` (2,812 operator / assignment entries);
+`python3 tools/emu/jasscomp/replay_corpus.py` re-runs the same corpus on the original (needs `GAME_DLL`), `retmodel.py` the random return programs. Bytecode parity of `compile.rs` is unchanged (150 of 151, the 151st is the old harness
+rejecting `native`).
+
+### 8.9 Harness faults found on the way (all fixed in `tools/emu/jasscomp/jcomp.py` / `realpath.py`)
+
+1. Storm `SMemReAlloc` (ordinal 405) with flag `0x10` means "do not move": the array growth `0x6F457930` copies and relinks by itself when it gets NULL. The stub always moved, which corrupted the symbol table after ~44 symbols (symptom: every `type X extends agent` after the 64th type failed).
+2. Storm ordinal 508 was a case-insensitive compare; it is `SStrCmp` (8.3).
+3. No per-thread block: `0x6F4550C0` / `0x6F455110` read the native table from slot 5 of `TlsGetValue(dwTlsIndex)`; and no native registration, hence the "every `native` line is rejected" symptom (error 34).
+4. A 60 KB stack: the grammar is right-recursive and a 2,400-line `common.j` needs more (the harness now has 64 MB).
+5. The CRT `realloc` / `malloc` stubs did not remember block sizes.

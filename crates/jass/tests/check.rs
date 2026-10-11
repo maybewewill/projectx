@@ -134,12 +134,15 @@ fn user_type_must_derive_from_handle() {
 
 #[test]
 fn duplicate_type_is_reported() {
-    let src = "type agent extends handle\ntype Agent extends handle\n";
+    let src = "type agent extends handle\ntype agent extends handle\n";
     let d = run(src);
     assert_eq!(d.len(), 1, "{d:#?}");
-    // Type names are case-insensitive (harness t01).
-    expect_err(&d, "duplicate type 'Agent'");
+    expect_err(&d, "duplicate type 'agent'");
     assert_eq!(d[0].line, 2);
+    // Identifiers are case-sensitive: `Agent` is another name (probe b2_type_dup_case).
+    assert!(run("type agent extends handle\ntype Agent extends handle\n").is_empty());
+    // A builtin's name is taken as well.
+    expect_err(&run("type integer extends handle\n"), "duplicate type 'integer'");
 }
 
 #[test]
@@ -271,11 +274,15 @@ fn comparisons() {
     fn_ok("local boolean b", "set b = gInt == 1.0");
     fn_ok("local boolean b", "set b = gUnit == null or gUnit != null");
     fn_ok("local boolean b\nlocal agent a", "set b = gUnit == a");
+    // Any two handle types compare, related or not (original matrix `bin_eq_unit_item`).
+    fn_ok("local boolean b\nlocal item it", "set b = gUnit == it");
     fn_err(
         "local boolean b\nlocal item it",
-        "set b = gUnit == it",
-        "cannot compare unit and item",
+        "set b = it == 1",
+        "cannot compare item and integer",
     );
+    // `null` compares with everything, and orders next to a number.
+    fn_ok("local boolean b", "set b = 1 == null and null != \"a\" and null < 1");
 }
 
 #[test]
@@ -363,13 +370,10 @@ fn undefined_variable() {
 }
 
 #[test]
-fn function_reference_needs_no_parameters() {
+fn function_reference_accepts_any_declared_function() {
     fn_ok("local code c", "set c = function Cb\ncall Run(function Cb)");
-    fn_err(
-        "local code c",
-        "set c = function CbArg",
-        "function 'CbArg' takes parameters and cannot be used as code",
-    );
+    // The original types `function X` as code whatever X takes (probe b1_funcref_with_params).
+    fn_ok("local code c", "set c = function CbArg");
     fn_err(
         "local code c",
         "set c = function Missing",
@@ -461,16 +465,11 @@ fn return_type_must_match_signature() {
     assert!(run(&real_fn("return 1")).is_empty());
     expect_err(
         &run(&int_fn("return \"x\"")),
-        "cannot convert string to integer",
+        "does not match the declared return type",
     );
-    expect_err(
-        &run(&int_fn("return")),
-        "'return' without a value, expected integer",
-    );
-    expect_err(
-        &run(&nothing_fn("return 1")),
-        "'return' with a value in a function that returns nothing",
-    );
+    // A bare `return` is a void return; it never counts as the value `return` the function needs.
+    expect_err(&run(&int_fn("return")), "does not match the declared return type");
+    expect_err(&run(&nothing_fn("return 1")), "returns nothing but returns a value");
     assert!(run(&nothing_fn("return")).is_empty());
 }
 
@@ -489,14 +488,12 @@ fn duplicate_declarations_are_reported() {
     expect_err(&d, "duplicate function or native 'Cb'");
 
     // Natives and functions share one namespace.
-    let d = run(&format!(
-        "{PRELUDE}\nnative Noop takes nothing returns nothing\n"
-    ));
+    let d = run("native Noop takes nothing returns nothing\nnative Noop takes nothing returns nothing\n");
     expect_err(&d, "duplicate function or native 'Noop'");
 
-    // Harness q05, q07: names are case-insensitive.
+    // Names are case-sensitive (probe b1_func_dup_case): `ABC` is another function than `Abc`.
     let d = run("function Abc takes nothing returns nothing\nendfunction\nfunction ABC takes nothing returns nothing\nendfunction\n");
-    expect_err(&d, "duplicate function or native 'ABC'");
+    assert!(d.is_empty(), "{d:#?}");
 }
 
 #[test]
@@ -690,12 +687,19 @@ fn output_is_deterministic() {
 // ---- identifiers and declaration placement (harness: tools/emu/jasscomp, order probes) ----
 
 #[test]
-fn identifiers_are_case_insensitive() {
-    // Harness q04, q06, q08, t01: functions, globals, locals and types ignore case.
+fn identifiers_are_case_sensitive() {
+    // The original compares names with Storm's case-sensitive string compare: a type, a function and a
+    // variable that differ in case are three different names.
     let src = format!(
         "{PRELUDE}\nfunction Test takes nothing returns nothing\nlocal Unit u = null\ncall NOOP()\nset GINT = 3\nendfunction\n"
     );
-    assert!(run(&src).is_empty(), "{:#?}", run(&src));
+    let d = run(&src);
+    expect_err(&d, "unknown type 'Unit'");
+    expect_err(&d, "undefined function 'NOOP'");
+    expect_err(&d, "undefined variable 'GINT'");
+    // `native Rect` and `type rect`, as in retail common.j.
+    let src = "type rect extends handle\nnative Rect takes real a returns rect\n";
+    assert!(run(src).is_empty());
 }
 
 #[test]
@@ -706,7 +710,9 @@ fn globals_and_types_must_precede_functions() {
     assert!(jass::parse(src).is_err());
     let src = "function f takes nothing returns nothing\nendfunction\ntype Gizmo extends handle\n";
     assert!(jass::parse(src).is_err());
-    // Natives are not covered by the harness (the original rejects `native` in user text).
+    // Natives too (probe b1_native_after_function), but each program (script segment) starts fresh.
+    let src = "function f takes nothing returns nothing\nendfunction\nnative N takes nothing returns nothing\n";
+    assert!(jass::parse(src).is_err());
 }
 
 #[test]
@@ -723,24 +729,28 @@ fn global_initializer_does_not_see_native_declared_below() {
 }
 
 #[test]
-fn a_native_may_share_its_name_with_a_global() {
-    // Retail `common.ai`: `native Sleep` and `constant integer SLEEP` (UNSURE: the original's native path could not
-    // be probed; see `Ctx::declare_native`).
+fn a_native_may_share_its_name_with_a_global_of_another_case() {
+    // Retail `common.ai`: `native Sleep` and `constant integer SLEEP` coexist because names are
+    // case-sensitive; the same spelling is a duplicate (probes b1_global_native_same, native_global_same).
     let src = "native Sleep takes real s returns nothing\nglobals\nconstant integer SLEEP = 5\nendglobals\n";
     assert!(run(src).is_empty());
     let src = "globals\nconstant integer SLEEP = 5\nendglobals\nnative Sleep takes real s returns nothing\n";
     assert!(run(src).is_empty());
+    let src = "native SLEEP takes real s returns nothing\nglobals\nconstant integer SLEEP = 5\nendglobals\n";
+    expect_err(&run(src), "duplicate global 'SLEEP'");
 }
 
 #[test]
-fn a_function_may_share_its_name_with_a_constant_global_but_not_a_plain_one() {
+fn a_function_may_share_its_name_with_a_global_of_another_case_only() {
     // Retail `undead.ai`: `function undead_mine` next to `constant integer UNDEAD_MINE` of `common.ai`.
     let src = "globals\nconstant integer UNDEAD_MINE = 5\nendglobals\nfunction undead_mine takes nothing returns nothing\nendfunction\n";
     assert!(run(src).is_empty());
-    // The emulated original rejects a function that reuses the name of a plain global (harness o17, o20, q05).
-    let src = "globals\ninteger Gx = 5\nendglobals\nfunction gx takes nothing returns nothing\nendfunction\n";
-    expect_err(&run(src), "duplicate function or native 'gx'");
+    // The same spelling is rejected, constant or not.
+    let src = "globals\ninteger Gx = 5\nendglobals\nfunction Gx takes nothing returns nothing\nendfunction\n";
+    expect_err(&run(src), "duplicate function or native 'Gx'");
+    let src = "globals\nconstant integer Gx = 5\nendglobals\nfunction Gx takes nothing returns nothing\nendfunction\n";
+    expect_err(&run(src), "duplicate function or native 'Gx'");
     // Two natives of one name stay an error.
-    let src = "native A takes nothing returns nothing\nnative a takes nothing returns nothing\n";
-    expect_err(&run(src), "duplicate function or native 'a'");
+    let src = "native A takes nothing returns nothing\nnative A takes nothing returns nothing\n";
+    expect_err(&run(src), "duplicate function or native 'A'");
 }

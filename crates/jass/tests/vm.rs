@@ -79,7 +79,9 @@ fn split_globals(src: &str) -> (String, String) {
         if !in_block && t == "globals" {
             in_block = true;
         }
-        let target = if in_block { &mut globals } else { &mut rest };
+        // Natives are declarations too: they must precede every function.
+        let decl = in_block || t.starts_with("native ") || t.starts_with("constant native ");
+        let target = if decl { &mut globals } else { &mut rest };
         target.push_str(line);
         target.push('\n');
         if in_block && t == "endglobals" {
@@ -267,15 +269,14 @@ endfunction
 }
 
 #[test]
-fn falling_off_the_end_returns_the_default_value() {
-    let mut vm = build(
-        r#"
-function NoRet takes nothing returns integer
-    local integer x = 1
-endfunction
-"#,
-    );
-    assert_eq!(vm.call("NoRet", &[]), Ok(Value::Integer(0)));
+fn a_value_function_without_a_value_return_does_not_compile() {
+    // The original rejects the whole script set (error 38 / 41): a function with a return type needs a
+    // `return value` somewhere in its body (see `jass::check`).
+    let prog = jass::parse(
+        "function NoRet takes nothing returns integer\nlocal integer x = 1\nendfunction\n",
+    )
+    .unwrap();
+    assert!(compile(&[prog]).is_err());
 }
 
 /// Hand-assembled module with one function `F` returning an integer, for opcodes the AST never emits.
@@ -942,8 +943,7 @@ endfunction
 "#,
         reg,
     );
-    // Function names are case-insensitive: the module keys are folded.
-    let target = vm.module().function_index["target"];
+    let target = vm.module().function_index["Target"];
     assert_eq!(vm.call("Give", &[]), Ok(Value::Null));
     assert_eq!(seen.get(), Some(Value::Code(target)));
 }
@@ -1007,8 +1007,15 @@ endfunction
 }
 
 #[test]
-fn names_are_case_insensitive_at_run_time() {
-    // Harness q04, q06: `call ABC()` calls `Abc`, and `GG` is the global `Gg`.
+fn names_are_case_sensitive() {
+    // The original compares names exactly (docs/spec/jass-frontend.md, "Real compile path"): `call ABC()`
+    // does not call `Abc`. Run-time lookups by name (`ExecuteFunc`, host calls) use the same exact spelling
+    // (UNSURE: not probed for the run-time name table).
+    let prog = jass::parse(
+        "function Abc takes nothing returns nothing\nendfunction\nfunction Run takes nothing returns nothing\ncall ABC()\nendfunction\n",
+    )
+    .unwrap();
+    assert!(compile(&[prog]).is_err());
     let mut vm = build(
         r#"
 globals
@@ -1018,10 +1025,12 @@ function Abc takes nothing returns nothing
     set Gg = 7
 endfunction
 function Run takes nothing returns nothing
-    call ABC()
+    call Abc()
 endfunction
 "#,
     );
-    assert_eq!(vm.call("RUN", &[]), Ok(Value::Null));
-    assert_eq!(vm.global("gg"), Some(Value::Integer(7)));
+    assert!(vm.call("RUN", &[]).is_err());
+    assert_eq!(vm.call("Run", &[]), Ok(Value::Null));
+    assert_eq!(vm.global("Gg"), Some(Value::Integer(7)));
+    assert_eq!(vm.global("gg"), None);
 }

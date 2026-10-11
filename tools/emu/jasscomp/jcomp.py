@@ -254,6 +254,10 @@ def storm_free(H, a):
 
 def storm_realloc(H, a):
     ptr, size, file, line, flags = a
+    if ptr and (flags & 0x10):
+        # flag 0x10 = "do not move": the caller (array growth 0x6F457930) treats NULL as "could not
+        # grow in place" and runs its own copy-and-relink path. Moving here would leave stale links.
+        return 0
     n = max(size, 1)
     p = H.alloc(n)
     H.mu.mem_write(p, b"\0" * n)
@@ -281,10 +285,13 @@ def storm_strdup(H, a):
     return p
 _def("Storm.dll!Ord507", storm_strdup, 3, True)
 
+CASE_INSENSITIVE_508 = False   # Storm ordinal 508: SStrCmp (case-sensitive) vs SStrCmpI; see docs/spec/jass-frontend.md section 8
 def storm_strcmp_i(H, a):
     s1, s2, maxlen = a
-    x = H.cstr(s1)[:maxlen & 0x7FFFFFFF].upper()
-    y = H.cstr(s2)[:maxlen & 0x7FFFFFFF].upper()
+    x = H.cstr(s1)[:maxlen & 0x7FFFFFFF]
+    y = H.cstr(s2)[:maxlen & 0x7FFFFFFF]
+    if CASE_INSENSITIVE_508:
+        x, y = x.upper(), y.upper()
     return 0 if x == y else (1 if x > y else 0xFFFFFFFF)
 _def("Storm.dll!Ord508", storm_strcmp_i, 3, True)
 
@@ -313,6 +320,7 @@ def c_strstr(H, a):
     return 0 if i < 0 else a[0] + i
 def c_malloc(H, a):
     p = H.alloc(max(a[0], 1))
+    ALLOC_SIZE[p] = max(a[0], 1)
     return p
 def c_calloc(H, a):
     n = a[0] * a[1]
@@ -324,6 +332,11 @@ def c_free(H, a):
 def c_realloc(H, a):
     old, n = a
     p = H.alloc(max(n, 1))
+    ALLOC_SIZE[p] = max(n, 1)
+    if old:
+        cp = min(ALLOC_SIZE.get(old, 0), n)
+        if cp:
+            H.mu.mem_write(p, bytes(H.mu.mem_read(old, cp)))
     return p
 def c_isdigit(H, a):
     return 1 if 0x30 <= (a[0] & 0xFF) <= 0x39 else 0

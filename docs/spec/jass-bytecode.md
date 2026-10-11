@@ -222,7 +222,7 @@ Rules of thumb (CONFIRMED from the table): a binary operator with two leaf opera
 
 ## 7. Symbols, constants and strings (CONFIRMED unless marked)
 
-- One symbol table, keyed by name, shared by identifiers and string literal texts. Identifiers are case-insensitive (`set A = 2` resolved to the id of `a`; test `ids_e_case`). A string literal `"a"` uses the same id as the identifier `a` (test `ids_d_string_vs_name`).
+- One symbol table, keyed by name, shared by identifiers and string literal texts. Identifiers are **case-sensitive** (CORRECTED 2026-10-11: the earlier "case-insensitive" reading came from a harness stub for Storm ordinal 508, which is `SStrCmp`; `set A = 2` and `a` get different ids; see docs/spec/jass-frontend.md section 8.3; parity is unchanged, 150/151). A string literal `"a"` uses the same id as the identifier `a` (test `ids_d_string_vs_name`).
 - Symbol ids are assigned in order of first appearance, starting at 2 (first user id observed = 2; ids 0 and 1 presumably reserved, LIKELY). Functions, globals, locals, parameters and string literals all draw from the same counter. A name seen again (even as a local in another function) reuses its id (test `47_labels_two_fns`: `a` gets id 3 in both functions).
 - The global-init function takes the last id after all declarations (test `ids_c`: globals 2, 3; function 4; local 5; init function 6).
 - Integer, real and boolean literals are immediates (`imm` holds the value or bit pattern). No constant table index is used for them.
@@ -307,7 +307,7 @@ Storm and CRT models used (CONFIRMED that they produce the observed outputs; arg
 | Storm ordinal 403 | free (no-op) |
 | Storm ordinal 405 | realloc(ptr, size, file, line, flags) with size tracking |
 | Storm ordinal 507 | strdup(str, file, line) |
-| Storm ordinal 508 | case-insensitive bounded compare, returns 0 when equal |
+| Storm ordinal 508 | `SStrCmp`: **case-sensitive** bounded compare, returns 0 when equal (was modelled case-insensitive until 2026-10-11) |
 | Storm ordinal 501 | bounded copy(dst, src, size) |
 | Storm ordinal 590 | MPQ-style string hash, type 0 (LIKELY SStrHash, as the project's `StringHash` note says) |
 | Storm ordinal 578 | no-op (WorldEditStrings warning path; not needed for the observed streams) |

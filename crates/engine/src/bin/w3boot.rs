@@ -3,7 +3,7 @@
 //! ```text
 //! w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | --mpq War3.mpq [--mpq War3x.mpq])
 //!        [--ai-common common.ai] [--ai-script NAME=PATH]... [--computer SLOT[:RACE]]... [--ai-log N]
-//!        [--seed S] [--steps N] map.w3x
+//!        [--seed S] [--steps N] [--check-natives] map.w3x
 //! ```
 //!
 //! `--mpq` reads `Scripts\common.j` and `Scripts\Blizzard.j` from the archives (later ones override),
@@ -21,7 +21,7 @@ use engine::{Engine, Inputs};
 
 const USAGE: &str = "usage: w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | \
 --mpq War3.mpq [--mpq War3x.mpq]) [--ai-common common.ai] [--ai-script NAME=PATH]... \
-[--seed S] [--steps N] map.w3x";
+[--seed S] [--steps N] [--check-natives] map.w3x";
 
 #[derive(Debug, Default)]
 struct Args {
@@ -38,6 +38,8 @@ struct Args {
     computers: Vec<(u32, Option<u32>)>,
     /// `--ai-log N`: print the first N entries of the AI command log (0: none).
     ai_log: usize,
+    /// `--check-natives`: reject `native` lines that the 1.26a native table does not have (like the game).
+    check_natives: bool,
     map: Option<String>,
 }
 
@@ -98,6 +100,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--ai-script" => args
                 .ai_scripts
                 .push(parse_ai_script(&value("--ai-script")?)?),
+            "--check-natives" => args.check_natives = true,
             "--seed" => args.seed = Some(parse_seed(&value("--seed")?)?),
             "--replay" => args.replay = Some(value("--replay")?),
             "--ai-log" => {
@@ -182,6 +185,7 @@ fn inputs(args: &Args) -> Result<Inputs, String> {
         ai_common: ai.common,
         ai_scripts: ai.scripts,
         game_archives: archives,
+        check_natives: args.check_natives,
     })
 }
 

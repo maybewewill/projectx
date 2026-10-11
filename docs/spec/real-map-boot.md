@@ -31,10 +31,10 @@ boot ok, 8 unbound natives (the list above). The failing rows are listed individ
 
 | Map | Boot ok | Reason |
 |---|---|---|
-| `Maps\DotA v6.83sf.w3x`, `Maps\iCCup DotA 454.w3x`, `Download\` DotA/iCCup/garik (7 files) | no | `war3map.j` begins with the line `ICCUP_MAP_SIGNATURE_V1: <hash>`; our lexer stops at `:`. UNKNOWN how the original handles it (not investigated: custom maps) |
-| `FrozenThrone\Scenario\(6)BomberCommand.w3x` | no | `function GetAirportTrainingPlane takes integer ... returns integer / return null`. Our checker rejects it. The original compiler (Unicorn, entry `0x6F458900`, p4/p5 in {0,1}) rejects it as well: it reports an error and emits no output. So either the real load path is more lenient than that entry or the map does not compile in 1.26a. OPEN |
+| `Maps\DotA v6.83sf.w3x`, `Maps\iCCup DotA 454.w3x`, `Download\` DotA/iCCup/garik (10 files) | no | `war3map.j` begins with the line `ICCUP_MAP_SIGNATURE_V1: <hash>`; the **original rejects it too** (the real compile path gives a syntax error; with the line commented out it compiles), so these maps only load in the iCCup client |
+| `FrozenThrone\Scenario\(6)BomberCommand.w3x` | yes (fixed 2026-10-11) | `return null` inside an `if` of an `integer` function. The real compile path accepts it (return analysis merges the nested null with the final value return, docs/spec/jass-frontend.md 8.6); the checker was rejecting a lone-statement rule that the original does not have |
 | `Download\101 Rounds`, `Download\Legion TD X1-X4` | no | obfuscated scripts that declare both `O` and `o` (and `S`/`s`, ...) as globals. The original compiler is case-insensitive for identifiers (Unicorn: two globals `O`, `o` give an error), so these maps were not made for 1.26a. Not a loader problem |
-| `Download\RATD v2.50.w3x` | no | `duplicate function or native` (23 type errors), same kind of cause (not investigated) |
+| `Download\RATD v2.50.w3x` | yes (fixed) | its 23 "duplicate function" errors were names that differ only in case |
 | `Download\deprotected\iCCup DotA 500_deprotected.w3x` | no | `war3map.w3i` version 33 |
 
 ## Fixes made for this table
@@ -74,3 +74,8 @@ fdf parser and are noted in the boot report, they hold no `StringList`).
 * `crates/w3map/tests/synthetic.rs`: `reign_of_chaos_map_info_version_18`.
 * `crates/fdf/tests/parser.rs`: float suffix. `crates/gamedata/tests/profile.rs`: lenient parse and case-insensitive keys.
 * `crates/sim/tests/melee_start.rs`: gold mine units start with the `Agld` amount.
+
+
+## Re-run after the compile-path rework (2026-10-11)
+
+`w3boot --steps 60` (release build) over all 181 maps of the table above (every `.w3m` / `.w3x` under `Maps` plus the two archive-only melee maps): **167 boot** (`config: ok`, `main` started), 14 do not: the 10 signed DotA / iCCup / garik maps and the version-33 `w3i` (original rejects the script too / out of scope), and the 4 Legion TD maps (`native UnitAlive` is not a 1.26a native). The registry check of `native` lines (jass-frontend.md 8.2, `w3boot --check-natives`) was active during this run. Every shipped Blizzard map, including `(6)BomberCommand`, boots.
