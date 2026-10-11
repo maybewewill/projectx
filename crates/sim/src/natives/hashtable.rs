@@ -65,7 +65,7 @@ const HANDLE_NATIVES: &[(&str, Option<HandleKind>)] = &[
     ("UnitHandle", Some(HandleKind::Unit)),
     ("AbilityHandle", None),
     ("TimerHandle", Some(HandleKind::Timer)),
-    ("RegionHandle", None),
+    ("RegionHandle", Some(HandleKind::Region)),
     ("TriggerHandle", Some(HandleKind::Trigger)),
     ("TriggerConditionHandle", Some(HandleKind::Condition)),
     ("TriggerActionHandle", Some(HandleKind::Action)),
