@@ -24,14 +24,26 @@
 //! exactly when the host registered it with [`Game::add_resource_node`] (the map loader does this for mines, UNSURE for
 //! the initial amounts, which come from the map data).
 //!
-//! The tests are in `tests/world_natives.rs`.
+//! Gold mines. A resource node owns a [`Mine`] (the remaining gold, `Agld` `+0x6C`, see `economy.rs`). The natives
+//! above read and write it, and the harvest path ([`Game::gold_trip`]) takes gold from it.
+//!
+//! Gold and lumber of the players. [`Game::economy`] holds the stored x10 amounts, which the changer
+//! (`economy::change`) and `SetPlayerState` / `GetPlayerState` (states 1 and 2, see `natives/player.rs`) share. The
+//! credits of the harvest, the cancel refunds and the upkeep rates go through the methods of the `impl Game` block
+//! below. The original's `SetPlayerState` writes the stored value directly (no tax, no ally share; spec economy.md
+//! 1.2, CONFIRMED structure), so the native does not go through the changer.
+//!
+//! The tests are in `tests/world_natives.rs` (mines) and `tests/economy_integration.rs` (the resource paths).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use jass::vm::{NativeRegistry, NativeResult, Value};
 
-use super::game::{Game, ObjKey};
+use super::game::{Game, ObjKey, PLAYER_SLOTS};
+use crate::economy::{
+    self, EconomyConstants, Flags, Mine, MineNotice, PlayerEconomy, RefundKind, Res, Worker,
+};
 use super::hashtable::{int_at, real_at};
 use super::unit_attr::{NativeEntry, Support};
 use softfloat::F32;
@@ -86,14 +98,110 @@ pub const NATIVES: &[NativeEntry] = &[
 ];
 
 impl Game {
-    /// Registers a resource node: `unit` gives `amount` (the host's entry point, see the module notes).
+    /// Registers a resource node: `unit` is a gold mine with `amount` gold (the host's entry point, see the module
+    /// notes). An existing mine is replaced.
     pub fn add_resource_node(&mut self, unit: ObjKey, amount: i32) {
-        self.resources.insert(unit, amount);
+        self.mines.insert(unit, Mine { remaining: amount });
     }
 
     /// The amount of the resource node `unit`, or `None` when it is not one.
     pub fn resource_amount(&self, unit: ObjKey) -> Option<i32> {
-        self.resources.get(&unit).copied()
+        self.mines.get(&unit).map(|m| m.remaining)
+    }
+
+    /// The economy constants in use (see [`EconomyConstants`]).
+    pub fn economy_constants(&self) -> &EconomyConstants {
+        &self.economy_constants
+    }
+
+    /// Sets the economy constants (the engine does this at boot, from Misc or the defaults) and refreshes every
+    /// slot's upkeep rates for food used 0. UNSURE: the original refreshes the rates when the food used changes; a
+    /// host that tracks food calls [`Game::refresh_upkeep`] itself.
+    pub fn set_economy_constants(&mut self, constants: EconomyConstants) {
+        self.economy_constants = constants;
+        for p in 0..PLAYER_SLOTS as u32 {
+            self.refresh_upkeep(p, 0);
+        }
+    }
+
+    /// The gold and lumber state of slot `p`, or `None` for an index outside 0 to 15.
+    pub fn player_economy(&self, p: u32) -> Option<&PlayerEconomy> {
+        self.economy.get(p as usize)
+    }
+
+    /// Mutable gold and lumber state of slot `p`, for the host (the ally share table is set from the map here).
+    pub fn player_economy_mut(&mut self, p: u32) -> Option<&mut PlayerEconomy> {
+        self.economy.get_mut(p as usize)
+    }
+
+    /// Recomputes the upkeep tax rates of slot `p` for `food_used` (`0x6F40F620`). Returns `false` for a bad slot.
+    pub fn refresh_upkeep(&mut self, p: u32, food_used: i32) -> bool {
+        let Some(player) = self.economy.get_mut(p as usize) else {
+            return false;
+        };
+        self.economy_constants.upkeep.refresh_rates(player, food_used);
+        true
+    }
+
+    /// Credits `amount` script units of `res` to slot `p` through the changer (`0x6F416A00` / `0x6F416A40`).
+    /// Returns the credited amount in script units, or `None` for a bad slot.
+    pub fn credit_resource(&mut self, p: u32, res: Res, amount: i32, flags: Flags) -> Option<i32> {
+        if p as usize >= self.economy.len() {
+            return None;
+        }
+        Some(economy::credit(&mut self.economy, p as usize, res, amount, flags))
+    }
+
+    /// Deposits the carry of `worker` to its owner (`0x6F047C80`, tax and share on). Returns the credited amount, 0
+    /// for a bad owner or an empty carry.
+    pub fn deposit_worker(&mut self, worker: &mut Worker) -> i32 {
+        if worker.owner >= self.economy.len() {
+            return 0;
+        }
+        worker.deposit(&mut self.economy)
+    }
+
+    /// A gold trip of `worker` at the gold mine `mine` (`0x6F060890`). `None` when `mine` is not a resource node or the
+    /// owner is not a slot. `notify` is the host's visibility check for the notice. Returns the amount taken and the
+    /// notice to raise (the notice itself is not sent: event ids 0xDE and 0xDF are not mapped to a JASS event yet, see
+    /// the module notes of `natives/event.rs`).
+    pub fn gold_trip(
+        &mut self,
+        worker: &mut Worker,
+        mine: ObjKey,
+        notify: bool,
+    ) -> Option<(i32, MineNotice)> {
+        if worker.owner >= self.economy.len() {
+            return None;
+        }
+        let low_gold = self.economy_constants.low_gold_amount;
+        let m = self.mines.get_mut(&mine)?;
+        Some(worker.gold_trip(&mut self.economy, m, low_gold, notify))
+    }
+
+    /// The refund of a cancelled slot of `kind` to `owner`, gold then lumber, through the plain changer
+    /// (`0x6F062320`). `refund_applies` is false when the slot's bit in the owner's mask is set (the original then
+    /// counts instead; not modelled). Returns the credited (gold, lumber) in script units, `(0, 0)` for a bad owner.
+    pub fn refund_cancelled(
+        &mut self,
+        owner: u32,
+        kind: RefundKind,
+        gold_cost: i32,
+        lumber_cost: i32,
+        refund_applies: bool,
+    ) -> (i32, i32) {
+        if owner as usize >= self.economy.len() {
+            return (0, 0);
+        }
+        let rate = self.economy_constants.refund_rate(kind);
+        economy::cancel_train_refund(
+            &mut self.economy,
+            owner as usize,
+            gold_cost,
+            lumber_cost,
+            rate,
+            refund_applies,
+        )
     }
 }
 
@@ -149,8 +257,9 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("AddResourceAmount", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = resource_unit(&gm, a) {
-            let v = gm.resources.entry(k).or_insert(0);
-            *v = v.wrapping_add(int_at(a, 1));
+            if let Some(m) = gm.mines.get_mut(&k) {
+                m.remaining = m.remaining.wrapping_add(int_at(a, 1));
+            }
         }
         NativeResult::Return(Value::Null)
     });
@@ -168,7 +277,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SetResourceAmount", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = resource_unit(&gm, a) {
-            gm.resources.insert(k, int_at(a, 1));
+            gm.mines.insert(k, Mine { remaining: int_at(a, 1) });
         }
         NativeResult::Return(Value::Null)
     });

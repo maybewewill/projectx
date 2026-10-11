@@ -797,3 +797,190 @@ mod tests {
         assert!(with_timed.counts(&timed));
     }
 }
+
+// ---- cooldown and mana state (model; the original's storage is not found, see docs/spec/abilities-3.md) ----
+
+/// Result of the cast check of this model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastCheck {
+    Ready,
+    /// The ability's cooldown has not run out.
+    Cooling,
+    /// The unit has less mana than the cost.
+    NoMana,
+}
+
+/// Cooldowns of one unit's abilities. A running cooldown is a one-shot timer on [`crate::timer::TimerQueue`]: its
+/// expiry is the time the ability is ready again, and its payload is the ability's base code. The 1.26a binary
+/// keeps the level cooldown in the level record (`Cool`, offset `+0x14`, clamped by the builder), but the countdown
+/// and the ready check are NOT FOUND, so this is a model (UNSURE).
+#[derive(Debug, Clone, Default)]
+pub struct Cooldowns {
+    queue: crate::timer::TimerQueue<u32>,
+    running: std::collections::BTreeMap<u32, crate::timer::TimerId>,
+}
+
+impl Cooldowns {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Current queue time (the game clock of the cooldown timers).
+    pub fn now(&self) -> f32 {
+        self.queue.now()
+    }
+
+    /// `true` when no cooldown of `base` is running.
+    pub fn is_ready(&self, base: u32) -> bool {
+        !self.running.contains_key(&base)
+    }
+
+    /// Seconds left on the cooldown of `base` (0 when ready).
+    pub fn remaining(&self, base: u32) -> f32 {
+        self.running
+            .get(&base)
+            .and_then(|&id| self.queue.expiry_of(id))
+            .map_or(0.0, |e| (e - self.queue.now()).max(0.0))
+    }
+
+    /// Starts the cooldown of `base` for `seconds` from now, replacing a running one. A value that is not
+    /// greater than 0.0 starts nothing (the ability is ready at once).
+    pub fn start(&mut self, base: u32, seconds: f32) {
+        if let Some(old) = self.running.remove(&base) {
+            self.queue.cancel(old);
+        }
+        if seconds.is_nan() || seconds <= 0.0 {
+            return;
+        }
+        let id = self.queue.start(seconds, false, base);
+        self.running.insert(base, id);
+    }
+
+    /// Clears the cooldown of `base`. Returns `true` when one was running.
+    pub fn reset(&mut self, base: u32) -> bool {
+        match self.running.remove(&base) {
+            Some(id) => self.queue.cancel(id),
+            None => false,
+        }
+    }
+
+    /// Advances the queue to `target` and returns the abilities that became ready, in expiry order.
+    pub fn advance_to(&mut self, target: f32) -> Vec<u32> {
+        let mut ready = Vec::new();
+        while let Some(fired) = self.queue.pop_due(target) {
+            if self.running.get(&fired.payload) == Some(&fired.id) {
+                self.running.remove(&fired.payload);
+            }
+            ready.push(fired.payload);
+        }
+        ready
+    }
+}
+
+/// The cast check: the cooldown first, then the mana (the order is UNSURE).
+pub fn cast_check(cooldowns: &Cooldowns, base: u32, mana: f32, cost: i32) -> CastCheck {
+    if !cooldowns.is_ready(base) {
+        CastCheck::Cooling
+    } else if mana < cost.max(0) as f32 {
+        CastCheck::NoMana
+    } else {
+        CastCheck::Ready
+    }
+}
+
+/// Casts `base`: checks it, pays `cost` and starts the cooldown of `cool` seconds. Returns the mana left.
+pub fn cast(
+    cooldowns: &mut Cooldowns,
+    base: u32,
+    mana: f32,
+    cost: i32,
+    cool: f32,
+) -> Result<f32, CastCheck> {
+    match cast_check(cooldowns, base, mana, cost) {
+        CastCheck::Ready => {
+            cooldowns.start(base, cool);
+            Ok(mana - cost.max(0) as f32)
+        }
+        refused => Err(refused),
+    }
+}
+
+#[cfg(test)]
+mod cooldown_tests {
+    use super::*;
+
+    const A: u32 = code(b"AHbz");
+    const B: u32 = code(b"AHbb");
+
+    #[test]
+    fn cooldown_runs_down_and_reports_ready_once() {
+        let mut c = Cooldowns::new();
+        c.start(A, 5.0);
+        assert!(!c.is_ready(A));
+        assert_eq!(c.remaining(A), 5.0);
+        assert!(c.advance_to(4.0).is_empty());
+        assert!(!c.is_ready(A));
+        assert!((c.remaining(A) - 1.0).abs() < 1e-5);
+        assert_eq!(c.advance_to(5.0), vec![A]);
+        assert!(c.is_ready(A));
+        assert!(c.advance_to(100.0).is_empty());
+    }
+
+    #[test]
+    fn zero_or_negative_cooldown_never_blocks() {
+        let mut c = Cooldowns::new();
+        c.start(A, 0.0);
+        c.start(B, -2.0);
+        assert!(c.is_ready(A) && c.is_ready(B));
+        assert_eq!(cast_check(&c, A, 10.0, 0), CastCheck::Ready);
+    }
+
+    #[test]
+    fn restarting_replaces_the_old_timer() {
+        let mut c = Cooldowns::new();
+        c.start(A, 5.0);
+        c.start(A, 2.0);
+        assert_eq!(c.advance_to(2.0), vec![A]);
+        // the 5 s timer was cancelled: nothing fires later
+        assert!(c.advance_to(10.0).is_empty());
+    }
+
+    #[test]
+    fn reset_clears_a_running_cooldown() {
+        let mut c = Cooldowns::new();
+        c.start(A, 5.0);
+        assert!(c.reset(A));
+        assert!(c.is_ready(A));
+        assert!(!c.reset(A));
+        assert!(c.advance_to(10.0).is_empty());
+    }
+
+    #[test]
+    fn abilities_have_independent_cooldowns() {
+        let mut c = Cooldowns::new();
+        c.start(A, 3.0);
+        c.start(B, 1.0);
+        assert_eq!(c.advance_to(1.0), vec![B]);
+        assert!(!c.is_ready(A));
+        assert_eq!(c.advance_to(3.0), vec![A]);
+    }
+
+    #[test]
+    fn cast_pays_mana_and_starts_the_cooldown() {
+        let mut c = Cooldowns::new();
+        let mana = cast(&mut c, A, 100.0, 75, 4.0).expect("ready with enough mana");
+        assert_eq!(mana, 25.0);
+        assert!(!c.is_ready(A));
+        assert_eq!(cast(&mut c, A, 100.0, 75, 4.0), Err(CastCheck::Cooling));
+        c.advance_to(4.0);
+        assert_eq!(cast(&mut c, A, 20.0, 75, 4.0), Err(CastCheck::NoMana));
+        assert!(c.is_ready(A), "a refused cast starts no cooldown");
+    }
+
+    #[test]
+    fn exact_mana_is_enough() {
+        let c = Cooldowns::new();
+        assert_eq!(cast_check(&c, A, 75.0, 75), CastCheck::Ready);
+        assert_eq!(cast_check(&c, A, 74.9, 75), CastCheck::NoMana);
+    }
+}

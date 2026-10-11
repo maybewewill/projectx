@@ -548,6 +548,10 @@ pub struct HeroObj {
     /// Base agility (`+0xA8`) and per-level agility gain (`+0xE4`, real).
     pub agi_base: i32,
     pub agi_plus: softfloat::F32,
+    /// Intelligence base (the counter behind the reference at `+0x7C`, written from type `+0x28` at creation) and
+    /// its per-level gain (`+0xDC`, real), see `crate::heroes::intelligence` (`docs/spec/heroes.md`, section 6).
+    pub int_base: i32,
+    pub int_plus: softfloat::F32,
 }
 
 impl Default for HeroObj {
@@ -561,6 +565,8 @@ impl Default for HeroObj {
             str_plus: softfloat::F32::ZERO,
             agi_base: 0,
             agi_plus: softfloat::F32::ZERO,
+            int_base: 0,
+            int_plus: softfloat::F32::ZERO,
         }
     }
 }
@@ -855,7 +861,8 @@ pub struct PlayerObj {
     /// Per alliance type, the set of target players as a bit mask (bit `q` = this player has the
     /// type with player `q`). Only the row of this player is stored: alliances are one-directional.
     pub alliances: [u32; ALLIANCE_TYPES],
-    /// The stored state words (see `natives/player.rs` for the scaling of gold and lumber).
+    /// The stored state words (see `natives/player.rs` for the scaling of gold and lumber). Entries 1 (gold) and 2
+    /// (lumber) are not used: those live in `Game::economy`.
     pub states: [i32; PLAYER_STATES],
 }
 
@@ -1114,9 +1121,14 @@ pub struct Game {
     pub(crate) firings: Vec<super::event::Firing>,
     /// Waygate state of the units that have the waygate ability (see `natives/economy.rs`).
     pub(crate) waygates: BTreeMap<ObjKey, super::economy::WaygateState>,
-    /// The resource amount of each resource node (a unit with the gold mine flag). A unit has an entry only when it is
-    /// a resource node (see `natives/economy.rs`).
-    pub(crate) resources: BTreeMap<ObjKey, i32>,
+    /// The gold mine of each resource node (a unit with the gold mine flag). A unit has an entry only when it is a
+    /// resource node (see `natives/economy.rs`).
+    pub(crate) mines: BTreeMap<ObjKey, crate::economy::Mine>,
+    /// Gold and lumber of each player slot, the x10 stored amounts and the upkeep rates (see `economy.rs`). Index =
+    /// slot. Gold and lumber are read and written only here (`SetPlayerState`, `GetPlayerState` and the changer).
+    pub(crate) economy: Vec<crate::economy::PlayerEconomy>,
+    /// The economy constants read from Misc at boot (or the built-in defaults), see [`crate::economy::EconomyConstants`].
+    pub(crate) economy_constants: crate::economy::EconomyConstants,
     /// The attack cycle: type data, Misc values, attack objects and the damage model (see `combat.rs`).
     pub(crate) combat: crate::combat::CombatSystem,
     /// The hero experience tables built from the Misc values (see `crate::heroes`). Empty until the engine sets them,
@@ -1176,7 +1188,9 @@ impl Game {
             strings: Vec::new(),
             firings: Vec::new(),
             waygates: BTreeMap::new(),
-            resources: BTreeMap::new(),
+            mines: BTreeMap::new(),
+            economy: (0..PLAYER_SLOTS).map(crate::economy::PlayerEconomy::new).collect(),
+            economy_constants: crate::economy::EconomyConstants::default(),
             combat: crate::combat::CombatSystem::default(),
             hero_xp: crate::heroes::XpTables::default(),
             hero_attributes: BTreeMap::new(),
@@ -1365,6 +1379,8 @@ impl Game {
             h.str_plus = a.str_plus;
             h.agi_base = a.agi_base;
             h.agi_plus = a.agi_plus;
+            h.int_base = a.int_base;
+            h.int_plus = a.int_plus;
         }
         h
     }

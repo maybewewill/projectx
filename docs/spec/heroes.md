@@ -1,8 +1,8 @@
 # Heroes: experience, levels, skill points, attributes (Game.dll 1.26a)
 
-Scope: the hero experience tables, experience gain and level changes, skill points, and the strength and agility
-getters and setters. The intelligence getter and setter, the kill-experience distribution, and the derived attribute
-bonuses are **not** decoded (sections 6 and 7).
+Scope: the hero experience tables, experience gain and level changes, skill points, and the strength, agility and
+intelligence getters and setters (intelligence in section 6). The kill-experience split and the derived attribute
+bonuses are only partly decoded (section 7, numbers not resolved).
 
 Labels: **CONFIRMED** = read in the disassembly and/or checked in Unicorn against the original; **LIKELY** = strong
 reading of the decompile or disassembly, not run; **UNSURE** = guessed or open. Addresses are 1.26a `Game.dll` VAs.
@@ -121,33 +121,84 @@ bases, gains including negative and large values, counters 0..25). `crates/sim/t
 
 Setter side effects (ability re-application, see section 7) are not modelled.
 
-## 6. Intelligence: not decoded
+## 6. Intelligence (CONFIRMED, Unicorn 300 cases, 0 mismatches)
 
-- **GetHeroInt** → `0x6F3C68C0` → `0x6F277850` → `0x6F0DB3A0` (CONFIRMED path). The function takes the unit (not the
-  hero sub-object), reads a gain at unit `+0xDC` (real), and returns `c1 + trunc(gain * c2)` where `c1` and `c2` are
-  two level counters read through two different embedded references of the unit (`+0x7C` and `+0x6C`) (CONFIRMED by
-  disassembly).
-- What is open: if both references are the same counter, the base is the level counter itself and an intelligence of
-  about 20 at level 1 cannot come from it. So `c1` or the base lives elsewhere (UNSURE). The native and the setter
-  (`0x6F277980` → `0x6F20A260`, which adds to a counter, not to a base) are therefore not implemented.
+- **Core** `0x6F0DB3A0` (`__fastcall`, ECX = hero sub-object at unit `+0x1F0`): result = `c1 + trunc(gain * c2)`.
+  `gain` is the real at hero `+0xDC`. `c2` is the counter read through the reference object at hero `+0x6C` (the
+  level counter, the same one as section 1). `c1` is the counter read through the reference object at hero `+0x7C`,
+  which is the **intelligence base**. The two references are different objects, so the earlier open question
+  (base = level counter?) is closed: the base is its own counter (CONFIRMED by the `lea` operands of the core).
+- **Counter access.** `0x6F473170` (ECX = reference object) reads a handle id from the reference (`+8`), resolves it
+  through the handle table lookup `0x6F03FA30` and returns the `+0x78` field of the resolved object. `0x6F473140`
+  writes the same field (CONFIRMED by disassembly).
+- **GetHeroInt** → `0x6F3C68C0` → `0x6F277850(includeBonus)` → core. With `includeBonus` false the original also
+  subtracts the item part (`0x6F077FA0`). Items are not modelled, so both values are equal.
+- **SetHeroInt** → `0x6F277980`: `delta = value - core(without items)`, then `0x6F20A260(hero, delta, show)`, which
+  adds `delta` to the counter behind hero `+0x7C` (CONFIRMED). The rest of `0x6F20A260` refreshes the unit: the
+  shared refresh `0x6F332810`, the attack ability refresh `0x6F2087B0` when the unit has an ability at `+0x1E8`, and
+  `0x6F209210` / `0x6F2092A0` (LIKELY the same refresh as the strength setter). Those side effects are not modelled
+  (UNSURE what they change beyond the counter).
+- **Creation** (`0x6F20B9F0`, body after the zero-amount call to `0x6F20B080`): the type record fills the hero:
+  `+0x10` → str base (`+0x94`); `+0x14` (real) → strength gain object at hero `+0xD0` (value `+0xD4`); `+0x18` → agi
+  base (`+0xA8`); `+0x24` (real) → agility gain object at `+0xE0` (value `+0xE4`); **`+0x28` → the intelligence base
+  counter (reference `+0x7C`, written with `0x6F473140`)**; **`+0x2C` (real) → intelligence gain object at `+0xD8`
+  (value `+0xDC`)**. The vtable-carrying objects at `+0xD0`, `+0xD8`, `+0xE0` are embedded in the hero (their vtable
+  pointer is the first dword at the object address; CONFIRMED by the `lea` operands). `+0x1C` (real) and `+0x20`
+  (real) go to the embedded objects at hero `+0xB4` and `+0xBC`; their meaning is not read (UNSURE; they are not
+  attributes). `+0x08` is written to skill points `+0x90` and `+0x0C` to the suspend flag `+0xE8` (LIKELY, not checked
+  against a hero).
+- **Model.** `sim::heroes::intelligence` = `attribute` (same form, base + trunc(gain * counter)); `rebase` for the
+  setter. `HeroAttributes` and `HeroObj` carry `int_base` / `int_plus`; the engine fills them from the unit record
+  (`INT`, `INTplus`). Verification: `tools/emu/hero_int_emu.py` (300 cases, seed 7) against
+  `crates/sim/tests/hero_int_vectors.rs` (`HERO_INT_VECTORS`), plus unit and JASS-level tests.
 
-## 7. Not decoded (kill experience, derived bonuses, abilities)
+## 7. Kill experience and attribute bonuses (structure decoded, numbers open)
 
-- **Kill experience** (`0x6F20B080` with the distribution branch): when the sixth argument is non-zero, the gain is
-  computed from a per-level table of the victim's `GrantHeroXP` / `GrantNormalXP` (lookups `0x6F32E020/0x6F32E040`
-  and a 9-entry string table at `0x6FA6F044`), with a range check (the seventh argument) and a handicap multiplier
-  read from the owner player (`+0x2A4`). The unit-kill caller that sets these arguments, the "HERO" object list
-  (`0x6F40B340`), who receives the experience (range, allies, split), and the rounding of the split are not read.
-  `HeroFactorXP`, `HeroExpRange` and `SummonedKillFactor` are read by the builder or by other functions that are not
-  decoded here.
-- **Derived attribute bonuses** (`StrAttackBonus`, `StrHitPointBonus`, `StrRegenBonus`, `AgiAttackBonus`,
-  `AgiDefenseBonus`, `AgiAttackSpeedBonus`, `IntManaBonus`, `IntRegenBonus`): read from `[Misc]` by functions in
-  `chunk_004`, `chunk_007`, `chunk_010`, `chunk_015` (the functions `0x6F20A160`, `0x6F20A1E0`, `0x6F20A260` apply
-  them through the hero's attack and movement abilities, `+0x1E8` and `+0x1EC`). The values and the formulas are not
-  read; they are not modelled. The `[Misc]` reader keeps them out of the hero model for now.
-- **Hero ability slots** (five codes at `+0xF4`): their levels bound the skill-point cap and the strip rule. The
-  model has no hero ability slots, so the caps are off (section 4).
-- **Revive, skill selection, proper names**: unchanged from the earlier pass (see `natives/hero.rs`).
+The numeric rules of the kill split are **not** resolved. Nothing below is implemented; the kill path is not hooked.
+The structure is recorded so the next pass can start from it.
+
+### 7.1 Kill path (CONFIRMED addresses)
+
+- **Death handler** `0x6F2A4880` (`__fastcall`, ECX = dying unit). It returns early when the death has no killer
+  (`0x6F4786B0` returns the killer), or when the filter `0x6F285B00` rejects the unit. Otherwise it calls
+  `0x6F40B250` on the unit, updates a player counter at player `+0x250` for a hero-type victim, and, unless the unit has
+  the illusion flag (unit `+0x5C` bit 30), calls `0x6F2A00E0(killer)`, the kill record builder `0x6F2A46F0`
+  (dying, killer), and `0x6F282880`. Caller: `0x6F2A7F3C` (the death entry; not read further).
+- **Kill record builder** `0x6F2A46F0` (`this` = record, args dying and killer). It requires a killer and that
+  `0x6F285AC0(dying) == 0`. It also checks a global flag at `0x6FAB4268` and `0x6F26DE50(0)` (not identified). It
+  stores the victim position (through the victim's `+0xB8` slot, UNSURE which), the victim's level (its `+0xEC` slot),
+  reads the Misc real **`HeroExpRange`** (`0x6F009EE0`, index 0), and builds the candidate list. The candidates come from
+  the range enumerator `0x6F46D1B0` with the callback `0x6F290770` (the spatial walk order is the one of
+  `natives/region.rs` / groups-events-2; not re-read here). The record then goes to `0x6F2A3190`.
+- **Per-candidate loop** `0x6F2A3190` (`this` = record, arg = victim). The list is `record+0x14` (count) with array
+  `+0x18`; when that count is 0 the alternate `+0xE0` count with array `+0xE4` is used (CONFIRMED). If the value is
+  not positive it returns. For each candidate hero it calls the wrapper `0x6F26EB70` with the value pointer, show 1,
+  0, handicap flag 1, a flag that is 1 when the victim's level is at least 12, and range flag 1. The wrapper calls
+  `0x6F20B080` (the XP engine, section 4) for the candidate's hero sub-object when it has one (CONFIRMED).
+- **XP engine branch** (`0x6F20B080`, arguments: value pointer, show, a `0`/non-zero flag, handicap float, the
+  level-walk flag, range float). With the level-walk flag set, the gain is taken from a walk over the hero levels
+  using the need table (`0x6F207760`) and the Misc `GrantHeroXP` / `GrantNormalXP` lookups; the walk stops when the
+  remaining value no longer passes the next need, and the result is truncated (CONFIRMED the control flow; the
+  arithmetic not Unicorn-checked). The owner's handicap (`player +0x2A4`, read through the global at `0x6F2834E0`)
+  scales the value when the handicap flag is set.
+
+Open (kill XP): the formula for the value `F` in `0x6F2A3190` (the first `i2r` of the count, then `0x6F2A0230`
+which looks at the victim's ability/level and returns an int, then a division by the candidate count is LIKELY: the
+split), the `HeroFactorXP` and `SummonedKillFactor` uses, `SetPlayerHandicapXP` storage, and the rounding per
+recipient. Iteration order does not change the numbers unless a shared accumulator is updated per recipient, which
+has not been seen (LIKELY). These need a Unicorn run of `0x6F2A3190` with stubs for the candidate list and the
+per-hero call, then a second run of the level walk in `0x6F20B080`.
+
+### 7.2 Attribute bonuses (partly read)
+
+- **Strength setter core** `0x6F20A160` (`this` = hero, arg = delta): base `+0x94` += delta; the shared refresh
+  `0x6F332810`; the attack ability refresh `0x6F2087B0` when unit `+0x1E8` is set; then a call with the global object
+  (`0x6F2834E0()`, field `+0x29C`) and `0x6F209090`. The derived bonus formula (StrHitPointBonus etc.) is in the
+  callees `0x6F209000` / `0x6F209090` and the agility path `0x6F20A1E0`, which were not read to the end.
+- **Intelligence setter core** `0x6F20A260`: section 6 (counter, then the same refresh pattern).
+- The Misc keys (`StrAttackBonus`, `StrHitPointBonus`, `StrRegenBonus`, `AgiAttackBonus`, `AgiDefenseBonus`,
+  `AgiAttackSpeedBonus`, `IntManaBonus`, `IntRegenBonus`) are still not read into the model. Which unit fields they
+  set, and the rounding, are open. Not modelled.
 
 ## 8. Hero gate (CONFIRMED)
 
@@ -155,21 +206,23 @@ Every hero native first finds the unit, requires its type id to start with an up
 removed, and the unit not to be an illusion (`+0x5C` bit 30). A failing call returns its default. The model applies
 the same gate (`natives/hero.rs`).
 
-## 9. Model changes (this pass)
+## 9. Model changes
 
 - `sim::heroes`: the builder (`build`), the lookup (`XpTables::need_xp`), `add_xp`, `set_xp`, `set_level`,
-  `strip_levels`, `modify_skill_points`, `attribute`, `rebase`.
-- `HeroObj` gained `str_base`, `str_plus`, `agi_base`, `agi_plus`. A new hero copies the attributes of its type
-  (`Game::set_hero_attributes`, `Game::new_hero`). The engine installs the attributes from the unit records and the
-  experience tables from the `[Misc]` layers when the reciprocal table is present (`engine::data::install`).
+  `strip_levels`, `modify_skill_points`, `attribute`, `intelligence`, `rebase`.
+- `HeroObj` has `str_base`, `str_plus`, `agi_base`, `agi_plus`, `int_base`, `int_plus`. A new hero copies the attributes
+  of its type (`Game::new_hero`). The engine fills them from the unit records (`STR`, `AGI`, `INT` and their gains)
+  and the experience tables from the `[Misc]` layers when the reciprocal table is present (`engine::data::install`).
 - `gamedata::misc::HeroMisc` (`MiscData::hero`): the hero keys, read as integers (decimal, malformed = 0) and reals
   (S2R, default 0.0). LIKELY for the integer reader.
+- `GetHeroInt` and `SetHeroInt` are registered (`Support::Likely`).
 
 ## 10. Open items (priority)
 
-1. Kill experience distribution (section 7): needed for any XP gained in play.
-2. Intelligence getter and setter (section 6).
+1. Kill experience split: the value `F` and the candidate loop (section 7.1). Needed for any XP gained in play.
+2. The per-recipient level walk in `0x6F20B080` (section 7.1), Unicorn-checked with stubs.
 3. Hero ability slots and the ability-level rules of the skill points (sections 4 and 7).
-4. Derived bonuses and their application to HP, mana, attack and regeneration (section 7).
+4. Derived bonuses (section 7.2): the Misc values and the unit fields they set.
 5. Run the level loop and the strip rule in Unicorn with a stubbed hero object (the level counter is the only
    external read on those paths).
+6. Side effects of the attribute setters (refresh calls `0x6F332810`, `0x6F209210`, `0x6F2092A0`).

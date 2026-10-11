@@ -25,10 +25,11 @@ use gamedata::{Profile, Slk};
 use mpq::Archive;
 use sim::combat::{AttackType, CombatMisc, Defense};
 use sim::damage::{DamageMisc, DamageTypeTable, NegativeArmorTable, SpecDamage};
+use sim::economy::{EconomyConstants, UpkeepTable};
 use sim::natives::game::UnitType;
 use sim::orders::{AbilityKind, TypeOrderData};
 use sim::Game;
-use softfloat::{Tables, F32};
+use softfloat::{conv, Tables, F32};
 
 use crate::Error;
 
@@ -211,6 +212,73 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
     }
 }
 
+/// The Misc keys of the economy (see `gamedata::misc`), listed in the boot report when they are absent.
+pub const ECONOMY_KEYS: [&str; 7] = [
+    "UpkeepUsage",
+    "UpkeepGoldTax",
+    "UpkeepLumberTax",
+    "TrainRefundRate",
+    "ResearchRefundRate",
+    "ReviveRefundRate",
+    "LowGoldAmount",
+];
+
+/// What the economy constants were built from (see [`economy_constants`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EconomySetup {
+    /// `true` when some `[Misc]` layer was read; `false` means the built-in defaults of `sim::economy` are in use.
+    pub from_misc: bool,
+    /// How many layers had a `[Misc]` section.
+    pub layers: usize,
+    /// The economy keys that were absent (or malformed) and took the reader's default (`0.0`, or 0 for the integers).
+    pub absent: Vec<&'static str>,
+}
+
+/// Builds the economy constants from the Misc values, or the built-in defaults when no `[Misc]` layer exists at all
+/// (spec `economy-3.md` sections 2.2 and 4). With some layer present, a missing key takes the reader's default, which is
+/// `0.0` (so a missing `UpkeepUsage` is an all-zero threshold row). UNSURE: the original's behaviour for a missing
+/// `UpkeepUsage` key is not traced.
+pub fn economy_constants(misc: &MiscData) -> (EconomyConstants, EconomySetup) {
+    if misc.layers_with_misc == 0 {
+        let setup = EconomySetup {
+            from_misc: false,
+            layers: 0,
+            absent: Vec::new(),
+        };
+        return (EconomyConstants::default(), setup);
+    }
+    let constants = EconomyConstants {
+        upkeep: UpkeepTable {
+            thresholds: misc.upkeep_usage,
+            gold_tax: misc.upkeep_gold_tax,
+            lumber_tax: misc.upkeep_lumber_tax,
+        },
+        train_refund_rate: misc.train_refund_rate,
+        research_refund_rate: misc.research_refund_rate,
+        revive_refund_rate: misc.revive_refund_rate,
+        low_gold_amount: conv::f2i(misc.low_gold_amount),
+    };
+    let absent = misc
+        .defaulted
+        .iter()
+        .copied()
+        .filter(|k| ECONOMY_KEYS.contains(k))
+        .collect();
+    let setup = EconomySetup {
+        from_misc: true,
+        layers: misc.layers_with_misc,
+        absent,
+    };
+    (constants, setup)
+}
+
+/// Installs the economy constants into `game` (see [`economy_constants`]) and returns what they came from.
+pub fn install_economy(game: &mut Game, misc: &MiscData) -> EconomySetup {
+    let (constants, setup) = economy_constants(misc);
+    game.set_economy_constants(constants);
+    setup
+}
+
 /// The simulation's unit type registry entry of a unit record. Every field is a direct copy of the record's value
 /// (no load-time rule beyond the acquire rule already applied by `gamedata::unittype`).
 fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
@@ -297,6 +365,8 @@ fn hero_attributes(ty: &UnitTypeData) -> sim::heroes::HeroAttributes {
         str_plus: soft(ty.attribute_plus[0]),
         agi_base: ty.attributes[1],
         agi_plus: soft(ty.attribute_plus[1]),
+        int_base: ty.attributes[2],
+        int_plus: soft(ty.attribute_plus[2]),
     }
 }
 
