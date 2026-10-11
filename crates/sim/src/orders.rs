@@ -39,6 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use softfloat::{arith, math, Tables, F32};
 
+use crate::abilities::{Ability, BaseKind};
 use crate::natives::game::{Game, ObjKey, Object};
 use crate::pathing::grid::scale_by_1_32;
 use crate::pathing::search::{Request, Search, POP_BUDGET};
@@ -116,11 +117,22 @@ pub enum OrderClass {
     Target,
 }
 
-/// The abilities a unit type can have (only the two the order model uses).
+/// The abilities a unit type can have (only the two the order model uses). A type lists them in its order data;
+/// creating a unit attaches the matching ability objects (`Amov` / `Aatk`, see `crate::abilities`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbilityKind {
     Move,
     Attack,
+}
+
+impl AbilityKind {
+    /// The base code of the ability object for this kind.
+    pub fn base_code(self) -> u32 {
+        match self {
+            AbilityKind::Move => crate::abilities::MOVE,
+            AbilityKind::Attack => crate::abilities::ATTACK,
+        }
+    }
 }
 
 /// What the order model needs from a unit type: its abilities. The movement speed is the unit's own
@@ -202,9 +214,9 @@ const ARRIVE_CELLS: F32 = F32::from_bits(0x3E4C_CCCD);
 const CELL_SIZE: F32 = F32::from_bits(0x4200_0000);
 
 /// Whether ability `kind` takes the point or target order `id` by its family (CONFIRMED for the move family).
-fn point_family(kind: AbilityKind, id: u32) -> bool {
+fn point_family(kind: BaseKind, id: u32) -> bool {
     match kind {
-        AbilityKind::Move => matches!(
+        BaseKind::Move => matches!(
             id,
             0x000D_0002
                 | 0x000D_0003
@@ -214,17 +226,22 @@ fn point_family(kind: AbilityKind, id: u32) -> bool {
                 | 0x000D_0016
                 | 0x000D_0017
         ),
-        AbilityKind::Attack => id == ORDER_ATTACK,
+        BaseKind::Attack => id == ORDER_ATTACK,
+        _ => false,
     }
 }
 
 /// Whether ability `kind` accepts the immediate order `id` (stop is handled before this check).
-fn immediate_family(kind: AbilityKind, id: u32) -> bool {
-    kind == AbilityKind::Move && id == ORDER_HOLD
+fn immediate_family(kind: BaseKind, id: u32) -> bool {
+    kind == BaseKind::Move && id == ORDER_HOLD
 }
 
-/// Rank of an ability for an order id (lower wins, orders-2 1.8).
-fn rank(id: u32) -> u32 {
+/// Rank of an ability for an order id (lower wins, orders-2 1.8). The table is per order id, as recorded: move and
+/// attack abilities use it. Abilities without an order family (`BaseKind` other than move or attack) rank 0.
+fn rank(kind: BaseKind, id: u32) -> u32 {
+    if !matches!(kind, BaseKind::Move | BaseKind::Attack) {
+        return 0;
+    }
     match id {
         0x000D_0002 => 3,
         0x000D_0003 => 16,
@@ -265,16 +282,13 @@ impl OrderSystem {
         &self.notices
     }
 
-    /// The ability of `kind`-accepting lookup: the lowest-rank ability of the unit's list that accepts
-    /// the order (`FUN_6F279A90`, orders-2 1.8). `immediate` selects the immediate family.
-    fn ability_for(
-        &self,
-        abilities: &[AbilityKind],
-        id: u32,
-        immediate: bool,
-    ) -> Option<AbilityKind> {
-        let mut best: Option<(u32, AbilityKind)> = None;
-        for &kind in abilities {
+    /// The ability lookup of the order system: among the unit's ability objects, the lowest-rank one whose family
+    /// accepts the order wins, the first one on a tie (`FUN_6F279A90`, orders-2 1.8). `immediate` selects the
+    /// immediate family. Returns the kind of the winning ability.
+    fn ability_for(&self, abilities: &[Ability], id: u32, immediate: bool) -> Option<BaseKind> {
+        let mut best: Option<(u32, BaseKind)> = None;
+        for ability in abilities {
+            let kind = ability.kind;
             let ok = if immediate {
                 immediate_family(kind, id)
             } else {
@@ -283,7 +297,7 @@ impl OrderSystem {
             if !ok {
                 continue;
             }
-            let r = rank(id);
+            let r = rank(kind, id);
             if best.is_none_or(|(br, _)| r < br) {
                 best = Some((r, kind));
             }
@@ -362,14 +376,10 @@ impl Game {
             .is_some()
     }
 
-    /// The abilities of a unit (from its type's order data).
-    fn unit_abilities(&self, unit: ObjKey) -> Vec<AbilityKind> {
+    /// The ability objects of a unit (its fixed slots and list, see `crate::abilities`).
+    fn unit_abilities(&self, unit: ObjKey) -> Vec<Ability> {
         match self.object(unit) {
-            Object::Unit(u) => self
-                .orders
-                .types
-                .get(&u.type_id)
-                .map_or_else(Vec::new, |t| t.abilities.clone()),
+            Object::Unit(u) => u.abilities.iter().cloned().collect(),
             _ => Vec::new(),
         }
     }
@@ -469,7 +479,7 @@ impl Game {
                     self.orders.ability_for(&abilities, head.id, false),
                     head.point,
                 ) {
-                    if matches!(kind, AbilityKind::Move | AbilityKind::Attack) {
+                    if matches!(kind, BaseKind::Move | BaseKind::Attack) {
                         let points = self.plan_route(unit, goal);
                         if !points.is_empty() {
                             route = Some(Route { points, next: 0 });

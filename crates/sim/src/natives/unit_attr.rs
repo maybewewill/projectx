@@ -29,10 +29,10 @@
 //!   `0xAARRGGBB` in object `+0x2D4`.
 //! * Scale (UNSURE): `SetUnitScale` reads only its first real (the body dereferences one pointer). Only that value
 //!   is stored, and the second and third values are dropped.
-//! * Invulnerable (not implemented): the original's `SetUnitInvulnerable` adds or removes an ability whose id comes
-//!   from a helper (`FUN_6F10FA90`, not read), so it depends on the ability system (see [`NATIVES`]).
-//! * Abilities (CONFIRMED structure): a unit's ability list is keyed by the raw id. A level is stored as level minus
-//!   one (`+0x50`); `GetUnitAbilityLevel` returns that plus one, or 0 when the unit lacks the ability. The max level
+//! * Invulnerable: `SetUnitInvulnerable` lives in `natives/ability.rs` (it adds or removes the ability `Avul`).
+//! * Abilities (CONFIRMED structure, the model is `crate::abilities`): a unit's abilities are objects keyed by the
+//!   base raw id. A level is stored as a zero-based index (`+0x50`); `GetUnitAbilityLevel` returns that plus one, or 0
+//!   when the unit lacks the ability. The max level
 //!   of an ability is its record `+0x3C` when the flag `+0x2C` is set, and 1 otherwise. Setting a level clamps the
 //!   target to `[1, max]`. The level-up and level-down virtuals (slots 185 and 186) are not read, so their side
 //!   effects (events, stat changes) are not modelled.
@@ -57,10 +57,11 @@ use std::rc::Rc;
 use jass::vm::{NativeRegistry, NativeResult, Value};
 use softfloat::{arith, F32};
 
-use super::game::{Game, HandleKind, ObjKey, Object, UnitAbility, UnitType};
+use super::game::{Game, HandleKind, ObjKey, Object, UnitType};
 use super::group::in_range;
 use super::hero::is_hero_id;
 use super::player::raw_at;
+use crate::abilities::{is_factory_code, Ability};
 
 /// How a native is implemented here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,9 +371,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SetUnitInvulnerable",
-        support: Support::NotImplemented(
-            "N:the original adds or removes an ability whose id comes from FUN_6F10FA90 (not read)",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetUnitLookAt",
@@ -468,9 +467,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitApplyTimedLife",
-        support: Support::NotImplemented(
-            "N:timed life is a buff; buffs are not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitCanSleep",
@@ -486,9 +483,11 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitCountBuffsEx",
-        support: Support::NotImplemented(
-            "N:buffs are not modelled",
-        ),
+        support: Support::Likely,
+    },
+    NativeEntry {
+        name: "UnitHasBuffsEx",
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitDamagePoint",
@@ -526,9 +525,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitPauseTimedLife",
-        support: Support::NotImplemented(
-            "N:timed life is a buff; buffs are not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitPoolAddUnitType",
@@ -542,15 +539,11 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitRemoveBuffs",
-        support: Support::NotImplemented(
-            "N:buffs are not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitRemoveBuffsEx",
-        support: Support::NotImplemented(
-            "N:buffs are not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitRemoveType",
@@ -960,8 +953,8 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let gm = g.borrow();
         let id = raw_at(a, 1) as u32;
         let v = unit_at(&gm, a, 0)
-            .and_then(|k| gm.unit(k).abilities.get(&id))
-            .map_or(0, |ab| ab.level0 + 1);
+            .and_then(|k| gm.unit(k).abilities.get(id))
+            .map_or(0, Ability::level);
         NativeResult::Return(Value::Integer(v))
     });
 
@@ -969,19 +962,9 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SetUnitAbilityLevel", move |_, a| {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 1) as u32;
-        let v = match unit_at(&gm, a, 0) {
-            Some(k) if gm.unit(k).abilities.contains_key(&id) => {
-                // The target is at least 1, and at most the max (`if max <= target` then `max`), as read.
-                let max = ability_max(&gm, id);
-                let mut target = raw_at(a, 2).max(1);
-                if max <= target {
-                    target = max;
-                }
-                set_ability(&mut gm, Some(k), id, target - 1);
-                target
-            }
-            _ => 0,
-        };
+        let k = unit_at(&gm, a, 0);
+        let requested = raw_at(a, 2);
+        let v = with_ability(&mut gm, k, id, |ab| ab.set_level(requested));
         NativeResult::Return(Value::Integer(v))
     });
 
@@ -989,20 +972,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("IncUnitAbilityLevel", move |_, a| {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 1) as u32;
-        let v = match unit_at(&gm, a, 0) {
-            Some(k) if gm.unit(k).abilities.contains_key(&id) => {
-                // The guard compares the zero-based level with the max, as decompiled (UNSURE, see the notes).
-                let cur = gm.unit(k).abilities[&id].level0;
-                let next = if cur < ability_max(&gm, id) {
-                    cur + 1
-                } else {
-                    cur
-                };
-                set_ability(&mut gm, Some(k), id, next);
-                next + 1
-            }
-            _ => 0,
-        };
+        let k = unit_at(&gm, a, 0);
+        let v = with_ability(&mut gm, k, id, |ab| {
+            ab.inc_level();
+            ab.level()
+        });
         NativeResult::Return(Value::Integer(v))
     });
 
@@ -1010,15 +984,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("DecUnitAbilityLevel", move |_, a| {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 1) as u32;
-        let v = match unit_at(&gm, a, 0) {
-            Some(k) if gm.unit(k).abilities.contains_key(&id) => {
-                let cur = gm.unit(k).abilities[&id].level0;
-                let next = if cur > 0 { cur - 1 } else { cur };
-                set_ability(&mut gm, Some(k), id, next);
-                next + 1
-            }
-            _ => 0,
-        };
+        let k = unit_at(&gm, a, 0);
+        let v = with_ability(&mut gm, k, id, |ab| {
+            ab.dec_level();
+            ab.level()
+        });
         NativeResult::Return(Value::Integer(v))
     });
 
@@ -1026,12 +996,17 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("UnitAddAbility", move |_, a| {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 1) as u32;
+        // The factory needs a definition record, and `Amov` / `Aatk` have no factory leaf (see `crate::abilities`).
+        let definition = gm.ability_types().get(id).copied();
         let added = match unit_at(&gm, a, 0) {
             Some(k)
-                if !gm.unit(k).abilities.contains_key(&id)
-                    && gm.ability_types().get(id).is_some() =>
+                if definition.is_some()
+                    && is_factory_code(id)
+                    && !gm.unit(k).abilities.contains(id) =>
             {
-                gm.unit_mut(k).abilities.insert(id, UnitAbility::default());
+                gm.unit_mut(k)
+                    .abilities
+                    .attach(Ability::new(id, definition));
                 true
             }
             _ => false,
@@ -1044,7 +1019,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 1) as u32;
         let removed = match unit_at(&gm, a, 0) {
-            Some(k) => gm.unit_mut(k).abilities.remove(&id).is_some(),
+            Some(k) => gm.unit_mut(k).abilities.remove(id).is_some(),
             None => false,
         };
         NativeResult::Return(Value::Boolean(removed))
@@ -1054,11 +1029,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("UnitMakeAbilityPermanent", move |_, a| {
         let mut gm = g.borrow_mut();
         let id = raw_at(a, 2) as u32;
-        let step = if bool_arg(a, 1) { 1 } else { -1 };
+        let permanent = bool_arg(a, 1);
         let done = match unit_at(&gm, a, 0) {
-            Some(k) => match gm.unit_mut(k).abilities.get_mut(&id) {
+            Some(k) => match gm.unit_mut(k).abilities.get_mut(id) {
                 Some(ab) => {
-                    ab.permanent += step;
+                    ab.adjust_permanent(permanent);
                     true
                 }
                 None => false,
@@ -1069,18 +1044,17 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 }
 
-/// The max level of ability `id`: its record's max when it has one, and 1 otherwise (CONFIRMED, `FUN_6F02E570`).
-fn ability_max(gm: &Game, id: u32) -> i32 {
-    gm.ability_types()
-        .get(id)
-        .and_then(|t| t.max_level)
-        .unwrap_or(1)
-}
-
-/// Stores the zero-based level of ability `id` on unit `k`, when the unit has it.
-fn set_ability(gm: &mut Game, k: Option<ObjKey>, id: u32, level0: i32) {
-    if let Some(ab) = k.and_then(|k| gm.unit_mut(k).abilities.get_mut(&id)) {
-        ab.level0 = level0;
+/// Runs `f` on ability `id` of unit `k`, when the unit is live and has the ability. Returns the result of `f`, or 0
+/// when there is no such ability.
+fn with_ability(
+    gm: &mut Game,
+    k: Option<ObjKey>,
+    id: u32,
+    f: impl FnOnce(&mut Ability) -> i32,
+) -> i32 {
+    match k.and_then(|k| gm.unit_mut(k).abilities.get_mut(id)) {
+        Some(ab) => f(ab),
+        None => 0,
     }
 }
 
@@ -1097,7 +1071,7 @@ fn unit_type<'a>(gm: &'a Game, a: &[Value]) -> Option<&'a UnitType> {
 }
 
 /// The unit in argument `i`, if it is a live unit.
-fn unit_at(gm: &Game, a: &[Value], i: usize) -> Option<ObjKey> {
+pub(crate) fn unit_at(gm: &Game, a: &[Value], i: usize) -> Option<ObjKey> {
     gm.unit_of_handle(handle_arg(a, i))
 }
 
@@ -1116,12 +1090,12 @@ fn handle_arg(a: &[Value], i: usize) -> u32 {
 }
 
 /// The real in argument `i`, or 0.0.
-fn real_at(a: &[Value], i: usize) -> F32 {
+pub(crate) fn real_at(a: &[Value], i: usize) -> F32 {
     a.get(i).and_then(|v| v.as_real()).unwrap_or(F32::ZERO)
 }
 
 /// The boolean in argument `i`, or false.
-fn bool_arg(a: &[Value], i: usize) -> bool {
+pub(crate) fn bool_arg(a: &[Value], i: usize) -> bool {
     match a.get(i) {
         Some(Value::Boolean(b)) => *b,
         Some(Value::Integer(n)) => *n != 0,

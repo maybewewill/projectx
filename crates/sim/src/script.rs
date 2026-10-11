@@ -167,6 +167,10 @@ impl ScriptHost {
                         natives::fire_trigger(&self.game, &mut self.vm, trigger, Some(ev));
                     }
                 }
+                Payload::TimedLife { unit, serial } => {
+                    self.vm.set_now(expiry);
+                    natives::expire_timed_life(&self.game, &mut self.vm, unit, serial);
+                }
             }
         }
         self.game.borrow_mut().tick_orders();

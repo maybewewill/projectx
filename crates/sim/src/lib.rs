@@ -13,6 +13,7 @@
 //! Real arithmetic uses the bit-exact helpers of the `softfloat` crate. Nothing here reads the
 //! system clock, uses hash maps with random seeds, or depends on the host floating point unit.
 
+pub mod abilities;
 pub mod handles;
 pub mod hashmap;
 pub mod natives;
