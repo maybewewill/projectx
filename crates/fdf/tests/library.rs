@@ -433,3 +433,92 @@ fn raw_values_are_still_reachable() {
         vec![Value::Str("NOSHADING|IGNORETRACKEVENTS".into())]
     );
 }
+
+#[test]
+fn top_level_texture_and_string_templates_load_and_inherit() {
+    // Game files define Texture and String templates at top level, and a
+    // String template may INHERITS another one (the H3 load failure).
+    let lib = lib_from(
+        &[(
+            "t.fdf",
+            r#"
+Texture "BaseTex" {
+    File "a.blp",
+    TexCoord 0.0, 1.0, 0.0, 1.0,
+}
+String "BaseText" {
+    Font "MasterFont",0.01,
+    FontColor 1.0 1.0 1.0,
+}
+String "DisabledText" INHERITS "BaseText" {
+    FontColor 0.4 0.4 0.4,
+}
+Texture "NoName" { File "b.blp", }
+"#,
+        )],
+        "t.fdf",
+    )
+    .unwrap();
+    assert!(lib.warnings.is_empty(), "{:?}", lib.warnings);
+    let d = lib.block("disabledtext").unwrap();
+    assert_eq!(d.inherits, None);
+    let keys: Vec<&str> = d.props.iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(keys, vec!["Font", "FontColor"]);
+    assert_eq!(lib.block("BaseTex").unwrap().props.len(), 2);
+    assert!(lib.block_names().any(|n| n == "noname"));
+    assert!(matches!(
+        lib.block("missing"),
+        Err(LibraryError::UnknownBlock(_))
+    ));
+}
+
+#[test]
+fn nested_string_inheriting_a_template_is_resolved_in_frames() {
+    let lib = lib_from(
+        &[(
+            "t.fdf",
+            r#"
+String "Base" { FontColor 1.0 1.0 1.0, Font "F",0.01, }
+Frame "SIMPLEFRAME" "Host" {
+    String "Child" INHERITS "Base" {
+        FontColor 0.0 0.0 0.0,
+    }
+}
+"#,
+        )],
+        "t.fdf",
+    )
+    .unwrap();
+    let flat = lib.resolve("Host").unwrap();
+    let Child::Block(b) = &flat.children[0] else {
+        panic!("expected a block child");
+    };
+    assert_eq!(b.name.as_deref(), Some("Child"));
+    let keys: Vec<&str> = b.props.iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["Font", "FontColor"],
+        "inherited Font, own FontColor"
+    );
+}
+
+#[test]
+fn block_inheritance_errors_are_reported() {
+    let lib = lib_from(
+        &[(
+            "t.fdf",
+            r#"
+String "A" INHERITS "B" { }
+String "B" INHERITS "A" { }
+String "C" INHERITS "Nowhere" { }
+"#,
+        )],
+        "t.fdf",
+    )
+    .unwrap();
+    assert!(matches!(lib.block("A"), Err(LibraryError::InheritCycle(_))));
+    assert!(matches!(
+        lib.block("C"),
+        Err(LibraryError::UnknownParent { .. })
+    ));
+}

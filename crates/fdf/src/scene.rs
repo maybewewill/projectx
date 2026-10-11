@@ -44,26 +44,12 @@ impl Node {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SceneError {
     Library(LibraryError),
-    DuplicateName {
-        name: String,
-        first: Span,
-        second: Span,
-    },
 }
 
 impl fmt::Display for SceneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SceneError::Library(e) => write!(f, "{e}"),
-            SceneError::DuplicateName {
-                name,
-                first,
-                second,
-            } => write!(
-                f,
-                "name \"{name}\" used twice (line {}, column {} and line {}, column {})",
-                first.line, first.col, second.line, second.col
-            ),
         }
     }
 }
@@ -81,6 +67,10 @@ pub struct Scene {
     pub nodes: Vec<Node>,
     /// Top-level frames in the order they were added.
     pub roots: Vec<usize>,
+    /// Non-fatal notes. The game's own files reuse names (a template child
+    /// inherited by two frames, or a name repeated in one file); the first
+    /// node keeps the name and later ones are reported here.
+    pub warnings: Vec<String>,
     index: BTreeMap<String, usize>,
     spans: Vec<Span>,
 }
@@ -113,20 +103,22 @@ impl Scene {
         self.index.get(&name.to_ascii_lowercase()).copied()
     }
 
-    fn register(&mut self, name: &str, span: Span) -> Result<(), SceneError> {
+    /// Registers a name for the node about to be pushed. A repeated name keeps
+    /// the first node and records a warning.
+    fn register(&mut self, name: &str, span: Span) {
         if name.is_empty() {
-            return Ok(());
+            return;
         }
         let key = name.to_ascii_lowercase();
         if let Some(&first) = self.index.get(&key) {
-            return Err(SceneError::DuplicateName {
-                name: name.to_string(),
-                first: self.spans[first],
-                second: span,
-            });
+            let f = self.spans[first];
+            self.warnings.push(format!(
+                "name \"{name}\" used twice (line {}, column {} and line {}, column {}); first kept",
+                f.line, f.col, span.line, span.col
+            ));
+            return;
         }
         self.index.insert(key, self.nodes.len());
-        Ok(())
     }
 
     fn push(&mut self, node: Node) -> usize {
@@ -136,7 +128,7 @@ impl Scene {
     }
 
     fn add_rec(&mut self, f: &Frame, parent: Option<usize>) -> Result<usize, SceneError> {
-        self.register(&f.name, f.span)?;
+        self.register(&f.name, f.span);
         let idx = self.push(Node {
             kind: NodeKind::Frame,
             type_name: f.kind.clone(),
@@ -153,7 +145,7 @@ impl Scene {
                 Child::Frame(cf) => self.add_rec(cf, Some(idx))?,
                 Child::Block(b) => {
                     let name = b.name.clone().unwrap_or_default();
-                    self.register(&name, b.span)?;
+                    self.register(&name, b.span);
                     let (kind, type_name) = match b.kind {
                         BlockKind::Texture => (NodeKind::Texture, "TEXTURE"),
                         BlockKind::String => (NodeKind::String, "STRING"),

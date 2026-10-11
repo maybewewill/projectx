@@ -59,11 +59,13 @@ pub enum BlockKind {
     String,
 }
 
-/// `Texture [name] { ... }` or `String [name] { ... }`: a property-only element.
+/// `Texture [name] [INHERITS [WITHCHILDREN] name] { ... }` or the same with
+/// `String`: a property-only element. Top-level blocks are templates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub kind: BlockKind,
     pub name: Option<String>,
+    pub inherits: Option<Inherits>,
     pub props: Vec<Property>,
     pub layer: Option<String>,
     pub span: Span,
@@ -108,9 +110,14 @@ pub struct StringList {
 /// A top-level item of an FDF file.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TopItem {
-    Include { path: String, span: Span },
+    Include {
+        path: String,
+        span: Span,
+    },
     StringList(StringList),
     Frame(Frame),
+    /// A named `Texture` or `String` template (game files define these at top level).
+    Block(Block),
 }
 
 /// A parsed FDF file.

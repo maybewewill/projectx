@@ -225,7 +225,10 @@ Frame "SIMPLEFRAME" "BigSimple" { SetPoint TOPLEFT, TOPLEFT, 0.7, 0, Width 0.3, 
 
 #[test]
 fn unpositioned_nodes_warn_and_have_no_rect() {
-    let scene = scene_of(r#"Frame "FRAME" "Lost" { Width 0.1, }"#, &["Lost"]);
+    let scene = scene_of(
+        r#"Frame "FRAME" "P" { SetAllPoints, Frame "FRAME" "Lost" { Width 0.1, } }"#,
+        &["P"],
+    );
     let layout = solve(&scene, &Screen::safe_area(), &ExternalFrames::new()).unwrap();
     assert_eq!(layout.rect(node(&scene, "Lost")), None);
     assert_eq!(
@@ -237,12 +240,54 @@ fn unpositioned_nodes_warn_and_have_no_rect() {
 }
 
 #[test]
+fn root_without_anchors_fills_its_screen_rect() {
+    // ConsoleUI (a SIMPLEFRAME root with no SetPoint) fills the window; a
+    // FRAME root fills the 4:3 safe area. Its children anchor to it.
+    let scene = scene_of(
+        r#"
+Frame "SIMPLEFRAME" "Console" {
+    Frame "FRAME" "Bar" { SetAllPoints, }
+}
+Frame "FRAME" "Menu" {
+    Frame "FRAME" "Inner" { SetAllPoints, }
+}
+"#,
+        &["Console", "Menu"],
+    );
+    let screen = Screen::for_window(1920, 1080);
+    let layout = solve(&scene, &screen, &ExternalFrames::new()).unwrap();
+    assert_rect(
+        layout.rect(node(&scene, "Console")),
+        screen.window.left,
+        0.0,
+        screen.window.right,
+        0.6,
+    );
+    assert_rect(
+        layout.rect(node(&scene, "Bar")),
+        screen.window.left,
+        0.0,
+        screen.window.right,
+        0.6,
+    );
+    assert_rect(layout.rect(node(&scene, "Menu")), 0.0, 0.0, 0.8, 0.6);
+    assert_rect(layout.rect(node(&scene, "Inner")), 0.0, 0.0, 0.8, 0.6);
+    // Bar is a FRAME outside the 4:3 safe area, the existing warning; no
+    // node is unpositioned.
+    assert!(!layout
+        .warnings
+        .iter()
+        .any(|w| matches!(w, Warning::Unpositioned { .. })));
+}
+
+#[test]
 fn child_of_unpositioned_parent_is_unresolved() {
     let scene = scene_of(
-        r#"Frame "FRAME" "P" { Frame "FRAME" "K" { SetAllPoints, } }"#,
-        &["P"],
+        r#"Frame "FRAME" "Root" { SetAllPoints, Frame "FRAME" "P" { Frame "FRAME" "K" { SetAllPoints, } } }"#,
+        &["Root"],
     );
     let layout = solve(&scene, &Screen::safe_area(), &ExternalFrames::new()).unwrap();
+    assert_eq!(layout.rect(node(&scene, "P")), None);
     assert_eq!(layout.rect(node(&scene, "K")), None);
 }
 

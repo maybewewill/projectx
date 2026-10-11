@@ -247,17 +247,23 @@ fn bad_property_in_draw_is_reported_with_node_name() {
 }
 
 #[test]
-fn scene_rejects_duplicate_names() {
+fn scene_keeps_first_of_duplicate_names_and_warns() {
+    // The game's files repeat names (one template child inherited by two
+    // frames), so this is a warning, not a load failure.
     let mut lib = Library::new();
     let mut none = |_: &str| None;
     lib.load_source(
         "d",
-        r#"Frame "FRAME" "Root" { Frame "FRAME" "Same" { } Frame "FRAME" "same" { } }"#,
+        r#"Frame "FRAME" "Root" { Frame "FRAME" "Same" { SetAllPoints, } Frame "FRAME" "same" { } }"#,
         &mut none,
     )
     .unwrap();
-    let err = Scene::build(&lib, &["Root"]).unwrap_err();
-    assert!(err.to_string().contains("used twice"), "{err}");
+    let scene = Scene::build(&lib, &["Root"]).unwrap();
+    assert_eq!(scene.warnings.len(), 1, "{:?}", scene.warnings);
+    assert!(scene.warnings[0].contains("used twice"));
+    let kept = scene.find("same").unwrap();
+    assert_eq!(scene.nodes[kept].name, "Same");
+    assert_eq!(scene.nodes.len(), 3, "both nodes stay in the tree");
 }
 
 #[test]

@@ -6,3 +6,6 @@ license.workspace = true
 description = "Warcraft III FDF (frame definition) parser, inheritance, layout and draw list"
 
 [dependencies]
+
+[dev-dependencies]
+mpq = { path = "../mpq" }

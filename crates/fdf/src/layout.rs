@@ -239,6 +239,12 @@ pub fn solve(
             continue;
         };
         if anchors[i].is_empty() {
+            if node.parent.is_none() {
+                // A root with no anchors fills its screen rectangle: the game's
+                // root frames (for example ConsoleUI) carry no SetPoint.
+                rects[i] = Some(parent_rect);
+                continue;
+            }
             warnings.push(Warning::Unpositioned {
                 node: node.name.clone(),
             });
