@@ -150,6 +150,9 @@ pub(crate) fn dispatch_unit_death(game: &RefCell<Game>, rt: &mut dyn ScriptRunti
         unit,
     );
     fire_observers(game, rt, unit, EVENT_UNIT_DEATH + KEY_BASE, unit);
+    // `TriggerRegisterDeathEvent` on a unit (LIKELY: the widget death key is shared by widgets, see
+    // `destructable.rs`). The unit is the trigger unit of these entries, as for the unit death.
+    fire_observers(game, rt, unit, super::destructable::WIDGET_DEATH_KEY, unit);
 }
 
 /// Fires the entries of `agent`'s table whose key is `key`, oldest first. Returns the OR of the results of
@@ -253,7 +256,8 @@ pub(crate) fn current_event_id(gm: &Game, thread: u32) -> Option<u32> {
         Object::Event(ev) => match ev.source {
             EventSource::UnitEvent { key }
             | EventSource::PlayerUnitEvent { key, .. }
-            | EventSource::RegionEvent { key, .. } => key.checked_sub(KEY_BASE),
+            | EventSource::RegionEvent { key, .. }
+            | EventSource::WidgetDeath { key, .. } => key.checked_sub(KEY_BASE),
             _ => None,
         },
         _ => None,

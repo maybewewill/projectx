@@ -60,7 +60,7 @@ const HANDLE_NATIVES: &[(&str, Option<HandleKind>)] = &[
     ("PlayerHandle", Some(HandleKind::Player)),
     // TODO: a unit is also a widget; the widget type check is not modelled yet.
     ("WidgetHandle", None),
-    ("DestructableHandle", None),
+    ("DestructableHandle", Some(HandleKind::Destructable)),
     ("ItemHandle", Some(HandleKind::Item)),
     ("UnitHandle", Some(HandleKind::Unit)),
     ("AbilityHandle", None),

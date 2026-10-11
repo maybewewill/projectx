@@ -168,6 +168,94 @@ pub enum EventSource {
     /// `TriggerRegisterEnterRegion` / `TriggerRegisterLeaveRegion`: fires for a unit that crosses the
     /// edge of `region`. `key` is the registration key (`0x80205` enter, `0x80206` leave).
     RegionEvent { key: u32, region: ObjKey },
+    /// `TriggerRegisterDeathEvent` (`natives/destructable.rs`): fires when the widget `widget` dies. `key`
+    /// is the registration key (`0x80259`). The widget is what `GetTriggerDestructable` returns.
+    WidgetDeath { key: u32, widget: ObjKey },
+}
+
+/// A destructable type as the simulation needs it: the template values a new destructable starts with.
+///
+/// The fields follow the destructable record offsets listed in `natives/destructable.rs`. Only the fields the
+/// natives read are here. TODO(gamedata): the engine should fill the registry from
+/// the destructable rows of the SLK data (`crates/gamedata`) at map load. That parsing is not implemented.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DestructableType {
+    /// Maximum life. A new destructable starts at this value (LIKELY: the record's max life field, `+0x90`).
+    pub max_life: F32,
+    /// Number of variations (`+0x58`). A requested variation at or above this count is clamped to the last
+    /// one (CONFIRMED structure, see `natives/destructable.rs`).
+    pub variations: u32,
+}
+
+/// The destructable type registry, keyed by the raw type id (the four-character code as an integer).
+///
+/// The host fills it. TODO(gamedata): the engine should load it from the destructable rows of the SLK data at
+/// map load. Tests insert synthetic types.
+#[derive(Debug, Clone, Default)]
+pub struct DestructableTypes {
+    by_id: BTreeMap<u32, DestructableType>,
+}
+
+impl DestructableTypes {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds or replaces the type `id`. Returns the type it replaced.
+    pub fn insert(&mut self, id: u32, ty: DestructableType) -> Option<DestructableType> {
+        self.by_id.insert(id, ty)
+    }
+
+    /// The type with raw id `id`.
+    pub fn get(&self, id: u32) -> Option<&DestructableType> {
+        self.by_id.get(&id)
+    }
+
+    /// Number of registered types.
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// Whether no type is registered.
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
+/// A destructable (`destructable` in JASS, a widget with a handle). Its position, facing, scale and life are
+/// stored as the natives see them; the original keeps them in sub-objects (see `natives/destructable.rs`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DestructableObj {
+    /// The raw type id (`GetDestructableTypeId`, object field `+0x30`).
+    pub type_id: u32,
+    pub x: F32,
+    pub y: F32,
+    /// Height. `CreateDestructable` takes it from the terrain (not modelled: 0.0 there, see
+    /// `natives/destructable.rs`); `CreateDestructableZ` stores the given value.
+    pub z: F32,
+    /// Facing in radians (the degree argument times pi/180, as for units).
+    pub facing: F32,
+    /// Scale, clamped to `[0.1, 10.0]` at creation.
+    pub scale: F32,
+    /// The variation index after the clamp.
+    pub variation: u32,
+    /// Current life. Never negative: a life at or below zero is stored as `+0.0`.
+    pub life: F32,
+    pub max_life: F32,
+    /// Occluder height (`GetDestructableOccluderHeight`, object `+0x40`, default 0.0).
+    pub occluder_height: F32,
+    /// Set while the life is zero or below (the original's `IsDead` test, `+0x13C` slot): the corpse state.
+    pub dead: bool,
+    /// Set by `ShowDestructable(false)`, and by `RemoveDestructable`.
+    pub hidden: bool,
+    /// The invulnerable bit (object flag word `+0x20`, bit 3). Stored only: no damage path reads it yet.
+    pub invulnerable: bool,
+    /// Set by `RemoveDestructable`. A removed destructable has no live handle for the natives.
+    pub removed: bool,
+    /// Whether the destructable currently blocks pathing. Set while it is alive, cleared by its death or
+    /// removal. The pathing write itself is not implemented (see `natives/destructable.rs`, the hook).
+    /// The field is kept so that the hook has its state when the pathing map is written.
+    pub blocks_pathing: bool,
 }
 
 /// A trigger event (`event` in JASS).
@@ -201,6 +289,8 @@ pub enum HandleKind {
     Group,
     /// An item (see [`ItemObj`]).
     Item,
+    /// A destructable (see [`DestructableObj`]).
+    Destructable,
     /// Presentation handle types (see `presentation.rs`): camera setups, sounds, effects, quests,
     /// quest items, multiboards and their items, leaderboards, dialogs, buttons and timer dialogs.
     CameraSetup,
@@ -711,6 +801,8 @@ pub enum Object {
     Group(GroupObj),
     /// An item.
     Item(ItemObj),
+    /// A destructable (see [`DestructableObj`]).
+    Destructable(DestructableObj),
     /// A presentation object with a handle (see `presentation.rs`).
     Pres(PresObj),
 }
@@ -735,6 +827,7 @@ impl Object {
             Object::Unit(_) => HandleKind::Unit,
             Object::Group(_) => HandleKind::Group,
             Object::Item(_) => HandleKind::Item,
+            Object::Destructable(_) => HandleKind::Destructable,
             Object::Pres(p) => p.handle_kind(),
         }
     }
@@ -792,6 +885,13 @@ pub struct Game {
     enum_items: Vec<u32>,
     /// Item handles of the running `GetFilterItem` scopes, innermost last.
     filter_items: Vec<u32>,
+    /// The destructable type registry the host fills (see [`DestructableTypes`]).
+    destructable_types: DestructableTypes,
+    /// Destructable handles of the running `GetEnumDestructable` scopes (`EnumDestructablesInRect`), innermost
+    /// last.
+    enum_destructables: Vec<u32>,
+    /// Destructable handles of the running `GetFilterDestructable` scopes, innermost last.
+    filter_destructables: Vec<u32>,
 }
 
 impl Default for Game {
@@ -830,6 +930,9 @@ impl Game {
             item_orders: Vec::new(),
             enum_items: Vec::new(),
             filter_items: Vec::new(),
+            destructable_types: DestructableTypes::new(),
+            enum_destructables: Vec::new(),
+            filter_destructables: Vec::new(),
         }
     }
 
@@ -909,6 +1012,71 @@ impl Game {
     /// Closes the innermost `GetFilterItem` scope.
     pub fn pop_filter_item(&mut self) {
         self.filter_items.pop();
+    }
+
+    /// The destructable type registry (read only). TODO(gamedata): filled by the engine from SLK data.
+    pub fn destructable_types(&self) -> &DestructableTypes {
+        &self.destructable_types
+    }
+
+    /// The destructable type registry, for the host and the tests.
+    pub fn destructable_types_mut(&mut self) -> &mut DestructableTypes {
+        &mut self.destructable_types
+    }
+
+    /// The destructable behind `key`. Panics if `key` is not a destructable.
+    pub fn destructable(&self, key: ObjKey) -> &DestructableObj {
+        match self.object(key) {
+            Object::Destructable(d) => d,
+            _ => panic!("not a destructable"),
+        }
+    }
+
+    /// Mutable access to the destructable behind `key`. Panics if `key` is not a destructable.
+    pub fn destructable_mut(&mut self, key: ObjKey) -> &mut DestructableObj {
+        match self.object_mut(key) {
+            Object::Destructable(d) => d,
+            _ => panic!("not a destructable"),
+        }
+    }
+
+    /// The destructable behind handle `id`, or `None` for a null, freed, destroyed, wrong-type or removed handle.
+    /// Every destructable native resolves its argument through this.
+    pub fn destructable_of_handle(&self, id: u32) -> Option<ObjKey> {
+        let k = self.handle_of_kind(id, HandleKind::Destructable)?;
+        (!self.destructable(k).removed).then_some(k)
+    }
+
+    /// The destructable handle that `GetEnumDestructable` returns: the innermost running enum callback, or 0.
+    pub fn enum_destructable(&self) -> u32 {
+        self.enum_destructables.last().copied().unwrap_or(0)
+    }
+
+    /// The destructable handle that `GetFilterDestructable` returns: the innermost running filter call, or 0.
+    pub fn filter_destructable(&self) -> u32 {
+        self.filter_destructables.last().copied().unwrap_or(0)
+    }
+
+    /// Opens a `GetEnumDestructable` scope with destructable handle `id`. Pair with
+    /// [`Game::pop_enum_destructable`].
+    pub fn push_enum_destructable(&mut self, id: u32) {
+        self.enum_destructables.push(id);
+    }
+
+    /// Closes the innermost `GetEnumDestructable` scope.
+    pub fn pop_enum_destructable(&mut self) {
+        self.enum_destructables.pop();
+    }
+
+    /// Opens a `GetFilterDestructable` scope with destructable handle `id`. Pair with
+    /// [`Game::pop_filter_destructable`].
+    pub fn push_filter_destructable(&mut self, id: u32) {
+        self.filter_destructables.push(id);
+    }
+
+    /// Closes the innermost `GetFilterDestructable` scope.
+    pub fn pop_filter_destructable(&mut self) {
+        self.filter_destructables.pop();
     }
 
     /// The unit type registry (read only). TODO(gamedata): filled by the engine from SLK data.
