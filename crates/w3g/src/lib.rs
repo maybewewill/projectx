@@ -25,6 +25,12 @@ pub enum Error {
     BadMagic,
     #[error("unsupported header version {0}")]
     UnsupportedHeaderVersion(u32),
+    #[error("header version {version} has size {size:#x}, expected {expected:#x}")]
+    BadHeaderSize {
+        version: u32,
+        size: u32,
+        expected: u32,
+    },
     #[error("unexpected end of data at offset {offset:#x} (wanted {wanted} bytes)")]
     UnexpectedEof { offset: usize, wanted: usize },
     #[error("unterminated string at offset {offset:#x}")]
