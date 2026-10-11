@@ -247,6 +247,9 @@ struct Checker {
     env: TypeEnv,
     globals: BTreeMap<String, VarInfo>,
     funcs: BTreeMap<String, FuncInfo>,
+    /// Keys of `funcs` that are natives. A native and a global may share a name (retail `common.ai` has
+    /// `native Sleep` and `constant integer SLEEP`; the original compiler's `native` path could not be probed, UNSURE).
+    native_keys: std::collections::BTreeSet<String>,
     diags: Vec<Diagnostic>,
     multi: bool,
     prog: usize,
@@ -263,6 +266,7 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
         env,
         globals: BTreeMap::new(),
         funcs: BTreeMap::new(),
+        native_keys: std::collections::BTreeSet::new(),
         diags: type_diags,
         multi,
         prog: 0,
@@ -303,7 +307,9 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
                         c.err(format!("constant '{}' needs an initializer", g.name));
                     }
                     let key = ident_key(&g.name);
-                    if c.globals.contains_key(&key) || c.funcs.contains_key(&key) {
+                    if c.globals.contains_key(&key)
+                        || (c.funcs.contains_key(&key) && !c.native_keys.contains(&key))
+                    {
                         c.err(format!("duplicate global '{}'", g.name));
                     } else {
                         c.globals.insert(key, info.clone());
@@ -316,7 +322,7 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
                         order,
                         ..c.func_info(&n.sig, (pi, n.line))
                     };
-                    c.declare_func(&n.sig.name, info);
+                    c.declare_native(&n.sig.name, info);
                 }
                 Decl::Function(f) => {
                     c.line = f.line;
@@ -433,10 +439,25 @@ impl Checker {
         }
     }
 
+    /// A native: clashes with another function or native, not with a global (see `native_keys`).
+    fn declare_native(&mut self, name: &str, info: FuncInfo) {
+        let key = ident_key(name);
+        if self.funcs.contains_key(&key) {
+            self.err(format!("duplicate function or native '{name}'"));
+        } else {
+            self.native_keys.insert(key.clone());
+            self.funcs.insert(key, info);
+        }
+    }
+
     fn declare_func(&mut self, name: &str, info: FuncInfo) {
         // Functions, natives and globals share one namespace (harness o17, o20, q05).
         let key = ident_key(name);
-        if self.funcs.contains_key(&key) || self.globals.contains_key(&key) {
+        // A function may reuse the name of a constant global: retail `undead.ai` has `function undead_mine`
+        // next to `constant integer UNDEAD_MINE` of `common.ai`, and the retail AI runs. The emulated compiler
+        // entry rejects that pair (kind-0 error), probably because its native registry is not set up: UNSURE.
+        let clash_global = self.globals.get(&key).is_some_and(|g| !g.constant);
+        if self.funcs.contains_key(&key) || clash_global {
             self.err(format!("duplicate function or native '{name}'"));
         } else {
             self.funcs.insert(key, info);

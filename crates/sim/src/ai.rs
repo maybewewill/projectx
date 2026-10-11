@@ -134,6 +134,17 @@ pub struct AiControl {
     pub settings: BTreeMap<&'static str, AiArg>,
     /// The alliance target handle (`SetAllianceTarget`), 0 when none.
     pub alliance_target: u32,
+    /// The attack captain's group size (captain record `+0xBC`, read by `CaptainIsEmpty` and `CaptainGroupSize`).
+    /// Nothing in the sim forms captain groups yet, so it stays 0 unless a host sets it (UNSURE: the writer of the
+    /// field was not found).
+    pub captain_group_size: i32,
+    /// Whether the captain has an enemy reference (`0x6F2D0A00`: either of the two refs at `+0x114`, `+0x120`
+    /// resolves), by captain: index 1 is the attack captain (`CaptainInCombat(true)`), index 0 the defense captain.
+    /// No combat tracking sets it (UNSURE).
+    pub captain_in_combat: [bool; 2],
+    /// Whether the player's threat reference (player record `+0x164`) resolves (`TownThreatened`). No threat scan sets
+    /// it (UNSURE).
+    pub town_threatened: bool,
 }
 
 /// The state shared by the main VM's AI natives, the AI VMs and the host.
@@ -149,6 +160,8 @@ pub struct AiShared {
     pub unimplemented: BTreeMap<&'static str, u32>,
     /// Start and build events, in order.
     pub events: Vec<AiEvent>,
+    /// The town sites and town slots (`ai_towns.rs`).
+    pub towns: crate::ai_towns::Towns,
 }
 
 /// The shared AI state, as the natives and the host hold it.

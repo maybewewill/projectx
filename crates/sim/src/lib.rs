@@ -15,6 +15,7 @@
 
 pub mod abilities;
 pub mod ai;
+pub mod ai_towns;
 pub mod combat;
 pub mod commands;
 pub mod construction;

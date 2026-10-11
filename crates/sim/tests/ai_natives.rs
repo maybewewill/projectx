@@ -24,6 +24,10 @@ native GetUnitCount takes integer t returns integer
 native GetUnitCountDone takes integer t returns integer
 native GetPlayerUnitTypeCount takes player p, integer t returns integer
 native GetGoldOwned takes nothing returns integer
+native GetMinesOwned takes nothing returns integer
+native TownWithMine takes nothing returns integer
+native TownHasMine takes integer slot returns boolean
+native TownHasHall takes integer slot returns boolean
 native GetUnitGoldCost takes integer t returns integer
 native UnitAlive takes unit u returns boolean
 native CommandsWaiting takes nothing returns integer
@@ -337,12 +341,193 @@ endfunction
     assert_eq!(ai_int(&r, 0, "woodCost"), 50);
     // An id that is not in the registry costs 0.
     assert_eq!(ai_int(&r, 0, "unknownCost"), 0);
-    // Not implemented: the call returns 0 and is counted.
+    // GetGoldOwned sums the gold of the mines of the AI's town slots (not the player's gold): no town, no gold.
     assert_eq!(ai_int(&r, 0, "gold"), 0);
-    assert_eq!(
-        r.shared.borrow().unimplemented.get("GetGoldOwned").copied(),
-        Some(1)
+    assert_eq!(r.shared.borrow().unimplemented.get("GetGoldOwned"), None);
+}
+
+const HTOW: u32 = u32::from_be_bytes(*b"htow");
+const NGOL: u32 = u32::from_be_bytes(*b"ngol");
+const UGOL: u32 = u32::from_be_bytes(*b"ugol");
+/// `UNIT_TYPE_TOWNHALL` in the classification word.
+const CLASS_TOWNHALL: u32 = 0x40;
+
+const TOWN_AI: &str = r#"
+globals
+    integer mines = -9
+    integer gold = -9
+    integer town = -9
+    integer hall0 = -9
+    integer hall1 = -9
+    integer hall4 = -9
+    integer mine0 = -9
+    integer mine1 = -9
+endglobals
+function b2i takes boolean b returns integer
+    if b then
+        return 1
+    endif
+    return 0
+endfunction
+function main takes nothing returns nothing
+    set mines = GetMinesOwned()
+    set gold = GetGoldOwned()
+    set town = TownWithMine()
+    set hall0 = b2i(TownHasHall(0))
+    set hall1 = b2i(TownHasHall(1))
+    set hall4 = b2i(TownHasHall(4))
+    set mine0 = b2i(TownHasMine(0))
+    set mine1 = b2i(TownHasMine(1))
+endfunction
+"#;
+
+fn town_rig(race: u32, extra_main: &str) -> Rig {
+    let main = format!(
+        r#"
+native SetResourceAmount takes unit u, integer a returns nothing
+function main takes nothing returns nothing
+    local unit m = CreateUnit(Player(15), 'ngol', 0.0, 0.0, 0.0)
+    call SetResourceAmount(m, 12500)
+    call CreateUnit(Player(0), 'htow', 300.0, 0.0, 0.0)
+    {extra_main}
+    call StartMeleeAI(Player(0), "town.ai")
+endfunction
+"#
     );
+    let mut lib = library();
+    lib.add_script("town.ai", TOWN_AI);
+    rig_with(&main, lib, |game| {
+        let mut gm = game.borrow_mut();
+        gm.player_mut(0).unwrap().race = race;
+        for (id, name, class) in [(HTOW, "htow", CLASS_TOWNHALL), (NGOL, "ngol", 0), (UGOL, "ugol", 0)] {
+            gm.unit_types_mut().insert(
+                id,
+                UnitType {
+                    name: name.to_string(),
+                    max_life: F32::from_bits(0x42C8_0000),
+                    classification: class,
+                    ..Default::default()
+                },
+            );
+        }
+    })
+}
+
+/// A hall and a gold mine near each other form one town of the AI: the model of `ai_towns.rs` (the five natives'
+/// bodies are Unicorn-checked in `ai_towns_vectors.rs`; the registration of units is the model's).
+#[test]
+fn town_natives_see_the_hall_and_the_mine() {
+    let mut r = town_rig(1, "");
+    tick(&mut r);
+    assert_eq!(ai_int(&r, 0, "mines"), 1);
+    assert_eq!(ai_int(&r, 0, "gold"), 12500);
+    assert_eq!(ai_int(&r, 0, "town"), 0);
+    assert_eq!(ai_int(&r, 0, "hall0"), 1);
+    assert_eq!(ai_int(&r, 0, "hall1"), 0, "an empty slot has no hall");
+    assert_eq!(ai_int(&r, 0, "hall4"), 0, "slot 4 is out of range");
+    assert_eq!(ai_int(&r, 0, "mine0"), 1);
+    assert_eq!(ai_int(&r, 0, "mine1"), 0);
+    assert!(r.shared.borrow().unimplemented.is_empty());
+}
+
+/// Without a hall a human or orc AI has no town with a mine; an undead AI needs only the mine; a night elf needs an
+/// entangled mine (`egol`), which a plain gold mine is not.
+#[test]
+fn town_with_mine_depends_on_the_race() {
+    // A mine alone, no AI hall: the hall natives say no, TownWithMine depends on the race.
+    for (race, want) in [(1u32, -1), (2, -1), (3, -1), (4, -1)] {
+        let main = r#"
+native SetResourceAmount takes unit u, integer a returns nothing
+function main takes nothing returns nothing
+    local unit m = CreateUnit(Player(15), 'ngol', 0.0, 0.0, 0.0)
+    call SetResourceAmount(m, 100)
+    call StartMeleeAI(Player(0), "town.ai")
+endfunction
+"#;
+        let mut lib = library();
+        lib.add_script("town.ai", TOWN_AI);
+        let mut r = rig_with(main, lib, |game| {
+            let mut gm = game.borrow_mut();
+            gm.player_mut(0).unwrap().race = race;
+            gm.unit_types_mut().insert(
+                NGOL,
+                UnitType {
+                    name: "ngol".to_string(),
+                    ..Default::default()
+                },
+            );
+        });
+        tick(&mut r);
+        // No hall, so the AI has no town slot at all: every race answers -1 and 0 mines.
+        assert_eq!(ai_int(&r, 0, "town"), want, "race {race}");
+        assert_eq!(ai_int(&r, 0, "mines"), 0);
+    }
+    // With the hall, a night elf still needs the entangled mine.
+    let mut r = town_rig(4, "");
+    tick(&mut r);
+    assert_eq!(ai_int(&r, 0, "town"), -1);
+    let mut r = town_rig(3, "");
+    tick(&mut r);
+    assert_eq!(ai_int(&r, 0, "town"), 0);
+}
+
+/// The captain and threat records start idle: the captain group is empty, nothing is in combat or threatened.
+#[test]
+fn captain_and_threat_records_start_idle() {
+    let main = "function main takes nothing returns nothing\n    call StartMeleeAI(Player(0), \"idle.ai\")\nendfunction\n";
+    let idle = r#"
+native CaptainIsEmpty takes nothing returns boolean
+native CaptainGroupSize takes nothing returns integer
+native CaptainInCombat takes boolean attack returns boolean
+native TownThreatened takes nothing returns boolean
+globals
+    integer empty = -9
+    integer size = -9
+    integer atk = -9
+    integer def = -9
+    integer thr = -9
+endglobals
+function main takes nothing returns nothing
+    if CaptainIsEmpty() then
+        set empty = 1
+    else
+        set empty = 0
+    endif
+    set size = CaptainGroupSize()
+    if CaptainInCombat(true) then
+        set atk = 1
+    else
+        set atk = 0
+    endif
+    if CaptainInCombat(false) then
+        set def = 1
+    else
+        set def = 0
+    endif
+    if TownThreatened() then
+        set thr = 1
+    else
+        set thr = 0
+    endif
+endfunction
+"#;
+    for set in [false, true] {
+        let mut lib = library();
+        lib.add_script("idle.ai", idle);
+        let mut r = rig(main, lib);
+        if set {
+            // Host-set values are read back (the sim has no writer for them yet).
+            let mut sh = r.shared.borrow_mut();
+            let c = sh.control_mut(0);
+            c.captain_group_size = 3;
+            c.captain_in_combat = [false, true];
+            c.town_threatened = true;
+        }
+        tick(&mut r);
+        let want = if set { [0, 3, 1, 0, 1] } else { [1, 0, 0, 0, 0] };
+        let got = ["empty", "size", "atk", "def", "thr"].map(|n| ai_int(&r, 0, n));
+        assert_eq!(got, want, "host-set: {set}");
+    }
 }
 
 /// The boolean natives whose bodies fix their value: `SetUpgrade` and `ConvertUnits` return false, `SetProduce` with

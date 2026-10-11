@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | --mpq War3.mpq [--mpq War3x.mpq])
-//!        [--ai-common common.ai] [--ai-script NAME=PATH]... [--seed S] [--steps N] map.w3x
+//!        [--ai-common common.ai] [--ai-script NAME=PATH]... [--computer SLOT[:RACE]]... [--ai-log N]
+//!        [--seed S] [--steps N] map.w3x
 //! ```
 //!
 //! `--mpq` reads `Scripts\common.j` and `Scripts\Blizzard.j` from the archives (later ones override),
@@ -33,6 +34,10 @@ struct Args {
     seed: Option<u32>,
     replay: Option<String>,
     steps: u64,
+    /// `--computer SLOT[:RACE]`: make a slot a computer player (RACE human|orc|undead|nightelf, else the map's).
+    computers: Vec<(u32, Option<u32>)>,
+    /// `--ai-log N`: print the first N entries of the AI command log (0: none).
+    ai_log: usize,
     map: Option<String>,
 }
 
@@ -44,6 +49,26 @@ fn parse_ai_script(text: &str) -> Result<(String, String), String> {
         }
         _ => Err(format!("--ai-script: expected NAME=PATH, got {text}")),
     }
+}
+
+/// A `SLOT[:RACE]` argument of `--computer` (RACE: human 1, orc 2, undead 3, nightelf 4).
+fn parse_computer(text: &str) -> Result<(u32, Option<u32>), String> {
+    let (slot, race) = match text.split_once(':') {
+        Some((s, r)) => (s, Some(r)),
+        None => (text, None),
+    };
+    let slot = slot
+        .parse::<u32>()
+        .map_err(|_| format!("--computer: bad slot {text}"))?;
+    let race = match race {
+        None => None,
+        Some("human") => Some(1),
+        Some("orc") => Some(2),
+        Some("undead") => Some(3),
+        Some("nightelf") => Some(4),
+        Some(other) => return Err(format!("--computer: unknown race {other}")),
+    };
+    Ok((slot, race))
 }
 
 /// A 32-bit seed in decimal or `0x` hex.
@@ -75,6 +100,13 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .push(parse_ai_script(&value("--ai-script")?)?),
             "--seed" => args.seed = Some(parse_seed(&value("--seed")?)?),
             "--replay" => args.replay = Some(value("--replay")?),
+            "--ai-log" => {
+                let v = value("--ai-log")?;
+                args.ai_log = v
+                    .parse()
+                    .map_err(|_| format!("--ai-log: not a number: {v}"))?;
+            }
+            "--computer" => args.computers.push(parse_computer(&value("--computer")?)?),
             "--steps" => {
                 let v = value("--steps")?;
                 args.steps = v
@@ -156,10 +188,28 @@ fn inputs(args: &Args) -> Result<Inputs, String> {
 fn run(argv: &[String]) -> Result<(), String> {
     let args = parse_args(argv)?;
     let mut engine = Engine::boot(inputs(&args)?).map_err(|e| e.to_string())?;
+    for &(slot, race) in &args.computers {
+        let host = engine.host();
+        let mut game = host.game_mut();
+        let p = game
+            .player_mut(slot)
+            .ok_or_else(|| format!("--computer: no slot {slot}"))?;
+        p.controller = engine::map::CONTROL_COMPUTER;
+        p.slot_state = 1;
+        if let Some(r) = race {
+            p.race = r;
+        }
+    }
     for _ in 0..args.steps {
         engine.step();
     }
     print!("{}", engine.report());
+    if args.ai_log > 0 {
+        let shared = engine.ai().shared().borrow();
+        for (i, c) in shared.commands.iter().take(args.ai_log).enumerate() {
+            println!("ai-log {i:4}: p{} {} {:?}", c.player, c.name, c.args);
+        }
+    }
     Ok(())
 }
 
