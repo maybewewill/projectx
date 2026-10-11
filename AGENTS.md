@@ -342,6 +342,12 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (vision)**: `docs/spec/vision.md` (fog grid, writers, state table, shapes, query natives). Unicorn
+  (`tools/emu/vision_emu.py`, 1,000 cases per item, 0 mismatches): state table, span writers, cell writer, rect
+  writer (end exclusive; odd-start quirk in the span writer). `crates/sim/src/vision.rs` + `natives/fog.rs` rewired
+  from counts to the last-writer grid. Open: grid size/scale, circle row expansion `0x6f408fd0`, refresh counter.
+  Acquisition does not read vision (direct callees checked).
+
 - **2026-10-11 (24)**: abilities pass 3 (abilities-3.md): builder `0x6F2657A0` fills the definition + 0x68-byte level record (targs +0x00, Cast +0x04, Dur +0x08, HeroDur +0x0C, Cost +0x10 int, Cool +0x14 (negative/NaN → 0), Area +0x18, Rng +0x1C, DataA..I +0x20..+0x40, UnitID +0x44, BuffID/EfctID lists), getter per offset (Unicorn 94/94, lead re-ran). Correction: ability +0x4C is the targs flag word, not a record pointer. `gamedata::abilitytype`. Still NOT FOUND: cooldown countdown/ready check, mana payment, Dur vs HeroDur choice (the sim has a model, marked as such).
 
 - **2026-10-11 (23)**: merged economy pass 3 (changer/tax/carry/deposit/refund; Unicorn 2,961+152), missile gates (slots 45/47, Unicorn 3,000; flight still a distance/speed model), hero progression (XP tables 11,336 values + Str/Agi 800 cases in Unicorn). Lead verified the merged tree: 803 tests with and without GAME_DLL, clippy clean. Disk filled once (5 parallel target dirs) — agents now build with -j 2 and `cargo clean` at the end. ~40.5%.
