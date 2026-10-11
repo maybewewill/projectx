@@ -31,6 +31,7 @@ pub mod rng;
 pub mod script;
 pub mod timer;
 pub mod unit_counts;
+pub mod vision;
 
 mod pe;
 

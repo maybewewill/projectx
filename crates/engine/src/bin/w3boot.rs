@@ -10,7 +10,9 @@
 //! The same archives give the Misc constants and the unit rows (`Units\MiscData.txt`, `Units\UnitBalance.slk`, ...);
 //! the damage model is `SpecDamage` only with `--dll` as well (see `engine::data`).
 //! `--ai-common` and `--ai-script NAME=PATH` give AI scripts as files; they override the archive ones.
-//! `--seed` is the raw game-start seed (decimal or `0x` hex, default 0); see `engine::Inputs::rng_seed`.
+//! `--seed` is the raw game-start seed (decimal or `0x` hex). Without it, `--replay FILE.w3g` takes the
+//! seed from the replay's game-start record (link UNSURE, `docs/spec/game-start.md`); otherwise 0.
+//! See `engine::Inputs::rng_seed` and `engine::game_start`.
 
 use std::process::ExitCode;
 
@@ -28,7 +30,8 @@ struct Args {
     mpqs: Vec<String>,
     ai_common: Option<String>,
     ai_scripts: Vec<(String, String)>,
-    seed: u32,
+    seed: Option<u32>,
+    replay: Option<String>,
     steps: u64,
     map: Option<String>,
 }
@@ -70,7 +73,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--ai-script" => args
                 .ai_scripts
                 .push(parse_ai_script(&value("--ai-script")?)?),
-            "--seed" => args.seed = parse_seed(&value("--seed")?)?,
+            "--seed" => args.seed = Some(parse_seed(&value("--seed")?)?),
+            "--replay" => args.replay = Some(value("--replay")?),
             "--steps" => {
                 let v = value("--steps")?;
                 args.steps = v
@@ -105,6 +109,13 @@ fn read(path: &str) -> Result<Vec<u8>, String> {
 
 fn inputs(args: &Args) -> Result<Inputs, String> {
     let map = read(args.map.as_deref().unwrap_or_default())?;
+    let replay = match &args.replay {
+        Some(path) => Some(
+            w3g::Replay::parse(&read(path)?).map_err(|e| format!("--replay {path}: {e}"))?,
+        ),
+        None => None,
+    };
+    let start = engine::game_start::resolve(args.seed, replay.as_ref());
     let game_dll = args.dll.as_deref().map(read).transpose()?;
     let archives = args
         .mpqs
@@ -135,7 +146,7 @@ fn inputs(args: &Args) -> Result<Inputs, String> {
         game_dll,
         common_j,
         blizzard_j,
-        rng_seed: args.seed,
+        rng_seed: start.seed,
         ai_common: ai.common,
         ai_scripts: ai.scripts,
         game_archives: archives,

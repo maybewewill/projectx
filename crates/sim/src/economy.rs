@@ -11,8 +11,12 @@
 //!   the mine withdrawal (`0x6F09E220`), the lumber hit (`0x6F060780`) and the swing timer;
 //! - the cancel refund of a train slot (`0x6F062320`, train branch), `F2I(MUL(I2R(cost), rate))`.
 //!
-//! Not modelled (see the spec): the training progress tick, spawn and rally, the nearest town hall
-//! choice, the statistic counters that `0x6F02D660` adds to, the event 0x6F02D660 keys, the floating
+//! - the training queue (`TrainQueue`, `CAbilityTrain`): capacity, food reservation at start, the blocked head,
+//!   completion, cancel and the queue shift (`shift_out`, checked in Unicorn). Spec: `economy-4.md`. The timer
+//!   length is the build time, which is UNSURE.
+//!
+//! Not modelled (see the spec): the train progress timer (not found), spawn placement and rally, the nearest town
+//! hall choice, the statistic counters that `0x6F02D660` adds to, the event 0x6F02D660 keys, the floating
 //! text, the sound calls, and the hook `0x6F09E220` calls when a mine is empty.
 //!
 //! Units: a stored amount is "x10" (`stock`, `amount10`); the script value is the stored value / 10.
@@ -506,6 +510,257 @@ impl Worker {
         }
         self.carry_add(players, self.lumber_per_hit, true);
         (id, true)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Training queue (`CAbilityTrain`). Spec: docs/spec/economy-4.md. Only the parts below are confirmed; the
+// progress timer that finishes a unit is NOT found (see the spec), so `try_start` takes the build time as the
+// timer length. That length is a model input, not a claim about the original.
+
+/// Event key of the train-start notification. LIKELY the unit-level id 0x45 of `natives/event.rs`; the start hook
+/// `0x6F298BE0` fires key `0x80245` (CONFIRMED).
+pub const TRAIN_EVENT_START: u32 = 0x45;
+/// Cancel notification id (LIKELY 0x46, see [`TRAIN_EVENT_START`]).
+pub const TRAIN_EVENT_CANCEL: u32 = 0x46;
+/// Finish notification id (LIKELY 0x47, see [`TRAIN_EVENT_START`]).
+pub const TRAIN_EVENT_FINISH: u32 = 0x47;
+/// Event the blocked head waits for (CONFIRMED: the dispatcher `0x6F177FA0` releases the two listeners and restarts
+/// slot 0 on it; LIKELY it is a food-change notice).
+pub const TRAIN_EVENT_RETRY: u32 = 0xD01C1;
+/// Completion event of the running head (CONFIRMED: the dispatcher sends it to the completion handler `0x6F1733A0`).
+/// Its timer is not found.
+pub const TRAIN_EVENT_COMPLETE: u32 = 0xD01C4;
+
+/// One queued unit. `type_id == 0` marks an empty slot.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TrainItem {
+    pub type_id: u32,
+    /// Gold cost in script units (type `+0x20`, CONFIRMED getter `0x6F29B800`).
+    pub gold: i32,
+    /// Lumber cost in script units (type `+0x24`, CONFIRMED getter `0x6F29B830`).
+    pub lumber: i32,
+    /// Food used (type `+0x5C`, CONFIRMED getter `0x6F29BAF0`).
+    pub food: i32,
+    /// The food-check exemption (type flag `0x10`, LIKELY "does not use food").
+    pub food_exempt: bool,
+    /// Build time in seconds (`bldtm`, type `+0x18`). Used as the timer length (UNSURE, see the module note).
+    pub build_seconds: f32,
+}
+
+/// Payload of the training timer: the building that owns the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainTimer {
+    pub building: usize,
+}
+
+/// Why an enqueue is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrainError {
+    /// Seven slots are in use (capacity, CONFIRMED `0x6F05DF60`).
+    QueueFull,
+    /// The food check failed (the validator `0x6F172FC0` returns 7 for it, CONFIRMED structure).
+    FoodBlocked,
+    /// The owner cannot pay. LIKELY the check exists; its location and error code are not traced.
+    NotEnoughResources,
+}
+
+/// What a queue operation did. Side effects (spawn, notices) are the caller's; food is applied to `food_used`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrainOutcome {
+    /// The head started: its food was reserved and its timer armed.
+    Started { type_id: u32 },
+    /// The head waits for food. It is retried on [`TRAIN_EVENT_RETRY`] (see [`TrainQueue::retry`]).
+    Blocked { type_id: u32 },
+    /// The head finished. The caller spawns `type_id` and issues the rally order.
+    Finished { type_id: u32 },
+}
+
+/// The queue shift of `CAbilityTrain::vf208` (0x6F1652A0), generic over the slot type. The slots after `index` move
+/// down over it, and the last used slot is cleared. CONFIRMED in Unicorn (`tools/emu/train_queue_emu.py`, 3,000
+/// cases). The original does NOT change the count (the caller does). The mask bits move with the slots: bit `i`
+/// takes bit `i + 1`, and bit `count - 1` is cleared.
+pub fn shift_out<T: Copy + Default>(slots: &mut [T], count: usize, mask: &mut u32, index: usize) {
+    if count == 0 || index >= count {
+        return;
+    }
+    for i in index..count - 1 {
+        slots[i] = slots[i + 1];
+        let bit = (*mask >> (i + 1)) & 1;
+        *mask = (*mask & !(1u32 << i)) | (bit << i);
+    }
+    slots[count - 1] = T::default();
+    *mask &= !(1u32 << (count - 1));
+}
+
+/// The training queue of one building. `slots[0]` is the head. `refund_mask` has one bit per slot that suppresses
+/// the cancel refund (the meaning of the bit is UNSURE; the bits move with the slots).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrainQueue {
+    slots: [TrainItem; TRAIN_QUEUE_CAPACITY],
+    count: usize,
+    pub refund_mask: u32,
+    timer: Option<TimerId>,
+    /// Food reserved by the running head, given back if it is cancelled.
+    reserved_food: i32,
+}
+
+impl TrainQueue {
+    /// An empty queue.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of queued units, the running head included.
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    /// Whether the queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// The queued units, head first.
+    pub fn items(&self) -> &[TrainItem] {
+        &self.slots[..self.count]
+    }
+
+    /// Whether the head's timer is armed.
+    pub fn is_running(&self) -> bool {
+        self.timer.is_some()
+    }
+
+    /// Queues a unit for `owner`. Checks in order: capacity, food (`food_room` with the cap the caller gives; the
+    /// validator reads FoodCeiling alone, the room check of `0x6F416A80` uses the minimum of three supplies, so the
+    /// caller decides), then resources. The cost is paid at queue time (LIKELY: [`TrainQueue::cancel`] refunds any
+    /// train slot, running or not).
+    pub fn enqueue(
+        &mut self,
+        players: &mut [PlayerEconomy],
+        owner: usize,
+        item: TrainItem,
+        food_used: i32,
+        food_cap: i32,
+    ) -> Result<(), TrainError> {
+        if self.count >= TRAIN_QUEUE_CAPACITY {
+            return Err(TrainError::QueueFull);
+        }
+        if !food_room(food_used, food_cap, item.food, item.food_exempt) {
+            return Err(TrainError::FoodBlocked);
+        }
+        let p = &players[owner];
+        if (p.stored(Res::Gold) as i64) < (item.gold as i64) * 10
+            || (p.stored(Res::Lumber) as i64) < (item.lumber as i64) * 10
+        {
+            return Err(TrainError::NotEnoughResources);
+        }
+        credit(players, owner, Res::Gold, item.gold.wrapping_neg(), Flags::NONE);
+        credit(players, owner, Res::Lumber, item.lumber.wrapping_neg(), Flags::NONE);
+        self.slots[self.count] = item;
+        self.refund_mask &= !(1u32 << self.count);
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Starts the head if nothing runs. If its food fits, the food is reserved (`*food_used += food`, the original
+    /// adds the type's food through `0x6F023BD0` on start, CONFIRMED) and the timer is armed for `build_seconds`
+    /// (UNSURE). Otherwise the head is [`TrainOutcome::Blocked`]. `None` when the queue is empty or already running.
+    pub fn try_start(
+        &mut self,
+        timers: &mut TimerQueue<TrainTimer>,
+        food_used: &mut i32,
+        food_cap: i32,
+        building: usize,
+    ) -> Option<TrainOutcome> {
+        if self.count == 0 || self.timer.is_some() {
+            return None;
+        }
+        let head = self.slots[0];
+        if !food_room(*food_used, food_cap, head.food, head.food_exempt) {
+            return Some(TrainOutcome::Blocked { type_id: head.type_id });
+        }
+        *food_used = food_used.wrapping_add(head.food);
+        self.reserved_food = head.food;
+        self.timer = Some(timers.start(head.build_seconds, false, TrainTimer { building }));
+        Some(TrainOutcome::Started { type_id: head.type_id })
+    }
+
+    /// The retry on [`TRAIN_EVENT_RETRY`]: the same as [`TrainQueue::try_start`].
+    pub fn retry(
+        &mut self,
+        timers: &mut TimerQueue<TrainTimer>,
+        food_used: &mut i32,
+        food_cap: i32,
+        building: usize,
+    ) -> Option<TrainOutcome> {
+        self.try_start(timers, food_used, food_cap, building)
+    }
+
+    /// Completes the running head ([`TRAIN_EVENT_COMPLETE`]). The head is removed with the shift; its reserved food
+    /// stays used (the unit owns it, LIKELY). The next head starts (CONFIRMED: the original starts a new head after
+    /// removing slot 0). Returns `Finished`, then the next head's outcome if there is one. Ignored when nothing runs.
+    pub fn complete(
+        &mut self,
+        timers: &mut TimerQueue<TrainTimer>,
+        food_used: &mut i32,
+        food_cap: i32,
+        building: usize,
+    ) -> Vec<TrainOutcome> {
+        if self.timer.take().is_none() || self.count == 0 {
+            return Vec::new();
+        }
+        let done = self.slots[0].type_id;
+        self.remove_slot(0);
+        self.reserved_food = 0;
+        let mut out = vec![TrainOutcome::Finished { type_id: done }];
+        if let Some(next) = self.try_start(timers, food_used, food_cap, building) {
+            out.push(next);
+        }
+        out
+    }
+
+    /// Cancels slot `index`. Refund: [`cancel_train_refund`] (CONFIRMED arithmetic), skipped when the slot's bit in
+    /// `refund_mask` is set. If the running head is cancelled, its timer is cancelled and its reserved food is given
+    /// back (LIKELY). The slot is removed with the shift, and the next head starts if the head changed (CONFIRMED).
+    /// Returns the credited (gold, lumber) and the next head's outcome.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cancel(
+        &mut self,
+        timers: &mut TimerQueue<TrainTimer>,
+        players: &mut [PlayerEconomy],
+        owner: usize,
+        food_used: &mut i32,
+        food_cap: i32,
+        building: usize,
+        index: usize,
+        rate: F32,
+    ) -> ((i32, i32), Option<TrainOutcome>) {
+        if index >= self.count {
+            return ((0, 0), None);
+        }
+        let item = self.slots[index];
+        let refund_applies = self.refund_mask & (1u32 << index) == 0;
+        let refund = cancel_train_refund(players, owner, item.gold, item.lumber, rate, refund_applies);
+        if index == 0 {
+            if let Some(id) = self.timer.take() {
+                timers.cancel(id);
+            }
+            *food_used = food_used.wrapping_sub(self.reserved_food);
+            self.reserved_food = 0;
+        }
+        self.remove_slot(index);
+        let next = if index == 0 { self.try_start(timers, food_used, food_cap, building) } else { None };
+        (refund, next)
+    }
+
+    /// Removes slot `index` with [`shift_out`] and decrements the count (the count change is the caller's part in
+    /// the original).
+    fn remove_slot(&mut self, index: usize) {
+        let mut mask = self.refund_mask;
+        shift_out(&mut self.slots, self.count, &mut mask, index);
+        self.refund_mask = mask;
+        self.count -= 1;
     }
 }
 

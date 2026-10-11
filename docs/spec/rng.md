@@ -130,6 +130,9 @@ Function FUN_6F5C37A0. It computes a seed S and then:
 - initialises the 45 streams from S directly (section 2.4, with X = S; no extra step before the streams). CONFIRMED.
 
 How S is computed:
+- CORRECTION (2026-10-11, see `game-start.md`): the XOR operand is a per-player value read from a
+  reader object, not the slot count; the count only sizes the slot records. The fold step itself is
+  CONFIRMED under Unicorn.
 - S starts at 0.
 - It loops over 16 player-slot indices. For each slot that passes a validity check (a lookup in the game data), S := ROTL32(S XOR N, 3), where N is a per-game count returned by the helper FUN_6F5C0780 (the slot count, LIKELY).
 - The validity check and the meaning of N are only partly understood. CONFIRMED for the fold itself; UNSURE for the check and for N.
