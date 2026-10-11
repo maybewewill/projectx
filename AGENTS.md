@@ -271,7 +271,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~45%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~45.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -341,6 +341,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (30)**: kill-XP numbers (heroes.md §8.2): amount `0x6F2A0230` (grant table by victim level, summoned factor), split `0x6F2A3190` (F = K/N once; in-range list else global list), engine `0x6F20B080` (handicap, upgrade bonus, factor walk across levels, floor(x+0.5)) — Unicorn 6,000 (agent) + 1,000 fresh (lead), 0 mismatches. Not wired yet: candidate selection units (normaliser `0x6F4743A0`), killer tracking (GetKillingUnit null). ~45.5%.
 
 - **2026-10-11 (29)**: player unit counters (player+0x2D0; GetPlayerUnitCount/StructureCount/TypedUnitCount bound; Unicorn 1,900 ops + 3,800 walks, lead 600+1,200 fresh, 0 mismatches) → 1,110/1,167 natives bound. ChooseRandomCreep/NPBuilding: draw `0x6F285320` + filters decoded, tileset/movement checks not → still pending. Hero derived bonuses (heroes.md §9): 8 Misc keys read, formulas Unicorn 14,000/14,000; attack bonus = primary × StrAttackBonus; current HP/mana on max change UNSURE; armor/regen/speed computed but not applied yet. ~45%.
 
