@@ -4,13 +4,17 @@
 //! `rangeN1`, `atkType1`) and `Units\UnitBalance.slk` (defense: `def`, `defType`). Row keys are the unit raw codes
 //! (see [`rawcode`]). Units without a weapon row, or without a defense row, get `None` for that part.
 //!
-//! Defaults for a missing cell (no note): integers 0, reals 0.0, `atkType1` = Normal, `defType` = Normal.
-//! A malformed cell (not an integer, not a real, an unknown type name) also takes the default and adds a note.
+//! Defaults for a missing cell (no note): integers 0, reals 0.0, `defType` = Normal, `atkType1` = Spells.
+//! The attack-type default is the binary's own: its string-to-type reader (`0x6F262B00`) returns 0 (Spells) for an
+//! empty string and for any name it does not know (CONFIRMED by the disassembly, `docs/spec/attack-damage.md`
+//! section 2.1). The armor reader (`0x6F262C10`) returns 4 (Normal) for the same cases.
+//! A malformed cell (not an integer, not a real) takes 0 and adds a note; an unknown non-empty type name takes the
+//! same default as the binary and adds a note.
 //! Only weapon 1 is read: weapon 2 is not in the attack record the simulation holds (UNSURE, see `sim::combat`).
 //!
-//! UNSURE: the column names of `dice1`/`sides1` as dice count and sides (the roll wrapper's argument order, spec
-//! section 3.3), the armor-type column order of [`ArmorType`] (the spec gives 8 columns but not their names), and the
-//! physical attack types of [`DamageType::is_physical`].
+//! The armor-type column order of [`ArmorType`] is CONFIRMED (section 2.2 of the spec). UNSURE: the column names of
+//! `dice1`/`sides1` as dice count and sides (the roll wrapper's argument order, spec section 3.3), and the physical
+//! attack types of [`DamageType::is_physical`] (see that function).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,10 +42,11 @@ impl DamageType {
         usize::from(self as u8)
     }
 
-    /// The type named `name` (case-insensitive), or `None`.
+    /// The type named `name` (case-insensitive), or `None` for a name the binary does not know. `unknown` is
+    /// Spells in the binary (`0x6F262B00`, CONFIRMED). `melee` is not a name the binary reads (it is `None`).
     pub fn from_name(name: &str) -> Option<DamageType> {
         Some(match name.to_ascii_lowercase().as_str() {
-            "spells" => DamageType::Spells,
+            "spells" | "unknown" => DamageType::Spells,
             "normal" => DamageType::Normal,
             "pierce" => DamageType::Pierce,
             "siege" => DamageType::Siege,
@@ -52,8 +57,10 @@ impl DamageType {
         })
     }
 
-    /// Whether the armor factor applies to this attack type. UNSURE: Normal, Pierce, Siege and Hero are taken as
-    /// physical (the spec's class bit 0x10 is LIKELY the physical class); Spells, Magic and Chaos are not.
+    /// Whether the armor factor applies to this attack type. CONFIRMED part: the target-side damage path
+    /// `0x6F2A40D0` applies the armor factor only when the damage class word (attack record +0x14) equals `0x10`.
+    /// UNSURE part: how a weapon's `atkType1` sets that class word. Until that is read, the set below is a
+    /// heuristic (Normal, Pierce, Siege and Hero physical; Spells, Magic and Chaos not).
     pub fn is_physical(self) -> bool {
         matches!(
             self,
@@ -62,8 +69,9 @@ impl DamageType {
     }
 }
 
-/// The armor-type columns of the damage-type table. The order is UNSURE (the spec gives eight columns and their
-/// count only); this is the order OpenRealm uses, and the names are the game's `defType` strings.
+/// The armor-type columns of the damage-type table. The order is CONFIRMED by the string reader `0x6F262C10`:
+/// small 0, medium 1, large 2, fort 3, normal 4, hero 5, divine 6, none 7. Unknown names and an empty string are
+/// Normal (4) in the binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ArmorType {
@@ -84,9 +92,10 @@ impl ArmorType {
         self as u8
     }
 
-    /// The type named `name` (case-insensitive), or `None`.
+    /// The type named `name` (case-insensitive), or `None` for a name the binary does not know. `unknown` is Normal.
     pub fn from_name(name: &str) -> Option<ArmorType> {
         Some(match name.to_ascii_lowercase().as_str() {
+            "unknown" => ArmorType::Normal,
             "small" => ArmorType::Small,
             "medium" => ArmorType::Medium,
             "large" => ArmorType::Large,
@@ -219,13 +228,14 @@ fn weapon_of(
         notes.push(format!("{key}: negative dice or sides; 0 used"));
     }
     let damage_type = match slk.raw(key, "atkType1") {
-        None => DamageType::Normal,
+        None => DamageType::Spells,
+        Some(raw) if scalar(raw).is_empty() => DamageType::Spells,
         Some(raw) => DamageType::from_name(scalar(raw)).unwrap_or_else(|| {
             notes.push(format!(
-                "{key}.atkType1: {:?} unknown; Normal used",
+                "{key}.atkType1: {:?} unknown; Spells (0) used, as the binary does",
                 scalar(raw)
             ));
-            DamageType::Normal
+            DamageType::Spells
         }),
     };
     Some(Weapon {

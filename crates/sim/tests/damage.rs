@@ -2,8 +2,8 @@
 //! the last test which reads `GAME_DLL` when it is set. No table contents are stored in the repository.
 
 use sim::damage::{
-    armor_factor, dice_sum, roll_total, DamageTableError, DamageTypeTable, NegativeArmorTable,
-    ARMOR_TYPE_COLS, ATTACK_TYPE_ROWS, MAX_DICE, NEG_ARMOR_LEN,
+    armor_factor, dice_sum, roll_total, DamageMisc, DamageTableError, DamageTypeTable,
+    NegativeArmorTable, SpecDamage, ARMOR_TYPE_COLS, ATTACK_TYPE_ROWS, MAX_DICE, NEG_ARMOR_LEN,
 };
 use sim::rng::{Rng, RngTable};
 use softfloat::{arith, Tables, F32};
@@ -100,6 +100,28 @@ fn negative_armor_factor_uses_the_table_without_division() {
         armor_factor(f(-40.0), f(0.06), &table, &tables),
         arith::sub(F32::ONE, f(0.9))
     );
+}
+
+/// The ethereal factor is stored by attack row (synthetic values; the row order is the builder's slot order, which
+/// the gamedata test checks against the Misc element order).
+#[test]
+fn ethereal_factor_is_looked_up_by_attack_row() {
+    let row_values: [F32; ATTACK_TYPE_ROWS] = std::array::from_fn(|r| f(10.0 + r as f32));
+    let misc = DamageMisc {
+        defense_armor: F32::ZERO,
+        type_table: DamageTypeTable([[F32::ONE; ARMOR_TYPE_COLS]; ATTACK_TYPE_ROWS]),
+        ethereal_by_attack_type: row_values,
+    };
+    let negative = NegativeArmorTable::from_bits([0x3F80_0000; NEG_ARMOR_LEN]).expect("non-zero");
+    let model = SpecDamage::new(Tables::default(), misc, negative);
+    for r in 0..ATTACK_TYPE_ROWS {
+        assert_eq!(
+            model.ethereal_factor(r as u8),
+            f(10.0 + r as f32),
+            "row {r}"
+        );
+    }
+    assert_eq!(model.ethereal_factor(7), F32::ZERO, "outside the rows");
 }
 
 #[test]

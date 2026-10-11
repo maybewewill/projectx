@@ -162,8 +162,8 @@ fn malformed_cells_take_defaults_and_are_noted() {
     assert_eq!(bad.dice, 0, "negative dice become 0");
     assert_eq!(
         bad.damage_type,
-        DamageType::Normal,
-        "unknown attack type becomes Normal"
+        DamageType::Spells,
+        "unknown attack type becomes Spells (0), as the binary's reader does"
     );
     assert_eq!(
         bad.cooldown.to_bits(),
@@ -185,6 +185,36 @@ fn a_missing_file_gives_no_rows_for_it() {
     let only_defense = combat::load(Some(&balance), None, None);
     assert_eq!(only_defense.len(), 3);
     assert!(only_defense.iter().all(|(_, u)| u.weapon.is_none()));
+}
+
+#[test]
+fn attack_and_armor_names_follow_the_binary_readers() {
+    // Attack type: the reader 0x6F262B00 maps unknown, spells, empty and any other name to 0 (Spells).
+    assert_eq!(DamageType::from_name("UNKNOWN"), Some(DamageType::Spells));
+    assert_eq!(DamageType::from_name("Chaos"), Some(DamageType::Chaos));
+    assert_eq!(
+        DamageType::from_name("melee"),
+        None,
+        "not a name the binary reads"
+    );
+    // Armor type: the reader 0x6F262C10 maps unknown and other names to 4 (Normal), none to 7.
+    assert_eq!(ArmorType::from_name("unknown"), Some(ArmorType::Normal));
+    assert_eq!(ArmorType::from_name("None"), Some(ArmorType::Unarmored));
+    assert_eq!(ArmorType::from_name("Plasma"), None);
+    assert_eq!(ArmorType::Normal.column(), 4);
+    assert_eq!(DamageType::Hero.row(), 6);
+}
+
+#[test]
+fn an_empty_attack_type_cell_is_spells_and_is_not_noted() {
+    let weapons = sylk(
+        &["dice1", "sides1", "atkType1"],
+        &[("hemp", vec![Some("1"), Some("4"), Some("\"\"")])],
+    );
+    let data = combat::load(None, Some(&weapons), None);
+    let w = data.get("hemp").and_then(|u| u.weapon).expect("weapon");
+    assert_eq!(w.damage_type, DamageType::Spells);
+    assert!(data.notes.is_empty(), "{:?}", data.notes);
 }
 
 #[test]

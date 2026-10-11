@@ -1,7 +1,7 @@
 //! `MiscData` on synthetic `[Misc]` layers. Nothing here comes from the game. The S2R check runs only with
 //! `GAME_DLL` set to a 1.26a `Game.dll`; otherwise it is skipped.
 
-use gamedata::misc::{ARMOR_COLUMNS, ATTACK_ROWS, ETHEREAL_ENTRIES};
+use gamedata::misc::{ARMOR_COLUMNS, ATTACK_ROWS, ETHEREAL_ELEMENT_BY_ROW, ETHEREAL_ENTRIES};
 use gamedata::real::{is_real_syntax, parse_real};
 use gamedata::{MiscData, Profile};
 use softfloat::{Tables, F32};
@@ -15,11 +15,12 @@ fn f(x: f32) -> F32 {
 }
 
 #[test]
-fn no_layers_gives_the_documented_defaults() {
+fn no_layers_gives_the_reader_defaults_of_zero() {
+    // The binary's reader returns 0.0 for an absent key (CONFIRMED, attack-damage.md section 4.1).
     let m = MiscData::from_layers(&[], None);
-    assert_eq!(m.defense_armor, f(0.06));
-    assert!(m.damage_bonus.iter().flatten().all(|&v| v == F32::ONE));
-    assert!(m.ethereal_damage_bonus.iter().all(|&v| v == F32::ONE));
+    assert_eq!(m.defense_armor, F32::ZERO);
+    assert!(m.damage_bonus.iter().flatten().all(|&v| v == F32::ZERO));
+    assert!(m.ethereal_damage_bonus.iter().all(|&v| v == F32::ZERO));
     assert_eq!(m.reaction_delay, F32::ZERO);
     assert_eq!(m.attack_half_angle, None);
     assert_eq!(m.layers_with_misc, 0);
@@ -50,7 +51,11 @@ fn a_layer_without_a_misc_section_is_not_counted() {
     let other = layer("[Other]\nDefenseArmor=0.5\n");
     let m = MiscData::from_layers(&[&other], None);
     assert_eq!(m.layers_with_misc, 0);
-    assert_eq!(m.defense_armor, f(0.06), "keys outside [Misc] are not read");
+    assert_eq!(
+        m.defense_armor,
+        F32::ZERO,
+        "keys outside [Misc] are not read"
+    );
 }
 
 #[test]
@@ -92,23 +97,59 @@ fn damage_bonus_rows_follow_the_binary_order_and_columns_are_the_list_order() {
 }
 
 #[test]
-fn a_list_with_the_wrong_length_is_rejected_and_defaults() {
-    let misc = layer("[Misc]\nDamageBonusSiege=1,2,3\n");
+fn a_short_list_leaves_its_tail_at_zero_and_a_long_list_is_cut_at_eight() {
+    // Elements are read by index: element 3 past the end of a short list is the reader's 0.0 (not a rejection).
+    let misc = layer("[Misc]\nDamageBonusSiege=1,2,3\nDamageBonusMagic=1,2,3,4,5,6,7,8,9,10\n");
     let m = MiscData::from_layers(&[&misc], None);
-    assert!(m.damage_bonus[3].iter().all(|&v| v == F32::ONE));
-    assert!(m.defaulted.contains(&"DamageBonusSiege"));
+    assert_eq!(m.damage_bonus[3][..3], [f(1.0), f(2.0), f(3.0)]);
+    assert!(m.damage_bonus[3][3..].iter().all(|&v| v == F32::ZERO));
+    assert!(!m.defaulted.contains(&"DamageBonusSiege"));
     assert!(
-        m.notes.iter().any(|n| n.contains("3 values, 8 expected")),
+        m.notes.iter().any(|n| n.contains("3 values, 8 read")),
         "{:?}",
         m.notes
     );
+    assert_eq!(
+        m.damage_bonus[4][7],
+        f(8.0),
+        "element 8 and later are not read"
+    );
+}
+
+#[test]
+fn a_missing_damage_cell_is_zero_not_neutral() {
+    let misc = layer("[Misc]\nDamageBonusNormal=1,1,1,1,1,1,1,1\n");
+    let m = MiscData::from_layers(&[&misc], None);
+    assert!(
+        m.damage_bonus[0].iter().all(|&v| v == F32::ZERO),
+        "absent row"
+    );
+    assert!(m.defaulted.contains(&"DamageBonusSpells"));
+    assert!(m.damage_bonus[1].iter().all(|&v| v == F32::ONE));
+}
+
+#[test]
+fn ethereal_entries_are_stored_in_the_binary_slot_order() {
+    // Element k of EtherealDamageBonus is k + 1. The table slot of attack row r holds element ETHEREAL_ELEMENT_BY_ROW[r].
+    assert_eq!(ETHEREAL_ELEMENT_BY_ROW, [5, 0, 1, 2, 3, 4, 6]);
+    let misc = layer("[Misc]\nEtherealDamageBonus=1,2,3,4,5,6,7\n");
+    let m = MiscData::from_layers(&[&misc], None);
+    let by_row: Vec<F32> = (0..ATTACK_ROWS)
+        .map(|r| m.ethereal_for_attack_type(r))
+        .collect();
+    assert_eq!(
+        by_row,
+        [6.0, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0].map(f).to_vec(),
+        "Spells gets element 5 (value 6), Hero gets element 6 (value 7)"
+    );
+    assert_eq!(m.ethereal_for_attack_type(7), F32::ZERO);
 }
 
 #[test]
 fn a_malformed_real_is_rejected_and_defaults() {
     let misc = layer("[Misc]\nDefenseArmor=abc\nReactionDelay=1e3\n");
     let m = MiscData::from_layers(&[&misc], None);
-    assert_eq!(m.defense_armor, f(0.06));
+    assert_eq!(m.defense_armor, F32::ZERO);
     assert_eq!(m.reaction_delay, F32::ZERO);
     assert_eq!(m.notes.len(), 2, "{:?}", m.notes);
 }
@@ -125,6 +166,7 @@ fn quoted_scalars_are_unquoted_and_half_angle_is_optional() {
         assert_eq!(*v, f((i + 1) as f32));
     }
     assert_eq!(ETHEREAL_ENTRIES, 7);
+    assert_eq!(m.defense_armor, f(0.2f32));
 }
 
 #[test]

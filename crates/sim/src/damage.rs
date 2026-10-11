@@ -7,9 +7,13 @@
 //!    `M = 1 / (1 + K A)`), and for `A < 0` `R` comes from a 21-entry table indexed by `min(trunc(-A), 20)`.
 //! 3. Attack type times armor type factor from the 7 x 8 damage-type table.
 //!
-//! Not implemented (open in the spec): evasion and the other handler categories (other specs), the ethereal table
-//! (its lookup key is UNSURE), the relation factor, the miss/critical rolls, and the Gaussian dice path above 16
-//! dice (its constants are UNSURE; [`SpecDamage`] falls back to the weapon's placeholder value there).
+//! The physical test is the damage class word `0x10` of the original (CONFIRMED compare; the `physical` flag of
+//! [`AttackType`] is set from the weapon's attack type by the engine, which is UNSURE, see `gamedata::combat`).
+//! The 7 x 8 table and the ethereal factors are built from Misc exactly as the original's builder does
+//! (`docs/spec/attack-damage.md` section 4). Not implemented (open in the spec): evasion and the other handler
+//! categories (other specs), the ethereal rule (the factor is stored, [`SpecDamage::ethereal_factor`]), the relation
+//! factor, the miss/critical rolls, and the Gaussian dice path above 16 dice (its constants are UNSURE;
+//! [`SpecDamage`] falls back to the weapon's placeholder value there).
 //!
 //! The 21-entry negative-armor table at `0x6FAB4300` is in BSS: its values are written by a start-up initialiser
 //! (`0x6F85A4C0`, see `docs/spec/attack-damage.md` section 5.1), so a file read cannot see them.
@@ -155,11 +159,14 @@ impl DamageTypeTable {
     }
 }
 
-/// The Misc values the model needs: the armor constant `K` (`DefenseArmor`) and the damage-type table.
+/// The Misc values the model needs: the armor constant `K` (`DefenseArmor`, `0.0` when absent in the original), the
+/// damage-type table, and the ethereal factor of each attack type (row `0..=6`, see
+/// `docs/spec/attack-damage.md` section 4.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DamageMisc {
     pub defense_armor: F32,
     pub type_table: DamageTypeTable,
+    pub ethereal_by_attack_type: [F32; ATTACK_TYPE_ROWS],
 }
 
 /// The armor factor `M` of armor `a` (spec section 5). `M` is `1 - R` with the softfloat helpers.
@@ -217,6 +224,7 @@ pub struct SpecDamage {
     armor_k: F32,
     negative: NegativeArmorTable,
     types: DamageTypeTable,
+    ethereal: [F32; ATTACK_TYPE_ROWS],
 }
 
 impl SpecDamage {
@@ -227,7 +235,18 @@ impl SpecDamage {
             armor_k: misc.defense_armor,
             negative,
             types: misc.type_table,
+            ethereal: misc.ethereal_by_attack_type,
         }
+    }
+
+    /// The ethereal factor stored for an attack type (CONFIRMED: the table slot is the attack type's row, see
+    /// `docs/spec/attack-damage.md` section 4.2). The rule that applies it to a target (its ethereal state and the
+    /// `!= 1.0` test) is not in the model yet, so [`DamageModel::roll`] does not use it.
+    pub fn ethereal_factor(&self, attack_type: u8) -> F32 {
+        self.ethereal
+            .get(usize::from(attack_type))
+            .copied()
+            .unwrap_or(F32::ZERO)
     }
 
     /// The raw amount of one execute (`CAbilityAttack::GetDamageAmount`, CONFIRMED by disassembly): the roll on

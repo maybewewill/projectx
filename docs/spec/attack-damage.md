@@ -230,3 +230,120 @@ run the dice (+1 question) and armor factor through the Unicorn harness.
 ## 9.1 Status update (2026-10-11): sections 3.2 and 5.1 resolved
 
 The dice question of section 3.2 and the negative-armor table of section 5.1 are closed. The "Implementation status" table below is partly stale: the `+1 per die` line and the `from_game_dll` load row are superseded by sections 3.2 and 5.1 (`NegativeArmorTable::computed`, `roll_total`).
+
+## 10. Misc tables, name readers, physical and ethereal (2026-10-11, CONFIRMED unless marked)
+
+This section supersedes the UNSURE items of sections 2, 4, 5 and 7 that it covers. Evidence: decompile export
+(`chunk_012.c`, `chunk_013.c`, `chunk_020.c`, `chunk_027.c`) checked against the disassembly of the same functions.
+Plain words; no code from the binary is reproduced.
+
+### 10.1 The Misc reader `0x6F009EE0` (section, key, element)
+
+- Calling form (CONFIRMED): ECX = output dword address, EDX = section name (`"Misc"` at `0x6F875DE0`), stack = key
+  pointer, then element index. The result is written as one dword (an f32 bit pattern), `ret 8`.
+- Layers (CONFIRMED structure): the reader reaches a per-process object (global, then `+0x10`, then `+0x4C`, created by
+  `0x6F002790`). That object holds two profile layers at `+4` and `+8` (class `CMiscCustom`). The lookup tries `+4`,
+  then `+8`; the first layer that has the key supplies the value (CONFIRMED order). Which file is `+4` (the map's
+  `war3mapMisc` or the game's `MiscData`) is LIKELY, not checked; `gamedata::MiscData` gives the later layer priority,
+  which agrees only if the map layer is `+4` (UNSURE).
+- Element lookup (CONFIRMED): `0x6F4D1EB0` walks `index` links of a value list from its head (link at `+0x1C`, value
+  at `+0x18`). So element `i` is the i-th comma item. An index past the end gives no value.
+- Parse (CONFIRMED call): the value text goes through the S2R real parser `0x6F6F0520` (`0x6F4D2040` calls it), the same
+  routine as `softfloat::text::s2r`.
+- Default (CONFIRMED): every "no value" path returns `0.0` from `DAT_6FAAE470` (= 0.0, see
+  `tools/emu/runtime_consts.py`). So an absent key, a short list, and a missing layer all read as `0.0`. Consequences:
+  - `DefenseArmor` absent gives K = 0.0 (not 0.06). The armor factor reads `DefenseArmor` (element 0) on every damage
+    call (`0x6F26D270` calls the reader each time; LIKELY no cache).
+  - A missing `DamageBonus*` cell is 0.0 (not 1.0). `gamedata::misc` uses this now.
+- Malformed text (e.g. `abc`): not traced (S2R on a non-number). Our code gives `0.0` with a note (UNSURE).
+
+### 10.2 The damage-type table builder `0x6F26D300` (CONFIRMED, run in Unicorn)
+
+- One-time build (CONFIRMED): a flag at `0x6FA70E90` gates the whole build. When it is non-zero the function reads all
+  Misc values and then clears the flag. Later calls only look up. Where the first call happens in the game's start-up
+  is UNSURE; a map's Misc layer loaded later than that call would not be seen.
+- Rows (CONFIRMED): row = attack type, in the order Spells (`DamageBonusSpells`, row 0), Normal (1), Pierce (2),
+  Siege (3), Magic (4), Chaos (5), Hero (6). Columns = element `0..7` of the same key, in list order.
+- Storage (CONFIRMED): row-major, 8 dwords per row, base `0x6FAB4358` (cell = base + 0x20·row + 4·col).
+- Ethereal (CONFIRMED, store addresses): element 0 goes to `0x6FAB42E8`, 1 to `0x6FAB42EC`, 2 to `0x6FAB42F0`,
+  3 to `0x6FAB42F4`, 4 to `0x6FAB42F8`, 5 to `0x6FAB42E4`, 6 to `0x6FAB42FC`. As a function of the attack row `a`
+  (slot `0x6FAB42E4 + 4a`): row 0 = element 5, row 1 = element 0, row 2 = element 1, row 3 = element 2, row 4 =
+  element 3, row 5 = element 4, row 6 = element 6.
+- Lookup (CONFIRMED): the function is also the lookup. ECX = output, EDX = row, stack = column; it returns
+  `table[row·8 + column]` (CONFIRMED by the Unicorn lookup check). In the target path the column is the target's
+  armor type and the row is the attack type (LIKELY: the decompile hides the EDX setup of that call).
+- Check: `tools/emu/damage_table_emu.py` hooks the reader with synthetic Misc values and runs the builder in Unicorn:
+  63 reader calls (7·8 + 7), 56 table cells, 7 ethereal slots, the flag, a second call that reads nothing, and 56 lookups:
+  **122 checks, 0 mismatches**. The reader itself is replaced by the hook (its layer and list code is section 10.1).
+
+### 10.3 Attack-type names (`0x6F262B00`, CONFIRMED by decompile; Unicorn not run)
+
+Compare is case-insensitive (`_strnicmp`-style ordinal with a length of 0x7FFFFFFF, LIKELY; the data's capitalised
+names only match this way). Result:
+
+| Text (any case) | Attack type | Index |
+|---|---|---|
+| empty string | Spells | 0 |
+| `unknown` | Spells | 0 |
+| `spells` | Spells | 0 |
+| `normal` | Normal | 1 |
+| `pierce` | Pierce | 2 |
+| `siege` | Siege | 3 |
+| `magic` | Magic | 4 |
+| `chaos` | Chaos | 5 |
+| `hero` | Hero | 6 |
+| anything else (for example `melee`) | Spells | 0 |
+
+The lowercase name strings are at `0x6F92E104`..`0x6F92E12C` (`chaos`, `magic`, `siege`, `pierce`, `normal`, `spells`),
+`hero` is at `0x6F92CA94`. Column names are `atkType` plus the weapon number (CONFIRMED string `atkType`; the digit is
+added by the loader, LIKELY `atkType1` for weapon 1).
+
+### 10.4 Armor-type names (`0x6F262C10`, CONFIRMED by decompile)
+
+| Text (any case) | Armor type | Column |
+|---|---|---|
+| `small` | Small | 0 |
+| `medium` | Medium | 1 |
+| `large` | Large | 2 |
+| `fort` | Fort | 3 |
+| `normal` | Normal | 4 |
+| `hero` | Hero | 5 |
+| `divine` | Divine | 6 |
+| `none` | Unarmored | 7 |
+| `unknown`, empty, anything else | Normal | 4 |
+
+Strings: `small` / `medium` / `large` / `fort` / `divine` / `unknown` at `0x6F92E15C`..`0x6F92E13C`, `none` at `0x6F92CAE0`.
+
+### 10.5 How numbers in unit data are read (PARTLY UNSURE)
+
+- Misc reals: S2R (section 10.1, CONFIRMED).
+- Unit SLK reals (`cool1`, `dmgpt1`, `backSw1`, `rangeN1`, `def`) go through the generic value getter `0x6F25F6F0`,
+  then `0x6F25B2F0` and `0x6F70C4F0`, with a fallback `0x6F7084F0`. That chain was not traced to the string-to-float
+  routine. The gamedata reader uses S2R for them (the same text rules as Misc). UNSURE until traced.
+- Missing unit cell (real or int): not traced; gamedata uses 0.
+
+### 10.6 Physical armor (CONFIRMED compare, UNSURE mapping)
+
+- The target-side path (`0x6F2A40D0`) applies the armor factor only when the damage class word (attack record
+  `+0x14`) equals `0x10` exactly, and only when the status value from `0x6F26DE50` (bit 57) is zero. This is an
+  equality compare, not a bit test (CONFIRMED). The damage-type table step (10.2) runs regardless of the class.
+- How a weapon's `atkType1` sets that class word: not traced (writers of `+0x14` not found). The gamedata
+  `DamageType::is_physical` set (Normal, Pierce, Siege, Hero) is therefore a heuristic (UNSURE).
+
+### 10.7 Ethereal (structure CONFIRMED, rule UNSURE)
+
+- Slot = the attack record's type field `+0x20` (same value as the table row, CONFIRMED in the decompile: `local_8`
+  feeds both the row and the slot index).
+- Applied only when three conditions hold (CONFIRMED structure): (a) the attacker is null, or the flag from
+  `0x6F009F90(0)` is set, or `0x6F285B00(target)` is non-zero; (b) the target's `+0x158` counter is positive; (c) the
+  slot is not `1.0` (`0x6FAAE4F4`). Then the amount is multiplied by the slot value through `0x6F255800`. The meanings
+  of (a) and (b) are UNSURE.
+- `sim::damage::SpecDamage::ethereal_factor` returns the slot for a row; the roll does not apply it yet.
+
+### 10.8 Summary of changes made in code (2026-10-11)
+
+- `gamedata::misc`: reader default 0.0 for every missing value (was 1.0 and 0.06); lists read by element index (short
+  list = zeros, long list cut at 8); ethereal elements mapped to attack rows as in 10.2.
+- `gamedata::combat`: attack-type names per 10.3 (empty or unknown = Spells); armor names per 10.4 (`unknown` = Normal).
+- `sim::damage`: `DamageMisc.ethereal_by_attack_type`, `SpecDamage::ethereal_factor`.
+- Tests: `crates/gamedata/tests/{misc,combat}.rs`, `crates/sim/tests/damage.rs`, `tools/emu/damage_table_emu.py`.

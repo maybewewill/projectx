@@ -144,6 +144,9 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
             let misc = DamageMisc {
                 defense_armor: data.misc.defense_armor,
                 type_table: DamageTypeTable(data.misc.damage_bonus),
+                ethereal_by_attack_type: std::array::from_fn(|row| {
+                    data.misc.ethereal_for_attack_type(row)
+                }),
             };
             let negative = NegativeArmorTable::computed(tables);
             game.set_damage_model(Box::new(SpecDamage::new(tables.clone(), misc, negative)));
