@@ -44,6 +44,7 @@ use jass::compile::{compile, CompileError};
 use jass::vm::{NativeRegistry, RunStatus, ThreadId, VmError};
 use mpq::Archive;
 use sim::ai::{AiEvent, AiHost, AiLibrary};
+use sim::commands::{Command, CommandState, Outcome};
 use sim::lockstep::{TurnReport, TICKS_PER_BATCH};
 use sim::{Game, RngTable, ScriptHost};
 use softfloat::{Tables, F32};
@@ -52,6 +53,7 @@ use w3map::MapInfo;
 pub mod data;
 pub mod map;
 pub mod pathing;
+pub mod replay;
 pub mod scripts;
 
 pub use map::{apply_players, controller_of, playable_area};
@@ -139,6 +141,9 @@ pub struct Engine {
     timers_fired: u64,
     notes: Vec<String>,
     combat: data::CombatSetup,
+    economy: data::EconomySetup,
+    /// Replay command state: selections, hotkey groups, the object table and the speed setting.
+    commands: CommandState,
 }
 
 /// What the AI host did, as the report shows it (see [`sim::ai::AiShared`] for the full logs).
@@ -193,6 +198,8 @@ pub struct Report {
     pub pathing: Option<PathingSummary>,
     /// The combat setup: the damage model in use (and why the placeholder is kept, if it is), and the unit rows.
     pub combat: data::CombatSetup,
+    /// The economy constants: read from `[Misc]`, or the built-in defaults when no `[Misc]` layer exists.
+    pub economy: data::EconomySetup,
     /// The AI host's summary (no AI players when no AI was started).
     pub ai: AiReport,
     pub notes: Vec<String>,
@@ -291,6 +298,7 @@ impl Engine {
         let game_data = data::load(&game_refs, &archive, tables.as_ref())?;
         notes.extend(game_data.notes.iter().cloned());
         let combat = data::install(&mut host.game_mut(), &game_data, tables.as_ref());
+        let economy = data::install_economy(&mut host.game_mut(), &game_data.misc);
 
         let mut engine = Engine {
             host,
@@ -311,6 +319,8 @@ impl Engine {
             notes,
             ai,
             combat,
+            economy,
+            commands: CommandState::new(),
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
@@ -373,10 +383,34 @@ impl Engine {
         fired
     }
 
-    /// Runs one replay turn: the game ticks it produced (see [`sim::lockstep::TurnScheduler`]).
-    /// The caller applies `turn.actions` first, as the turn's commands come before its ticks.
-    pub fn run_turn<A>(&mut self, turn: &TurnReport<A>) -> usize {
+    /// Runs one replay turn: applies its commands in stream order, then runs the game ticks it produced
+    /// (lockstep.md section 3; see [`sim::lockstep::TurnScheduler`]). Returns the timers fired by the ticks.
+    pub fn run_turn(&mut self, turn: &TurnReport<Command>) -> usize {
+        self.apply_commands(&turn.actions);
         self.step_ticks(turn.game_ticks)
+    }
+
+    /// Applies commands in the given order and returns their outcomes (one per command).
+    ///
+    /// The orders fire the same issued-order events as the natives (`CommandState::apply_fired`), with the main
+    /// VM running the triggers.
+    pub fn apply_commands(&mut self, commands: &[(u8, Command)]) -> Vec<Outcome> {
+        let game = self.host.game_handle();
+        let vm = self.host.vm_mut();
+        commands
+            .iter()
+            .map(|(_, cmd)| self.commands.apply_fired(&game, vm, cmd))
+            .collect()
+    }
+
+    /// The replay command state (selections, hotkey groups, the object table, the speed setting).
+    pub fn commands(&self) -> &CommandState {
+        &self.commands
+    }
+
+    /// Mutable access to the replay command state (to register the object pairs of units).
+    pub fn commands_mut(&mut self) -> &mut CommandState {
+        &mut self.commands
     }
 
     /// The script host (VM, clock, timers and game state).
@@ -455,6 +489,7 @@ impl Engine {
             game_time: self.host.clock().now(),
             pathing: self.pathing.clone(),
             combat: self.combat.clone(),
+            economy: self.economy.clone(),
             ai: self.ai_report(),
             notes: self.notes.clone(),
         }
@@ -570,6 +605,20 @@ impl fmt::Display for Report {
         }
         writeln!(f, "damage model: {}", self.combat.damage_model)?;
         writeln!(f, "unit types with combat rows: {}", self.combat.unit_types)?;
+        if self.economy.from_misc {
+            writeln!(
+                f,
+                "economy constants: from [Misc] ({} layers); absent keys: {}",
+                self.economy.layers,
+                if self.economy.absent.is_empty() {
+                    "none".to_string()
+                } else {
+                    self.economy.absent.join(", ")
+                }
+            )?;
+        } else {
+            writeln!(f, "economy constants: built-in defaults (no [Misc] layer)")?;
+        }
         writeln!(f, "config: {}", self.config)?;
         writeln!(f, "main: {}", self.main)?;
         writeln!(
