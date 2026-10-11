@@ -23,6 +23,7 @@ mu.mem_write(G_PTR_SLOT, struct.pack('<I', GADDR))
 # initialisers write (read with tools/emu/runtime_consts.py); use that script for any other constant.
 mu.mem_write(0x6faae464, struct.pack('<I', 0xBF800000))  # -1.0
 mu.mem_write(0x6faae614, struct.pack('<I', 0x3456BF95))  # 2.0e-7 (was wrongly 0.0 before 2026-10-11)
+mu.mem_write(0x6faae478, struct.pack('<I', 0x38D1B717))  # 1e-4, the zero snap of 0x6F483E70 (stub 0x6F84DC90; 2026-10-11)
 MAX_INSNS = 50_000_000
 def u32(x): return x & 0xffffffff
 def call(fn, ecx=None, edx=None, stack_args=(), cleanup=True):

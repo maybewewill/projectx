@@ -922,6 +922,81 @@ pub fn in_range(d: F32, v: F32) -> bool {
     !arith::lt(v, d)
 }
 
+/// Unit fields read by the position normaliser `0x6F4743A0` (CONFIRMED by the Unicorn vectors, `docs/spec/heroes.md`
+/// 8.3): `O+0x14` (grid selector: bit 31 picks the grid), `O+0x70` (float cell term `i`), `O+0x74` (int cell term `j`),
+/// `O+0x78`/`O+0x7C` (the position in cells), `O+0x80`/`O+0x84` (the factors of the cell term).
+#[derive(Clone, Copy, Debug)]
+pub struct NormUnit {
+    pub grid_word: u32,
+    pub i: F32,
+    pub j: i32,
+    pub x: F32,
+    pub y: F32,
+    pub xv: F32,
+    pub yv: F32,
+}
+
+/// A grid sub-object of the world's grid manager: `G+0x40` (float origin), `G+0x44` (int row), `G+0x48` (float scale).
+/// The manager holds grid A at `+0x14` and grid B at `+0x68`; a unit with bit 31 of `O+0x14` set uses grid B.
+#[derive(Clone, Copy, Debug)]
+pub struct GridCell {
+    pub origin: F32,
+    pub row: i32,
+    pub scale: F32,
+}
+
+/// The world origins read by the normaliser: `W+0x6C` (x) and `W+0x70` (y).
+#[derive(Clone, Copy, Debug)]
+pub struct WorldOrigin {
+    pub x: F32,
+    pub y: F32,
+}
+
+/// `1e-4` as the snap threshold of the cell term (`0x6FAAE478`, CONFIRMED from the file constant; see movement-2.md).
+const SNAP: F32 = F32(0x38D1_B717);
+
+/// The cell-term snap and the cell-to-world step `0x6F483E70`: `v = snap(G+0x40 - O+0x70)`, and when the rows differ
+/// `v += G+0x48 * i2r(G+0x44 - O+0x74)`. The snap zeroes the first term only when `|x| < 1e-4` (strict; NaN is kept).
+pub fn cell_term(grid: &GridCell, unit: &NormUnit) -> F32 {
+    let first = arith::sub(grid.origin, unit.i);
+    let mut v = if arith::lt(F32(first.0 & 0x7FFF_FFFF), SNAP) { F32::ZERO } else { first };
+    if grid.row != unit.j {
+        let rows = conv::i2r(grid.row.wrapping_sub(unit.j));
+        v = arith::add(v, arith::mul(grid.scale, rows));
+    }
+    v
+}
+
+/// The multiply-by-32 of the normaliser (`0x6F4742F0`): adds 5 to a non-zero exponent, which is an exact multiply by
+/// 32 (zero and denormal exponents stay as they are).
+fn times_32(a: F32) -> F32 {
+    if a.0 & 0x7F80_0000 != 0 {
+        F32(a.0.wrapping_add(0x0280_0000))
+    } else {
+        a
+    }
+}
+
+/// The normalised world position of a unit (`0x6F4743A0`, CONFIRMED by the Unicorn vectors in
+/// `tools/emu/hero_normaliser_emu.py`): the cell term `v` (from [`cell_term`]) moves the cell position by its factors,
+/// and the result is `32 * position + origin`. `grids` are grid A (`mgr+0x14`) and grid B (`mgr+0x68`).
+pub fn normalise(unit: &NormUnit, grids: [GridCell; 2], origin: WorldOrigin) -> (F32, F32) {
+    let grid = if unit.grid_word & 0x8000_0000 != 0 { grids[1] } else { grids[0] };
+    let v = cell_term(&grid, unit);
+    let cx = arith::add(unit.x, arith::mul(unit.xv, v));
+    let cy = arith::add(unit.y, arith::mul(unit.yv, v));
+    (arith::add(times_32(cx), origin.x), arith::add(times_32(cy), origin.y))
+}
+
+/// The squared distance of the candidate routine `0x6F28B990` (through `0x6F020000`, CONFIRMED by the Unicorn vectors):
+/// `dx = cand.x - rec.x`, `dy = cand.y - rec.y`, `D = dx*dx + dy*dy` in soft-float. Unlike `arith::dist2` there is no
+/// shortcut for equal points (the original computes the same expression for every pair).
+pub fn kill_distance2(rec: (F32, F32), cand: (F32, F32)) -> F32 {
+    let dx = arith::sub(cand.0, rec.0);
+    let dy = arith::sub(cand.1, rec.1);
+    arith::add(arith::mul(dx, dx), arith::mul(dy, dy))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1135,5 +1210,57 @@ mod tests {
         let nan = F32::from_bits(0x7FC0_0000);
         assert!(in_range(nan, one));
         assert!(in_range(one, nan));
+    }
+}
+
+#[cfg(test)]
+mod kill_position_tests {
+    use super::*;
+
+    fn f(x: f32) -> F32 {
+        F32::from_bits(x.to_bits())
+    }
+
+    fn grid(origin: f32, row: i32, scale: f32) -> GridCell {
+        GridCell { origin: f(origin), row, scale: f(scale) }
+    }
+
+    #[test]
+    fn normaliser_without_cell_term_is_32_times_the_cell_plus_origin() {
+        // Rows equal and the first term exactly zero: v = 0, so out = 32 * (x, y) + origin.
+        let u = NormUnit { grid_word: 0, i: f(2.0), j: 3, x: f(1.5), y: f(-2.0), xv: f(7.0), yv: f(9.0) };
+        let g = grid(2.0, 3, 1.0);
+        let (x, y) = normalise(&u, [g, g], WorldOrigin { x: f(100.0), y: f(200.0) });
+        assert_eq!((x, y), (f(148.0), f(136.0)));
+    }
+
+    #[test]
+    fn the_second_grid_is_used_when_bit_31_of_the_unit_word_is_set() {
+        let u = NormUnit { grid_word: 0x8000_0000, i: f(0.0), j: 0, x: f(1.0), y: f(0.0), xv: f(0.0), yv: f(0.0) };
+        let a = grid(0.0, 0, 1.0);
+        let b = grid(0.0, 5, 2.0);
+        let origin = WorldOrigin { x: f(0.0), y: f(0.0) };
+        // The cell term only moves the position through the factors, which are zero here: x = 32 * 1.0 either way.
+        // The grid choice is visible in the cell term itself.
+        assert_eq!(cell_term(&b, &u), f(10.0));
+        assert_eq!(cell_term(&a, &u), F32::ZERO, "grid A has row 0 = unit row 0 and origin 0");
+        assert_eq!(normalise(&u, [a, b], origin).0, f(32.0));
+    }
+
+    #[test]
+    fn cell_term_snaps_a_tiny_first_term_to_zero() {
+        // |origin - i| = 5e-5 < 1e-4: the first term is zeroed; rows equal, so v = +0.
+        let g = grid(5.0, 1, 1.0);
+        let u = NormUnit { grid_word: 0, i: f(5.00005), j: 1, x: f(0.0), y: f(0.0), xv: f(1.0), yv: f(1.0) };
+        assert_eq!(cell_term(&g, &u), F32::ZERO);
+        // A larger difference is kept.
+        let u2 = NormUnit { i: f(5.5), ..u };
+        assert_ne!(cell_term(&g, &u2), F32::ZERO);
+    }
+
+    #[test]
+    fn distance_is_the_sum_of_squared_differences() {
+        assert_eq!(kill_distance2((f(0.0), f(0.0)), (f(3.0), f(4.0))), f(25.0));
+        assert_eq!(kill_distance2((f(1.0), f(1.0)), (f(1.0), f(1.0))), F32::ZERO);
     }
 }
