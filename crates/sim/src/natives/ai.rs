@@ -750,6 +750,21 @@ mod tests {
     }
 
     #[test]
+    fn unbound_ai_natives_are_pinned() {
+        // The 36 rows not bound yet, each blocked by a subsystem the AI model does not hold (docs/spec/ai-natives.md
+        // sections 2 and 5). A change here must come with a change of that document.
+        let unbound: Vec<&str> = AI_NATIVES.iter().filter(|r| !r.implemented).map(|r| r.name).collect();
+        assert_eq!(unbound.len(), 36);
+        for row in AI_NATIVES.iter().filter(|r| !r.implemented) {
+            assert_eq!(row.level, Level::Unsure, "{} is unbound but not UNSURE", row.name);
+            assert!(row.note.starts_with("NOT IMPLEMENTED"), "{} has no reason", row.name);
+        }
+        for name in ["GetHeroId", "GetGoldOwned", "CreepsOnMap", "UnitInvis", "GetUpgradeGoldCost", "SetExpansion"] {
+            assert!(unbound.contains(&name), "{name} should be unbound");
+        }
+    }
+
+    #[test]
     fn flag_bits_are_distinct_and_cover_the_setters() {
         let mut bits: Vec<u32> = FLAG_BITS.iter().map(|&(_, b)| b).collect();
         bits.sort_unstable();
