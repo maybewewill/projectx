@@ -74,19 +74,25 @@ For count N <= 16: for each die, take one RNG step r of the chosen stream (32-bi
 
 For N > 16: no loop. It computes a mean from (sides-1)*N, takes a square root, makes a Gaussian draw on the same stream, rounds, and clamps to [0, (sides-1)*N]. Exact constants UNSURE.
 
-### 3.2 Discrepancy to test (IMPORTANT)
-- The repo spec rng.md section 3.4 says each die gives floor(...) + 1, and then "+ count", then "+ bonus". In the decompile of 0x6F26CAD0 I see only the floor values summed, with no +1 per die and no +count. The +1 may be applied elsewhere, or rng.md may be wrong. UNSURE which.
-- OpenRealm says raw = base + sum(rand() % S + 1) per die, i.e. 1 to S. That is the same as rng.md's claim, but OpenRealm uses the wrong RNG, so only the value range matters.
-- Decision needed by a differential test: run 0x6F26CAD0 under the Unicorn harness (tools/emu) for a known stream state and compare the sum with floor-only and floor+1 models.
+### 3.2 The +1 per die: RESOLVED (CONFIRMED, 2026-10-11)
+- The sampler `0x6F26CAD0` gives `0..sides-1` per die (CONFIRMED, Unicorn). The **+1 per die is added by the roll wrapper** `0x6F285350`: its code is `sum = sampler(...); eax = sum + count; eax += bonus; i2r; mul by 1.0`. So the roll is `count + sum(floor(r*sides/2^32)) + bonus` = one die is `1..sides`, plus the bonus, plus nothing else (CONFIRMED by disassembly).
+- Verified in Unicorn: `tools/emu/test_damage_roll.py`, 400/400 wrapper cases (count -1..16, sides 1..100, bonus -30..60; value and stream state) and 400/400 `GetDamageAmount` cases (stream 2, clamp at zero). Random seeds, all 45 streams set.
+- rng.md section 3.4 (+1 per die, then +count, then +bonus) is therefore **right in value**, but the "+count" and the "+1" are the same term: the wrapper adds `count` once, which is one per die.
+- Count <= 0 path (CONFIRMED): the wrapper stores `0.0` and draws nothing; the flat bonus is dropped too. The caller `GetDamageAmount` then clamps at zero.
+- OpenRealm's `rand() % S + 1` (1..S per die) is the same range (its RNG differs; only the range matters).
 
-### 3.3 Dice wrapper argument binding (UNSURE)
-Call sites show four arguments in this order: count, sides, bonus, and a pointer to the float 1.0 (DAT_0x6FAAE4F4). Examples: 2d10 with bonus 0 (stream 23, FUN_6F081420, consistent with rng.md), 1 die of (hi-lo) plus offset lo (FUN_6F19F1D0), and count 1 with a bonus of -1 (chunk_006.c line 9819, enclosing function not identified). The callee's own declaration does not match these four arguments (decompiler artifact). Conclusion: the wrapper takes (count, sides, bonus) and multiplies the result by 1.0 at the end. Where the bonus is added is not visible in 0x6F285350 or 0x6F26CAD0. LIKELY it is added to the sum, but the position (before or after the float conversion) is UNSURE.
+### 3.3 Roll wrapper `0x6F285350` (CONFIRMED by disassembly and Unicorn)
+- Signature: ECX = result pointer, EDX = RNG stream index, stack = `count`, `sides`, `bonus`, pointer to the real multiplier (`ret 0x10`). Returns EAX = result pointer.
+- Body: stream table lookup (`0x6F4C34D0(13)` -> stream base, entry `base + 8*stream + 4`); `count <= 0` gives `0.0` (plus a log call on a non-draw path); otherwise `sampler(ECX=sides, EDX=count, stack=stream)`, then `total = sum + count + bonus` (int32), `I2R(total)`, then `MUL(multiplier, I2R)`.
+- The multiplier is `1.0` (`DAT_0x6FAAE4F4`) in the two callers checked (GetDamageAmount and the others below). Its value is 1.0 only after start-up (zero in the file; written by the start-up code, see `tools/emu/runtime_consts.py`).
+- Callers: 18 call sites of the wrapper (`0x6F0814B4`, `0x6F088524`, `0x6F0C698F` [GetDamageAmount], `0x6F12DC18`, `0x6F13DA70`, `0x6F15482E`, `0x6F19F235`, `0x6F19F2B6`, `0x6F1ED4EA`, `0x6F1ED569`, `0x6F29DDA8`, `0x6F29DE4B`, `0x6F2C4A89`, `0x6F2C4ADA`, `0x6F2DEA08`, `0x6F2DEAA0`, `0x6F2E5C05`, `0x6F2F00A2`), with streams 0x17, 0x18, 0x0C, 0x11, 0x13, 0x1F, 0x2C, 0x19, 0x1A, 0x0D, 0x00 and 0x02 (the combat stream). The wrapper is the general "roll N dice d(S) + B" of the engine. Which of these are the other gameplay rolls is not mapped (UNSURE beyond GetDamageAmount).
 
 ### 3.4 Attack roll for a unit (GetDamageAmount, 0x6F0C6940)
 - The weapon index is this+0x2B8 (CONFIRMED).
-- Dice count and sides come from the per-attack fields at this+0x88 and this+0x94, indexed by weapon (CONFIRMED read; LIKELY count=0x88 and sides=0x94, from argument order). Bonus is the sum of this+0xAC and this+0xA0 (CONFIRMED read, indexed by weapon; the two summed fields' meanings are UNSURE: likely dmgplus and dmgUp-based).
-- Stream: 2 (stream number taken from rng.md section 6; the call that selects it is not visible in this decompile, so LIKELY).
-- Result is clamped to >= 0 (CONFIRMED): if raw < 0 (0.0), the result is 0.0.
+- Dice count is this+0x88[w], sides this+0x94[w] (CONFIRMED by argument order in the call: the first stack argument is the count, the second the sides). Bonus is this+0xA0[w] + this+0xAC[w] (CONFIRMED read, the sum is passed as the third argument). The meanings of the two summed fields are UNSURE (likely dmgplus and a per-level/upgrade term).
+- Stream: 2 (CONFIRMED: `EDX = 2` in the call to the roll wrapper). Multiplier: pointer to 1.0 (CONFIRMED).
+- The result of the wrapper is then clamped: positive or zero kept, negative becomes `0.0` (CONFIRMED by the `fcompp`/`fnstsw` sequence).
+- Verified in Unicorn (`tools/emu/test_damage_roll.py`): 400/400 cases with random counts (-1..16, so the count-0 path is included), sides 1..100 and bonuses; the result and the stream state are compared with the model.
 - There is no min-1 clamp in this function. OpenRealm's min 1 is NOT seen on this path (see section 7).
 
 Writers of the fields at +0x88 to +0xB0 include 0x6F09D5F0, 0x6F09E9E0, 0x6F0A5C60 and 0x6F0A76F0. They are probably setters on the attack object, but this is UNSURE: several of these writes go through virtual objects, and the weapon-to-field mapping is not resolved.
@@ -118,7 +124,7 @@ Inputs: armor value A from target +0xE0 (float bits), K = Misc key "DefenseArmor
 Output R (stored in the status slot): R is the reduction fraction. The damage factor is M = 1 - R (from step 7 of section 4, which subtracts R from 1.0).
 
 - A >= 0 (CONFIRMED branch, from the sign test): X = K * A (softfloat multiply), Y = 1 + X (softfloat add), R = X / Y (divide helper). So M = 1 - X/(1+X) = 1/(1+K*A). This matches OpenRealm's 1/(1+K*A). LIKELY.
-- A < 0 (CONFIRMED branch): n = trunc(-A) (float-to-int truncation), clamped so that n = 20 for any n >= 20. R = Table[n] from a 21-entry float table at 0x6FAB4300. Tabled values are not in the container. If the table holds R = (1-K)^n - 1 (so M = 2 - (1-K)^n), this matches OpenRealm's 2 - (1-K)^(-A). LIKELY for the form, UNSURE for the stored numbers (the table has no writer in the decompile, so it is probably static data in Game.dll).
+- A < 0 (CONFIRMED branch): n = trunc(-A) (float-to-int truncation), clamped so that n = 20 for any n >= 20. R = Table[n] from a 21-entry float table at 0x6FAB4300 (values in section 5.1: R_n = -(1 - 0.94^n), so M = 1 - R = 2 - 0.94^n, the OpenRealm form with K = 0.06; see 5.1). The table is in BSS and written by a start-up initialiser, not stored in the file.
 - If R > 1.0, the step-7 branch uses factor 0 (the code takes an else-path). For A >= 0 and the table form above, R < 1 always, so this does not trigger for normal armor.
 
 Armor applies only to damage class bit 4 (0x10), and only when the status flag is clear. LIKELY: physical damage only.
@@ -208,3 +214,19 @@ tables and skips without the variable. The 0x6FAB4300 table may be all zeros in 
 filled at run time); in that case `from_game_dll` refuses it, and the model cannot be built from the DLL alone.
 Next step: dump the bytes at 0x6FAB4300 and 0x6FAB4358 with `tools/emu/runtime_consts.py` on a real `Game.dll`, and
 run the dice (+1 question) and armor factor through the Unicorn harness.
+
+## 5.1 Negative-armor table: start-up initialiser (resolved 2026-10-11)
+
+- **Where**: the 21 entries at `0x6FAB4300..0x6FAB4350` (4 bytes each) and the sentinel `-99999.0` at `0x6FAB4354` are in .bss. The writer is the function `0x6F85A4C0` (a static initialiser, called by the CRT start-up ranges). Its 21 blocks each store one entry. The sentinel is written by a separate stub at `0x6F85A820` (`mov edx, -99999; mov ecx, 0x6FAB4354; jmp I2R`). Found by scanning all sections for dwords in `0x6FAB4300..0x6FAB4358`: the only references are in `.text` (CONFIRMED). The references around `0x6F26D2xx` (inside the armor-factor code, `0x6F26D270`) are the readers (LIKELY); the 7 x 8 damage table starts at `0x6FAB4358`, right after the sentinel.
+- **Arithmetic** (CONFIRMED by disassembly; each block is the same): the initialiser calls I2R on the integer `100000` (the scale), I2R on an integer constant `k_n` (an immediate in the code, `k_0 = 0`, negative for n >= 1), and then the softfloat DIV of `I2R(k_n)` by `I2R(100000)` (both operands are pointers, the result is stored at the entry). The 21 integers are all immediates in the code (CONFIRMED by extracting them; the values are not recorded here, see `tools/emu/neg_armor_vectors.py`).
+- **Meaning of k_n** (CONFIRMED for the 21 values): `k_n = -trunc(100000 * (1 - 0.94^n))`. The stored entry is therefore `DIV(I2R(k_n), I2R(100000))`, which is about `-(1 - 0.94^n)` with the DIV's own rounding (not correctly rounded: the stored bits differ from the correctly rounded quotient in the last place for several entries; `tools/emu/neg_armor_vectors.py` gives the bits).
+- **Float ops**: all softfloat (I2R, DIV); no x87 instruction is used in the initialiser. The DIV is the table-driven RECIP plus MUL described in section 3.3 of `docs/spec/softfloat.md`.
+- **Store points**: each entry is written as the DIV result (a 32-bit store into the entry). The sentinel is stored by I2R directly.
+- **Port**: `sim::damage::NegativeArmorTable::computed(&Tables)`. `k_n` is computed as `-trunc(100000 * (1 - p))`, `p` being `0.94^n` by repeated `f64` multiplication (the trunc margins are at least 0.0166, so `f64` rounding cannot change an integer; the 21 integers were checked against the original). The DIV uses the reciprocal table of the DLL (`Tables::from_game_dll`).
+- **Verification**: `tools/emu/neg_armor_vectors.py` runs the initialisers in Unicorn and reads the 22 dwords back. `crates/sim/tests/damage.rs::computed_table_matches_the_original_start_up_values` compares all 21 entries and the sentinel bit for bit (22/22 with `GAME_DLL` and `NEG_ARMOR_VECTORS`). The values are not committed.
+- **Confidence**: CONFIRMED for the 22 stored values, the initialiser's structure and the DIV arithmetic; LIKELY that the source expression is `-(1 - 0.94^n)` (the integers match it exactly, which is the only evidence of the 0.94 rate).
+- Open: whether the initialiser in the original runs once per process only (it does, as a CRT initialiser; not checked for re-entry); the sentinel is not used by the model (the lookup clamps to n = 20).
+
+## 9.1 Status update (2026-10-11): sections 3.2 and 5.1 resolved
+
+The dice question of section 3.2 and the negative-armor table of section 5.1 are closed. The "Implementation status" table below is partly stale: the `+1 per die` line and the `from_game_dll` load row are superseded by sections 3.2 and 5.1 (`NegativeArmorTable::computed`, `roll_total`).
