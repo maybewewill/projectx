@@ -654,7 +654,7 @@ fn in_range(x: F32, y: F32, cx: F32, cy: F32, radius: F32, origin: (F32, F32)) -
 
 /// The bounds test of the rect query. UNVERIFIED (spec 3.7): the edges are inclusive here, and the
 /// original may test only the cells of the box (its rect path is the box mode, not decoded).
-fn in_rect(x: F32, y: F32, r: &RectObj) -> bool {
+pub(super) fn in_rect(x: F32, y: F32, r: &RectObj) -> bool {
     arith::le(r.min_x, x) && arith::le(x, r.max_x) && arith::le(r.min_y, y) && arith::le(y, r.max_y)
 }
 

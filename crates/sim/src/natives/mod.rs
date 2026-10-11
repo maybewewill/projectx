@@ -19,6 +19,7 @@ pub mod game;
 mod gamecache;
 mod group;
 mod hashtable;
+mod item;
 mod location;
 mod player;
 pub mod presentation;
@@ -62,4 +63,5 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     unit::register(reg, game);
     unit_event::register(reg, game);
     group::register(reg, game);
+    item::register(reg, game);
 }

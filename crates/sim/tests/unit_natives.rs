@@ -83,6 +83,7 @@ fn ut(name: &str, max_life: u32, max_mana: u32, start_mana: u32) -> UnitType {
         max_life: F32::from_bits(max_life),
         max_mana: F32::from_bits(max_mana),
         start_mana: F32::from_bits(start_mana),
+        inventory_size: 0,
     }
 }
 

@@ -23,7 +23,7 @@
 //!   A stored handle is written with flag 1: the table holds one reference, taken with AddRef
 //!   (0x6F428080) after the old owned reference is released (0x6F42DD40). CONFIRMED (0x6F402D80).
 //!   The handle id keeps its number after the object is destroyed, because the table still holds it.
-//! * Handle types the simulation does not model (unit, item, ...) have no objects here, so every
+//! * Handle types the simulation does not model (widget, destructable, ...) have no objects here, so every
 //!   handle of those types is null and the typed save fails. That is the same result the original
 //!   gives for a null handle.
 //! * `LoadXHandle` (`LoadUnitHandle` 0x6F3CAC10 -> 0x6F3BF680) returns the saved id only if the id
@@ -61,7 +61,7 @@ const HANDLE_NATIVES: &[(&str, Option<HandleKind>)] = &[
     // TODO: a unit is also a widget; the widget type check is not modelled yet.
     ("WidgetHandle", None),
     ("DestructableHandle", None),
-    ("ItemHandle", None),
+    ("ItemHandle", Some(HandleKind::Item)),
     ("UnitHandle", Some(HandleKind::Unit)),
     ("AbilityHandle", None),
     ("TimerHandle", Some(HandleKind::Timer)),

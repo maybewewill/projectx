@@ -194,6 +194,8 @@ pub enum HandleKind {
     Unit,
     /// A unit group (see [`GroupObj`]).
     Group,
+    /// An item (see [`ItemObj`]).
+    Item,
     /// Presentation handle types (see `presentation.rs`): camera setups, sounds, effects, quests,
     /// quest items, multiboards and their items, leaderboards, dialogs, buttons and timer dialogs.
     CameraSetup,
@@ -237,6 +239,9 @@ pub struct UnitType {
     pub max_mana: F32,
     /// Mana of a new unit (UNSURE: the original copies the template's starting mana).
     pub start_mana: F32,
+    /// Number of item slots (`UnitInventorySize`). 0 for a unit without an inventory: the original has
+    /// no pack object then, and every pack native fails (`natives/item.rs`).
+    pub inventory_size: u32,
 }
 
 /// The unit type registry, keyed by the raw type id (the four-character code as an integer).
@@ -316,6 +321,152 @@ pub struct UnitObj {
     pub paused: bool,
     /// Set by `RemoveUnit`. A removed unit has no live handle, so every native treats it as invalid.
     pub removed: bool,
+}
+
+/// An item type as the simulation needs it: the template values a new item starts with, and the record
+/// fields the random item selection reads (`natives/item.rs`).
+///
+/// The field names follow the item-type record offsets of `docs/spec/items.md` section 3.4. The meaning of
+/// the flag word bits is in [`item_flags`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemType {
+    /// Class of the type (record `+0x3C`). `ChooseRandomItemEx` compares its category with it.
+    pub class: u32,
+    /// Level read by `ChooseRandomItemEx` when its category is not 7 (record `+0x38`).
+    pub level_ex: i32,
+    /// Level read by `ChooseRandomItem`, and by `ChooseRandomItemEx` with category 7 (record `+0x40`).
+    pub level_plain: i32,
+    /// Record `+0x48`. The random selection requires it to be nonzero (its flag5 is 0 in both natives).
+    pub flag_48: u32,
+    /// Charges a new item starts with (template value copied to `+0x84`).
+    pub charges: i32,
+    /// Flag bits a new item starts with (the type-record bits of `+0x20`, see [`item_flags`]).
+    pub flags: u32,
+}
+
+/// The item type registry, keyed by the raw type id. Its candidate order is the registration order (the
+/// first `insert` of an id fixes its position). The original's list order is LIKELY load-history based
+/// (`docs/spec/items.md` 9.3, UNSURE), so this order is a model, not a verified one.
+///
+/// TODO(gamedata): the engine should load it from the item rows of the SLK data (`crates/gamedata`) at map
+/// load, like [`UnitTypes`]. Tests insert synthetic types.
+#[derive(Debug, Clone, Default)]
+pub struct ItemTypes {
+    order: Vec<u32>,
+    by_id: BTreeMap<u32, ItemType>,
+}
+
+impl ItemTypes {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds or replaces the type `id`. A new id goes last in the registration order; a replaced id keeps its
+    /// position. Returns the type it replaced.
+    pub fn insert(&mut self, id: u32, ty: ItemType) -> Option<ItemType> {
+        if !self.by_id.contains_key(&id) {
+            self.order.push(id);
+        }
+        self.by_id.insert(id, ty)
+    }
+
+    /// The type with raw id `id`.
+    pub fn get(&self, id: u32) -> Option<&ItemType> {
+        self.by_id.get(&id)
+    }
+
+    /// The registered ids in registration order.
+    pub fn ids(&self) -> &[u32] {
+        &self.order
+    }
+
+    /// Number of registered types.
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// Whether no type is registered.
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+}
+
+/// Bits of the item flag word (`+0x20`, `docs/spec/items.md` section 2). Only the bits the natives use are
+/// named. Bit 0 is the hidden bit that `SetItemVisible(false)` and `RemoveItem` set (the spec's reading).
+pub mod item_flags {
+    /// Hidden (`IsItemVisible` is its negation).
+    pub const HIDDEN: u32 = 0x001;
+    /// Invulnerable (`SetItemInvulnerable`).
+    pub const INVULNERABLE: u32 = 0x008;
+    /// Dropped on the owner's death (`SetItemDropOnDeath`).
+    pub const DROP_ON_DEATH: u32 = 0x080;
+    /// Set by `UnitAddItemById` on the item it creates. Its meaning is not known (UNSURE).
+    pub const ADDED_BY_ID: u32 = 0x100;
+    /// Droppable (`SetItemDroppable`).
+    pub const DROPPABLE: u32 = 0x400;
+    /// Powerup: consumed when a unit takes it, never placed in a slot (`IsItemPowerup`).
+    pub const POWERUP: u32 = 0x800;
+    /// No charges. Set when the charges are 0 or below (`SetItemCharges`).
+    pub const NO_CHARGES: u32 = 0x1000;
+    /// Pawnable (`SetItemPawnable`, `IsItemPawnable`).
+    pub const PAWNABLE: u32 = 0x2000;
+}
+
+/// An item (`item` in JASS), an object with a handle. Its position is raw, as the natives see it (the
+/// original keeps it in a sub-object, `docs/spec/items.md` section 2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemObj {
+    /// The raw type id (`GetItemTypeId`).
+    pub type_id: u32,
+    pub x: F32,
+    pub y: F32,
+    /// The flag word (see [`item_flags`]).
+    pub flags: u32,
+    /// Charges (`GetItemCharges`). Stored as given by `SetItemCharges` (0 when it was 0 or below).
+    pub charges: i32,
+    /// The owning player's slot index (`+0x74`). A new item starts at 0 (UNSURE: the original copies it from
+    /// the type record).
+    pub owner: u32,
+    /// The unit whose pack holds the item, or `None` while the item is on the ground.
+    pub holder: Option<ObjKey>,
+    /// Set by `RemoveItem` and by a powerup consumed on pickup. A removed item has no live handle for the
+    /// natives, although its id is released only when its reference is dropped (see `natives/item.rs`).
+    pub removed: bool,
+}
+
+/// What an item order asks a unit to do with its item (the order system is not modelled, so the order is
+/// only recorded: see [`Game::item_orders`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ItemOrderKind {
+    /// `UnitDropItemPoint`: order id `0xD0021`, to the point `(x, y)`.
+    DropPoint { x: F32, y: F32 },
+    /// `UnitDropItemSlot`: order id `0xD0022 + slot`.
+    DropSlot { slot: u32 },
+    /// `UnitDropItemTarget`: the target order (its id is not read, UNSURE). The target is the handle id of
+    /// the widget argument.
+    DropTarget { target: u32 },
+}
+
+impl ItemOrderKind {
+    /// The order id the original queues for this kind: `0xD0021` for a point drop, `0xD0022 + slot` for a
+    /// slot drop (`docs/spec/items.md` 5.6). `None` for the target form, whose id is not read.
+    pub fn order_id(&self) -> Option<u32> {
+        match *self {
+            ItemOrderKind::DropPoint { .. } => Some(0x000D_0021),
+            ItemOrderKind::DropSlot { slot } => Some(0x000D_0022 + slot),
+            ItemOrderKind::DropTarget { .. } => None,
+        }
+    }
+}
+
+/// An item order a native queued, in the order the scripts issued it. The natives return the value the
+/// original returns when the order is queued (`true`), so the move itself happens later, in the order system
+/// that is not implemented yet (`docs/spec/items.md` 5.6).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ItemOrder {
+    pub unit: ObjKey,
+    pub item: ObjKey,
+    pub kind: ItemOrderKind,
 }
 
 /// A unit event, in the order the natives produced it. Drained by the host with
@@ -544,6 +695,8 @@ pub enum Object {
     Unit(UnitObj),
     /// A unit group.
     Group(GroupObj),
+    /// An item.
+    Item(ItemObj),
     /// A presentation object with a handle (see `presentation.rs`).
     Pres(PresObj),
 }
@@ -566,6 +719,7 @@ impl Object {
             Object::Force(_) => HandleKind::Force,
             Object::Unit(_) => HandleKind::Unit,
             Object::Group(_) => HandleKind::Group,
+            Object::Item(_) => HandleKind::Item,
             Object::Pres(p) => p.handle_kind(),
         }
     }
@@ -611,6 +765,18 @@ pub struct Game {
     enum_units: Vec<u32>,
     /// Unit handles of the running `GetFilterUnit` scopes, innermost last.
     filter_units: Vec<u32>,
+    /// The item type registry the host fills (see [`ItemTypes`]).
+    item_types: ItemTypes,
+    /// The pack of each unit that has one: one entry per slot, `None` for an empty slot. A pack grows to the
+    /// slot it is first used at and never has more slots than the unit's capacity (the type's
+    /// `inventory_size`).
+    pub(crate) packs: BTreeMap<ObjKey, Vec<Option<ObjKey>>>,
+    /// Item orders in the order they were queued, until the host takes them (see [`ItemOrder`]).
+    item_orders: Vec<ItemOrder>,
+    /// Item handles of the running `GetEnumItem` scopes (`EnumItemsInRect`), innermost last.
+    enum_items: Vec<u32>,
+    /// Item handles of the running `GetFilterItem` scopes, innermost last.
+    filter_items: Vec<u32>,
 }
 
 impl Default for Game {
@@ -644,7 +810,90 @@ impl Game {
             observers: BTreeMap::new(),
             enum_units: Vec::new(),
             filter_units: Vec::new(),
+            item_types: ItemTypes::new(),
+            packs: BTreeMap::new(),
+            item_orders: Vec::new(),
+            enum_items: Vec::new(),
+            filter_items: Vec::new(),
         }
+    }
+
+    /// The item type registry (read only). TODO(gamedata): filled by the engine from SLK data.
+    pub fn item_types(&self) -> &ItemTypes {
+        &self.item_types
+    }
+
+    /// Mutable access to the item type registry, for the host and the tests.
+    pub fn item_types_mut(&mut self) -> &mut ItemTypes {
+        &mut self.item_types
+    }
+
+    /// The item behind `key`. Panics if `key` is not an item.
+    pub fn item(&self, key: ObjKey) -> &ItemObj {
+        match self.object(key) {
+            Object::Item(i) => i,
+            _ => panic!("not an item"),
+        }
+    }
+
+    /// Mutable access to the item behind `key`. Panics if `key` is not an item.
+    pub fn item_mut(&mut self, key: ObjKey) -> &mut ItemObj {
+        match self.object_mut(key) {
+            Object::Item(i) => i,
+            _ => panic!("not an item"),
+        }
+    }
+
+    /// The item behind handle `id`, or `None` for a null, freed, destroyed, wrong-type or removed handle.
+    /// Every item native resolves its item argument through this.
+    pub fn item_of_handle(&self, id: u32) -> Option<ObjKey> {
+        let k = self.handle_of_kind(id, HandleKind::Item)?;
+        (!self.item(k).removed).then_some(k)
+    }
+
+    /// The item orders queued so far, oldest first.
+    pub fn item_orders(&self) -> &[ItemOrder] {
+        &self.item_orders
+    }
+
+    /// Takes the queued item orders (oldest first) and empties the queue.
+    pub fn take_item_orders(&mut self) -> Vec<ItemOrder> {
+        std::mem::take(&mut self.item_orders)
+    }
+
+    /// Appends an item order to the queue.
+    pub(crate) fn push_item_order(&mut self, order: ItemOrder) {
+        self.item_orders.push(order);
+    }
+
+    /// The item handle that `GetEnumItem` returns: the innermost running `EnumItemsInRect` callback, or 0.
+    pub fn enum_item(&self) -> u32 {
+        self.enum_items.last().copied().unwrap_or(0)
+    }
+
+    /// The item handle that `GetFilterItem` returns: the innermost running filter call, or 0.
+    pub fn filter_item(&self) -> u32 {
+        self.filter_items.last().copied().unwrap_or(0)
+    }
+
+    /// Opens a `GetEnumItem` scope with item handle `id`. Pair with [`Game::pop_enum_item`].
+    pub fn push_enum_item(&mut self, id: u32) {
+        self.enum_items.push(id);
+    }
+
+    /// Closes the innermost `GetEnumItem` scope.
+    pub fn pop_enum_item(&mut self) {
+        self.enum_items.pop();
+    }
+
+    /// Opens a `GetFilterItem` scope with item handle `id`. Pair with [`Game::pop_filter_item`].
+    pub fn push_filter_item(&mut self, id: u32) {
+        self.filter_items.push(id);
+    }
+
+    /// Closes the innermost `GetFilterItem` scope.
+    pub fn pop_filter_item(&mut self) {
+        self.filter_items.pop();
     }
 
     /// The unit type registry (read only). TODO(gamedata): filled by the engine from SLK data.
@@ -928,6 +1177,14 @@ impl Game {
     /// Mutable access to the object behind `key`.
     pub fn object_mut(&mut self, key: ObjKey) -> &mut Object {
         &mut self.objects[key.0 as usize]
+    }
+
+    /// Adds an object without a handle. The caller gives it one later with [`Game::handle_or_create`]: the
+    /// original allocates an item's handle after its placement (`docs/spec/items.md` 5.4).
+    pub(crate) fn push_object(&mut self, object: Object) -> ObjKey {
+        let key = ObjKey(self.objects.len() as u32);
+        self.objects.push(object);
+        key
     }
 
     /// Adds an object and gives it a handle with the given flag (see `HandleTable::create`). Returns
