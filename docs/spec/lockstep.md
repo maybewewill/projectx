@@ -972,3 +972,81 @@ over the whole `.text`, plus an independent disassembly from `0x6F545840`), not 
   the writes to world+0x1C and world+0x50 with a Unicorn run of the world constructor and the first map-init
   calls (the `tools/emu/emu.py` harness runs initializers); get the value of `[CNetData+0x139C]` from a running
   constructor.
+
+### 13.7 Pass 11 (2026-10-11): registry 13 objects, world writers, the tick step, start-state test
+
+Labels as above. Addresses are Game.dll 1.26a. Tools: `scratchpad` disassembly scans (not committed),
+`tools/analysis/sync_stream.py` (new `implied_fold`), `crates/sim/src/sync.rs` (new producers, 11 tests).
+
+**Goal 1: what registry 13 holds and how it is filled (partly CONFIRMED)**
+
+- The table entry 13 (lookup `0x6F4C34D0`, ECX = 0xD) points to a registry object: data pointer at `+0x10`, 20 dword
+  slots, each slot an owned object pointer or 0. Slot accessors (CONFIRMED, decompile + disassembly):
+  - `0x6F0026B0` **get-or-create** (ECX = slot index): `0x6F6EB5B2` allocates 0xC bytes (Data.h line 0x74; 0xC =
+    size of a `CMiscCustom`), `0x6F0020A0` builds it, and **the store is at `0x6F0026DE`: `mov [ecx+esi*4], eax`**
+    (ecx = registry data pointer, esi = slot index). On allocation failure the slot is set to 0.
+  - `0x6F002700` **clear**: if the slot is non-null, calls `vtable[2](1)` (deleting destructor) and sets the slot to 0.
+  - About 19 further pairs of the same shape exist (`0x6F25AA20`..`0x6F25B040`, `0x6F2806E0`, `0x6F2808E0`, ...;
+    list in the scan output, 38 functions with the `+0x10 + idx*4` pattern). Only the `CMiscCustom` pair is decoded
+    so far. No direct `call`, `jmp` or data reference to these accessors exists in the file (they are reached some
+    other way, e.g. a computed dispatch); **the callers and so the slot indices are UNSURE**.
+- The participant classes (RTTI from `tools/analysis/rtti_vtables.py`, CONFIRMED names):
+  - `CMiscCustom` (vtable `0x6F8750A4`): slot 0 = `0x6F0020D0`, slot 1 = `0x6F002000`, slot 2 = `0x6F002760`.
+  - `CSkinCustom` (vtable `0x6F937B38`, ctor `0x6F309800` calls the `CMiscCustom` base ctor): slot 0 and 1 the
+    same functions, slot 2 = `0x6F30ECC0`, slot 3 = `0x6F309820`.
+  - So the participants that were decoded are **custom game-data objects** (Misc/skin overrides). A depends on the
+    map's custom data, which the sim does not load.
+- Slot 0 of `CMiscCustom` (`0x6F0020D0`, CONFIRMED arithmetic): with children `a = [obj+4]`, `b = [obj+8]`:
+  `s = a ? rol(H(a),3) : 0`, `H = b ? rol(H(b) ^ s, 3) : s`. `H(child)` is the walk `0x6F6FA990` → `0x6F4D0570`
+  with callback `0x6F6FA970` (not reproduced). Implemented as `sim::sync::custom_node_hash` (the child hashes are
+  inputs). An empty object hashes to 0.
+- The registry fold itself (section 13.5) is unchanged: `A` = fold over the non-null slots, the walk runs from
+  slot 19 down to 0, each `acc = rol(v ^ acc, 3)`.
+
+**Goal 2: writers of world+0x1C and world+0x50 (CONFIRMED for the constructor; the rest NOT FOUND)**
+
+- `world = [0x6FAB778C]`. The world object is allocated in `0x6F46D940` with flag 8 (`Ordinal_401(0xDC, "...tempest_thread.h", 0x66, 8)`);
+  its constructor `0x6F46B6B0` calls `0x6F46B120` (CONFIRMED stores: `+0x40 = -1`, `+0x44 = -1`, `+0x48..+0x58 = 0`,
+  so `+0x50 = 0` at start). The constructor's own stores to `+0x1C` are into sub-objects at `+0x5C`, `+0x7C`,
+  `+0x9C`, `+0xBC` (`ebx+0x1C`, not `world+0x1C`). The constructor also sets `[0x6FAB7788] = world`.
+- So at start X = `world+0x1C` (because `+0x40 = -1`) and Y = 0. `+0x1C` is 0 if the allocation is zero-filled (flag 8;
+  LIKELY, Storm not checked). Implemented as `sim::sync::WorldWords::at_start()`.
+- Functions that read the world global (`[0x6FAB778C]`, 22 machine loads, 18 functions, 59 with direct callees,
+  scan of stores with displacement 0x1C or 0x50): the only stores at those displacements are stack slots
+  (`[esp+0x1C]`), sub-objects, or `[eax+0x50]` in `0x6F484C00` (a serializer-like function, its base is not the world).
+  **No direct store to world+0x1C or world+0x50 was found** in the world code. Writers must go through an alias
+  (world pointer passed as `this`/argument to another class) → **UNSURE, still open**.
+- Other world-global writers: `0x6F46FCC0` (`mov [0x6FAB778C], ebx`), `0x6F46D9E0` (clear), `0x6F46D910`/`0x6F46D940`
+  (create/replace, the `0x6F46B790`/`Ordinal_403` destroy path).
+
+**Goal 3: the tick step `[CNetData+0x139C]` (CONFIRMED: the value is 5 per tick; the field has no writer)**
+
+- `[CNetData+0x139C]` is read once (`mov ebp, [esi+0x139c]`, `0x6F553516`) as one term of a pending-count sum.
+  No instruction in `.text` stores to `+0x139C` (no `mov/add/lea` with that displacement, no `0x139C` in the
+  decompile except that read). So its value is whatever the object holds (0 unless a block copy writes it).
+- On the path that runs ticks, `ebp` is **overwritten** before the tick adds: `mov eax, 0x19` (`0x6F553665`),
+  `cmp [esi+0x2250], eax; jb 0x6F553869` (the tick block is entered only when the accumulator is at least 25 ms;
+  the `jb` target does not reach the tick block), then `lea ebp, [eax-0x14]` (`0x6F553676`) = **5**. The tick adds
+  (`0x6F553770`, `0x6F553785`) use this `ebp`; the only jump into `0x6F553770` comes from the loop at `0x6F5537A5`,
+  which skips the `lea`, so `ebp` stays 5. Implemented as `sim::sync::TICK_CLOCK_STEP` = `TICK_UNIT_MS (0x19) -
+  0x14` (test `tick_step_is_the_25ms_unit_minus_20`).
+- Consequence: the tick step is a constant 5 ms, and the 139C field is irrelevant to the clock.
+
+**Goal 4: start-state test on the real replay (LIKELY model, result: rejected or incomplete)**
+
+- Real records (`w3g checksums --tsv`, 89,259 slots): slot 0 `cef28d12`; time before slot k = 110·k ms (22 ticks of 5 ms).
+- Under the simplest start state T = clock before the slot's ticks (110·k), X = 0, Y = 0, the record implies one
+  registry fold per slot (`sync_stream.py`, `implied_registry_fold` is the exact inverse of the value chain):
+  record 0 → A = `1A258A4E`, record 1 → `5C7C8201`, record 2 → `5D432204`. **A = 0 (empty registry) is impossible
+  for every record** (0 of 89,259 are 0), and 89,257 of the 89,259 implied folds are distinct. So at least one
+  participant of registry 13 is non-empty from slot 0 (a custom-data object with unknown content) **or** X/Y are not
+  constant zero. A fold that changes on every slot needs changing participants or world words.
+- The simpler test "A = 0, Y = 0, T = 0, X free" is unreachable (`sync_stream.py`, unchanged result).
+- Conclusion: **the sync value cannot be reproduced yet**. The missing inputs are (1) the contents (H values) of the
+  `CMiscCustom`/`CSkinCustom` registry objects of the map (requires the map's custom Misc/skin data and the child walk
+  `0x6F4D0570`), (2) the writer of world+0x1C/+0x50 (alias path), and (3) whether T is the clock before or after the
+  slot's own ticks (110·k assumed). Next: a Unicorn run of the map-start path with a real `CMiscCustom` tree, and a
+  watch-point on `0x6F0026DE` to see which slot index the first map start uses.
+
+**Verification (this pass)**: `crates/sim/src/sync.rs` 11 unit tests pass (`cargo test -p sim --lib sync`); the real
+replay export (89,259 records) and `sync_stream.py` run without error (values above).
