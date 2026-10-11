@@ -356,6 +356,17 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 ## 7. Log
 
 - **2026-10-11 (replay leading records)**: the game setup reads the replay body positionally (docs/spec/replay-load.md section 3): string, string (build >= 6027), a 184-byte block (3 strings + 2 dwords), a u16 start blob, then dwords/20 bytes/string. Unicorn port (tools/emu/replay_leading_emu.py, 400 random bodies, 0 mismatches) and Rust port (crates/w3g/src/leading.rs, 24 vectors). **Disagreement**: crates/w3g GameInfo (u32, host record, 0x16 players, 0x19 id) is refused by the original reader; UNCONFIRMED until a real 1.26a replay is parsed. boot_from_replay unchanged (no newly confirmed field).
+- **2026-10-11 (37)**: vision pass 4 (docs only, `docs/spec/vision.md` section 12): time of day is an agile float property
+  (FloatModifier + FloatListener created by `0x6f429770`, reads DayLength/DayHours and the scale at game+0x5c; listener
+  message 0x80262 resets to 0). Day/night switch `0x6f42c210`: day iff Dawn <= t < Dusk, read from Misc keys (not the 6/18
+  constants). Rate formula and modifier evaluation still UNSURE. Unit writer `0x6f409e00` structure re-read (span rows at
+  grid+0x1C/+0x20, cell words at grid+0x38 with pitch shift grid+0x68, row offset -1 UNSURE). No code changes; the Rust
+  clock and sight shapes are unchanged.
+
+- **2026-10-11 (36)**: vision pass 3: unit centre `0x6f474460` = centre of the footprint rect at unit+0x98 (Unicorn 200/200); fog cell for units = pathing cell >> 2 (128 units). Unit sight writer `0x6f409e00` is NOT the plain circle for R ≥ 3 (depends on span data at grid+0x1C/+0x20, producer not found; reads cliff levels → cliffs can block sight) — sim still uses the circle (known wrong). Time of day = game state slot at game+0x28; advance rate and night threshold not found.
+
+- **2026-10-11 (35)**: hero life sink `0x6F2AC450` (heroes.md §10; Unicorn 800 cases): mode 1 proportional (life = floor(newmax·life/max + 0.5)), mode 2/3 absolute, clamp rules of the max/life setters. ⚠ **Known divergence**: 1 of 800 cases differs only in the sign of a zero (mode 2, min path) — the test tolerates ≤ 4 such cases; this is NOT bit-exact and must be fixed (signed zero can matter downstream). Hero bonuses applied: HP via the sink, armor/move added (LIKELY), attack bonus added to the dice bonus (UNSURE which field), regen/attack speed stored only; mana sink `0x6F278F50` not run. Factor at global+0x29C unknown (1.0 used).
+
 - **2026-10-11 (34)**: replay load (replay-load.md): header magic/reader `0x6F534750` (size 0x40 v0 / 0x44 v1 enforced in w3g), block reader `0x6F535050` (8-byte block header with a 16-bit folded CRC), stat-string encoder `0x6F651860` (our decoder is its exact inverse), setup builder `0x6F443860`. `Engine::boot_from_replay` (seed + slots from the replay; races/colors/teams LIKELY). Open: the game-info record reader (replay → start blob link still LIKELY), settings flag meanings, game speed bits, handicap not stored in the sim.
 
 - **2026-10-11 (33)**: killer tracking: a unit killed by an attack fires its death events with the attacker as Killer (GetKillingUnit for 0x14/0x35); KillUnit/SetWidgetLife keep null. Kill-XP candidate routine `0x6F28B990` (Unicorn 2,000, 0 mismatches): listed unless V < D (ties and NaN listed); gate = illusion/removed flags + shared-XP bit + max-level rule; dead-but-not-removed heroes qualify (LIKELY). Normaliser cell term and 'AHer' list order still open → kill XP not wired into the death path. ~46.5%.

@@ -17,6 +17,7 @@ pub mod abilities;
 pub mod ai;
 pub mod combat;
 pub mod commands;
+pub mod construction;
 pub mod damage;
 pub mod economy;
 pub mod handles;

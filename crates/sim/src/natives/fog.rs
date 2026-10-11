@@ -163,7 +163,7 @@ impl Game {
         }
         let night = self.is_night();
         for (x, y, radius, mask) in self.unit_sight_sources(night) {
-            self.fog.grid.write_circle(FOG_VISIBLE, mask, x, y, radius);
+            self.fog.grid.write_unit_sight(mask, x, y, radius);
         }
     }
 
@@ -209,7 +209,8 @@ impl Game {
     /// and the global flag that skips the cell test are not read: both are taken as on and off (UNSURE).
     pub fn unit_fog_test(&self, unit: ObjKey, player: u32, mask: i32) -> bool {
         let u = self.unit(unit);
-        let cell = self.fog.grid.cell_of_point(u.x, u.y);
+        // The unit path maps the unit to a fog cell of 128 units (vision.md section 11.9), not through the grid scale.
+        let cell = self.fog.grid.unit_cell(u.x, u.y);
         let cell_seen = self.fog.grid.state(cell, player) & mask != 0;
         let revealed = (u.revealed | u.vision_extra) >> (player & 15) & 1 != 0;
         cell_seen || revealed

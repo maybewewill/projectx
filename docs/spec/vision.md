@@ -1,7 +1,7 @@
 # Vision: fog-of-war grid, writers, queries (Game.dll 1.26a)
 
-Status: pass 2 (2026-10-11). Written from disassembly and decompiled structure of the 1.26a `Game.dll`
-(SHA1 c5d8624b…). Tags: CONFIRMED = read from the code and/or checked in Unicorn; LIKELY = the reading is
+Status: pass 3 (2026-10-11, section 11.9 onwards). Written from disassembly and decompiled structure of the 1.26a
+`Game.dll` (SHA1 c5d8624b…). Tags: CONFIRMED = read from the code and/or checked in Unicorn; LIKELY = the reading is
 consistent with the code but not run; UNSURE = open. Addresses are image VAs.
 
 Verification (pass 1 and pass 2):
@@ -394,3 +394,171 @@ is in `+0x148 | +0x14C`. The fallback ignores the mask, so a revealed unit also 
 | Rust model: vision unit tests and integration tests | see the repository | pass |
 
 Reproduce: `GAME_DLL=<Game.dll> PYTHONPATH=<unicorn, pefile> python3 tools/emu/vision_grid_emu.py --cases 300 --radii 160 --wide`.
+
+## 11.9 Pass 3 (2026-10-11): unit cell, unit sight writer, centre function
+
+Harness: `tools/emu/vision_unit_emu.py` (centre and writer; runs on the JASS harness of `tools/emu/jasscomp`, which has
+the TIB, the Storm and CRT import models and the start-up initialisers), `tools/emu/vision_unit_diag.py` (one case,
+cell-by-cell map). Both are GAME_DLL-gated and write nothing from the original into the repository.
+
+### 11.9.1 The unit centre `0x6f474460` (CONFIRMED by Unicorn, 200 of 200)
+
+- Argument ECX = the unit's mover `unit+0x164` (the CUnit vtable slot `0xB8` is `lea eax,[ecx+0x164]; ret`,
+  `0x6f28b0e0`, CONFIRMED). The function reads the handle at mover `+8` (the unit's handle), resolves it with
+  `0x6f03fa30` (handle to object), and takes the unit's footprint rectangle at `unit+0x98`: `y0` at `+0x1c`, `x0` at
+  `+0x20`, `y1` at `+0x24`, `x1` at `+0x28` (pathing cells).
+- Fast path (both results `>= 0`): the output is `((x0 + x1) / 2, (y0 + y1) / 2)` in pathing cells, with the
+  truncating halves of the signed division (`cdq; sub; sar 1`). The output pointer is the stack argument (`ret 4`).
+- A negative half takes a slow path (`0x6f497460`, `0x6f38b0b0`, f2i) that was not run: UNSURE for off-map units.
+- The result is stored as two ints, so the centre is a pathing cell, not a fog cell.
+
+### 11.9.2 The unit fog cell (CONFIRMED structure, LIKELY for the footprint)
+
+- `0x6f409e00` (the unit writer) and the unit query path `0x6f285080` -> `0x6f3a38f0` both take the centre of 11.9.1
+  and shift it right by 2 (`sar 2`): a fog cell is 4 by 4 pathing cells = 128 world units, whatever the grid's own scale
+  (section 11.1, `scale = cells / range`). On a playable area that is not a multiple of 128 the unit cell and the point
+  cell (section 2.1) differ; both are what the original does (CONFIRMED structure).
+- The footprint rectangle of a unit is not decoded (who writes `unit+0x98` is open). The Rust model takes the unit's own
+  pathing cell as its footprint (LIKELY: a one-cell rectangle has the centre of that cell).
+
+### 11.9.3 The unit sight writer `0x6f409e00(unit, mask, arg3, arg4)` (partly decoded)
+
+Structure (CONFIRMED by disassembly):
+1. Gate: the low 12 bits of `mask` must be non-zero, otherwise the owner (`unit`'s vtable slot `0xEC`) is read and the
+   writer exits for owners `>= 12`. Bits 12 to 15 are written as well when the low bits are set (UNSURE meaning).
+2. The centre (11.9.1, then `>> 2`), the radius kind `k = u16 unit+0x10C` (`arg4 != 0` gives 4 instead), and the shape:
+   `k == 0` writes nothing; `k == 1` the 2x2 block, `k == 2` the block with the four arms (the circle of 0x6f3ba480 for
+   radii 1 and 2, CONFIRMED by reading); `k >= 3` the shape object of `0x6f409d00(grid+0x78, k, pitch)`, a cache indexed
+   by `k` whose builder `0x6f409120` makes a `(2k+1)^2` word block plus records.
+3. The writes: `msk &= ~mask` and `vis |= mask` (mode 4, visible), with a per-record flag from an elevation compare
+   (`grid+0x38` words against the unit level, `0x6f0128c0` or `0x6f00f600` for cliff data). So units can be blocked by
+   cliffs (UNSURE for the magnitude, CONFIRMED that the path exists: the helpers read `TerrainArt\CliffTypes`).
+4. For `k >= 3` the rows come from a span list at `grid+0x20` with count `grid+0x1C` (the layout of the span table of
+   `0x6f408fd0`: `2k+1` pairs of i32). With count 0 the writer covers two cells or none; with a large count and zero pairs
+   it covers nothing (CONFIRMED by Unicorn). Who builds this list per refresh is not decoded (UNSURE).
+
+Unicorn results (`tools/emu/vision_unit_emu.py`, `vision_unit_diag.py`):
+
+| Run | Cases | Result |
+|---|---|---|
+| centre `0x6f474460` (random rectangles) | 200 | 200/200 equal to `((x0+x1)/2, (y0+y1)/2)` |
+| writer, flat terrain, grid+0x1C = 0 | 183 | 146 differ from the circle of section 11.3 (the writer covers only the top part near edges) |
+| writer, grid+0x1C = 2k+1, grid+0x20 = span table of k | 92 | 72 differ from the circle |
+| writer, interior centre, span table, k = 6 | 1 | the centre is covered; rows below the centre are wider than the circle, and row `cy+k` is included (the original's row end is inclusive for the unit path, UNSURE) |
+
+So the circle of 0x6f3ba480 is **not** the unit sight shape for k >= 3. The Rust model keeps the circle as a stand-in.
+Zero masks with the low 12 bits clear changed 7 of 8 cases (the writer is not a no-op there).
+
+### 11.9.4 What the refresh writes, and does order matter (CONFIRMED by algebra and by the Rust tests)
+
+- The sight pass only writes visible mode: `vis |= m`, `msk &= ~m`. Two such writes commute (same bits, same mode), so the
+  order of the unit writers does not change the words. The modifiers (fogged or masked modes) are not commutative with
+  sight; the refresh applies modifiers first and units last, as before (LIKELY the original's order, section 11.5).
+- Rust test `sight_writes_only_set_visible_so_their_order_does_not_matter` (vision.rs).
+
+### 11.9.5 Unit visibility query (updated model)
+
+`IsUnitVisible` / `IsUnitFogged` / `IsUnitMasked` use the unit fog cell of 11.9.2 (`VisionGrid::unit_cell`), not the point
+mapping. On the default 128-unit grid the two agree; on other playable sizes they differ (tests in vision.rs).
+
+### 11.9.6 Time of day and night (partly decoded, UNSURE rule)
+
+- The time of day is float game state 2 (`GetFloatGameState(GAME_TIME_OF_DAY)` = `0x6f3bc310`): the slot is the 16-byte
+  record `game+8+16*2` = `game+0x28` (`0x6f427f40`, CONFIRMED). `SetFloatGameState` (`0x6f3bc2e0`) stores through
+  `0x6f477350`, which clamps the value against the slot's limits (`+0x78`, `+0x7C`, `+0x80`, `0x6f477180`, CONFIRMED
+  structure; the limits' values are not read).
+- `SuspendTimeOfDay(flag)` = `0x6f429920` / `0x6f427e70` toggles bit `0x6c` of the game object... (CONFIRMED structure:
+  `and [game+0x6c], ~flag`; when the bit set becomes zero the helper `0x6f429770` starts two agent timers and stores
+  them at `game+0x70` / `game+0x74`). Its timer message is `0x80262` (pushed at `0x6f4298a3`).
+- Message `0x80262` is case index 0 of the message switch of `0x6f42fc80` (`id - 0x80262` indexes a byte map at
+  `0x6f42fd18`, then a jump table at `0x6f42fcfc`); the handler is `0x6f42fc9f`, which stores **0.0** into the time-of-day
+  slot through `0x6f477350` (CONFIRMED by disassembly). So the message does not advance the clock by itself; the advance
+  is open (UNSURE: the rate per tick; the scale `GetTimeOfDayScale` (`0x6f3bc4b0`) reads the object at `game+0x5c`).
+- Night thresholds: none read yet. The Rust model keeps `night = t < 6 || t >= 18` and uses the night sight only when it
+  is above zero (UNSURE). The night sight is the unit type's `nsight` (`+0x190` of the type record, `sight` at `+0x18C`,
+  unit-types.md); its reader is not found (virtual getters `0x6f025d80`/`0x6f025d90` with no direct caller and no vtable
+  entry in the data sections found by search).
+
+### 11.9.7 Open items after pass 3
+
+1. The unit writer's row shape for k >= 3 (11.9.3): the span list at `grid+0x20` and its row loop; who builds it.
+2. The elevation / cliff compare and its level (11.9.3 step 3).
+3. The footprint rectangle `unit+0x98` (who writes it; 11.9.2).
+4. The unit radius kind `unit+0x10C`: the writer is not found (the copy at `0x6f02f990` and the constructors that zero
+   it are the only sites seen; the three values `+0x104..+0x10C` come from `0x6f4c2d30` on the creation object,
+   `0x6f053a58`-`0x6f053ae0`, UNSURE). Until then the Rust radius is `sight / 128` (UNSURE).
+5. Time of day advance and the night threshold (11.9.6).
+
+## 12. Pass 4 (2026-10-11): time of day structure, unit writer shape (partial, docs only)
+
+Status: no code change in this pass. The clock rate and the k >= 3 row rule are NOT decoded; the Rust model is unchanged.
+Sources: Ghidra decompile export (scratchpad, not committed), capstone listings of `0x6f409e00` and `0x6f429770`.
+
+### 12.1 Time of day is a float property with a modifier and a listener (LIKELY structure)
+
+- Game state 2 (time of day) is an agile float property (`FloatProp.cpp`): `0x6f4774e0` creates a `FloatModifier`
+  (vtable `0x6f878528`, `FloatModifier` in `engine/source/agile/FloatModifier.h`), `0x6f477550` creates a `FloatListener`
+  (`FloatListener.h`). Both are attached to the property through the agent handle.
+- `0x6f429770` (the day/night timer setup, CONFIRMED by disassembly of its first 0x130 bytes):
+  - reads Misc-style keys `DayLength` (string `0x6f94f46c`) and `DayHours` (string `0x6f93ade8`) through the reader
+    `0x6f009ee0` (its missing-value default is 0.0, see attack-damage.md 10);
+  - reads the scale handle at `game+0x5c` (the object `GetTimeOfDayScale` reads);
+  - combines them with two softfloat calls (`0x6f6eee20` mul, `0x6f6efe10` div) into a rate;
+  - creates the modifier at slot 2 and stores it at `game+0x70` (first branch, gated by `game+0x70 == 0`);
+  - creates a listener with message `0x80262` and stores it at `game+0x74` (second branch, gated by `game+0x74 == 0`).
+- The listener handler `0x6f42fc9f` stores 0.0 into slot 2 (section 11.9.6). So the value wraps to 0 when the
+  listener fires.
+- Suspension: `0x6f429920` clears bits of `game+0x6c` and calls `0x6f429770` when the word becomes zero (CONFIRMED
+  structure); `0x6f427e70` sets bits and drops the modifier at `game+0x70` (CONFIRMED structure).
+- UNSURE: the exact operand order of the rate (`MUL`/`DIV`: the stack copies of the scale into `[esp+0x18..0x1c]` are an
+  8-byte move whose source is not resolved), the listener threshold (the decompile shows `local_18` uninitialised;
+  `DayHours` is LIKELY), and how a FloatModifier's trajectory is evaluated per tick (the `CModifier` vtable slots
+  `0x6f4797f0`/`0x6f479760` call the agile engine `0x6f4a6b70`/`0x6f4a6bc0`/`0x6f4a9390`, not read). So the rate per
+  game second is NOT known.
+
+### 12.2 Day and night thresholds (CONFIRMED string addresses, LIKELY rule)
+
+- `0x6f42c210` (the day/night switch; its callers are in the code around `0x6f3a80e0` and `0x6f3a7090`, not walked
+  further): reads `Dawn` (string `0x6f940bf0`) and `Dusk` (`0x6f940bf8`) through `0x6f009ee0`, and
+  - tests `dawn <= t` (the decompile's `(a < b) != (a == b)` form with `a = dawn`, `b = t`);
+  - tests `t < dusk`;
+  - calls `0x6f473140(day)` with day = 1 when both hold, else 0; then `0x6f429460` and `0x6f428520(0)`.
+  So the rule is **day iff Dawn <= t < Dusk**, with the values read from Misc-style keys, not constants. The Rust
+  model's `night = t < 6 || t >= 18` is a stand-in that agrees with the usual values only; with a Misc layer that sets
+  other values, the original differs. The value of the default (0.0 when the key is missing) would make the map always
+  night, which is UNSURE (the real MiscData.txt values were not read).
+- Action: the sim should read `Dawn` and `Dusk` from the Misc layers (gamedata::misc) instead of 6/18. Not done here.
+
+### 12.3 The unit sight writer `0x6f409e00`: structure from the listing (CONFIRMED by disassembly, not yet by Unicorn)
+
+- Gate and owner: `test ebp,0xfff` on the mask (arg 2). When the low 12 bits are clear, the owner is read through the
+  unit's vtable slot `0xEC` and the writer exits for owners `>= 12` (`0x6f40a640`). The flag at `unit+0x5C & 0x20000000`
+  with `unit+0x200 > 0` selects an extra bit (stack word `[esp+0x18]`).
+- Centre: `0x6f474460` is called twice on the mover (`vtable+0xB8`). The first result gives `(x,y)` which are shifted
+  right by 2 (`sar`), as in 11.9.2.
+- Radius kind: `k = u16 unit+0x10C`, or 4 when arg 4 is non-zero (`0x6f409ec5`..`0x6f409ed9`). Dispatch at `0x6f409ee5`
+  (k == 0 exits at `0x6f40a63f`), `0x6f409eee` (k == 1 to `0x6f40a625`), `0x6f409ef7` (k == 2 to `0x6f40a544`), else
+  the shape builder `0x6f409d00(grid+0x78, k, grid+0x64)`.
+- Bounds: two flags, `[esp+0x24]` (x0 < 0 or x1 >= width-1) and `[esp+0x28]` (y0 < 0 or y1 >= height-1), with width at
+  `grid+0x60` and height at `grid+0x6C` (`grid+0x6C` is compared as `count - 1`). When both are clear and `[esp+0x1c]` is
+  non-zero, the shape's own row records are written through the span writer `0x6f406850` once per row
+  (`0x6f40a05e..0x6f40a07d`). Otherwise the rows come from `grid+0x1C` (count) and `grid+0x20` (8-byte pairs `(x0, x1)`
+  per row) at `0x6f40a0b0..0x6f40a151`, with row index `top + i - 1` (`lea eax,[ebx+ecx-1]` at `0x6f40a0c4`; `top` is
+  `cy - k` as set at `0x6f409fe4`/`0x6f40a046`; the `-1` is UNSURE, it is the first thing a Unicorn run must settle).
+- Cell address: `grid+0x38` (elevation layer) is indexed as `2 * ((row << grid+0x68) + x)` (`0x6f409f5b..0x6f409f6e`,
+  `0x6f40a0cb..0x6f40a0d8`): cells are 16-bit words, row pitch = `1 << grid+0x68`.
+- Writes: per cell in a span, the visible word is `vis |= mask` and the masked word `msk &= ~mask` (mode 4), and the
+  per-record flag is set when the elevation word compares greater than the level (`setg`, `0x6f40a108..0x6f40a122`).
+  The 20-byte records at `shape+0x30` (`lea eax,[ebx+ebx*4]`, stride 0x14) hold the per-row bits. The elevation rule and
+  the level `[esp+0x18]` are the 11.9.3 step 3 items.
+- Still open: the producer of `grid+0x1C`/`grid+0x20` (not written in the writer), the meaning of the `-1` row offset, and
+  the `0x6f409d00` shape record layout beyond `+0x30` (the size of the record array at `+0x24`).
+
+### 12.4 Next steps (for the next pass)
+
+1. Unicorn: run `0x6f409e00` with `k = 3..6` on flat terrain with `grid+0x1C = 0` and `2k+1` spans; compare the covered
+   cells with the circle of `0x6f3ba480` to fix the row offset and the inclusive end (use `tools/emu/vision_unit_diag.py`).
+2. Find the producer of the `grid+0x20` pairs: search for writes to `[reg+0x20]`/`[reg+0x1C]` in the grid constructor
+   `0x6f408d10` and its callers (`find_callers.py` on `0x6f408d10`).
+3. Time of day: stub `0x6f009ee0` in the harness to return fixed `DayLength`/`DayHours`/`Dawn`/`Dusk` values, run
+   `0x6f429770` and read the modifier object's fields (rate) for two `DayLength` values, to fix the rate formula.

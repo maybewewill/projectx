@@ -18,7 +18,9 @@
 //!
 //! Which unit events call the updates is in [`crate::natives::unit`]: creation adds a completed unit, removal
 //! takes it out, and an owner change moves it. Nothing creates an in-progress unit yet (no construction
-//! model), so the in-progress methods are exercised only by the tests.
+//! model), so the in-progress methods are exercised only by the tests. The registration transition of a
+//! building under construction (`0x6F29F850`) is in [`crate::construction`], which maps it onto these methods
+//! with [`crate::construction::apply_counts`].
 
 use std::collections::BTreeMap;
 

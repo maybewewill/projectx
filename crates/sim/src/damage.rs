@@ -491,14 +491,18 @@ impl SpecDamage {
     /// The raw amount of one execute (`CAbilityAttack::GetDamageAmount`, CONFIRMED by disassembly): the roll on
     /// combat stream 2 ([`roll_total`]), then clamped at zero before the armor step. The bonus is an integer added
     /// to the dice total before the I2R conversion. `None` without an RNG table or above [`MAX_DICE`] dice.
-    fn raw(&self, game: &mut Game, weapon: &AttackType) -> Option<F32> {
+    fn raw(&self, game: &mut Game, attacker: ObjKey, weapon: &AttackType) -> Option<F32> {
+        // The hero attack bonus (`docs/spec/heroes.md`, section 10) is added to the dice bonus as an integer. The
+        // conversion of the stored real (truncation) is UNSURE.
+        let hero = conv::r2i(game.unit(attacker).hero_attack);
+        let bonus = weapon.dice_bonus.saturating_add(hero);
         let (table, streams) = game.rng_parts()?;
         let total = roll_total(
             streams.stream_mut(COMBAT_STREAM),
             table,
             i32::try_from(weapon.dice).ok()?,
             weapon.sides,
-            weapon.dice_bonus,
+            bonus,
         )?;
         Some(conv::i2r(total.max(0)))
     }
@@ -508,11 +512,11 @@ impl DamageModel for SpecDamage {
     fn roll(
         &mut self,
         game: &mut Game,
-        _attacker: ObjKey,
+        attacker: ObjKey,
         target: ObjKey,
         weapon: &AttackType,
     ) -> F32 {
-        let Some(raw) = self.raw(game, weapon) else {
+        let Some(raw) = self.raw(game, attacker, weapon) else {
             // No RNG table, or more dice than the known sampler handles: the placeholder value (documented).
             return weapon.damage;
         };
