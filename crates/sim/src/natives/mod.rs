@@ -38,6 +38,7 @@ pub mod pending;
 mod player;
 pub mod pool;
 pub mod presentation;
+pub mod shop;
 mod region;
 mod rng;
 mod timer;
@@ -108,4 +109,5 @@ pub fn register_world(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     economy::register(reg, game);
     object::register(reg, game);
     animation::register(reg, game);
+    shop::register(reg, game);
 }

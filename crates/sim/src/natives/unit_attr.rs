@@ -413,9 +413,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SetUnitTypeSlots",
-        support: Support::NotImplemented(
-            "N:supply slot accounting is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetUnitUseFood",

@@ -10,8 +10,6 @@
 
 use super::unit_attr::{NativeEntry, Support};
 
-/// Reason for the shop stock natives.
-const STOCK: &str = "shop stock lists (the per-shop arrays of the unit object and the default lists that FUN_6f46d1b0 fills) and the slot counts are not modelled";
 /// Reason for the local selection natives.
 const SELECTION: &str = "selection is local interface state (the local player object's selection set, guarded by its interface flag at +0x34); the simulation has no interface object";
 /// Reason for the neutral order natives.
@@ -33,17 +31,6 @@ const EVENT: &str = "the event that carries this payload has no firing site in t
 
 /// The support table of the natives this crate does not register yet.
 pub const NATIVES: &[NativeEntry] = &[
-    NativeEntry { name: "AddItemToAllStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "AddItemToStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "AddUnitToAllStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "AddUnitToStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "RemoveItemFromAllStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "RemoveItemFromStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "RemoveUnitFromAllStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "RemoveUnitFromStock", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "SetItemTypeSlots", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "SetAllItemTypeSlots", support: Support::NotImplemented(STOCK) },
-    NativeEntry { name: "SetAllUnitTypeSlots", support: Support::NotImplemented(STOCK) },
     NativeEntry { name: "ClearSelection", support: Support::NotImplemented(SELECTION) },
     NativeEntry { name: "SelectUnit", support: Support::NotImplemented(SELECTION) },
     NativeEntry { name: "SyncSelections", support: Support::NotImplemented(SELECTION) },
