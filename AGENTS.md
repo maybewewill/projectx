@@ -284,7 +284,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~46%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~46.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -354,6 +354,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (33)**: killer tracking: a unit killed by an attack fires its death events with the attacker as Killer (GetKillingUnit for 0x14/0x35); KillUnit/SetWidgetLife keep null. Kill-XP candidate routine `0x6F28B990` (Unicorn 2,000, 0 mismatches): listed unless V < D (ties and NaN listed); gate = illusion/removed flags + shared-XP bit + max-level rule; dead-but-not-removed heroes qualify (LIKELY). Normaliser cell term and 'AHer' list order still open → kill XP not wired into the death path. ~46.5%.
 
 - **2026-10-11 (32)**: race enum table `0x6FA70FE8` (human 1 … other 7, creeps 8, commoner 9, critters 10, naga 11; NULL → 7, no match → 0), creep walk `0x6F29FD90` and neutral-building walk `0x6F294740` filters (Unicorn 3×2,000, 0 mismatches); candidate list ORDER still unresolved → ChooseRandomCreep/NPBuilding stay pending. GetWorldBounds: rect = 16-byte copy of terrain getter `0x6F73F500`, handle last; getter values not decoded. Vision pass 2 (grid = playable area, scale = cells/range; midpoint-circle span table; refresh on its own 0.4 s timer 0x80269) verified by the lead (Unicorn 200/118/200/11,640, 0 mismatches).
 
