@@ -219,3 +219,73 @@ The walks needed fs:[0] accesses rewritten in the emulated copy (no FS base in t
 
 - `pending.rs`: the reasons of `ChooseRandomCreep`, `ChooseRandomNPBuilding` and `GetWorldBounds` are updated to the
   findings above. No native changed status in this pass.
+
+## 11. Pass 4 (2026-10-11): candidate order of the unit-type list (natives stay pending)
+
+Goal: the iteration order of the global unit-type list that the creep walk (`0x6F29FD90`) and the neutral walk
+(`0x6F294740`) read, because the shared draw picks by index. Probe: `tools/emu/unit_order_probe.py` (Unicorn, the
+real code of the table, insert, lookup, hash and walk; the allocator, the node allocator and the free wrapper are
+stand-ins, see the probe header). Confidence: CONFIRMED (disassembly or emulation), LIKELY, UNSURE.
+
+### 11.1 The container (CONFIRMED)
+
+- Table object `T = 0x6FAB445C`. Vftable `0x6F931BB8`, written by the static initializer `0x6F85A8C0` after the
+  constructor `0x6F2A0880` (the constructor writes `0x6F931BA4`, overwritten by the initializer).
+- Words (after the constructor, emulated): `T+4 = 0xC` (the walk's base value, see 11.2), `T+8` = global cell next
+  (sentinel `T+8`, self-linked when empty), `T+0xC` = global cell prev (`~(T+8)` when empty, i.e. a negative
+  end marker; the walk head is this word when it is positive). Bucket array pointer `T+0x1C`, mask `T+0x24`
+  (`-1` until the first bucket init).
+- Bucket array (12-byte cells, `{tag 4, next, ~prev}`): index = `key & mask`; the insert calls slot 1 of the vftable
+  (`0x6F2A30C0`, layered lookup through `T+0x1CC`/`T+0x1D4`; with no layers it returns an anchor of 0 in our runs)
+  and then the node allocator (`0x6F2A3010`, a pool of the record class; stubbed in the probe).
+- Insert `0x6F2A6190` (thiscall, 3 stack arguments: key, 0, 0): `T+0x24` checked, bucket chosen, anchor = bucket
+  cell or the global sentinel, the new node is linked in front of the anchor's first element, returns the node
+  (the builder then writes the hash at `+0x00`, the raw code at `+0x14`, race at `+0x1C0` and the other fields).
+- Growth: `0x6F2A4030` (score test, `T+0x10`) decides; `0x6F2A0C50` rehashes into `mask+1` buckets. Its growable
+  array reserve is `0x6F29F230` with ECX = `T+0x14` (array count `+0x14`, capacity `+0x18`, data `+0x1C` = bucket
+  array, granularity `+0x20`).
+
+### 11.2 The walk reads the global cell (CONFIRMED offsets)
+
+- `0x6F29FD90` (and `0x6F294740`): head = `[T+0xC]` if > 0 else end; next = `[[T+4] + node + 4]`, loop while > 0.
+  With `[T+4] = 0xC` the link is at `node+0x10`, and the global cell of a node is `node+0xC` (next) and `node+0x10`
+  (prev): the walk goes from the head (the first node inserted) along the prev links.
+- The rehash (`0x6F2A0C50`, decompile) moves bucket cells at `element+4` / `element+8`. These do not overlap the
+  global cell (`+0xC`, `+0x10`), so LIKELY the rehash does not change the walk order (not checked by emulation).
+
+### 11.3 Emulated order (CONFIRMED for this harness, no growth)
+
+| Case | Result |
+|---|---|
+| 5 records, fixed order, real insert and real creep walk | visits = insertion order |
+| 19 records, random order (seed 2), 4 buckets (collisions) | 19/19 visits = insertion order |
+| 19 records, random order (seed 7), 4 buckets (collisions) | 19/19 visits = insertion order |
+
+The walk visits every record exactly once; the bucket of a record does not change the visit order.
+The walk's own filter (race 8, level, flags) was satisfied by every record in these cases; the filters are checked
+in `tools/emu/random_pick_emu.py` (3 x 2,000 cases, 0 mismatches, previous pass).
+
+### 11.4 Not resolved
+
+- GROWTH: the 20th insert (the first growth) faults in the harness: `0x6F2A0C50` -> `0x6F29F230` (reserve) ->
+  `0x6F293DD0` returns to a bad address. The same fault happens for the real bucket initializer `0x6F2A0BF0`
+  (called with `T`), whatever pop count the free stand-in uses (0, 4, 8, 12, 16 all tried). So the probe builds
+  the 4 buckets by hand (the state `0x6F2A0BF0` produces) and cannot run growth. Next: find the convention of the
+  free import used there (its call site pushes an extra argument) or run the reserve with the real allocator.
+- Where the records come from: `0x6F2A7C30` walks the rows of UnitUI with a counter from 0 to the row count and calls
+  the builder `0x6F2A6750` for each row (CONFIRMED, disassembly). The builder inserts a record only when the raw code
+  is absent and the row is valid (missing UnitUI row = not inserted). So the list order = the valid UnitUI rows in
+  row-index order, IF the row index is the order Storm's SLK reader returns (Storm.dll is not in the container:
+  UNSURE, could be file order or another order).
+- Custom map units (`war3map.w3u`): not located in the builder loop; whether they are inserted later (appended to
+  the same list) is UNSURE.
+- Item types (ChooseRandomItem, items.md): not analysed in this pass.
+
+### 11.5 Decision
+
+The walk order equals the insertion order (CONFIRMED in the emulated structure). The insertion order equals the
+UnitUI row order from the builder loop (CONFIRMED loop, UNSURE row order from Storm, custom units UNSURE). The
+growth path (which does not change the walk, LIKELY) and the source of the row order are not confirmed end to end.
+The draw of `ChooseRandomCreep` / `ChooseRandomNPBuilding` depends on the exact list, so the natives stay
+NotImplemented. No candidate order is implemented in `crates/sim`. ChooseRandomItem keeps its current registry order
+(UNSURE, unchanged).
