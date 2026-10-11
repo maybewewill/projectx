@@ -267,11 +267,11 @@ fn map_info_keeps_trailing_bytes_raw() {
 #[test]
 fn map_info_rejects_wrong_version() {
     let mut data = w3i_bytes();
-    data[0] = 18; // ROC format
+    data[0] = 33; // a newer format
     assert!(matches!(
         MapInfo::parse(&data),
         Err(Error::UnsupportedVersion {
-            found: 18,
+            found: 33,
             expected: 25,
             ..
         })
@@ -529,4 +529,62 @@ fn terrain_huge_dimensions_are_an_error() {
         Terrain::parse(&data),
         Err(Error::CountTooLarge { .. })
     ));
+}
+
+#[test]
+fn reign_of_chaos_map_info_version_18() {
+    let mut b = B::default()
+        .u32(18)
+        .u32(29) // saves
+        .u32(6030)
+        .s("TRIGSTR_003")
+        .s("TRIGSTR_006")
+        .s("TRIGSTR_005")
+        .s("TRIGSTR_004");
+    for v in [-9728.0f32, -9728.0, 9728.0, 9728.0, -9728.0, 9728.0, 9728.0, -9728.0] {
+        b = b.f32(v);
+    }
+    b = b
+        .i32(18)
+        .i32(14)
+        .i32(8)
+        .i32(16)
+        .u32(160)
+        .u32(72)
+        .u32(0x9C14)
+        .u8(b'L')
+        .u32(0xFFFF_FFFF) // loading screen number
+        .s("")
+        .s("")
+        .s("")
+        .u32(0xFFFF_FFFF) // prologue number
+        .s("")
+        .s("")
+        .s("");
+    b = b.u32(2);
+    for (n, race) in [(0u32, 1u32), (1, 2)] {
+        b = b
+            .u32(n)
+            .u32(1)
+            .u32(race)
+            .u32(0)
+            .s("TRIGSTR_000")
+            .f32(-8384.0)
+            .f32(1792.0)
+            .u32(0)
+            .u32(0);
+    }
+    b = b.u32(1).u32(0).u32(3).s("TRIGSTR_002");
+    let info = MapInfo::parse(&b.done()).unwrap();
+    assert_eq!(info.file_version, 18);
+    assert_eq!(info.name, "TRIGSTR_003");
+    assert_eq!((info.playable_width, info.playable_height), (160, 72));
+    assert_eq!(info.main_tileset, b'L');
+    assert_eq!(info.players.len(), 2);
+    assert_eq!(info.players[1].race, 2);
+    assert_eq!(info.players[0].start_x, -8384.0);
+    assert_eq!(info.forces.len(), 1);
+    assert_eq!(info.forces[0].player_masks, 3);
+    assert_eq!(info.forces[0].name, "TRIGSTR_002");
+    assert!(info.rest.is_empty());
 }

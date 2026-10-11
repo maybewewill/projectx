@@ -228,6 +228,15 @@ fn lex_number(cur: &mut Cursor, start: Span) -> Result<Token, ParseError> {
             }
         }
     }
+    // Real game files write C float literals such as `0.090f` (Glue\CampaignMenu.fdf); one trailing `f` that ends the
+    // token is accepted and ignored.
+    if matches!(cur.peek(), Some('f' | 'F'))
+        && !cur
+            .peek_at(1)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '%' || c == '_')
+    {
+        cur.bump();
+    }
     if cur
         .peek()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '%' || c == '_')

@@ -11,6 +11,7 @@ path = "src/bin/w3boot.rs"
 
 [dependencies]
 flate2 = "1.1.10"
+fdf = { path = "../fdf" }
 gamedata = { path = "../gamedata" }
 jass = { path = "../jass" }
 mpq = { path = "../mpq" }

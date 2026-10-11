@@ -1306,6 +1306,9 @@ pub struct Game {
     /// The gold mine of each resource node (a unit with the gold mine flag). A unit has an entry only when it is a
     /// resource node (see `natives/economy.rs`).
     pub(crate) mines: BTreeMap<ObjKey, crate::economy::Mine>,
+    /// The gold a unit gets at creation for each resource ability it carries (ability raw code -> amount), filled by
+    /// the host from the ability data (`Agld`, level 1 `DataA`). See [`Game::set_ability_resource_amount`].
+    pub(crate) ability_resource: BTreeMap<u32, i32>,
     /// Gold and lumber of each player slot, the x10 stored amounts and the upkeep rates (see `economy.rs`). Index =
     /// slot. Gold and lumber are read and written only here (`SetPlayerState`, `GetPlayerState` and the changer).
     pub(crate) economy: Vec<crate::economy::PlayerEconomy>,
@@ -1384,6 +1387,7 @@ impl Game {
             firings: Vec::new(),
             waygates: BTreeMap::new(),
             mines: BTreeMap::new(),
+            ability_resource: BTreeMap::new(),
             economy: (0..PLAYER_SLOTS).map(crate::economy::PlayerEconomy::new).collect(),
             economy_constants: crate::economy::EconomyConstants::default(),
             combat: crate::combat::CombatSystem::default(),

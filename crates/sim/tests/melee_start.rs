@@ -366,3 +366,29 @@ endfunction",
     assert!(boolean(&host, "b4"));
     assert!(!boolean(&host, "b5"));
 }
+
+#[test]
+fn gold_mine_units_start_with_the_amount_of_the_resource_ability() {
+    const AGLD: u32 = 0x4167_6C64;
+    let mut host = host_for(
+        "function main takes nothing returns nothing
+    set u1 = CreateBlightedGoldmine(Player(0), I2R(0), I2R(0), I2R(0))
+    set i1 = GetResourceAmount(u1)
+    set u2 = CreateUnit(Player(15), 'ngol', I2R(256), I2R(0), I2R(0))
+    set i2 = GetResourceAmount(u2)
+    set u3 = CreateUnit(Player(0), 'hfoo', I2R(0), I2R(0), I2R(0))
+    set i3 = GetResourceAmount(u3)
+endfunction",
+    );
+    {
+        let mut g = host.game_mut();
+        let mine = |name: &str| UnitType { abilities: vec![AGLD], ..ut(name) };
+        g.unit_types_mut().insert(NGOL, mine("Gold Mine"));
+        g.unit_types_mut().insert(UGOL, mine("Haunted Gold Mine"));
+        g.set_ability_resource_amount(AGLD, 12500);
+    }
+    run(&mut host);
+    assert_eq!(int(&host, "i1"), 12500, "the haunted mine takes the hidden mine's amount");
+    assert_eq!(int(&host, "i2"), 12500, "a placed gold mine starts with the ability amount");
+    assert_eq!(int(&host, "i3"), 0, "a unit without the ability is not a resource node");
+}
