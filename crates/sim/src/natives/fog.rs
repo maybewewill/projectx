@@ -2,19 +2,18 @@
 //! `FogModifierStart` / `FogModifierStop`, `SetFogStateRect` / `SetFogStateRadius` / `SetFogStateRadiusLoc`, and the
 //! visibility queries `IsVisibleToPlayer`, `IsFoggedToPlayer`, `IsMaskedToPlayer` and their location forms.
 //!
-//! Model. The original keeps a fog grid per player (a bit per player slot in the grid cells, read through the
-//! helpers `0x6f00e7a0` and `0x6f26d0c0`). A point query returns one of three states: visible (4), fogged (2) or
-//! masked (1). The grid itself and its sight counts are not modelled: vision comes from fog modifiers and from
-//! the explicit states the natives set. The model keeps the state per player and cell as follows.
+//! Model. The fog grid is [`crate::vision::VisionGrid`] (see `docs/spec/vision.md`): the playable area cut into
+//! `trunc(range / 128)` cells per axis, with two words per cell (visible and explored) and one bit per player slot. A
+//! point query returns one of three states: visible (4), fogged (2) or masked (1), through the state table of the
+//! original. The writers are the cell, span and rectangle writers, and the sight circle is decoded (vision.md section
+//! 11.3). A fog modifier stores the flat grid indices its shape covers and writes them with its mode.
 //!
-//! * A cell is 128 world units wide (UNSURE: the original's fog cell size was not read; it is a single constant,
-//!   [`FOG_CELL`]). Cell `(cx, cy)` covers `[cx * 128, cx * 128 + 128)` on each axis.
-//! * Each player has, per cell, the number of active modifiers of each state (visible, fogged, masked), an
-//!   explicit state (what `SetFogState*` wrote, if anything), and an "explored" bit (a visible modifier covered the
-//!   cell at some time).
-//! * The state of a point is the first that applies, in this order: an active visible modifier gives visible; an
-//!   active masked modifier gives masked; an active fogged modifier gives fogged; the explicit state; the explored
-//!   bit gives fogged; otherwise masked. The order is UNSURE: it is the model's reading of the three states.
+//! The vision refresh ([`Game::vision_refresh`], the 0.4 s timer of message 0x80269, vision.md section 11.4) clears the
+//! visible layer, applies the active modifiers in start order, then draws a sight circle for each live unit (the unit
+//! pass is partly decoded, UNSURE: vision.md section 11.5). Explicit states (`SetFogState*`) are immediate writes.
+//!
+//! The order of the original's writers is UNSURE in the places that the refresh does not show; within one shape all
+//! cells get the same mode, so the order of a shape's cells does not matter.
 //!
 //! Handles (CONFIRMED). The three creators (`0x6f3d0f90`, `0x6f3d10f0`, `0x6f3d0e70`) resolve the player first and
 //! return null when the player is not live. A location or rect argument that does not resolve also returns null,
@@ -78,8 +77,8 @@ pub struct FogModifierObj {
     pub state: i32,
     /// The player slots whose grids it writes, as a bit mask (the owner, plus shared-vision players when asked).
     pub players: u32,
-    /// The cells it covers.
-    pub cells: BTreeSet<(i32, i32)>,
+    /// The flat grid indices it covers (see [`crate::vision::VisionGrid::circle_shape`]).
+    pub cells: BTreeSet<usize>,
     /// Set by `FogModifierStart`, cleared by `FogModifierStop`. A modifier starts inactive.
     pub active: bool,
     /// The `afterUnits` argument (stored only, UNSURE).
@@ -150,16 +149,70 @@ impl Game {
         self.fog.grid.state(cell, player)
     }
 
-    /// Rebuilds the visible layer: clears it, then re-applies every active modifier in start order. The
-    /// explored layer is kept, as in the original's refresh (UNSURE: the original clears the visible layer only on
-    /// some refreshes, `DAT_6fab6a34 & 3`, and that counter's writer is not found yet).
-    fn fog_refresh(&mut self) {
+    /// The vision refresh (`0x6f40a8f0`, CONFIRMED structure): clears the visible layer, applies every active
+    /// modifier in start order, then the sight circles of the live units (LIKELY: the unit pass runs last in the
+    /// original). The explored layer is kept. The visible layer is cleared on every refresh, because the counter that
+    /// gates the clear (`DAT_6fab6a34 & 3`) is zero and has no writer (CONFIRMED). Runs from the 0.4 s timer of
+    /// message 0x80269 (`lockstep::VISION_PERIOD_BITS`).
+    pub fn vision_refresh(&mut self) {
         self.fog.grid.clear_visible();
         let active = self.fog.active.clone();
         for k in active {
             let m = self.fog_modifier(k).clone();
-            self.fog.grid.write_cells(m.state, (m.players & 0xFFFF) as u16, &m.cells);
+            self.fog.grid.write_indices(m.state, (m.players & 0xFFFF) as u16, &m.cells);
         }
+        let night = self.is_night();
+        for (x, y, radius, mask) in self.unit_sight_sources(night) {
+            self.fog.grid.write_circle(FOG_VISIBLE, mask, x, y, radius);
+        }
+    }
+
+    /// Whether the time of day counts as night for the night-sight values (LIKELY the usual 18:00 to 06:00 rule, UNSURE:
+    /// the original's rule is not read; the time is float game state 2, `GetFloatGameState(GAME_TIME_OF_DAY)`).
+    pub fn is_night(&self) -> bool {
+        let t = self.game_state.float_state.to_f32();
+        !(6.0..18.0).contains(&t)
+    }
+
+    /// The sight sources of the unit pass: the position, the sight radius and the player mask of every live unit with
+    /// a positive radius, in creation order. The mask is the owner's vision mask (own bit plus the shared-vision
+    /// players) and the unit's extra vision bits (`+0x14C`, CONFIRMED value). A unit is skipped when removed, dead or
+    /// hidden (CONFIRMED for the removed flag; dead and hidden LIKELY).
+    fn unit_sight_sources(&self, night: bool) -> Vec<(F32, F32, F32, u16)> {
+        let mut out = Vec::new();
+        for (_, u) in self.unit_objects() {
+            if u.removed || u.dead || u.hidden {
+                continue;
+            }
+            // The night sight is used at night when it is set; an unset (zero) night sight falls back to the day sight
+            // (UNSURE: the original's choice between the two values is not read).
+            let radius = if night && arith::lt(F32::ZERO, u.night_sight) { u.night_sight } else { u.sight };
+            if !arith::lt(F32::ZERO, radius) {
+                continue;
+            }
+            let mask = self.owner_vision_mask(u.owner) | u.vision_extra;
+            out.push((u.x, u.y, radius, mask));
+        }
+        out
+    }
+
+    /// The vision mask of player slot `owner` (`DAT_6fab6a14[owner]`): its own bit plus the players that share vision
+    /// with it (the shared-vision row of alliance type [`SHARED_VISION_ALLIANCE`], UNSURE; the helpers that build the
+    /// original's mask are not read).
+    pub fn owner_vision_mask(&self, owner: u32) -> u16 {
+        self.fog_player_mask(owner, true) as u16
+    }
+
+    /// `IsUnitVisible` / `IsUnitFogged` / `IsUnitMasked` (CONFIRMED structure, `0x6f285080`): the unit counts as seen
+    /// when its cell has a state in `mask` for `player` (state 4, 2 or 1), or when the player is in the unit's
+    /// revealed set (`+0x148 | +0x14C`, CONFIRMED). The gate of the original (the fog manager's enable word, `+0x3e0`)
+    /// and the global flag that skips the cell test are not read: both are taken as on and off (UNSURE).
+    pub fn unit_fog_test(&self, unit: ObjKey, player: u32, mask: i32) -> bool {
+        let u = self.unit(unit);
+        let cell = self.fog.grid.cell_of_point(u.x, u.y);
+        let cell_seen = self.fog.grid.state(cell, player) & mask != 0;
+        let revealed = (u.revealed | u.vision_extra) >> (player & 15) & 1 != 0;
+        cell_seen || revealed
     }
 
     /// The fog modifier behind `key`. Panics if `key` is not a fog modifier.
@@ -190,13 +243,13 @@ impl Game {
     /// shape at its next refresh; the write is immediate here (UNSURE).
     fn fog_apply(&mut self, k: ObjKey) {
         let m = self.fog_modifier(k).clone();
-        self.fog.grid.write_cells(m.state, (m.players & 0xFFFF) as u16, &m.cells);
+        self.fog.grid.write_indices(m.state, (m.players & 0xFFFF) as u16, &m.cells);
     }
 
     /// Writes an explicit state (`SetFogState*`) for each player in `players`, with the modifier writer
     /// (CONFIRMED: `0x6f3c1a30` and its siblings reach the same writers as the modifiers).
-    fn fog_set_explicit(&mut self, players: u32, cells: &BTreeSet<(i32, i32)>, state: i32) {
-        self.fog.grid.write_cells(state, (players & 0xFFFF) as u16, cells);
+    fn fog_set_explicit(&mut self, players: u32, cells: &BTreeSet<usize>, state: i32) {
+        self.fog.grid.write_indices(state, (players & 0xFFFF) as u16, cells);
     }
 
     /// Creates a fog modifier (inactive) and returns its handle, or 0 when the player is not live.
@@ -205,7 +258,7 @@ impl Game {
         &mut self,
         owner: u32,
         state: i32,
-        cells: BTreeSet<(i32, i32)>,
+        cells: BTreeSet<usize>,
         use_shared: bool,
         after_units: bool,
     ) -> u32 {
@@ -398,7 +451,7 @@ impl Game {
         }
         self.fog.active.retain(|&x| x != k);
         self.fog_obj_mut(k).active = false;
-        self.fog_refresh();
+        self.vision_refresh();
     }
 
     /// The fog modifier behind `key`, mutable. Panics if `key` is not a fog modifier.

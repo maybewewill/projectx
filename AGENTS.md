@@ -1,7 +1,7 @@
 # projectx — WC3 1.26a TFT engine rewrite in Rust (agent handoff)
 
 > A living document. **Every agent updates it at the end of a session**: the "Status", "Findings" and "Log" sections.
-> Last updated: 2026-10-10
+> Last updated: 2026-10-11
 
 ## 1. Goal
 
@@ -223,6 +223,19 @@ tools/
 - Confirmed: `0x6FAAE464` = **-1.0** (the GetRandomReal assumption is confirmed), `0x6FAAE4F4` = 1.0, `0x6FAAE4A0` = 0.1, `0x6FAAE5E8` = π/180 (0x3C8EFA35), `0x6FAAE60C` = 180/π (0x42652EE1), `0x6FAAE600` = π, `0x6FAAE570` = 90.0, `0x6FAAE614` = 2e-7, `0x6FAB7748` = -128000.0 (0xC7FA0001), `0x6FAAE470` = 0.0, **`0x6FAAE564` = 32.0** → the rect clamp is `max - 32` (the earlier assumption C = 0 was **wrong**, fixed in location.rs, confirmed by the disassembly of `0x6F469490`).
 - **Rule for agents**: before assuming the value of a constant from .data, check it with this script. `tools/emu/emu.py` now writes the real startup values and **fails loudly** if a call doesn't return (it used to silently stop after 200k instructions).
 
+### 4.3u Vision / fog of war (spec: docs/spec/vision.md, pass 2, 2026-10-11)
+- Grid = playable area: `width = trunc(range/128)` per axis, origin = playable minimum, **scale = cells/range** (not 1/128;
+  CONFIRMED by Unicorn on 300 rectangles and 40 soft-float vectors). Row pitch = next power of two; flat arrays.
+- Span table of the sight circle (`0x6f408fd0`, octant list `0x6f408800`) decoded; circle writer `0x6f3ba480` checked
+  end to end (300 grids, 0 mismatches). The single-cell writer `0x6f3b0e20` reads row and column as **bytes** (wraps mod 256);
+  the span and rectangle writers use full integers.
+- Refresh `0x6f40a8f0` runs on its own 0.4 s timer (message 0x80269, `0x6f426c50`), **not** on the movement handler (corrected
+  in lockstep.md 11.2). The visible-layer counter `DAT_6fab6a34` has no writer and is 0: the visible layer clears every refresh.
+- Unit sight path: partly decoded (`0x6f409e00` per unit); the walker/source applier `0x6f40a740` pushes 3 arguments into a
+  4-argument circle writer, so it is not the unit path as written. Day/night rule and the unit cell mapping: UNSURE.
+- `IsUnitVisible/Fogged/Masked` = the unit's vtable slot 0xFC (`0x6f285080`), decoded.
+- Tools: `tools/emu/vision_grid_emu.py` (constructor, span table, circle; hooks the Storm heap, memset, `fs:[0]`).
+
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).
 - Iteration order in containers keyed by pointer → the memory layout/allocator has to be emulated.
@@ -342,6 +355,9 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (vision pass 2)**: fog grid from the playable area (scale cells/range), span table and circle writer
+  checked in Unicorn (0 mismatches on 300 grids), byte-wide cell writer found, refresh moved to its own 0.4 s timer
+  (message 0x80269; lockstep.md 11.2 corrected), unit visibility natives on the slot-0xFC method.
 - **2026-10-11 (26)**: boot now registers type orders (moves accepted on booted maps); replay orders fire ISSUED_ORDER; replay object pair → agent: the lookup table `0x6F4428B0` found, its producer not (sim uses an UNSURE handle-id model). Training (economy-4.md): **correction** — the 0.1 s 0xD01C1 tick is CBuffAuraRegenLife's aura pulse, not training; CAbilityTrain completion = 0xD01C4; queue shift `0x6F1652A0` Unicorn 3,000/3,000; progress timer NOT found (TrainQueue uses bldtm, UNSURE). Pending natives: findings spec natives-pending.md (0 implemented; each blocked on missing state). ~43.5%.
 
 - **2026-10-11 (25)**: hero intelligence = c1 + trunc(gain·level) (core `0x6F0DB3A0`, Unicorn 300 + lead 400 fresh); kill-XP chain located (`0x6F2A4880` → `0x6F2A46F0` HeroExpRange → `0x6F2A3190` → `0x6F20B080`), split formula NOT resolved, so kill XP is not implemented (a wrong split would desync). Economy wired into Game (single gold/lumber store, Misc constants, mines).

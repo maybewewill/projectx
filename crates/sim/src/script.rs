@@ -80,6 +80,7 @@ impl ScriptHost {
         game: Rc<RefCell<Game>>,
     ) -> Result<Self, VmError> {
         game.borrow_mut().set_tables(tables.clone());
+        game.borrow_mut().set_vision_tables(tables.clone());
         natives::register(&mut natives, &game);
         {
             // The movement walk is a repeating timer (message 0x8026A, lockstep.md section 11.2), armed once per
@@ -91,6 +92,15 @@ impl ScriptHost {
                     f32::from_bits(lockstep::MOVE_PERIOD_BITS),
                     true,
                     Payload::Movement,
+                );
+            }
+            // The vision refresh is its own repeating timer (message 0x80269, 0.4 s; vision.md section 11).
+            if !g.vision_armed {
+                g.vision_armed = true;
+                g.timers.start(
+                    f32::from_bits(lockstep::VISION_PERIOD_BITS),
+                    true,
+                    Payload::Vision,
                 );
             }
         }
@@ -236,8 +246,8 @@ impl ScriptHost {
             let Some(event) = next else {
                 break;
             };
-            // The movement walk is counted separately (`Game::movement_calls`), not as a script event.
-            if !matches!(event.payload, Payload::Movement) {
+            // The movement walk and the vision refresh are engine passes, not script events: not counted.
+            if !matches!(event.payload, Payload::Movement | Payload::Vision) {
                 fired += 1;
             }
             let expiry = F32::from_bits(event.expiry.to_bits());
@@ -273,6 +283,11 @@ impl ScriptHost {
                     // The movement walk runs at its own expiry (the game time during the callback).
                     self.vm.set_now(expiry);
                     self.game.borrow_mut().tick_movement();
+                }
+                Payload::Vision => {
+                    // The vision refresh (0x80269) at its own expiry.
+                    self.vm.set_now(expiry);
+                    self.game.borrow_mut().vision_refresh();
                 }
             }
         }

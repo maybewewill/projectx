@@ -51,6 +51,12 @@ pub const TICKS_PER_BATCH: u64 = 20;
 /// The period is the same as the timeout (LIKELY). 0.03 s is six game ticks of 0.005 s.
 pub const MOVE_PERIOD_BITS: u32 = 0x3CF5_C290;
 
+/// The period of the vision refresh (message 0x80269, `0x6f426c50` posts it with the timeout at `0x6FAB6F00`).
+/// The start-up initialisers give `0x3ECCCCCE` = 0.4 f32 (Unicorn, `tools/emu/runtime_consts.py`, CONFIRMED value);
+/// the repeat flag is set by the post (CONFIRMED), the period equal to the timeout is LIKELY (`docs/spec/vision.md`
+/// section 11).
+pub const VISION_PERIOD_BITS: u32 = 0x3ECC_CCCE;
+
 /// Agile-clock increment per game tick, f32 0.005 (`0x3BA3D70A`). CONFIRMED: the tick event built by
 /// the frame driver carries `[0x6FACC8CC]` at +0x14, the static initializer `0x6F8621C0` stores
 /// `I2R(5) / I2R(1000)` there (run in Unicorn), and the listener `0x6F2F4950` adds that float to

@@ -295,6 +295,9 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         // The record's `moveHeight` is the default fly height (`docs/spec/unit-types.md` section 4.3).
         fly_height: soft(ty.move_height),
         acquire_range: soft(ty.acquire),
+        // The balance values `sight` and `nsight` (record `+0x18C` / `+0x190`, `docs/spec/unit-types.md`).
+        sight: soft(ty.sight),
+        night_sight: soft(ty.night_sight),
         point_value: ty.points,
         food_used: ty.food_used,
         food_made: ty.food_made,
