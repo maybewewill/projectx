@@ -540,14 +540,14 @@ fn support_tables_cover_the_work_list() {
         .filter(|e| !matches!(e.support, Support::NotImplemented(_)))
         .count();
     // 56 with UnitResetCooldown (a no-op in the simulation, abilities-2.md section 1.2), plus nine hero natives
-    // (AddHeroXP, SetHeroXP, SetHeroLevel, UnitStripHeroLevel, UnitModifySkillPoints, GetHeroStr/Agi,
-    // SetHeroStr/Agi, docs/spec/heroes.md).
-    assert_eq!(implemented, 65);
+    // (AddHeroXP, SetHeroXP, SetHeroLevel, UnitStripHeroLevel, UnitModifySkillPoints, GetHeroStr/Agi/Int,
+    // SetHeroStr/Agi/Int, docs/spec/heroes.md).
+    assert_eq!(implemented, 67);
 
     let host = host_for(
         r#"
 native GetUnitName takes unit whichUnit returns string
-native SetHeroInt takes unit whichUnit, integer newInt, boolean permanent returns nothing
+native SelectHeroSkill takes unit whichHero, integer abilcode returns nothing
 native UnitAddSleep takes unit whichUnit, boolean add returns nothing
 native GetUnitLevel takes unit whichUnit returns integer
 native GetHeroXP takes unit whichUnit returns integer
@@ -555,7 +555,7 @@ function unused takes nothing returns nothing
     local string s
     local unit u
     set s = GetUnitName(u)
-    call SetHeroInt(u, 5, true)
+    call SelectHeroSkill(u, 5)
     call UnitAddSleep(u, true)
     set s = null
 endfunction
@@ -565,7 +565,7 @@ endfunction
     );
     let unbound = host.vm().unbound_natives();
     assert!(unbound.contains(&"GetUnitName"));
-    assert!(unbound.contains(&"SetHeroInt"));
+    assert!(unbound.contains(&"SelectHeroSkill"));
     assert!(unbound.contains(&"UnitAddSleep"));
     assert!(!unbound.contains(&"GetHeroXP"), "GetHeroXP is registered");
 }

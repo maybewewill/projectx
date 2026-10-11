@@ -268,6 +268,8 @@ fn hero_attributes(ty: &UnitTypeData) -> sim::heroes::HeroAttributes {
         str_plus: soft(ty.attribute_plus[0]),
         agi_base: ty.attributes[1],
         agi_plus: soft(ty.attribute_plus[1]),
+        int_base: ty.attributes[2],
+        int_plus: soft(ty.attribute_plus[2]),
     }
 }
 

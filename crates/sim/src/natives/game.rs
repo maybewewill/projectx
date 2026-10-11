@@ -548,6 +548,10 @@ pub struct HeroObj {
     /// Base agility (`+0xA8`) and per-level agility gain (`+0xE4`, real).
     pub agi_base: i32,
     pub agi_plus: softfloat::F32,
+    /// Intelligence base (the counter behind the reference at `+0x7C`, written from type `+0x28` at creation) and
+    /// its per-level gain (`+0xDC`, real), see `crate::heroes::intelligence` (`docs/spec/heroes.md`, section 6).
+    pub int_base: i32,
+    pub int_plus: softfloat::F32,
 }
 
 impl Default for HeroObj {
@@ -561,6 +565,8 @@ impl Default for HeroObj {
             str_plus: softfloat::F32::ZERO,
             agi_base: 0,
             agi_plus: softfloat::F32::ZERO,
+            int_base: 0,
+            int_plus: softfloat::F32::ZERO,
         }
     }
 }
@@ -1365,6 +1371,8 @@ impl Game {
             h.str_plus = a.str_plus;
             h.agi_base = a.agi_base;
             h.agi_plus = a.agi_plus;
+            h.int_base = a.int_base;
+            h.int_plus = a.int_plus;
         }
         h
     }
