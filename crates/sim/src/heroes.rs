@@ -662,6 +662,34 @@ pub fn max_mana_delta(before: &DerivedBonuses, after: &DerivedBonuses) -> F32 {
     arith::sub(after.mana, before.mana)
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Kill candidates (docs/spec/heroes.md, section 8.3). The per-candidate routine `0x6F28B990` gates and tests each hero
+// of the killer's candidate list. Checked in Unicorn by `tools/emu/hero_candidate_emu.py` (2,000 cases with the
+// normaliser, the distance and the comparison run as the binary runs them). The position normaliser is NOT modelled:
+// its cell term is not decoded, so the candidate positions are not confirmed (UNSURE), and nothing calls these
+// helpers from the death path yet.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// The unit flags that exclude a kill candidate: `0x40000100` (bit 30, the illusion flag, and bit 8, `0x100`, which
+/// the removal sequence sets; death alone does not set it, LIKELY from `docs/spec/unit-core.md`).
+pub const CANDIDATE_EXCLUDED_FLAGS: u32 = 0x4000_0100;
+
+/// Whether a hero passes the eligibility of `0x6F28B990` (CONFIRMED): `MaxLevelHeroesDrainExp` (`drain_on`) or the hero
+/// below its maximum level (`at_max` is the answer of `0x6F26EB10`), the flags free of [`CANDIDATE_EXCLUDED_FLAGS`],
+/// and the candidate's owner bit set in the killer's shared-experience mask (`shares_xp`, the test `0x6F3A34E0`). No
+/// life test appears in the routine, so a dead hero that is not removed passes (LIKELY, see `docs/spec/heroes.md`).
+pub fn is_candidate(drain_on: bool, at_max: bool, flags: u32, shares_xp: bool) -> bool {
+    (drain_on || !at_max) && flags & CANDIDATE_EXCLUDED_FLAGS == 0 && shares_xp
+}
+
+/// The range test of `0x6F28B990` (CONFIRMED by Unicorn): a candidate is listed in range unless `v < d`, with `d` the
+/// squared distance of the normalised positions and `v = R * R` (the record's `+0x0C`, the `HeroExpRange` squared,
+/// with no division by 32). A tie is listed. NaN on either side is listed too: the x87 compare is unordered and the
+/// original rejects only the strictly-less case (`fcompp`, `test ah,5`, `jnp`).
+pub fn in_range(d: F32, v: F32) -> bool {
+    !arith::lt(v, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,5 +875,33 @@ mod tests {
         let base = rebase(12, gain, 2, 40);
         assert_eq!(base, 37);
         assert_eq!(intelligence(base, gain, 2), 40);
+    }
+
+    #[test]
+    fn candidate_gate_follows_the_routine() {
+        // Drain on lets a maximum-level hero through; drain off rejects it.
+        assert!(is_candidate(true, true, 0, true));
+        assert!(!is_candidate(false, true, 0, true));
+        assert!(is_candidate(false, false, 0, true));
+        // The flags 0x40000100 exclude, any other bit does not (0x10 is the parent substitution, not an exclusion).
+        assert!(!is_candidate(true, false, 0x0000_0100, true));
+        assert!(!is_candidate(true, false, 0x4000_0000, true));
+        assert!(is_candidate(true, false, 0x0000_0010 | 0x0000_0020, true));
+        // The shared-experience bit is required.
+        assert!(!is_candidate(true, false, 0, false));
+    }
+
+    #[test]
+    fn in_range_rejects_only_strictly_less_v() {
+        let (one, two) = (f(1.0), f(2.0));
+        // d <= v is listed, including the tie.
+        assert!(in_range(one, two));
+        assert!(in_range(two, two));
+        // v < d is rejected.
+        assert!(!in_range(two, one));
+        // NaN on either side is listed (unordered compare).
+        let nan = F32::from_bits(0x7FC0_0000);
+        assert!(in_range(nan, one));
+        assert!(in_range(one, nan));
     }
 }

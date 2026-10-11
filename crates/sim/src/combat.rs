@@ -50,7 +50,7 @@ use softfloat::{arith, math, Tables, F32};
 
 use crate::abilities::ATTACK;
 use crate::natives::game::{Game, ObjKey, Object, Payload};
-use crate::natives::{circle_candidates, dispatch_unit_death, set_life, ScriptRuntime};
+use crate::natives::{circle_candidates, dispatch_unit_death_by, set_life, ScriptRuntime};
 use crate::orders::{Order, OrderClass, ORDER_AIMOVE, ORDER_ATTACK};
 use crate::pathing::scale_by_1_32;
 use crate::missiles;
@@ -793,7 +793,8 @@ fn bearing(dx: F32, dy: F32, tables: &Tables) -> F32 {
 
 /// Handles the timer of an attack object: the one place the event queue meets the combat state. Called by the script
 /// host when an [`Payload::Attack`] entry is due, with the game time set to its expiry. A death that the timer causes
-/// runs the death dispatch after the game borrow is released.
+/// runs the death dispatch after the game borrow is released. The attacker that dealt the killing damage is the
+/// killer of that death (`GetKillingUnit`, the hand-off of the attacker through `dispatch_unit_death_by`).
 pub fn expire_attack_timer(
     game: &RefCell<Game>,
     rt: &mut dyn ScriptRuntime,
@@ -802,7 +803,7 @@ pub fn expire_attack_timer(
 ) {
     let died = game.borrow_mut().combat_fire(unit, msg);
     if let Some(target) = died {
-        dispatch_unit_death(game, rt, target);
+        dispatch_unit_death_by(game, rt, target, Some(unit));
     }
 }
 
