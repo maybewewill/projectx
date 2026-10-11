@@ -247,3 +247,7 @@ Names for slots 120 and 121 are LIKELY from the polarity behavior (120 = harmful
 - scratchpad/specs/abilities.md (this file)
 - scratchpad/specs/ability_factory_1.26a.tsv (raw code, wrapper address, ambiguity flag, status)
 - Named vtable slot tables: scratchpad/slots_CAbility.txt, scratchpad/slots_CBuff.txt, scratchpad/slots_CUnit.txt.
+
+
+## Addendum (lead, 2026-10-11)
+Each factory wrapper calls a one-instruction thunk (`mov eax, imm32; ret`) whose immediate is the ability's base rawcode (e.g. 0x6F10FA90 returns 'Avul', 0x6F1102C0 returns 'Aloc'). Reading these thunks gives a unique base code for all 417 wrappers (no duplicates), replacing the 333 + 84 ambiguous entries of the first parse. docs/spec/ability_factory_1.26a.tsv was regenerated with `tools/analysis/ability_base_codes.py`.
