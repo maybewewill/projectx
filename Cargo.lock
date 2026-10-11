@@ -1978,6 +1978,7 @@ dependencies = [
 name = "w3map"
 version = "0.1.0"
 dependencies = [
+ "mpq",
  "thiserror 2.0.21",
 ]
 
