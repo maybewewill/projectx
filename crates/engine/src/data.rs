@@ -175,7 +175,7 @@ fn attack_type(w: &combat::Weapon) -> AttackType {
         sides: w.sides,
         dice_bonus: w.dmg_plus,
         damage_type: w.damage_type.row() as u8,
-        physical: w.damage_type.is_physical(),
+        damage_class: sim::damage::ATTACK_DAMAGE_CLASS,
     }
 }
 
