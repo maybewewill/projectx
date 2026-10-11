@@ -104,9 +104,9 @@ fn point(x: f32, y: f32) -> WorldPoint {
 #[test]
 fn select_adds_once_and_removes() {
     let (host, mut cs, a, b) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Select {
             player: 1,
             add: true,
@@ -116,7 +116,7 @@ fn select_adds_once_and_removes() {
     assert_eq!(out, Outcome::Selected { now: 2, unresolved: 0 });
     assert_eq!(cs.selection(1), &[a, b]);
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Select {
             player: 1,
             add: false,
@@ -132,9 +132,9 @@ fn select_adds_once_and_removes() {
 #[test]
 fn unknown_pairs_are_counted_and_do_nothing() {
     let (host, mut cs, a, _) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Select {
             player: 1,
             add: true,
@@ -148,9 +148,9 @@ fn unknown_pairs_are_counted_and_do_nothing() {
 #[test]
 fn hotkey_groups_assign_and_select() {
     let (host, mut cs, _a, b) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     cs.apply(
-        &mut g,
+        &cell,
         &Command::Select {
             player: 1,
             add: true,
@@ -158,7 +158,7 @@ fn hotkey_groups_assign_and_select() {
         },
     );
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::AssignGroup {
             player: 1,
             group: 3,
@@ -168,7 +168,7 @@ fn hotkey_groups_assign_and_select() {
     assert_eq!(out, Outcome::Grouped { units: 1, unresolved: 0 });
     assert_eq!(cs.group(1, 3), &[b]);
     cs.apply(
-        &mut g,
+        &cell,
         &Command::SelectGroup {
             player: 1,
             group: 3,
@@ -176,7 +176,7 @@ fn hotkey_groups_assign_and_select() {
     );
     assert_eq!(cs.selection(1), &[b]);
     cs.apply(
-        &mut g,
+        &cell,
         &Command::SelectGroup {
             player: 1,
             group: 7,
@@ -188,9 +188,9 @@ fn hotkey_groups_assign_and_select() {
 #[test]
 fn subgroup_choice_leaves_one_unit_selected() {
     let (host, mut cs, _, b) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     cs.apply(
-        &mut g,
+        &cell,
         &Command::Select {
             player: 1,
             add: true,
@@ -198,7 +198,7 @@ fn subgroup_choice_leaves_one_unit_selected() {
         },
     );
     cs.apply(
-        &mut g,
+        &cell,
         &Command::SelectSubgroup {
             player: 1,
             item: FOOTMAN,
@@ -211,9 +211,9 @@ fn subgroup_choice_leaves_one_unit_selected() {
 #[test]
 fn point_order_goes_to_every_selected_unit_and_queued_flag_appends() {
     let (host, mut cs, a, b) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     cs.apply(
-        &mut g,
+        &cell,
         &Command::Select {
             player: 1,
             add: true,
@@ -222,7 +222,7 @@ fn point_order_goes_to_every_selected_unit_and_queued_flag_appends() {
     );
     let move_id = 0x000D_0012;
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Order {
             player: 1,
             flags: 0,
@@ -238,13 +238,13 @@ fn point_order_goes_to_every_selected_unit_and_queued_flag_appends() {
             unresolved: 0
         }
     );
-    assert_eq!(g.unit_order_ids(a), vec![move_id]);
-    assert_eq!(g.unit_order_ids(b), vec![move_id]);
+    assert_eq!(cell.borrow().unit_order_ids(a), vec![move_id]);
+    assert_eq!(cell.borrow().unit_order_ids(b), vec![move_id]);
 
     // A queued order joins behind the current move instead of replacing it.
     let smart = 0x000D_0003;
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Order {
             player: 1,
             flags: FLAG_QUEUED,
@@ -253,11 +253,11 @@ fn point_order_goes_to_every_selected_unit_and_queued_flag_appends() {
         },
     );
     assert!(matches!(out, Outcome::Ordered { accepted: 2, .. }));
-    assert_eq!(g.unit_order_ids(a), vec![move_id, smart]);
+    assert_eq!(cell.borrow().unit_order_ids(a), vec![move_id, smart]);
 
     // A replacing order clears the list first.
     cs.apply(
-        &mut g,
+        &cell,
         &Command::Order {
             player: 1,
             flags: 0,
@@ -265,15 +265,15 @@ fn point_order_goes_to_every_selected_unit_and_queued_flag_appends() {
             target: OrderTarget::None,
         },
     );
-    assert_eq!(g.unit_order_ids(a), vec![0x000D_0019]);
+    assert_eq!(cell.borrow().unit_order_ids(a), vec![0x000D_0019]);
 }
 
 #[test]
 fn object_target_needs_a_registered_pair() {
     let (host, mut cs, a, b) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     cs.apply(
-        &mut g,
+        &cell,
         &Command::Select {
             player: 1,
             add: true,
@@ -282,7 +282,7 @@ fn object_target_needs_a_registered_pair() {
     );
     let attack = 0x000D_000F;
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Order {
             player: 1,
             flags: 0,
@@ -301,11 +301,11 @@ fn object_target_needs_a_registered_pair() {
             unresolved: 1
         }
     );
-    assert!(g.unit_order_ids(a).is_empty());
+    assert!(cell.borrow().unit_order_ids(a).is_empty());
     // With the pair registered to the other footman, the attack is a target order at that unit.
     cs.register_object(obj(5, 5), b);
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Order {
             player: 1,
             flags: 0,
@@ -317,15 +317,15 @@ fn object_target_needs_a_registered_pair() {
         },
     );
     assert!(matches!(out, Outcome::Ordered { unresolved: 0, .. }));
-    assert_eq!(g.unit_order_ids(a), vec![attack]);
+    assert_eq!(cell.borrow().unit_order_ids(a), vec![attack]);
 }
 
 #[test]
 fn order_with_no_selection_is_accepted_by_nobody() {
     let (host, mut cs, _, _) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     let out = cs.apply(
-        &mut g,
+        &cell,
         &Command::Order {
             player: 1,
             flags: 0,
@@ -346,15 +346,15 @@ fn order_with_no_selection_is_accepted_by_nobody() {
 #[test]
 fn speed_is_recorded_and_clamped_to_fast() {
     let (host, mut cs, _, _) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     assert_eq!(cs.speed_setting(), 1, "normal before any command");
     assert_eq!(
-        cs.apply(&mut g, &Command::SetSpeed { player: 1, setting: 0 }),
+        cs.apply(&cell, &Command::SetSpeed { player: 1, setting: 0 }),
         Outcome::Speed { setting: 0 }
     );
     assert_eq!(cs.speed_setting(), 0);
     assert_eq!(
-        cs.apply(&mut g, &Command::SetSpeed { player: 1, setting: 9 }),
+        cs.apply(&cell, &Command::SetSpeed { player: 1, setting: 9 }),
         Outcome::Speed { setting: 2 }
     );
     assert_eq!(cs.speed_setting(), 2);
@@ -363,14 +363,56 @@ fn speed_is_recorded_and_clamped_to_fast() {
 #[test]
 fn unmodelled_actions_are_recorded() {
     let (host, mut cs, _, _) = rig();
-    let mut g = host.game_mut();
+    let cell = host.game_handle();
     assert_eq!(
-        cs.apply(&mut g, &Command::Recorded { player: 1, id: 0x6B }),
+        cs.apply(&cell, &Command::Recorded { player: 1, id: 0x6B }),
         Outcome::Recorded
     );
     assert_eq!(
-        cs.apply(&mut g, &Command::PreSubselection { player: 1 }),
+        cs.apply(&cell, &Command::PreSubselection { player: 1 }),
         Outcome::Recorded
     );
     assert_eq!(cs.applied(), 2);
+}
+
+#[test]
+fn unregistered_unit_resolves_by_the_model_pair() {
+    // No `register_object` for these units: the model pair `(handle id, 0)` finds them (sim::commands, UNSURE).
+    let (host, mut cs, a, _b) = rig();
+    let cell = host.game_handle();
+    let pair = sim::commands::model_pair(&cell.borrow(), a);
+    assert_eq!(pair.id2, 0);
+    let out = cs.apply(
+        &cell,
+        &Command::Select {
+            player: 3,
+            add: true,
+            units: vec![pair],
+        },
+    );
+    assert_eq!(out, Outcome::Selected { now: 1, unresolved: 0 });
+    assert_eq!(cs.selection(3), &[a]);
+    // A non-zero second word is not the model's pair: unresolved, no effect.
+    let out = cs.apply(
+        &cell,
+        &Command::Select {
+            player: 4,
+            add: true,
+            units: vec![ObjectRef {
+                id1: pair.id1,
+                id2: 7,
+            }],
+        },
+    );
+    assert_eq!(out, Outcome::Selected { now: 0, unresolved: 1 });
+    // A handle that is no unit (the null handle) is unresolved.
+    let out = cs.apply(
+        &cell,
+        &Command::Select {
+            player: 5,
+            add: true,
+            units: vec![ObjectRef { id1: 0, id2: 0 }],
+        },
+    );
+    assert_eq!(out, Outcome::Selected { now: 0, unresolved: 1 });
 }

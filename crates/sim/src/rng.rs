@@ -262,3 +262,32 @@ impl Streams {
         self.init_streams(table, s);
     }
 }
+
+/// One step of the game-start slot fold: `S := rotl(S xor X, 3)`.
+///
+/// Machine code `0x6F5C3A4C..0x6F5C3A5B` (`mov eax,[esp+0x30]; xor eax,[esp+0x44];
+/// rol eax,3; mov [esp+0x44],eax`), checked against the original under Unicorn
+/// (`tools/emu/game_start_emu.py`, 300 cases). See `docs/spec/game-start.md`.
+pub const fn slot_fold_step(s: u32, x: u32) -> u32 {
+    (s ^ x).rotate_left(3)
+}
+
+/// Folds `values` from `S = 0` with [`slot_fold_step`]. What the values are is not
+/// yet established (see `docs/spec/game-start.md`, section 3); this only performs the fold.
+pub fn slot_fold<I: IntoIterator<Item = u32>>(values: I) -> u32 {
+    values.into_iter().fold(0, slot_fold_step)
+}
+
+/// The game-start seed `S` the original passes to the generator and the streams, given the
+/// settings flag word and the fold value.
+///
+/// If bit `0x8000` of the settings flags (the "fixed seed" flag, settings object `+0x38`)
+/// is set, the seed is the constant [`FIXED_GAME_SEED`]; otherwise it is `fold` (CONFIRMED
+/// in `0x6F5C37A0` at `0x6F5C3F79..0x6F5C3F97`, checked under Unicorn).
+pub const fn game_start_seed(settings_flags: u32, fold: u32) -> u32 {
+    if settings_flags & 0x8000 != 0 {
+        FIXED_GAME_SEED
+    } else {
+        fold
+    }
+}

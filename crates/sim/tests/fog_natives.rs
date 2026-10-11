@@ -218,9 +218,9 @@ fn explicit_fog_states_and_shared_vision() {
 function main takes nothing returns nothing
     call SetFogStateRect(Player(0), 4, Rect(I2R(0), I2R(0), I2R(256), I2R(256)), false)
     set b1 = IsVisibleToPlayer(I2R(100), I2R(100), Player(0))
-    call SetFogStateRadius(Player(0), 2, I2R(500), I2R(500), I2R(100), false)
+    call SetFogStateRadius(Player(0), 2, I2R(500), I2R(500), I2R(200), false)
     set b2 = IsFoggedToPlayer(I2R(500), I2R(500), Player(0))
-    call SetFogStateRadiusLoc(Player(0), 1, Location(I2R(900), I2R(900)), I2R(100), false)
+    call SetFogStateRadiusLoc(Player(0), 1, Location(I2R(900), I2R(900)), I2R(200), false)
     set b3 = IsMaskedToPlayer(I2R(900), I2R(900), Player(0))
     call SetPlayerAlliance(Player(3), Player(4), 5, true)
     set f1 = CreateFogModifierRadius(Player(3), 4, I2R(2000), I2R(2000), I2R(200), true, false)

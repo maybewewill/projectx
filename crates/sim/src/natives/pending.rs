@@ -25,9 +25,9 @@ const SYNC: &str = "the multiplayer sync barriers and the wait-on-trigger thread
 const NAMES: &str = "the editor object tables and the localised string tables are not loaded (the lookups return names from them)";
 /// Reason for the guard position natives.
 const GUARD: &str =
-    "the guard position list of a unit (the creep leash used by the AI) is not modelled";
+    "the guard position list of the AI (creep leash) is not modelled; the helpers are FUN_6f2e5410, FUN_6f2dcf00, FUN_6f2dcec0 (natives-pending.md section 5)";
 /// Reason for the player natives.
-const PLAYER: &str = "the player statistics, unit and structure counts and the slot removal read counters and unit flags that the model does not keep";
+const PLAYER: &str = "the player statistics and the slot removal read counters and unit flags that the model does not keep";
 /// Reason for the event response getters whose payload is not produced.
 const EVENT: &str = "the event that carries this payload has no firing site in the model (see event.rs), so the getter has nothing to read";
 
@@ -84,27 +84,24 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "ChooseRandomCreep",
-        support: Support::NotImplemented("the candidate filter needs the creep flags of the unit types (not in the registry); the walk is FUN_6f29fd90 on stream 32 (rng.md 6)"),
+        support: Support::NotImplemented("the candidate walk (0x6F29FD90, race at record +0x1C0 = 8, not a building, special 0, level) and the draw (0x6F285320 on stream 0x20, index = high32(r*n)) are read; the tileset string check and the movement-type check (0x6F29C240, +0x1A8) are not decoded, and the race enum values are not confirmed (natives-pending.md section 3)"),
     },
     NativeEntry {
         name: "ChooseRandomNPBuilding",
-        support: Support::NotImplemented("the candidate filter needs the neutral building flags of the unit types (not in the registry); the walk is FUN_6f294740 on stream 34 (rng.md 6)"),
+        support: Support::NotImplemented("the candidate walk (0x6F294740, race +0x1C0 = 7, building, hostile pal 0, special 0, nbrandom != 0) and the draw (0x6F285320 on stream 0x22) are read; the race enum values are not confirmed (natives-pending.md section 3)"),
     },
     NativeEntry { name: "CripplePlayer", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "RemovePlayer", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "SetPlayerUnitsOwner", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "CachePlayerHeroData", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "GetPlayerScore", support: Support::NotImplemented(PLAYER) },
-    NativeEntry { name: "GetPlayerUnitCount", support: Support::NotImplemented(PLAYER) },
-    NativeEntry { name: "GetPlayerStructureCount", support: Support::NotImplemented(PLAYER) },
-    NativeEntry { name: "GetPlayerTypedUnitCount", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "GetWinningPlayer", support: Support::NotImplemented(EVENT) },
     NativeEntry { name: "GetRescuer", support: Support::NotImplemented(EVENT) },
     NativeEntry { name: "GetSellingUnit", support: Support::NotImplemented(EVENT) },
     NativeEntry { name: "GetOrderTargetDestructable", support: Support::NotImplemented(EVENT) },
     NativeEntry {
         name: "GetWorldBounds",
-        support: Support::NotImplemented("the world bounds are map-size constants of the game struct, not read (the playable area is the rect of location.rs)"),
+        support: Support::NotImplemented("the four bounds come from the global object (+0x70, via 0x6F001EC0) and the pathing object (+0x54, via 0x6F48AB80) through about ten helpers whose argument flow the decompile loses; the rect is allocated last (docs/spec/natives-pending.md section 2)"),
     },
     NativeEntry {
         name: "Cheat",

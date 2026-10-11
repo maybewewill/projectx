@@ -6,22 +6,26 @@
 //! its evidence are in `docs/spec/replay-actions.md`. Labels there apply here:
 //!
 //! * Object references are `(id1, id2)` pairs ([`ObjectRef`]). The original's resolver is not located
-//!   yet (UNSURE), so the table is filled explicitly with [`CommandState::register_object`]. A pair with no
-//!   entry is reported as unresolved and has no effect. Nothing guesses a unit from a pair.
+//!   (`docs/spec/replay-actions.md` section 10). A pair is resolved first by an explicit registration
+//!   ([`CommandState::register_object`]), then by the object-pair model ([`model_resolve`], UNSURE: `(handle id, 0)`).
+//!   A pair that neither knows is reported as unresolved and has no effect.
 //! * An order command applies to the player's current selection, in selection order (LIKELY, the public
 //!   replay model). Each unit gets one call to the order dispatcher with `replace = !queued`
 //!   ([`Command::Order`] flags, bit [`FLAG_QUEUED`], UNSURE).
-//! * Orders go through [`Game::issue_order`], the same path as the natives (`orders.rs`). The issued-order
-//!   events are not fired for replay orders yet (the event path lives in `natives/order.rs`).
+//! * Orders go through [`Game::issue_order`], the same path as the natives (`orders.rs`). With
+//!   [`CommandState::apply_fired`] they also fire the issued-order events, per accepted unit, through the same
+//!   function as the natives (`natives::order::fire_issued`).
 //! * Speed only records the setting ([`CommandState::speed_setting`]); the caller's `TurnScheduler` reads it.
 //!   The original's speed table is in `lockstep.rs`.
 //! * Actions with no model here yet are recorded as [`Outcome::Recorded`] (pause, save, chat, ping, ...).
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use softfloat::F32;
 
-use crate::natives::game::{Game, ObjKey};
+use crate::natives::game::{Game, ObjKey, ScriptRuntime};
+use crate::natives::order::fire_issued;
 use crate::orders::{point_capable, Order, OrderClass};
 
 /// Order flag bit that makes the order queued behind the current one (`replace = false`). UNSURE: the
@@ -135,9 +139,18 @@ impl CommandState {
         self.objects.insert(object, unit);
     }
 
-    /// The unit behind a pair, if registered.
+    /// The unit behind a pair, if registered explicitly (no model lookup; see [`CommandState::resolve_in`]).
     pub fn resolve(&self, object: ObjectRef) -> Option<ObjKey> {
         self.objects.get(&object).copied()
+    }
+
+    /// The unit behind a pair: an explicit registration first, then the object-pair model
+    /// ([`model_resolve`], UNSURE, `docs/spec/replay-actions.md` section 10). `None` when neither knows it.
+    pub fn resolve_in(&self, game: &Game, object: ObjectRef) -> Option<ObjKey> {
+        self.objects
+            .get(&object)
+            .copied()
+            .or_else(|| model_resolve(game, object))
     }
 
     /// The player's current selection, in selection order.
@@ -147,9 +160,7 @@ impl CommandState {
 
     /// The units of hotkey group `group` of `player`.
     pub fn group(&self, player: u8, group: u8) -> &[ObjKey] {
-        self.groups
-            .get(&(player, group))
-            .map_or(&[], Vec::as_slice)
+        self.groups.get(&(player, group)).map_or(&[], Vec::as_slice)
     }
 
     /// The last speed setting seen (0 slow, 1 normal, 2 fast), or 1 (normal) before any command.
@@ -162,13 +173,35 @@ impl CommandState {
         self.applied
     }
 
-    /// Applies one command. Commands take effect in the order they are given (the caller applies a turn's
-    /// commands in stream order before its ticks).
-    pub fn apply(&mut self, game: &mut Game, cmd: &Command) -> Outcome {
+    /// Applies one command without firing script events. Commands take effect in the order they are given (the
+    /// caller applies a turn's commands in stream order before its ticks). Use [`CommandState::apply_fired`] when
+    /// script triggers must see the orders.
+    pub fn apply(&mut self, game: &RefCell<Game>, cmd: &Command) -> Outcome {
+        self.apply_with(game, None, cmd)
+    }
+
+    /// Applies one command and fires the script events of the orders it issues (`ISSUED_ORDER` player-unit and
+    /// unit events, `natives::order::fire_issued`), per accepted unit right after its dispatch, the same as a
+    /// native order. `rt` is the script runtime that runs the trigger threads (the main VM).
+    pub fn apply_fired(
+        &mut self,
+        game: &RefCell<Game>,
+        rt: &mut dyn ScriptRuntime,
+        cmd: &Command,
+    ) -> Outcome {
+        self.apply_with(game, Some(rt), cmd)
+    }
+
+    fn apply_with(
+        &mut self,
+        game: &RefCell<Game>,
+        rt: Option<&mut dyn ScriptRuntime>,
+        cmd: &Command,
+    ) -> Outcome {
         self.applied += 1;
         match cmd {
             Command::Select { player, add, units } => {
-                let (keys, unresolved) = self.resolve_all(units);
+                let (keys, unresolved) = self.resolve_all(game, units);
                 let sel = self.selections.entry(*player).or_default();
                 if *add {
                     for k in keys {
@@ -189,7 +222,7 @@ impl CommandState {
                 group,
                 units,
             } => {
-                let (keys, unresolved) = self.resolve_all(units);
+                let (keys, unresolved) = self.resolve_all(game, units);
                 let n = keys.len();
                 self.groups.insert((*player, *group), keys);
                 Outcome::Grouped {
@@ -207,7 +240,7 @@ impl CommandState {
                 }
             }
             Command::SelectSubgroup { player, unit, .. } => {
-                let (keys, unresolved) = self.resolve_all(std::slice::from_ref(unit));
+                let (keys, unresolved) = self.resolve_all(game, std::slice::from_ref(unit));
                 self.selections.insert(*player, keys);
                 Outcome::Selected {
                     now: self.selection(*player).len(),
@@ -220,7 +253,7 @@ impl CommandState {
                 flags,
                 id,
                 target,
-            } => self.apply_order(game, *player, *flags, *id, *target),
+            } => self.apply_order(game, rt, *player, *flags, *id, *target),
             Command::SetSpeed { setting, .. } => {
                 let setting = (*setting).min(2);
                 self.speed = Some(setting);
@@ -231,11 +264,12 @@ impl CommandState {
     }
 
     /// Resolves pairs in the given order; returns the units found and the number of pairs with no entry.
-    fn resolve_all(&self, objects: &[ObjectRef]) -> (Vec<ObjKey>, usize) {
+    fn resolve_all(&self, game: &RefCell<Game>, objects: &[ObjectRef]) -> (Vec<ObjKey>, usize) {
+        let g = game.borrow();
         let mut keys = Vec::with_capacity(objects.len());
         let mut unresolved = 0;
         for o in objects {
-            match self.resolve(*o) {
+            match self.resolve_in(&g, *o) {
                 Some(k) => keys.push(k),
                 None => unresolved += 1,
             }
@@ -245,7 +279,8 @@ impl CommandState {
 
     fn apply_order(
         &mut self,
-        game: &mut Game,
+        game: &RefCell<Game>,
+        mut rt: Option<&mut dyn ScriptRuntime>,
         player: u8,
         flags: u16,
         id: u32,
@@ -263,21 +298,23 @@ impl CommandState {
                 };
                 (class, Some((p.x, p.y)), 0)
             }
-            OrderTarget::Object { object, point } => match self.resolve(object) {
-                Some(k) => {
-                    let h = game.handle_of(k);
-                    (OrderClass::Target, point.map(|p| (p.x, p.y)), h)
+            OrderTarget::Object { object, point } => {
+                match self.resolve_in(&game.borrow(), object) {
+                    Some(k) => {
+                        let h = game.borrow().handle_of(k);
+                        (OrderClass::Target, point.map(|p| (p.x, p.y)), h)
+                    }
+                    None => {
+                        // Nothing is issued for an object the table does not know.
+                        unresolved += 1;
+                        return Outcome::Ordered {
+                            accepted: 0,
+                            refused: 0,
+                            unresolved,
+                        };
+                    }
                 }
-                None => {
-                    // Nothing is issued for an object the table does not know.
-                    unresolved += 1;
-                    return Outcome::Ordered {
-                        accepted: 0,
-                        refused: 0,
-                        unresolved,
-                    };
-                }
-            },
+            }
         };
         let units = self.selection(player).to_vec();
         let mut accepted = 0;
@@ -289,11 +326,15 @@ impl CommandState {
                 point,
                 target: handle,
             };
-            let (validated, index) = game.issue_order(unit, order, replace);
+            let (validated, index) = game.borrow_mut().issue_order(unit, order, replace);
             if validated && index.is_some() {
                 accepted += 1;
             } else {
                 refused += 1;
+            }
+            // The same events as a native order, right after this unit's dispatch (natives/order.rs `issue`).
+            if let (Some(index), Some(rt)) = (index, rt.as_deref_mut()) {
+                fire_issued(game, rt, unit, class, index);
             }
         }
         Outcome::Ordered {
@@ -304,3 +345,24 @@ impl CommandState {
     }
 }
 
+/// The object-pair model for units with no explicit registration (UNSURE, `docs/spec/replay-actions.md` section 10).
+///
+/// The pair of a unit is taken to be `(handle id, 0)`: the first word is the unit's JASS handle id (the one identity
+/// the simulation allocates per object, `natives/game.rs`), the second word is zero. A pair with a non-zero second
+/// word, or with a first word that is no live unit's handle, resolves to nothing. This is a model, not the original's
+/// rule: the original's pair source is the agent's `+0x0C/+0x10` (CONFIRMED layout, LIKELY source), and the inverse
+/// is not located. Replays with pairs from another scheme stay unresolved and have no effect.
+fn model_resolve(game: &Game, object: ObjectRef) -> Option<ObjKey> {
+    if object.id2 != 0 {
+        return None;
+    }
+    game.unit_of_handle(object.id1)
+}
+
+/// The object pair the model assigns to a unit (`(handle id, 0)`, see [`model_resolve`]).
+pub fn model_pair(game: &Game, unit: ObjKey) -> ObjectRef {
+    ObjectRef {
+        id1: game.handle_of(unit),
+        id2: 0,
+    }
+}

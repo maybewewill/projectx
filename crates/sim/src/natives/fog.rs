@@ -50,7 +50,7 @@
 //! UNSURE), and the rendering of the fog. The tests are in `tests/fog_natives.rs`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use jass::vm::{NativeRegistry, Value};
@@ -60,20 +60,16 @@ use super::game::{Game, HandleKind, LocationObj, ObjKey, Object, RectObj};
 use super::gamestate::native;
 use super::hashtable::{bool_at, int_at, real_at};
 use super::player::index_at;
+use crate::vision::VisionGrid;
 
-/// The fog state values of the model (CONFIRMED: the values the grid query returns).
-pub const FOG_MASKED: i32 = 1;
-pub const FOG_FOGGED: i32 = 2;
-pub const FOG_VISIBLE: i32 = 4;
+pub use crate::vision::{FOG_FOGGED, FOG_MASKED, FOG_VISIBLE};
 
-/// The width of a fog cell in world units (UNSURE, see the module notes).
+/// The width of a fog cell in world units (UNSURE: the grid's scale, see `vision::VisionGrid::scale`).
 pub const FOG_CELL: i32 = 128;
 
 /// The alliance type whose row gives the players that a shared-vision modifier covers (UNSURE, see the module notes).
 pub const SHARED_VISION_ALLIANCE: usize = 5;
 
-/// A cell key: the player slot and the cell.
-pub type CellKey = (u32, i32, i32);
 
 /// A fog modifier (`fogmodifier` in JASS). Its cells and players are fixed at creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,24 +88,14 @@ pub struct FogModifierObj {
     pub destroyed: bool,
 }
 
-/// The fog-of-war state of the game: per-cell counts and explicit states. See the module notes.
+/// The fog-of-war state of the game: the cell grid of `vision` and the active fog modifiers, in the order they
+/// were started (the order the rebuild re-applies them in, UNSURE).
 #[derive(Debug, Clone, Default)]
 pub struct FogState {
-    /// Number of active visible modifiers per cell.
-    visible: BTreeMap<CellKey, u32>,
-    /// Number of active masked modifiers per cell.
-    masked: BTreeMap<CellKey, u32>,
-    /// Number of active fogged modifiers per cell.
-    fogged: BTreeMap<CellKey, u32>,
-    /// The explicit state that `SetFogState*` wrote per cell.
-    explicit: BTreeMap<CellKey, i32>,
-    /// Cells that a visible modifier has covered.
-    explored: BTreeSet<CellKey>,
-}
-
-/// The cell index of a world coordinate: `floor(v / FOG_CELL)`. The division is by a power of two, so it is exact.
-pub(super) fn cell_of(v: F32) -> i32 {
-    cell_of_size(v, FOG_CELL)
+    /// Cell words per player (see `vision.rs`).
+    pub grid: VisionGrid,
+    /// Active fog modifiers, in start order.
+    active: Vec<ObjKey>,
 }
 
 /// The cells that a rect covers (both ends inclusive).
@@ -156,25 +142,23 @@ pub(super) fn cell_of_size(v: F32, cell: i32) -> i32 {
 impl Game {
     /// The fog state of point `(x, y)` for player slot `player`: [`FOG_VISIBLE`], [`FOG_FOGGED`] or [`FOG_MASKED`].
     pub fn fog_state_at(&self, player: u32, x: F32, y: F32) -> i32 {
-        self.fog_state_of_cell(player, (cell_of(x), cell_of(y)))
+        self.fog.grid.state_at(x, y, player)
     }
 
-    /// The fog state of a cell (see the module notes for the order of the checks).
+    /// The fog state of a cell for player slot `player` (the table of `vision::table_state`).
     pub fn fog_state_of_cell(&self, player: u32, cell: (i32, i32)) -> i32 {
-        let key = (player, cell.0, cell.1);
-        let f = &self.fog;
-        if f.visible.get(&key).copied().unwrap_or(0) > 0 {
-            FOG_VISIBLE
-        } else if f.masked.get(&key).copied().unwrap_or(0) > 0 {
-            FOG_MASKED
-        } else if f.fogged.get(&key).copied().unwrap_or(0) > 0 {
-            FOG_FOGGED
-        } else if let Some(&s) = f.explicit.get(&key) {
-            s
-        } else if f.explored.contains(&key) {
-            FOG_FOGGED
-        } else {
-            FOG_MASKED
+        self.fog.grid.state(cell, player)
+    }
+
+    /// Rebuilds the visible layer: clears it, then re-applies every active modifier in start order. The
+    /// explored layer is kept, as in the original's refresh (UNSURE: the original clears the visible layer only on
+    /// some refreshes, `DAT_6fab6a34 & 3`, and that counter's writer is not found yet).
+    fn fog_refresh(&mut self) {
+        self.fog.grid.clear_visible();
+        let active = self.fog.active.clone();
+        for k in active {
+            let m = self.fog_modifier(k).clone();
+            self.fog.grid.write_cells(m.state, (m.players & 0xFFFF) as u16, &m.cells);
         }
     }
 
@@ -202,49 +186,17 @@ impl Game {
         own | self.player(owner).alliances[SHARED_VISION_ALLIANCE]
     }
 
-    /// Adds (`add` true) or removes the counts of modifier `k`, for each player in its mask.
-    fn fog_apply(&mut self, k: ObjKey, add: bool) {
+    /// Starts modifier `k`: writes its shape with its mode for each player in its mask. The original writes the
+    /// shape at its next refresh; the write is immediate here (UNSURE).
+    fn fog_apply(&mut self, k: ObjKey) {
         let m = self.fog_modifier(k).clone();
-        let f = &mut self.fog;
-        for p in 0..16u32 {
-            if m.players & (1 << p) == 0 {
-                continue;
-            }
-            for &(cx, cy) in &m.cells {
-                let key = (p, cx, cy);
-                let map = match m.state {
-                    FOG_VISIBLE => &mut f.visible,
-                    FOG_FOGGED => &mut f.fogged,
-                    _ => &mut f.masked,
-                };
-                if add {
-                    *map.entry(key).or_insert(0) += 1;
-                    if m.state == FOG_VISIBLE {
-                        f.explored.insert(key);
-                    }
-                } else if let Some(n) = map.get_mut(&key) {
-                    *n = n.saturating_sub(1);
-                    if *n == 0 {
-                        map.remove(&key);
-                    }
-                }
-            }
-        }
+        self.fog.grid.write_cells(m.state, (m.players & 0xFFFF) as u16, &m.cells);
     }
 
-    /// Sets the explicit state of the cells for each player in `players`.
+    /// Writes an explicit state (`SetFogState*`) for each player in `players`, with the modifier writer
+    /// (CONFIRMED: `0x6f3c1a30` and its siblings reach the same writers as the modifiers).
     fn fog_set_explicit(&mut self, players: u32, cells: &BTreeSet<(i32, i32)>, state: i32) {
-        for p in 0..16u32 {
-            if players & (1 << p) == 0 {
-                continue;
-            }
-            for &(cx, cy) in cells {
-                self.fog.explicit.insert((p, cx, cy), state);
-                if state == FOG_VISIBLE || state == FOG_FOGGED {
-                    self.fog.explored.insert((p, cx, cy));
-                }
-            }
-        }
+        self.fog.grid.write_cells(state, (players & 0xFFFF) as u16, cells);
     }
 
     /// Creates a fog modifier (inactive) and returns its handle, or 0 when the player is not live.
@@ -278,7 +230,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             return Value::Handle(0);
         };
         let (x, y, r) = (real_at(a, 2), real_at(a, 3), real_at(a, 4));
-        let cells = circle_cells(x, y, r, FOG_CELL);
+        let cells = gm.fog.grid.circle_shape(x, y, r);
         Value::Handle(gm.fog_create(p, int_at(a, 1), cells, bool_at(a, 5), bool_at(a, 6)))
     });
 
@@ -290,7 +242,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let Some(loc) = location_of(gm, a, 2) else {
             return Value::Handle(0);
         };
-        let cells = circle_cells(loc.x, loc.y, real_at(a, 3), FOG_CELL);
+        let cells = gm.fog.grid.circle_shape(loc.x, loc.y, real_at(a, 3));
         Value::Handle(gm.fog_create(p, int_at(a, 1), cells, bool_at(a, 4), bool_at(a, 5)))
     });
 
@@ -302,14 +254,13 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let Some(r) = rect_of(gm, a, 2) else {
             return Value::Handle(0);
         };
-        let cells = rect_cells(&r, FOG_CELL);
+        let cells = gm.fog.grid.rect_shape((r.min_x, r.min_y), (r.max_x, r.max_y));
         Value::Handle(gm.fog_create(p, int_at(a, 1), cells, bool_at(a, 3), bool_at(a, 4)))
     });
 
     native(reg, game, "DestroyFogModifier", |gm, _, a| {
         if let Some(k) = handle_fog(gm, a, 0) {
-            gm.fog_apply(k, false);
-            gm.fog_obj_mut(k).active = false;
+            gm.fog_stop(k);
             gm.fog_obj_mut(k).destroyed = true;
             gm.kill(k);
         }
@@ -318,20 +269,14 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     native(reg, game, "FogModifierStart", |gm, _, a| {
         if let Some(k) = handle_fog(gm, a, 0) {
-            if !gm.fog_modifier(k).active {
-                gm.fog_apply(k, true);
-                gm.fog_obj_mut(k).active = true;
-            }
+            gm.fog_start(k);
         }
         Value::Null
     });
 
     native(reg, game, "FogModifierStop", |gm, _, a| {
         if let Some(k) = handle_fog(gm, a, 0) {
-            if gm.fog_modifier(k).active {
-                gm.fog_apply(k, false);
-                gm.fog_obj_mut(k).active = false;
-            }
+            gm.fog_stop(k);
         }
         Value::Null
     });
@@ -345,7 +290,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             return Value::Null;
         };
         let players = gm.fog_player_mask(p, bool_at(a, 3));
-        let cells = rect_cells(&r, FOG_CELL);
+        let cells = gm.fog.grid.rect_shape((r.min_x, r.min_y), (r.max_x, r.max_y));
         gm.fog_set_explicit(players, &cells, int_at(a, 1));
         Value::Null
     });
@@ -355,7 +300,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let Some(p) = index_at(gm, a, 0) else {
             return Value::Null;
         };
-        let cells = circle_cells(real_at(a, 2), real_at(a, 3), real_at(a, 4), FOG_CELL);
+        let cells = gm.fog.grid.circle_shape(real_at(a, 2), real_at(a, 3), real_at(a, 4));
         let players = gm.fog_player_mask(p, bool_at(a, 5));
         gm.fog_set_explicit(players, &cells, int_at(a, 1));
         Value::Null
@@ -369,7 +314,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let Some(loc) = location_of(gm, a, 2) else {
             return Value::Null;
         };
-        let cells = circle_cells(loc.x, loc.y, real_at(a, 3), FOG_CELL);
+        let cells = gm.fog.grid.circle_shape(loc.x, loc.y, real_at(a, 3));
         let players = gm.fog_player_mask(p, bool_at(a, 4));
         gm.fog_set_explicit(players, &cells, int_at(a, 1));
         Value::Null
@@ -436,6 +381,26 @@ fn rect_of(gm: &Game, a: &[Value], i: usize) -> Option<RectObj> {
 }
 
 impl Game {
+    /// Starts modifier `k` (no effect when it is already active): it joins the active list and its shape is written.
+    fn fog_start(&mut self, k: ObjKey) {
+        if self.fog_modifier(k).active {
+            return;
+        }
+        self.fog.active.push(k);
+        self.fog_apply(k);
+        self.fog_obj_mut(k).active = true;
+    }
+
+    /// Stops modifier `k` (no effect when it is inactive) and rebuilds the visible layer from the remaining sources.
+    fn fog_stop(&mut self, k: ObjKey) {
+        if !self.fog_modifier(k).active {
+            return;
+        }
+        self.fog.active.retain(|&x| x != k);
+        self.fog_obj_mut(k).active = false;
+        self.fog_refresh();
+    }
+
     /// The fog modifier behind `key`, mutable. Panics if `key` is not a fog modifier.
     fn fog_obj_mut(&mut self, key: ObjKey) -> &mut FogModifierObj {
         match self.object_mut(key) {

@@ -33,8 +33,11 @@ pub const UNIT_BALANCE_FILE: &str = "Units\\UnitBalance.slk";
 pub const UNIT_UI_FILE: &str = "Units\\UnitUI.slk";
 /// `Units\UnitWeapons.slk` (launch and impact heights, acquire range, and the two weapon slots).
 pub const UNIT_WEAPONS_FILE: &str = "Units\\UnitWeapons.slk";
+/// `Units\UnitAbilities.slk` (the ability list of each unit type, column `abilList`). Optional: without it the
+/// lists are empty.
+pub const UNIT_ABILITIES_FILE: &str = "Units\\UnitAbilities.slk";
 
-/// The four tables a unit type record is built from. A missing table is `None` (every row is then missing).
+/// The tables a unit type record is built from. A missing table is `None` (every row is then missing).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UnitTypeTables<'a> {
     /// `UnitData.slk`.
@@ -45,6 +48,8 @@ pub struct UnitTypeTables<'a> {
     pub ui: Option<&'a Slk>,
     /// `UnitWeapons.slk`.
     pub weapons: Option<&'a Slk>,
+    /// `UnitAbilities.slk` (optional, see [`UNIT_ABILITIES_FILE`]).
+    pub abilities: Option<&'a Slk>,
 }
 
 /// Why a unit type record is not built.
@@ -170,6 +175,9 @@ pub struct UnitTypeData {
     pub buff_radius: f32,
     /// `buffType` (text, the buff type name).
     pub buff_type: String,
+    /// `race` (text, the race name of `UnitData`; the random pick walks read its enum value at record `+0x1C0`,
+    /// the enum names are not decoded, see docs/spec/natives-pending.md section 3).
+    pub race: String,
     /// `movetp` (text, the movement type name).
     pub move_type: String,
 
@@ -266,6 +274,9 @@ pub struct UnitTypeData {
     // UnitWeapons.slk (unit level)
     /// `weapsOn` (integer; the unit has weapons).
     pub weapons_on: i32,
+    /// `abilList` of `UnitAbilities.slk`: the ability rawcodes of the type, in file order (the comma-separated
+    /// cell split and trimmed; empty entries dropped). Empty when the table or the cell is missing.
+    pub abil_list: Vec<String>,
     /// `acquire` (real, after the load-time rule: below 1.0 becomes `sight`).
     pub acquire: f32,
     /// `minRange` (real).
@@ -485,6 +496,10 @@ pub fn load_unit_type(
     };
     let balance_ok = has_row(tables.balance, code);
     let weapons_ok = has_row(tables.weapons, code);
+    let abil = Cells {
+        slk: tables.abilities,
+        key: code,
+    };
     let bal = Cells {
         slk: tables.balance,
         key: code,
@@ -525,6 +540,7 @@ pub fn load_unit_type(
         buff_radius: data.real("buffRadius"),
         buff_type: data.text("buffType"),
         move_type: data.text("movetp"),
+        race: data.text("race"),
         fog_radius: ui.real("fogRad"),
         scale_bull: ui.int("scaleBull"),
         blend: ui.real("blend"),
@@ -590,6 +606,13 @@ pub fn load_unit_type(
             bal.int("repulsePrio"),
         ];
     }
+
+    out.abil_list = abil
+        .text("abilList")
+        .split(',')
+        .map(|t| unquote(t).to_owned())
+        .filter(|t| !t.is_empty())
+        .collect();
 
     if weapons_ok {
         out.weapons_on = wpn.int("weapsOn");

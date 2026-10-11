@@ -51,6 +51,7 @@ use softfloat::{Tables, F32};
 use w3map::MapInfo;
 
 pub mod data;
+pub mod game_start;
 pub mod map;
 pub mod pathing;
 pub mod replay;
@@ -100,8 +101,9 @@ pub struct Inputs {
     pub blizzard_j: String,
     /// The raw game-start seed `S` for the random generator (`GetRandomInt` and the streams are
     /// seeded from it, see `sim::Streams::start_game`). The replay's random seed field is the
-    /// intended source. UNSURE: the original computes `S` as a rotate-and-xor fold over the player
-    /// slots (`docs/spec/rng.md` section 4.1), which is not implemented, so the caller supplies `S`.
+    /// intended source (`game_start`). UNSURE: the original computes `S` as a rotate-and-xor fold
+    /// over per-player data (`docs/spec/game-start.md`), which is not implemented, so the caller
+    /// supplies `S`.
     /// Only used when `game_dll` is given (the generator needs its table).
     pub rng_seed: u32,
     /// The `common.ai` source (the common AI script of the AI VMs), or `None`. Without it an AI VM
@@ -391,11 +393,15 @@ impl Engine {
     }
 
     /// Applies commands in the given order and returns their outcomes (one per command).
+    ///
+    /// The orders fire the same issued-order events as the natives (`CommandState::apply_fired`), with the main
+    /// VM running the triggers.
     pub fn apply_commands(&mut self, commands: &[(u8, Command)]) -> Vec<Outcome> {
-        let mut game = self.host.game_mut();
+        let game = self.host.game_handle();
+        let vm = self.host.vm_mut();
         commands
             .iter()
-            .map(|(_, cmd)| self.commands.apply(&mut game, cmd))
+            .map(|(_, cmd)| self.commands.apply_fired(&game, vm, cmd))
             .collect()
     }
 
