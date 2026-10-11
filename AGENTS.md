@@ -223,6 +223,19 @@ tools/
 - Confirmed: `0x6FAAE464` = **-1.0** (the GetRandomReal assumption is confirmed), `0x6FAAE4F4` = 1.0, `0x6FAAE4A0` = 0.1, `0x6FAAE5E8` = π/180 (0x3C8EFA35), `0x6FAAE60C` = 180/π (0x42652EE1), `0x6FAAE600` = π, `0x6FAAE570` = 90.0, `0x6FAAE614` = 2e-7, `0x6FAB7748` = -128000.0 (0xC7FA0001), `0x6FAAE470` = 0.0, **`0x6FAAE564` = 32.0** → the rect clamp is `max - 32` (the earlier assumption C = 0 was **wrong**, fixed in location.rs, confirmed by the disassembly of `0x6F469490`).
 - **Rule for agents**: before assuming the value of a constant from .data, check it with this script. `tools/emu/emu.py` now writes the real startup values and **fails loudly** if a call doesn't return (it used to silently stop after 200k instructions).
 
+### 4.3u Vision / fog of war (spec: docs/spec/vision.md, pass 2, 2026-10-11)
+- Grid = playable area: `width = trunc(range/128)` per axis, origin = playable minimum, **scale = cells/range** (not 1/128;
+  CONFIRMED by Unicorn on 300 rectangles and 40 soft-float vectors). Row pitch = next power of two; flat arrays.
+- Span table of the sight circle (`0x6f408fd0`, octant list `0x6f408800`) decoded; circle writer `0x6f3ba480` checked
+  end to end (300 grids, 0 mismatches). The single-cell writer `0x6f3b0e20` reads row and column as **bytes** (wraps mod 256);
+  the span and rectangle writers use full integers.
+- Refresh `0x6f40a8f0` runs on its own 0.4 s timer (message 0x80269, `0x6f426c50`), **not** on the movement handler (corrected
+  in lockstep.md 11.2). The visible-layer counter `DAT_6fab6a34` has no writer and is 0: the visible layer clears every refresh.
+- Unit sight path: partly decoded (`0x6f409e00` per unit); the walker/source applier `0x6f40a740` pushes 3 arguments into a
+  4-argument circle writer, so it is not the unit path as written. Day/night rule and the unit cell mapping: UNSURE.
+- `IsUnitVisible/Fogged/Masked` = the unit's vtable slot 0xFC (`0x6f285080`), decoded.
+- Tools: `tools/emu/vision_grid_emu.py` (constructor, span table, circle; hooks the Storm heap, memset, `fs:[0]`).
+
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).
 - Iteration order in containers keyed by pointer → the memory layout/allocator has to be emulated.
@@ -271,7 +284,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~45.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~46%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -341,6 +354,12 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (32)**: race enum table `0x6FA70FE8` (human 1 … other 7, creeps 8, commoner 9, critters 10, naga 11; NULL → 7, no match → 0), creep walk `0x6F29FD90` and neutral-building walk `0x6F294740` filters (Unicorn 3×2,000, 0 mismatches); candidate list ORDER still unresolved → ChooseRandomCreep/NPBuilding stay pending. GetWorldBounds: rect = 16-byte copy of terrain getter `0x6F73F500`, handle last; getter values not decoded. Vision pass 2 (grid = playable area, scale = cells/range; midpoint-circle span table; refresh on its own 0.4 s timer 0x80269) verified by the lead (Unicorn 200/118/200/11,640, 0 mismatches).
+
+- **2026-10-11 (vision pass 2)**: fog grid from the playable area (scale cells/range), span table and circle writer
+  checked in Unicorn (0 mismatches on 300 grids), byte-wide cell writer found, refresh moved to its own 0.4 s timer
+  (message 0x80269; lockstep.md 11.2 corrected), unit visibility natives on the slot-0xFC method.
 
 - **2026-10-11 (31)**: game-start seed (game-start.md rewritten): the setup `0x6F5C37A0` parses the player-0 start blob as exactly the w3g **0x19 GameStartRecord body** (n<16 slots × 9 bytes, u32 seed, mode, start spots; refused if n==0 or spots>n) and, when accepted, **S = the record's seed** (LIKELY that a replay's 0x19 body is the stored blob; loader not found). Refused + mode 5 → fold over per-slot X (X = bytes +0x26..+0x29 of the slot sub-record when its tag byte +0x25 == 8; Unicorn 300, 0 mismatches). Second site `0x6F5C0EE0` (flag 0x80000) seeds from the record seed without the fold. `w3g::start::parse_start_body`, `engine::game_start::setup_seed`.
 

@@ -175,9 +175,12 @@ pub struct UnitTypeData {
     pub buff_radius: f32,
     /// `buffType` (text, the buff type name).
     pub buff_type: String,
-    /// `race` (text, the race name of `UnitData`; the random pick walks read its enum value at record `+0x1C0`,
-    /// the enum names are not decoded, see docs/spec/natives-pending.md section 3).
+    /// `race` (text, the race name of `UnitData`).
     pub race: String,
+    /// The race enum of the record (offset `+0x1C0`): [`race_enum`] of the `race` cell. CONFIRMED table and call
+    /// site; a missing cell gives 0 (UNSURE: the original may give 7 for a missing text, see [`RACE_NULL_TEXT`]).
+    /// Creeps are 8, neutral (`other`) buildings are 7 (docs/spec/natives-pending.md section 3.1).
+    pub race_id: i32,
     /// `movetp` (text, the movement type name).
     pub move_type: String,
 
@@ -248,6 +251,10 @@ pub struct UnitTypeData {
     pub primary: String,
     /// `isbldg` (integer).
     pub is_building: i32,
+    /// `tilesets` (text: the tileset letters where the type may appear, or `*` for all). The table it is read from
+    /// is UNSURE (UnitBalance per docs/spec/unit-types.md section 4.1); the random pick walks test it with
+    /// [`tileset_accepts`].
+    pub tilesets: String,
     /// `nbrandom` (integer, random name count).
     pub nb_random: i32,
     /// `repulse`, `repulseParam`, `repulseGroup`, `repulsePrio` (integers).
@@ -541,6 +548,7 @@ pub fn load_unit_type(
         buff_type: data.text("buffType"),
         move_type: data.text("movetp"),
         race: data.text("race"),
+        race_id: race_enum(&data.text("race")),
         fog_radius: ui.real("fogRad"),
         scale_bull: ui.int("scaleBull"),
         blend: ui.real("blend"),
@@ -599,6 +607,7 @@ pub fn load_unit_type(
         out.primary = bal.text("Primary");
         out.is_building = bal.int("isbldg");
         out.nb_random = bal.int("nbrandom");
+        out.tilesets = bal.text("tilesets");
         out.repulse = [
             bal.int("repulse"),
             bal.int("repulseParam"),
@@ -677,4 +686,72 @@ fn rawcode_of(code: &str) -> Option<u32> {
         return None;
     }
     Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// The race names of the builder's name table (CONFIRMED: 8-byte entries `{name, value}` at `0x6FA70FE8`, read by
+/// `0x6F26E210`; the value of the last entry is 0 and it stands for `unknown`).
+pub const RACE_TABLE: &[(&str, i32)] = &[
+    ("nightelf", 4),
+    ("demon", 5),
+    ("human", 1),
+    ("orc", 2),
+    ("undead", 3),
+    ("creeps", 8),
+    ("other", 7),
+    ("critters", 10),
+    ("commoner", 9),
+    ("naga", 11),
+    ("unknown", 0),
+];
+
+/// The value of a NULL race text in `0x6F26E210` (CONFIRMED: `lea eax,[ecx+7]`). The builder passes a text pointer;
+/// whether a missing cell gives NULL is UNSURE, so [`load_unit_type`] uses [`race_enum`] of the empty text (0).
+pub const RACE_NULL_TEXT: i32 = 7;
+
+/// The race enum of a race name (`0x6F26E210`). The first entry of [`RACE_TABLE`] whose name matches gives its value;
+/// no match gives 0. The match is ASCII case-insensitive (LIKELY: the compare is a Storm import, ordinal 508, that is
+/// not checked against `Storm.dll`).
+pub fn race_enum(text: &str) -> i32 {
+    RACE_TABLE
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(text))
+        .map_or(0, |&(_, value)| value)
+}
+
+/// The tileset test of the random pick walks (`0x6F6EB690`, called with `*` and then with the map's tileset char).
+/// A type is accepted when its `tilesets` text contains `*` or the map's tileset char. A map tileset char of 0 skips
+/// the test. LIKELY: the import (Storm ordinal 571, called as `(text, char)`) is a character search; not checked.
+pub fn tileset_accepts(tilesets: &str, map_tileset: u8) -> bool {
+    if map_tileset == 0 {
+        return true;
+    }
+    tilesets.as_bytes().contains(&b'*') || tilesets.as_bytes().contains(&map_tileset)
+}
+
+/// Whether a unit type is a candidate of the creep walk `0x6F29FD90` (`ChooseRandomCreep`). CONFIRMED rules: race 8,
+/// not a building, `special` 0, the first byte of the code not an uppercase letter, the level equal to `level` (or
+/// `level` is -1), and the tileset test. The movement-type gate of the walk is not here: the native passes 1 for
+/// all three of its flags, so that gate is always open. The candidate order is NOT confirmed (natives stay pending).
+pub fn is_creep_candidate(ty: &UnitTypeData, level: i32, map_tileset: u8) -> bool {
+    let first = ty.code.as_bytes().first().copied().unwrap_or(0);
+    if first.is_ascii_uppercase() {
+        return false;
+    }
+    (level == -1 || ty.level == level)
+        && ty.race_id == 8
+        && ty.is_building == 0
+        && ty.special == 0
+        && tileset_accepts(&ty.tilesets, map_tileset)
+}
+
+/// Whether a unit type is a candidate of the neutral building walk `0x6F294740` (`ChooseRandomNPBuilding`). CONFIRMED
+/// rules: race 7, a building (`isbldg` non-zero), `hostilePal` 0, `special` 0, `nbrandom` non-zero, and the tileset
+/// test. No level and no code test. The candidate order is NOT confirmed (natives stay pending).
+pub fn is_neutral_building_candidate(ty: &UnitTypeData, map_tileset: u8) -> bool {
+    ty.race_id == 7
+        && ty.is_building != 0
+        && ty.hostile_pal == 0
+        && ty.special == 0
+        && ty.nb_random != 0
+        && tileset_accepts(&ty.tilesets, map_tileset)
 }

@@ -130,3 +130,92 @@ counters of `crates/sim/src/unit_counts.rs`. Checked against the original in Uni
 - Stock natives (`AddUnitToStock` ...): the per-shop arrays of the unit object and the default lists are not
   modelled.
 - `Cheat` runs the chat command parser (`0x6F7B0DA0`), `ChangeLevel` the campaign loader (`0x6F3A4C70`). Neither is read.
+
+## 10. Pass 3 (2026-10-11): race enum, random pick filters, world bounds
+
+This section supersedes section 2 (world bounds) and the open part of section 3 (race enum, tileset check, movement
+check). Sections 1, 4 to 9 are unchanged. Addresses are image addresses; no decompiled text is copied here.
+
+### 10.1 Race enum: RESOLVED (CONFIRMED)
+
+- CONFIRMED (table): 8-byte entries `{name pointer, value}` at `0x6FA70FE8`, read by `0x6F26E210` in table order:
+
+  | Name | Value | Name | Value |
+  |---|---|---|---|
+  | nightelf | 4 | other | 7 |
+  | demon | 5 | creeps | 8 |
+  | human | 1 | critters | 10 |
+  | orc | 2 | commoner | 9 |
+  | undead | 3 | naga | 11 |
+  | unknown | 0 | (end: name pointer 0) | |
+
+- CONFIRMED (routine): `0x6F26E210` takes the text in ECX. NULL gives 7 (`lea eax,[ecx+7]`). Otherwise the first entry
+  whose name matches gives its value; no match gives 0.
+- CONFIRMED (store): the unit builder (`0x6F2A768D..0x6F2A76A0`) reads the race cell with `0x6F25F940`, calls
+  `0x6F26E210` and stores the result at record `+0x1C0`. So the values for the walks are: creeps 8, other (neutral
+  buildings) 7, as stated in section 3.
+- LIKELY (compare): the match calls the Storm import at IAT `0x6F86D608` (ordinal 508, through the thunk `0x6F6EB68A`)
+  with a length limit of `0x7FFFFFFF`. Modelled as ASCII case-insensitive equality. Storm.dll is not in the container,
+  so the case rule is not checked.
+- UNSURE: a missing race cell. The text getter's result for a missing cell is not read; the Rust side gives 0 (no match).
+- Other race mappings found and not used by the builder: `0x6F6F65A0` (a second table in code, with `unknown` giving 7)
+  and `0x6F6F6470` (the player race function, values 1..4 for the four playable races). Their callers are the editor
+  property readers, not the unit record.
+
+### 10.2 Random picks: the filters are CONFIRMED, the candidate order is NOT (natives stay pending)
+
+Checked in Unicorn: `tools/emu/random_pick_emu.py` runs `0x6F26E210`, the creep walk `0x6F29FD90` and the neutral walk
+`0x6F294740` against Python models. Results: seed 7, 2,000 cases: race table 2,000 cases, 0 mismatches; creep walk
+2,000 cases with random records, flags and levels, 0 mismatches (68 non-empty candidate lists); neutral walk 2,000
+cases, 0 mismatches (141 non-empty lists). Seed 1, 300 cases: 0 mismatches in all three (6 and 15 non-empty lists). Each record has a random race, level, building, special, hostile pal,
+nbrandom, tileset text, movement type and three random stack flags. The movement type is a table in the harness.
+The walks needed fs:[0] accesses rewritten in the emulated copy (no FS base in the harness; 7 sites, not in the file).
+
+- CONFIRMED (creep walk `0x6F29FD90`, arguments ECX = level, DL = map tileset char, three stack flags, all 1 from the
+  native `0x6F3B3660`):
+  - Candidates come from the global list (section 10.2 order below). A record is skipped when the first byte of its
+    code is an uppercase letter (`0x41`..`0x5A`).
+  - Movement-type gate: `mt = 0x6F29C240(code)` (the record's `+0x1A8`). If `mt == 2`, the flag `b` must be set; if
+    `mt == 0x10`, the flag `c`; otherwise the flag `a`. With the native's flags all 1 the gate is always open.
+  - Level: `level == -1` or the record's `+0x68` equals the argument.
+  - `race (+0x1C0) == 8`, `isbldg (+0x28C) == 0`, `special (+0x290) == 0`.
+  - Tileset test when DL is non-zero: the record's tilesets text (object at `+0x29C`, getter `0x6F4C4630`) is accepted
+    if it contains `*` or the map char. The test is the import at IAT `0x6F86D60C` (ordinal 571), called as
+    `(text, char)`. LIKELY a character search (`strchr`-like); its name is NOT checked (Storm.dll is not here).
+  - Count `n` of candidates: if `n != 0` the draw `0x6F285320` runs on stream `0x20` with EDX = `n`, and the result is
+    the candidate at the drawn index; if `n == 0` no draw happens and the result is 0.
+- CONFIRMED (neutral walk `0x6F294740`, CL = map tileset char, stream `0x22`): `race == 7`, `isbldg != 0`,
+  `hostilePal (+0x294) == 0`, `special == 0`, `nbrandom (+0x298) != 0`, then the same tileset test (CL non-zero). No
+  level test and no code test.
+- CONFIRMED (native wrappers): `ChooseRandomCreep` (`0x6F3B3660`) passes level, the map tileset byte (`0x6F00F520`,
+  which reads `+0x1D0` of the global map object through `0x6F01F5A0`) and flags 1, 1, 1. `ChooseRandomNPBuilding`
+  (`0x6F3B3680`) passes the tileset byte alone to the neutral walk.
+- CONFIRMED (draw): the shared helper `0x6F285320` (`ECX` stream, `EDX` count) is the one `ChooseRandomItem` uses.
+- NOT CONFIRMED, the blocker: the candidate ORDER. The walk starts at the head cell `0x6FAB4468` and follows the link at
+  `node + [0x6FAB4460] + 4` until the value is 0 or negative. The record insert `0x6F2A6190` (called with ECX =
+  `0x6FAB445C` from `0x6F2A695B`, the same table the lookup uses) prepends each new cell in front of the cell stored at
+  table `+0x08`, and stores the new cell at table `+0x08`. The head the walk reads (`table +0x0C` if the table is
+  `0x6FAB445C`) is therefore not the head the insert writes (`table +0x08`). Either the two lists differ or a fixed
+  offset is involved; this was not resolved. If they are the same list, the order is newest first (reverse UnitUI row
+  order). UNSURE: both directions. Without the order the draw index picks a different type, so the natives stay
+  pending.
+- Rust: `gamedata::unittype::{race_enum, tileset_accepts, is_creep_candidate, is_neutral_building_candidate}` hold the
+  confirmed rules (tests in `crates/gamedata/tests/unittype.rs`). Record fields added: `race_id` (CONFIRMED) and
+  `tilesets` (text, the table is UNSURE: UnitBalance per section 4.1 of unit-types.md).
+
+### 10.3 World bounds: the stores are CONFIRMED, the values are NOT (native stays pending)
+
+- CONFIRMED (disassembly of `0x6F3D0D60`): the native builds a rect object (the object returned by `0x6F3B6500`), copies
+  16 bytes from the result of the terrain getter `0x6F73F500` (called on the global map object through `0x6F01F5A0`,
+  copied by `0x6F00F560`), stores the four dwords at the object's `+0x24`, `+0x28`, `+0x2C`, `+0x30` through
+  `0x6F3DB8F0`, and only then allocates the handle (`0x6F430C80`, last). The four values, in order, are the copy of
+  the getter's 16-byte result.
+- NOT RESOLVED: `0x6F73F500` computes the 16 bytes from the terrain object (`+0xE0`, `+0xE4`, a grid indexed by bits
+  14 to 22 of the position). Its formula is not decoded, so the bounds are unknown. The native stays NotImplemented.
+- Earlier candidates (the pathing rect at `+0x54`) are not the source: the native reads the terrain getter, not the
+  pathing object, for the stored values.
+
+### 10.4 Support table
+
+- `pending.rs`: the reasons of `ChooseRandomCreep`, `ChooseRandomNPBuilding` and `GetWorldBounds` are updated to the
+  findings above. No native changed status in this pass.

@@ -229,9 +229,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitFogged",
-        support: Support::NotImplemented(
-            "N:fog of war is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "IsUnitIdType",
@@ -277,9 +275,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitMasked",
-        support: Support::NotImplemented(
-            "N:fog of war is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "IsUnitOwnedByPlayer",
@@ -305,9 +301,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitVisible",
-        support: Support::NotImplemented(
-            "N:visibility is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetUnitAbilityLevel",
@@ -869,6 +863,20 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let v = unit_at(&gm, a, 0).is_some_and(|k| gm.unit(k).loaded);
         NativeResult::Return(Value::Boolean(v))
     });
+
+    // The three fog tests of a unit for a player (vision.md section 7): the state 4 (visible), 2 (fogged) or 1
+    // (masked) of the unit's cell, or the reveal bit (`Game::unit_fog_test`, LIKELY).
+    for (name, state) in [("IsUnitVisible", 4), ("IsUnitFogged", 2), ("IsUnitMasked", 1)] {
+        let g = Rc::clone(game);
+        reg.register(name, move |_, a| {
+            let gm = g.borrow();
+            let v = match (unit_at(&gm, a, 0), gm.player_index_of_handle(handle_arg(a, 1))) {
+                (Some(k), Some(p)) => gm.unit_fog_test(k, p, state),
+                _ => false,
+            };
+            NativeResult::Return(Value::Boolean(v))
+        });
+    }
 
     let g = Rc::clone(game);
     reg.register("IsUnitOwnedByPlayer", move |_, a| {

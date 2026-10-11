@@ -646,6 +646,10 @@ bit 16 = cancelled), owner +0x18 and period +0x8. Re-arm (`6F46D570`, `6F46D5F0`
 agile clock** (6 game ticks). It is not every tick and not from G1-G3. The first fire is 0.03 after the
 timer is armed at map start (clock 0; LIKELY).
 
+**Correction (2026-10-11, vision pass 2, `vision.md` section 11.4).** The vision refresh `0x6F40A8F0` is not called
+from the movement handler. It is case `0x80269` of the handler `0x6F42FC80` (`0x6F4299E0`), driven by its own
+repeating timer with period 0.4 s (`0x6FAB6F00`, posted by `0x6F426C50`). The movement walk stays on 0x8026A.
+
 ### 11.3 The mover walk and the per-call step
 
 - `0x6F483300` (CONFIRMED): increments the walk counter `world.+0x538`; calls `0x6F49AC40`; walks the
