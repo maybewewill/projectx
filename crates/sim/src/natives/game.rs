@@ -331,7 +331,11 @@ pub struct RegionObj {
 }
 
 /// A unit type as the simulation needs it: the template values that a new unit starts with.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// The attribute fields follow the unit-type record offsets read by the attribute natives (see
+/// `natives/unit_attr.rs`). They are plain values here; TODO(gamedata): the engine fills them from the unit rows
+/// of the SLK data at map load, like the other fields.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct UnitType {
     /// The name that `CreateUnitByName` looks up.
     pub name: String,
@@ -344,6 +348,25 @@ pub struct UnitType {
     /// Number of item slots (`UnitInventorySize`). 0 for a unit without an inventory: the original has
     /// no pack object then, and every pack native fails (`natives/item.rs`).
     pub inventory_size: u32,
+    /// Default move speed (record `+0x1D4`). A new unit starts at this value (LIKELY).
+    pub move_speed: F32,
+    /// Default turn speed (record `+0x1E0`).
+    pub turn_speed: F32,
+    /// Default prop window (record `+0x1E4`).
+    pub prop_window: F32,
+    /// Default fly height (record `+0x1F8`).
+    pub fly_height: F32,
+    /// Default acquire range (record `+0x194`).
+    pub acquire_range: F32,
+    /// Point value (record `+0x1D0`), read by `GetUnitPointValue`.
+    pub point_value: i32,
+    /// Food used (record `+0x5C`), read by `GetUnitFoodUsed`.
+    pub food_used: i32,
+    /// Food made (record `+0x60`), read by `GetUnitFoodMade`.
+    pub food_made: i32,
+    /// The abilities a new unit gets, in list order, at level 1 (LIKELY). TODO(gamedata): from the type's ability
+    /// list.
+    pub abilities: Vec<u32>,
 }
 
 /// The unit type registry, keyed by the raw type id (the four-character code as an integer).
@@ -423,6 +446,102 @@ pub struct UnitObj {
     pub paused: bool,
     /// Set by `RemoveUnit`. A removed unit has no live handle, so every native treats it as invalid.
     pub removed: bool,
+    /// Move speed (`SetUnitMoveSpeed`). Stored as given (UNSURE: the original's mover may clamp it).
+    pub move_speed: F32,
+    /// Turn speed (`SetUnitTurnSpeed`, the mover's field at object `+0xB8`).
+    pub turn_speed: F32,
+    /// Prop window (`SetUnitPropWindow`, object `+0xBC`).
+    pub prop_window: F32,
+    /// Fly height (object `+0x208`). Set by `SetUnitFlyHeight`, which keeps a non-positive value at 0.01.
+    pub fly_height: F32,
+    /// Acquire range (`SetUnitAcquireRange`, read through the acquisition sub-object).
+    pub acquire_range: F32,
+    /// Scale (`SetUnitScale`). Only the first scale value is stored (see `natives/unit_attr.rs`).
+    pub scale: F32,
+    /// Time scale (`SetUnitTimeScale`, object `+0x300`).
+    pub time_scale: F32,
+    /// Vertex colour as `0xAARRGGBB` (`SetUnitVertexColor`, object `+0x2D4`).
+    pub vertex_color: u32,
+    /// The user data integer (`SetUnitUserData`, object `+0x27C`).
+    pub user_data: i32,
+    /// Creep guard flag (`SetUnitCreepGuard`, object `+0x60` bit 2).
+    pub creep_guard: bool,
+    /// Exploded flag (`SetUnitExploded`, object `+0x5C` bit 13).
+    pub exploded: bool,
+    /// Illusion flag (object `+0x5C` bit 30). Read by `IsUnitIllusion`; no native sets it yet.
+    pub illusion: bool,
+    /// Loaded flag (object `+0x5C` bit 4). Read by `IsUnitLoaded`; no transport system sets it yet.
+    pub loaded: bool,
+    /// The unit's abilities by raw id (the ability list of the original).
+    pub abilities: BTreeMap<u32, UnitAbility>,
+    /// Hero state, present for a hero type (see `natives/hero.rs`).
+    pub hero: Option<HeroObj>,
+}
+
+/// An ability a unit has (the ability object of the original).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnitAbility {
+    /// Level minus one (the original's `+0x50`). `GetUnitAbilityLevel` returns this plus one.
+    pub level0: i32,
+    /// Permanent counter (`+0x38`), changed by `UnitMakeAbilityPermanent`.
+    pub permanent: i32,
+}
+
+/// The hero state of a unit (the hero sub-object of the original, reached through `+0x1F0`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeroObj {
+    /// The hero level. A new hero starts at 1 (LIKELY).
+    pub level: i32,
+    /// Experience points (`+0x8C`).
+    pub xp: i32,
+    /// Unspent skill points (`+0x90`).
+    pub skill_points: i32,
+    /// Set by `SuspendHeroXP` (`+0xEC`): experience is not gained while set (LIKELY).
+    pub xp_suspended: bool,
+}
+
+impl Default for HeroObj {
+    fn default() -> Self {
+        HeroObj {
+            level: 1,
+            xp: 0,
+            skill_points: 0,
+            xp_suspended: false,
+        }
+    }
+}
+
+/// An ability type as the simulation needs it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AbilityType {
+    /// The maximum level from the ability record (its `+0x3C`, read only when the record's flag `+0x2C` is set).
+    /// `None` means no limit data: the original's max then is 1 (`natives/unit_attr.rs`).
+    pub max_level: Option<i32>,
+}
+
+/// The ability type registry, keyed by the raw ability id. An id that is not registered cannot be added to a
+/// unit (`UnitAddAbility` fails, LIKELY: the original's factory finds no record).
+///
+/// TODO(gamedata): the engine should load it from the ability rows of the SLK data at map load.
+#[derive(Debug, Clone, Default)]
+pub struct AbilityTypes {
+    by_id: BTreeMap<u32, AbilityType>,
+}
+
+impl AbilityTypes {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds or replaces the ability type `id`. Returns the type it replaced.
+    pub fn insert(&mut self, id: u32, ty: AbilityType) -> Option<AbilityType> {
+        self.by_id.insert(id, ty)
+    }
+
+    /// The ability type with raw id `id`.
+    pub fn get(&self, id: u32) -> Option<&AbilityType> {
+        self.by_id.get(&id)
+    }
 }
 
 /// An item type as the simulation needs it: the template values a new item starts with, and the record
@@ -892,6 +1011,8 @@ pub struct Game {
     enum_destructables: Vec<u32>,
     /// Destructable handles of the running `GetFilterDestructable` scopes, innermost last.
     filter_destructables: Vec<u32>,
+    /// The ability type registry the host fills (see [`AbilityTypes`]).
+    ability_types: AbilityTypes,
 }
 
 impl Default for Game {
@@ -933,6 +1054,7 @@ impl Game {
             destructable_types: DestructableTypes::new(),
             enum_destructables: Vec::new(),
             filter_destructables: Vec::new(),
+            ability_types: AbilityTypes::new(),
         }
     }
 
@@ -1077,6 +1199,16 @@ impl Game {
     /// Closes the innermost `GetFilterDestructable` scope.
     pub fn pop_filter_destructable(&mut self) {
         self.filter_destructables.pop();
+    }
+
+    /// The ability type registry (read only). TODO(gamedata): filled by the engine from SLK data.
+    pub fn ability_types(&self) -> &AbilityTypes {
+        &self.ability_types
+    }
+
+    /// Mutable access to the ability type registry, for the host and the tests.
+    pub fn ability_types_mut(&mut self) -> &mut AbilityTypes {
+        &mut self.ability_types
     }
 
     /// The unit type registry (read only). TODO(gamedata): filled by the engine from SLK data.

@@ -54,7 +54,10 @@ use std::rc::Rc;
 use jass::vm::{NativeRegistry, NativeResult, Value};
 use softfloat::{arith, F32};
 
-use super::game::{Game, LocationObj, ObjKey, Object, UnitEvent, UnitObj};
+use super::game::{
+    Game, HeroObj, LocationObj, ObjKey, Object, UnitAbility, UnitEvent, UnitObj,
+};
+use super::hero::is_hero_id;
 use super::player::raw_at;
 use super::region;
 use super::unit_event;
@@ -428,6 +431,26 @@ fn create(gm: &mut Game, owner_handle: u32, type_id: u32, x: F32, y: F32, face: 
         hidden: false,
         paused: false,
         removed: false,
+        move_speed: ty.move_speed,
+        turn_speed: ty.turn_speed,
+        prop_window: ty.prop_window,
+        fly_height: ty.fly_height,
+        acquire_range: ty.acquire_range,
+        scale: F32::ONE,
+        time_scale: F32::ONE,
+        // UNSURE: the original's default colour is not read; white is used.
+        vertex_color: 0xFFFF_FFFF,
+        user_data: 0,
+        creep_guard: false,
+        exploded: false,
+        illusion: false,
+        loaded: false,
+        abilities: ty
+            .abilities
+            .iter()
+            .map(|&id| (id, UnitAbility::default()))
+            .collect(),
+        hero: is_hero_id(type_id).then(HeroObj::default),
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
     // of units is UNSURE; 0 is used, as for the other handle types the scripts create on demand.

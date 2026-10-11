@@ -20,6 +20,7 @@ pub mod game;
 mod gamecache;
 mod group;
 mod hashtable;
+pub mod hero;
 mod item;
 mod location;
 mod player;
@@ -29,6 +30,7 @@ mod rng;
 mod timer;
 mod trigger;
 mod unit;
+pub mod unit_attr;
 mod unit_event;
 
 pub use game::{
@@ -68,4 +70,6 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     group::register(reg, game);
     item::register(reg, game);
     destructable::register(reg, game);
+    unit_attr::register(reg, game);
+    hero::register(reg, game);
 }
