@@ -311,7 +311,7 @@ fn w3boot_prints_the_report() {
         "{stdout}"
     );
     assert!(stdout.contains("  NoSuchNative"), "{stdout}");
-    assert!(stdout.contains("steps: 10"), "{stdout}");
+    assert!(stdout.contains("ticks: 200 (batches: 10,"), "{stdout}");
     assert!(
         stdout.contains("timer and sleep entries fired: 1"),
         "{stdout}"

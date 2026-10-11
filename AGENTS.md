@@ -338,6 +338,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (lockstep driver)**: the simulation advances one game tick (0.005 s soft-float add) per tick with the timer pump after each add (`ScriptHost::step_ticks`, `Engine::step_ticks`, `Engine::run_turn`). `step()` = one batch of 20 ticks. Order/JASS/AI cadence kept at 100 ms, UNSURE (lockstep.md section 10).
 - **2026-10-11 (19)**: damage table layout, Misc reader (S2R, default 0.0) and attack/armor name tables taken from Game.dll (Unicorn 122/122, re-run by the lead). Lockstep pass 4. 714 tests. ~34.5%.
 
 - **2026-10-11 (damage tables)**: the Misc damage tables are read from the binary (attack-damage.md section 10). Reader default is `0.0` (not 1.0, and `DefenseArmor` 0.0, not 0.06). Attack-type names: unknown/empty/`melee` = Spells (0); armor names: unknown = Normal (4). Ethereal slot = attack row, with elements 5,0,1,2,3,4,6. `tools/emu/damage_table_emu.py`: 122 checks, 0 mismatches. Physical armor = damage class word `0x10` (compare confirmed; atkType to class mapping still open).

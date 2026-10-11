@@ -502,3 +502,85 @@ populated agent in emulation needs the allocator stubs (`0x6F4C1AB0`, `0x6F629E9
   order and the horizon branch.
 - The idle events `0x40090093` / `0x40090094` build their float payload differently (`fild` of the
   tick total, a double constant at `0x6F932C60`); not analysed here.
+
+---
+
+## 10. Pass 6 (2026-10-11): the simulation driver advances one game tick at a time
+
+Implementation: `crates/sim/src/script.rs` (`ScriptHost::step_ticks`, `ScriptHost::step` = one batch),
+`crates/engine/src/lib.rs` (`Engine::step_ticks`, `Engine::step`, `Engine::run_turn`),
+`crates/sim/src/lockstep.rs` (`TICK_INCREMENT_BITS`, `TICKS_PER_BATCH`). Before this pass the host added
+0.1 s (`0x3DCCCCCD`) once per `step()`, which is not what the original does.
+
+### 10.1 What the driver does per game tick (in this order)
+
+1. **Clock.** `clock := softfloat_add(clock, 0.005f)` with `TICK_INCREMENT_BITS = 0x3BA3D70A` (section 9).
+   CONFIRMED value; the operator is LIKELY (section 9.3). One add per tick, no speed scaling.
+2. **Timer pump to the new clock** (`0x6F46E370`, CONFIRMED in section 7.3): pops every queue entry with
+   expiry `<= clock`, in (expiry, insertion) order. During each callback the queue time (and the VM time)
+   is that entry's expiry; when the pump ends it is the clock. Callbacks may queue entries that are due
+   at or before the clock; those are popped in the same tick. Entry kinds: sleep (resume the thread at
+   its expiry), timer expiry (handler and listening triggers), trigger event, timed life, attack timer.
+3. **Batch work** only at tick multiples of `TICKS_PER_BATCH = 20` (counted from host creation):
+   a. order and movement tick (`Game::tick_orders`, which includes the combat tick of units with orders);
+   b. one JASS scheduler pass (`Vm::step(clock)`), every runnable thread once;
+   c. (engine only) the AI host pass (`AiHost::step(clock)`), after the main host's batch work.
+
+`ScriptHost::step()` is one batch (20 ticks = 100 ms), so existing callers keep their meaning. The
+engine counts `steps` as batches and `ticks` as game ticks. A replay drives the same path:
+`TurnScheduler::push_turn(...).game_ticks` is the tick count, passed to `Engine::run_turn` after the
+turn's commands are applied (section 3 order).
+
+### 10.2 Cadence of each per-step piece
+
+| Piece | Cadence in this model | Original | Status |
+|---|---|---|---|
+| Clock add | every tick | every tick (driver `0x6F553470`, listener `0x6F2F4950`) | CONFIRMED value, LIKELY operator |
+| Timer pump | every tick | every tick (`0x6F46E520` after the add) | LIKELY (horizon branch below) |
+| Timers, sleeps, trigger events, attack timers (`0xD01AF..C1`) | exact, at the tick the clock reaches the expiry (queue timers) | queue timers, game-loop-2 4.2 | LIKELY |
+| Order and movement tick (`tick_orders`) | every 20 ticks; a move is `speed * 0.1` per call (`STEP_BITS`, orders.rs) | movement message `0x8026A` (movement.md); the cadence of the mover call is not known | **UNSURE** |
+| Combat tick of units with orders | every 20 ticks (inside `tick_orders`) | attack cycle is timer-driven (attack-cycle.md) | **UNSURE** |
+| JASS scheduler pass (`Vm::step`) | every 20 ticks | the interpreter is only called from the wake paths (game-loop-2 4.5), so there is no polling pass | **UNSURE**, a model |
+| AI host pass | every 20 ticks, after the main batch | AI dispatcher with a +100 ms next run (ai.rs notes, base UNSURE) | **UNSURE** |
+
+### 10.3 Consequences of the 0.005 s tick (CONFIRMED arithmetic, measured in tests)
+
+- The clock after `n` ticks is an `n`-fold soft-float add, not `n * 0.005` nor `0.1` at batch 1
+  (`per_tick_clock_is_twenty_soft_adds_per_batch`). Truncating adds drift, so a value that is exactly
+  reached in IEEE arithmetic may be reached one tick later.
+- A 0.1 s `TimerStart` at tick 20 fires at the first tick whose clock is `>= expiry`, where
+  `expiry = soft_add(clock(20), 0.1f)`. The test `point_one_second_timer_fires_on_the_first_tick_whose_clock_reaches_expiry`
+  checks this tick by tick.
+- A timer is observed by batch code only at the batch boundary after its tick. A 0.5 s scan armed at
+  tick 20 fires in the batch after tick 120 (test `idle_unit_acquires_an_enemy_that_enters_range_at_the_next_scan`
+  derives the step from the scan chain).
+- A computer player's `Sleep(0.1)` wakes at the first batch boundary whose clock reaches the wake time.
+  Because that clock drifts, a 0.1 s sleep takes 1 or 2 batches. The AI tests therefore run until the
+  count is reached and check the interleaving (`run_until` in `tests/ai_natives.rs`). UNSURE: the original
+  wakes the AI from a 100 ms timer on the tick that reaches it, so this is a known divergence of the
+  batch model.
+
+### 10.4 What is UNSURE in the driver
+
+- **Batch length 20 ticks** for the order/movement, JASS-scheduler and AI work: no source in the spec.
+  It is kept at the old 100 ms so the per-step behaviour does not change. Change `TICKS_PER_BATCH` when
+  the original's cadence is known.
+- **Horizon branch.** `0x6F46E520` advances only if `tmp < queue+0x48` (the limit); otherwise it takes a
+  branch not analysed (section 9.3). The driver always advances: no limit is modelled.
+- **Movement step.** A move step is `speed * 0.1` per `tick_orders` call. Under the 20-tick batch that is
+  per 100 ms of game time; the original's per-tick movement (`0x8026A`) may move `speed * 0.005` per tick.
+  Not verified (movement.md still-open list).
+- **Frame-driver ticks per turn.** The driver runs `SPEED * m` ticks per 25 ms unit (section 7.1). The
+  multiplier `m` is still UNSURE (section 7.2); the engine takes `game_ticks` from `TurnScheduler` as is.
+- **Agile clock vs +0x1C70.** Both advance per tick; whether `+0x1C70` (5 per tick) is the same time base
+  as the agile clock is LIKELY (section 8.2), not confirmed.
+- **Wake order** inside one tick (timers before sleeps of the same expiry) follows the queue's (expiry, seq)
+  order; the original's order for equal expiries is not in the spec (game-loop-2 4.5).
+
+### 10.5 Verification
+
+- `cargo test --workspace` (no `GAME_DLL`) and with `GAME_DLL` set: all pass.
+- Clock tests: `per_tick_clock_is_twenty_soft_adds_per_batch` (sim `tests/timer.rs`), the lockstep unit tests
+  (`agile_clock_advances_by_one_soft_float_add_per_tick`, `tick_increment_is_five_over_thousand_in_soft_float`
+  with `GAME_DLL`).
+- No Unicorn check of the pump after the tick add yet (needs the populated queue object, section 9.6).

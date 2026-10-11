@@ -3,6 +3,7 @@
 
 use jass::compile::compile;
 use jass::vm::NativeRegistry;
+use sim::lockstep::{TICKS_PER_BATCH, TICK_INCREMENT_BITS};
 use sim::{AgileClock, ScriptHost};
 use softfloat::{arith, F32};
 
@@ -72,15 +73,26 @@ fn add(a: f32, b: f32) -> f32 {
     arith::add(F32::from_bits(a.to_bits()), F32::from_bits(b.to_bits())).to_f32()
 }
 
-fn clock_after(k: usize) -> f32 {
+/// The agile clock after `ticks` game ticks: one soft-float add of the tick increment per tick
+/// (`sim::lockstep::TICK_INCREMENT_BITS`, 0.005 s).
+fn clock_at_tick(ticks: u64) -> f32 {
     let mut c = AgileClock::new();
-    for _ in 0..k {
-        c.advance_step();
+    for _ in 0..ticks {
+        c.advance(TICK_INCREMENT_BITS);
     }
     c.now()
 }
 
-const START: f32 = 0.1;
+/// The clock at the end of batch `k` (`TICKS_PER_BATCH` ticks each). An entry fires by the end of
+/// batch `k` exactly when its expiry is at most this clock, because the clock only grows.
+fn clock_after(k: usize) -> f32 {
+    clock_at_tick(TICKS_PER_BATCH * k as u64)
+}
+
+/// The start time: Main runs in batch 1, at the boundary tick 20, so timers start from that clock.
+fn start() -> f32 {
+    clock_at_tick(TICKS_PER_BATCH)
+}
 
 #[test]
 fn trigger_execute_runs_actions_at_once_and_counts() {
@@ -219,9 +231,9 @@ endfunction
 "#;
     let mut host = host_for(src);
     host.start("Main", &[]).unwrap();
-    let wake = add(START, 0.95);
+    let wake = add(start(), 0.95);
     let mut expiries = Vec::new();
-    let mut e = add(START, 0.2);
+    let mut e = add(start(), 0.2);
     for _ in 0..25 {
         expiries.push(e);
         e = add(e, 0.2);

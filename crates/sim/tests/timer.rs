@@ -9,6 +9,7 @@ fn sfadd(x: u32, y: u32) -> u32 {
     arith::add(F32::from_bits(x), F32::from_bits(y)).to_bits()
 }
 
+use sim::lockstep::{TICKS_PER_BATCH, TICK_INCREMENT_BITS};
 use sim::{AgileClock, ScriptHost, TimerQueue, STEP, STEP_BITS};
 
 /// Pump with a closure that records `(payload, expiry bits, now during callback bits)`.
@@ -275,34 +276,34 @@ fn host_for(src: &str) -> ScriptHost {
     ScriptHost::new(module, NativeRegistry::with_builtins(), tables()).expect("vm")
 }
 
+/// The agile clock after `ticks` game ticks: one soft-float add of the tick increment per tick.
+fn clock_at_tick(ticks: u64) -> f32 {
+    let mut c = AgileClock::new();
+    for _ in 0..ticks {
+        c.advance(TICK_INCREMENT_BITS);
+    }
+    c.now()
+}
+
 #[test]
 fn trigger_sleep_resumes_at_the_expected_step() {
     let mut host = host_for(SLEEP_SCRIPT);
     host.start("Main", &[]).expect("start");
 
-    // Step 1 runs Main at clock = STEP. Main sleeps for 0.25 s, so its wake time is the VM's
-    // soft-float `now + seconds`. That is the same value the host schedules as the timer expiry.
-    let mut clock = AgileClock::new();
-    clock.advance_step();
-    // The VM's wake time is the soft-float sum, so the host's timer expiry is that same value.
-    let until = f32::from_bits(sfadd(clock.now().to_bits(), 0.25f32.to_bits()));
+    // Main runs in batch 1, at tick 20 (TICKS_PER_BATCH), when the clock is the 20-tick fold of
+    // 0.005 s. Its sleep of 0.25 s wakes at the VM's soft-float `now + seconds`, which is the value
+    // the host schedules as the timer expiry.
+    let start = clock_at_tick(TICKS_PER_BATCH);
+    let until = f32::from_bits(sfadd(start.to_bits(), 0.25f32.to_bits()));
 
-    // The first clock value at or after `until` decides the resume step. Soft-float accumulation
-    // truncates, so the clock reads 0.1 (3DCCCCCD), 0.2 (3E4CCCCD), 0.29999998 (3E999999),
-    // 0.39999998 (3ECCCCCC). `until` is 0.349999994 (3EB33333), so the resume step is 4.
-    let mut expected_step = None;
-    let mut probe = clock;
-    for k in 2..=20u32 {
-        probe.advance_step();
-        if probe.now() >= until {
-            expected_step = Some(k);
-            break;
-        }
-    }
-    let expected_step = expected_step.expect("resume within 20 steps");
+    // The resume batch is the first batch whose end clock reaches `until`. The pump fires inside
+    // the tick where the clock first reaches it, so the batch end is the first observable point.
+    let expected_step = (2..=20u64)
+        .find(|&k| clock_at_tick(TICKS_PER_BATCH * k) >= until)
+        .expect("resume within 20 batches");
 
     let mut resumed_at = None;
-    for k in 1..=20u32 {
+    for k in 1..=20u64 {
         let fired = host.step();
         let done = host.vm().global("gDone").expect("gDone");
         if k == 1 {
@@ -315,17 +316,79 @@ fn trigger_sleep_resumes_at_the_expected_step() {
     }
     let (step, fired) = resumed_at.expect("thread resumed");
     assert_eq!(step, expected_step);
-    assert_eq!(fired, 1, "one sleep timer fires on the resume step");
-    // The host ends each step with a scheduler pass at the clock value, so the VM reads that value.
-    let mut at_step = AgileClock::new();
-    for _ in 0..step {
-        at_step.advance_step();
-    }
-    assert_eq!(host.vm().now().to_bits(), at_step.now().to_bits());
+    assert_eq!(fired, 1, "one sleep timer fires in the resume batch");
+    // The host ends each batch with the clock at that batch's boundary, so the VM reads that value.
+    assert_eq!(
+        host.vm().now().to_bits(),
+        clock_at_tick(TICKS_PER_BATCH * step).to_bits()
+    );
     // The thread itself ran at the timer's expiry (`until`), which the pump passed to `Vm::resume`.
-    assert!(until <= at_step.now());
-    // Three steps after the sleep began (step 1), as the spec scenario requires.
+    assert!(until <= clock_at_tick(TICKS_PER_BATCH * step));
+    // Four batches after the start (batch 1), as the spec scenario requires.
     assert_eq!(step, 4);
+}
+
+#[test]
+fn per_tick_clock_is_twenty_soft_adds_per_batch() {
+    // One batch is 20 ticks of 0.005 s. The clock is the fold of soft-float adds, never 0.1 in one add.
+    let mut host = host_for(SLEEP_SCRIPT);
+    host.step_ticks(1);
+    assert_eq!(host.ticks(), 1);
+    assert_eq!(host.clock().bits(), TICK_INCREMENT_BITS);
+    host.step_ticks(19);
+    assert_eq!(host.ticks(), 20);
+    assert!(host.at_batch_boundary());
+    let mut bits = 0u32;
+    for _ in 0..20 {
+        bits = sfadd(bits, TICK_INCREMENT_BITS);
+    }
+    assert_eq!(host.clock().bits(), bits);
+    assert_ne!(host.clock().bits(), 0x3DCC_CCCD, "not the 0.1 s step");
+    // The batch ran at tick 20: the VM reads the batch-end clock.
+    assert_eq!(host.vm().now().to_bits(), bits);
+}
+
+#[test]
+fn point_one_second_timer_fires_on_the_first_tick_whose_clock_reaches_expiry() {
+    let src = r#"
+type timer extends handle
+native CreateTimer takes nothing returns timer
+native TimerStart takes timer t, real timeout, boolean periodic, code handlerFunc returns nothing
+
+globals
+    integer gFired = 0
+endglobals
+
+function OnExpire takes nothing returns nothing
+    set gFired = gFired + 1
+endfunction
+
+function Main takes nothing returns nothing
+    local timer t = CreateTimer()
+    call TimerStart(t, 0.1, false, function OnExpire)
+endfunction
+"#;
+    let mut host = host_for(src);
+    host.start("Main", &[]).expect("start");
+    // Main starts the timer in batch 1, at tick 20, so its expiry is that clock plus 0.1 (soft add).
+    let started = clock_at_tick(TICKS_PER_BATCH);
+    let expiry = f32::from_bits(sfadd(started.to_bits(), 0.1f32.to_bits()));
+    // The first tick whose clock reaches the expiry, counted after tick 20.
+    let want = (TICKS_PER_BATCH + 1..)
+        .find(|&t| clock_at_tick(t) >= expiry)
+        .expect("expiry reached");
+    assert!(clock_at_tick(want - 1) < expiry, "the tick before does not reach it");
+
+    let mut fired_at = None;
+    for _ in 1..=60u64 {
+        host.step_ticks(1);
+        if host.vm().global("gFired") == Some(Value::Integer(1)) {
+            fired_at = Some(host.ticks());
+            break;
+        }
+    }
+    assert_eq!(fired_at, Some(want), "fires on the first tick that reaches the expiry");
+    assert!(want > TICKS_PER_BATCH, "not at the batch boundary that started it");
 }
 
 #[test]

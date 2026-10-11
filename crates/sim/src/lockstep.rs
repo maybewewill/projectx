@@ -37,6 +37,12 @@ pub const SPEED_TICKS: [u64; 3] = [3, 4, 5];
 /// Increment of the per-tick counter `+0x1C70` (CONFIRMED). Read as 5 ms of game time per tick (LIKELY).
 pub const TICK_GAME_MS: u64 = 5;
 
+/// Game ticks per batch of the per-step work of the host: the JASS scheduler pass, the order and
+/// movement tick, and the AI pass. UNSURE: the original's cadence for these is not in the spec
+/// (lockstep.md section 10). 20 ticks = 100 ms of game time keeps the cadence of the old 0.1 s step
+/// and of the AI dispatcher's +100 ms rhythm (AGENTS.md 4.3s/AI notes).
+pub const TICKS_PER_BATCH: u64 = 20;
+
 /// Agile-clock increment per game tick, f32 0.005 (`0x3BA3D70A`). CONFIRMED: the tick event built by
 /// the frame driver carries `[0x6FACC8CC]` at +0x14, the static initializer `0x6F8621C0` stores
 /// `I2R(5) / I2R(1000)` there (run in Unicorn), and the listener `0x6F2F4950` adds that float to
@@ -45,6 +51,9 @@ pub const TICK_INCREMENT_BITS: u32 = 0x3BA3_D70A;
 
 /// Advances the agile clock by `ticks` game ticks: one soft-float add of [`TICK_INCREMENT_BITS`]
 /// per tick. Each add rounds, so the work is linear in `ticks` and cannot be shortcut.
+///
+/// The host ([`crate::ScriptHost::step_ticks`]) calls this one tick at a time and runs the timer
+/// pump after each add, as the original does (`0x6F46E520`, lockstep.md section 10).
 pub fn advance_agile_clock(clock: &mut AgileClock, ticks: u64) {
     for _ in 0..ticks {
         clock.advance(TICK_INCREMENT_BITS);
