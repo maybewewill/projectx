@@ -176,7 +176,7 @@ fn fixture() -> (Slk, Slk, Slk, Slk) {
 #[test]
 fn full_record_is_read_from_the_four_tables() {
     let (ui, data, balance, weapons) = fixture();
-    let tables = UnitTypeTables {
+    let tables = UnitTypeTables { abilities: None,
         data: Some(&data),
         balance: Some(&balance),
         ui: Some(&ui),
@@ -224,7 +224,7 @@ fn full_record_is_read_from_the_four_tables() {
 fn acquire_at_least_one_is_kept() {
     let (ui, data, balance, _) = fixture();
     let weapons = table(&["unitWeapID", "acquire"], &[&["hfoo", "600"]]);
-    let tables = UnitTypeTables {
+    let tables = UnitTypeTables { abilities: None,
         data: Some(&data),
         balance: Some(&balance),
         ui: Some(&ui),
@@ -237,7 +237,7 @@ fn acquire_at_least_one_is_kept() {
 #[test]
 fn missing_ui_or_data_row_is_an_error() {
     let (ui, data, balance, weapons) = fixture();
-    let tables = UnitTypeTables {
+    let tables = UnitTypeTables { abilities: None,
         data: Some(&data),
         balance: Some(&balance),
         ui: Some(&ui),
@@ -247,7 +247,7 @@ fn missing_ui_or_data_row_is_an_error() {
         load_unit_type(&tables, "hxxx"),
         Err(UnitTypeError::MissingUiRow("hxxx".to_owned()))
     );
-    let no_data = UnitTypeTables {
+    let no_data = UnitTypeTables { abilities: None,
         data: None,
         ..tables
     };
@@ -260,7 +260,7 @@ fn missing_ui_or_data_row_is_an_error() {
 #[test]
 fn missing_balance_row_gives_acquire_one_and_zero_balance() {
     let (ui, data, _balance, weapons) = fixture();
-    let tables = UnitTypeTables {
+    let tables = UnitTypeTables { abilities: None,
         data: Some(&data),
         balance: None,
         ui: Some(&ui),
@@ -277,7 +277,7 @@ fn missing_balance_row_gives_acquire_one_and_zero_balance() {
 #[test]
 fn missing_weapon_row_gives_sight_and_default_slots() {
     let (ui, data, balance, _) = fixture();
-    let tables = UnitTypeTables {
+    let tables = UnitTypeTables { abilities: None,
         data: Some(&data),
         balance: Some(&balance),
         ui: Some(&ui),
@@ -295,6 +295,32 @@ fn missing_weapon_row_gives_sight_and_default_slots() {
 }
 
 #[test]
+fn ability_list_is_read_from_unit_abilities_in_file_order() {
+    // `abilList` of UnitAbilities.slk: comma-separated, trimmed, empty entries dropped; the table is optional.
+    let (ui, data, balance, weapons) = fixture();
+    let abilities = table(
+        &["unitAbilID", "abilList"],
+        &[&["hfoo", "Amov, Aatk,,ANsg"]],
+    );
+    let with = UnitTypeTables {
+        data: Some(&data),
+        balance: Some(&balance),
+        ui: Some(&ui),
+        weapons: Some(&weapons),
+        abilities: Some(&abilities),
+    };
+    let u = load_unit_type(&with, "hfoo").expect("valid unit");
+    assert_eq!(u.abil_list, vec!["Amov", "Aatk", "ANsg"]);
+
+    let without = UnitTypeTables {
+        abilities: None,
+        ..with
+    };
+    let u = load_unit_type(&without, "hfoo").expect("valid unit");
+    assert!(u.abil_list.is_empty());
+}
+
+#[test]
 fn load_all_skips_invalid_units_and_is_ordered() {
     let (_, data, balance, weapons) = fixture();
     let ui = table(
@@ -305,7 +331,7 @@ fn load_all_skips_invalid_units_and_is_ordered() {
             &["hbad", "1", "1"],
         ],
     );
-    let tables = UnitTypeTables {
+    let tables = UnitTypeTables { abilities: None,
         data: Some(&data),
         balance: Some(&balance),
         ui: Some(&ui),

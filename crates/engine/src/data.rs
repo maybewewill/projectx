@@ -26,6 +26,7 @@ use mpq::Archive;
 use sim::combat::{AttackType, CombatMisc, Defense};
 use sim::damage::{DamageMisc, DamageTypeTable, NegativeArmorTable, SpecDamage};
 use sim::natives::game::UnitType;
+use sim::orders::{AbilityKind, TypeOrderData};
 use sim::Game;
 use softfloat::{Tables, F32};
 
@@ -95,6 +96,7 @@ pub fn load(
     let data = read_slk(archives, unittype::UNIT_DATA_FILE, &mut notes)?;
     let balance = read_slk(archives, unittype::UNIT_BALANCE_FILE, &mut notes)?;
     let weapons = read_slk(archives, unittype::UNIT_WEAPONS_FILE, &mut notes)?;
+    let abilities = read_slk(archives, unittype::UNIT_ABILITIES_FILE, &mut notes)?;
     if ui.is_none() || data.is_none() {
         notes.push("UnitUI.slk or UnitData.slk missing: no unit types".to_string());
     }
@@ -103,6 +105,7 @@ pub fn load(
         balance: balance.as_ref(),
         ui: ui.as_ref(),
         weapons: weapons.as_ref(),
+        abilities: abilities.as_ref(),
     });
     for slk in [balance.as_ref(), weapons.as_ref()].into_iter().flatten() {
         for row in slk.rows() {
@@ -143,6 +146,9 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         };
         unit_types += 1;
         game.unit_types_mut().insert(id, sim_unit_type(ty));
+        // The order data (the fixed move and attack ability slots) is set before any unit of the type can be
+        // created: units take their abilities at creation (`natives/unit.rs`).
+        game.set_type_orders(id, type_order_data(ty));
         // Hero attributes (STR, AGI and their gains) of a hero type; a hero starts from them (`sim::heroes`).
         if is_hero_type(id) {
             game.set_hero_attributes(id, hero_attributes(ty));
@@ -224,11 +230,34 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         point_value: ty.points,
         food_used: ty.food_used,
         food_made: ty.food_made,
-        // TODO(gamedata): the type's ability list is not in the record reader yet.
-        abilities: Vec::new(),
+        // The `abilList` rawcodes of `UnitAbilities.slk`, in file order, after the fixed move and attack slots. The
+        // `Amov` and `Aatk` entries are dropped: those two are the fixed slots, decided by the record (`type_order_data`),
+        // and the original keeps them outside the ability factory (`docs/spec/abilities.md`).
+        abilities: ty
+            .abil_list
+            .iter()
+            .filter_map(|c| rawcode(c))
+            .filter(|&id| id != sim::abilities::MOVE && id != sim::abilities::ATTACK)
+            .collect(),
         gold_cost: ty.gold_cost,
         wood_cost: ty.lumber_cost,
     }
+}
+
+/// The order data of a unit type (the fixed ability slots, `docs/spec/orders.md`): a move ability when the record has
+/// a speed and a movement type (`movetp` other than empty or `none`), an attack ability when `weapsOn` is set.
+/// UNVERIFIED rule: the original decides the Amov/Aatk slots from its own type fields; this is the record's reading.
+fn type_order_data(ty: &UnitTypeData) -> TypeOrderData {
+    let mut abilities = Vec::new();
+    let movetp = ty.move_type.trim();
+    let mobile = !movetp.is_empty() && !movetp.eq_ignore_ascii_case("none");
+    if ty.speed > 0.0 && mobile {
+        abilities.push(AbilityKind::Move);
+    }
+    if ty.weapons_on > 0 {
+        abilities.push(AbilityKind::Attack);
+    }
+    TypeOrderData { abilities }
 }
 
 /// The attack record of a weapon row. The placeholder damage (used only without [`SpecDamage`]) is the flat bonus

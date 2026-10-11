@@ -55,7 +55,7 @@ const KEYS: &[&str] = &["hfoo", "hbow", "hbad", "htow", "hnone", "hemp", "hcool"
 fn units(balance: Option<&Slk>, weapons: Option<&Slk>) -> BTreeMap<String, UnitTypeData> {
     let ui = ui_fixture(KEYS);
     let data = data_fixture(KEYS);
-    load_all(&UnitTypeTables {
+    load_all(&UnitTypeTables { abilities: None,
         data: Some(&data),
         balance,
         ui: Some(&ui),
@@ -265,7 +265,7 @@ fn a_unit_without_a_ui_row_has_no_combat_row() {
     let weapons = weapon_fixture();
     let data_table = data_fixture(&["hfoo"]);
     let ui_table = ui_fixture(&["hfoo"]);
-    let records = load_all(&UnitTypeTables {
+    let records = load_all(&UnitTypeTables { abilities: None,
         data: Some(&data_table),
         balance: None,
         ui: Some(&ui_table),

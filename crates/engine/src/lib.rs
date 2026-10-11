@@ -386,11 +386,15 @@ impl Engine {
     }
 
     /// Applies commands in the given order and returns their outcomes (one per command).
+    ///
+    /// The orders fire the same issued-order events as the natives (`CommandState::apply_fired`), with the main
+    /// VM running the triggers.
     pub fn apply_commands(&mut self, commands: &[(u8, Command)]) -> Vec<Outcome> {
-        let mut game = self.host.game_mut();
+        let game = self.host.game_handle();
+        let vm = self.host.vm_mut();
         commands
             .iter()
-            .map(|(_, cmd)| self.commands.apply(&mut game, cmd))
+            .map(|(_, cmd)| self.commands.apply_fired(&game, vm, cmd))
             .collect()
     }
 
