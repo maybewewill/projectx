@@ -271,13 +271,13 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~39%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~40.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~50% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~38% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~41% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
 | JASS VM + ~1000 natives | 12% | ~88% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,107 of 1,167 bound** (60 NotImplemented with a reason), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
@@ -340,6 +340,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (23)**: merged economy pass 3 (changer/tax/carry/deposit/refund; Unicorn 2,961+152), missile gates (slots 45/47, Unicorn 3,000; flight still a distance/speed model), hero progression (XP tables 11,336 values + Str/Agi 800 cases in Unicorn). Lead verified the merged tree: 803 tests with and without GAME_DLL, clippy clean. Disk filled once (5 parallel target dirs) — agents now build with -j 2 and `cargo clean` at the end. ~40.5%.
 
 - **2026-10-11 (heroes)**: hero experience tables decoded from the builder `0x6F00ABD0` (docs/spec/heroes.md): `v = (A*prev + B*x) + C` beyond the list, `f2i` stores, last need entry copies N-2, factor = I2R(x) * recip(100) (100.0 at `0x6FAAE574`), need lookup = clamp(level,1,N)-1. Unicorn: builder 300 cases / 11,336 values, 0 mismatches (`tools/emu/hero_xp_emu.py`); Str/Agi getters 800 cases, 0 mismatches (`tools/emu/hero_stat_emu.py`). `sim::heroes` (builder, AddHeroXP/SetHeroXP/SetHeroLevel/strip/skill points, attributes) and natives; the engine installs the tables and hero attributes. Level-up loop and strip rules decoded from the disassembly, not run in Unicorn. Open: kill-XP distribution, GetHeroInt/SetHeroInt (base term unresolved), hero ability slots, derived Str/Agi/Int bonuses.
 - **2026-10-11 (economy-3)**: harvest/deposit/upkeep/refund decoded and implemented in `crates/sim/src/economy.rs` (19 unit tests, 3 replay tests with 2,961 refund + 152 upkeep Unicorn vectors, 0 mismatches). Corrections to economy.md 1.4, 2.5, 6.2 and economy-2 1.3/1.8 are in economy-3.md section 0. Training progress and the nearest hall are not decoded.
