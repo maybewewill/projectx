@@ -9,6 +9,7 @@
 //! * [`web`]: wasm-bindgen entry points (wasm32 only).
 
 pub mod app;
+pub mod model;
 pub mod renderer;
 pub mod scene;
 pub mod terrain;
@@ -17,4 +18,4 @@ pub mod terrain_gpu;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-pub use app::{run, run_terrain};
+pub use app::{run, run_model, run_terrain};

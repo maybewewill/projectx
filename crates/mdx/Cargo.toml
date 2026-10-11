@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 thiserror = "2.0.21"
+glam = "0.34.1"

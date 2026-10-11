@@ -451,6 +451,7 @@ mod tests {
             bones: Vec::new(),
             helpers: Vec::new(),
             pivots: Vec::new(),
+            geoset_anims: Vec::new(),
             unknown_chunks: Vec::new(),
         }
     }
