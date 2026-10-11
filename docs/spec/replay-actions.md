@@ -173,11 +173,10 @@ error (`UnterminatedString` in the decoder).
 - An object reference is two `u32` words. `(0xFFFFFFFF, 0xFFFFFFFF)` = no object. CONFIRMED: the sender
   `0x6F2CBAD0` writes `-1, -1` when it has no target (`param_2 == 0`, the branch that sets the pair to
   `0xFFFFFFFF`), and copies the pair of the target otherwise (`param_2 + 0x0C`, `+0x10`).
-- Resolving a pair to an agent: **the original's resolver is not located.** The sender takes the pair from
-  the target object's fields at `+0x0C/+0x10`, so the pair is an attribute the game assigns to a unit and that
-  replays carry (LIKELY). What assigns it, and which function maps a received pair back to the agent, is
-  UNSURE. Our sim therefore does not guess: the pairs are registered explicitly
-  (`CommandState::register_object`), and a pair with no entry is reported as unresolved and has no effect.
+- Resolving a pair to an agent: **the original's resolver is not located.** See section 10 for the pass-2 evidence
+  (pair words in the payload, the replay-unit hash, the model used by the sim). In the sim, an explicit
+  registration (`CommandState::register_object`) comes first, then the object-pair model of section 10 (UNSURE);
+  a pair that neither knows is reported as unresolved and has no effect.
 
 ### 5.2 Command sender (CONFIRMED structure)
 
@@ -226,7 +225,9 @@ which is the modifier bit above. **UNSURE**: whether the original's listener rea
 Order commands use `Game::issue_order` (the native path, `orders.rs`) with `replace = !FLAG_QUEUED`. The order
 id must be one the order system knows (for example `0xD0012` move, `0xD0003` smart, `0xD000F` attack,
 `0xD0019` hold, `0xD0004` stop); other ids (spell rawcodes) are refused by the validator. The issued-order events
-are not fired for replay orders yet (the event path is in `natives/order.rs`).
+are fired for replay orders too (section 10.4): `CommandState::apply_fired` calls `natives::order::fire_issued`
+per accepted unit, right after its dispatch, the same path as a native order. `CommandState::apply` (no runtime)
+does not fire them.
 
 Turn order (lockstep.md 3, LIKELY): `push_time_slot` decodes the slot's blocks in stream order (player blocks as
 they appear), `TurnScheduler::push_turn` converts the slot's increment into game ticks, and
@@ -259,10 +260,101 @@ they appear), `TurnScheduler::push_turn` converts the slot's increment into game
   speed and recorded actions, unknown id with its offset, selection mode error.
 - `crates/engine/src/replay.rs` (unit tests): conversion of point, object, none targets, mode and group errors.
 
-## 9. Known gaps outside this change (found while doing it)
+## 9. Gaps found in pass 1 (status after pass 2)
 
-- `Engine::boot` never calls `Game::set_type_orders`: a booted map's units have no move or attack abilities, so
-  every order is refused (validator). The tests set the footman's abilities explicitly. This blocks replay
-  orders in a real boot and needs the unit records' ability lists (gamedata agents).
-- Units take their abilities at creation (`natives/unit.rs::create`), so type orders must be set before the
-  units are created.
+- CLOSED (pass 2): `Engine::boot` never called `Game::set_type_orders`. `engine::data::install` now sets the order
+  data of every unit type before `config` and `main` run (section 10.5). Units take their abilities at creation
+  (`natives/unit.rs::create`), so the order data is in place before any unit exists, preplaced units included.
+  Test: `crates/engine/tests/boot_orders.rs`.
+- CLOSED (pass 2): the issued-order events of replay orders (section 10.4).
+- Still open: the resolver (section 10.2), the listeners of the 0xA00xx events (section 7).
+
+## 10. Pass 2: object-pair resolver and replay order events (2026-10-11)
+
+Labels as above. Addresses are in `Game.dll` 1.26a (SHA1 `c5d8624b...`). Decompile: `scratchpad/decomp/chunk_014.c`,
+`chunk_018.c`, `chunk_022.c` (not committed).
+
+### 10.1 Pair words in an order payload (CONFIRMED layout, LIKELY meaning)
+
+The sender `0x6F2CBAD0` (CONFIRMED, chunk_014.c line 12080) builds the move-target command. Its payload fields
+(offsets from the object's start, the vtable at +0x00, the event id at +0x08 as in every sender):
+
+| Offset | Value | Source in the sender |
+|---|---|---|
+| +0x08 | event id `0xA0012` | constant |
+| +0x14 | action byte `0x12` | constant |
+| +0x18 | flags `u16` | `param_4` |
+| +0x20, +0x24 | "source" pair | `param_2 + 0x0C`, `+0x10`; `(-1, -1)` when `param_2 == 0` |
+| +0x28, +0x2C | point | `vtable + 0xB8` of `param_3` (`0x6F4743A0`) |
+| +0x30, +0x34 | "target" pair | `param_3[3]`, `param_3[4]`; `(-1, -1)` when `param_3 == 0` |
+
+The reader layouts of section 4 agree: the `u32` words the readers call "unknown" at `+0x20/+0x24` (`AbilityHeader.unknown`
+in `w3g`) are the source pair, present in every 0x10..0x13 action. The target pair is at `+0x30/+0x34` (0x12 and 0x13),
+and 0x13 has a second pair at `+0x38/+0x3C`. The sim takes the target pair only (section 6); the source pair (the unit
+that issues the order, when the replay names one) is not used yet.
+
+The sender's `param_2` and `param_3` are agents (the pair is read at their `+0x0C/+0x10`, the point through their
+vtable). So an agent's pair is a field at `+0x0C/+0x10` (CONFIRMED that the sender reads it there).
+
+### 10.2 The inverse: pair to agent (partly located)
+
+- **CONFIRMED** `TSHashTable<TReplayUnit, HASHKEY_DWORD>` (RTTI and the vftable at `0x6F442A30`'s constructor): a
+  bucket hash keyed by a `DWORD`. The lookup `0x6F4428B0(table, key1, &key2)` (chunk_018.c line 41237):
+  bucket index = `key1 & mask` (mask at table+0x24, empty when `0xFFFFFFFF`), buckets are 12-byte entries at table+0x1C.
+  A chain entry is a node whose `+0x00` is `key1` and `+0x14` is `key2` (`*param_3`). The chain links are relative
+  (the next node is at node + bucket word + 4, the sentinel encoding of the table). The match needs **both** words.
+- **CONFIRMED** the node allocator `0x6F442B10` (`AUTReplayUnit`, size `param_3 | 8`) and the wrapper `0x6F442BA0`.
+  No direct caller of `0x6F442BA0` in the decompile: it is reached through a vtable or a template, not located.
+- **UNSURE** whether this table holds the game's units or the replay file's unit records. Its name says replay unit.
+  The sender's pair source (agent `+0x0C/+0x10`) is not yet tied to a `TReplayUnit` node.
+- **Not located**: the code that writes an agent's `+0x0C/+0x10`. The scan of the decompile for stores to these
+  offsets pairs them with constants and with float points (`FUN_6f48f7b0`, `FUN_6f4922b0`: zeros or world values, not
+  ids); `FUN_6f09aba0` (chunk_003 line 186) writes a counter at `[3]` and a point at `[4]/[5]` of the *command state*,
+  not of an agent. So the assignment rule (creation counter, handle id, or net id) is UNSURE.
+
+### 10.3 The sim's resolver (UNSURE model)
+
+`sim::commands::CommandState::resolve_in` looks a pair up in this order:
+1. the explicit registration (`register_object`), as before;
+2. the model `model_resolve`: a pair `(id1, 0)` resolves to the live unit whose JASS handle id is `id1`
+   (`Game::unit_of_handle`); any non-zero `id2`, or a first word that is no live unit's handle, resolves to nothing.
+   `sim::commands::model_pair(game, unit)` gives the pair the model assigns: `(handle id, 0)`.
+
+This is **UNSURE**. It makes units created in a game resolvable without registration, as the pass-2 task asked, but
+the pair scheme of the original is not confirmed. A real replay carries the original's pairs; they match this model
+only by coincidence or if the scheme is the same. A mismatch is harmless (unresolved, no effect), but it is not
+verified against any replay. Verifying needs a 1.26a `.w3g` with selections and a debugger or a Unicorn run of the
+selection reader (`0x6F553xxx` readers feed `0x6F4428B0`-style lookups, not yet traced).
+
+### 10.4 Replay orders fire the issued-order events (CONFIRMED path, UNVERIFIED timing)
+
+- Natives: `natives/order.rs` `issue` → `Game::issue_order` → `fire_issued` (player-unit event 38/39/40 of the owner,
+  then the unit event 75/76/77), per accepted unit, right after its dispatch.
+- Replays: `CommandState::apply_fired(game, rt, cmd)` runs the same `fire_issued` per accepted unit, with the main VM as
+  the runtime. `Engine::apply_commands` uses it. `natives::order::fire_issued` is `pub(crate)` and takes
+  `&RefCell<Game>` (the game must not be borrowed by the caller).
+- The event timing for replays is the same as for natives in this model (LIKELY the original fires the listeners from
+  the same applier path, `0x6F5378E0`, section 2; UNVERIFIED).
+- Test: `crates/engine/tests/boot_orders.rs::replay_order_fires_the_issued_order_trigger_like_a_native_order`.
+
+### 10.5 Unit order data at boot (model choice, UNVERIFIED rule)
+
+`engine::data::install` gives each unit type its order data before any unit is created:
+- Move ability when the record has a speed > 0 and a `movetp` other than empty or `none` (UNVERIFIED: the original's
+  Amov slot rule; the spec only says the fixed slot exists, section 4.3r).
+- Attack ability when `weapsOn` is greater than 0.
+- The `abilList` column of `Units\UnitAbilities.slk` (new `gamedata::unittype::UNIT_ABILITIES_FILE`, optional) gives the
+  other abilities in file order; its `Amov`/`Aatk` entries are dropped, because the fixed slots are decided by the rule
+  above (an `Amov` in the list would otherwise grant move to an immobile type).
+
+Tests: `crates/engine/tests/boot_orders.rs` (boot data, move accepted, immobile type refused, attack without a list),
+`crates/gamedata/tests/unittype.rs::ability_list_is_read_from_unit_abilities_in_file_order`.
+
+### 10.6 Tests added in pass 2
+
+- `crates/engine/tests/boot_orders.rs` (6 tests): boot order data, replay move accepted on a booted map, immobile
+  refused, attack without an ability list, trigger fired once with the unit and order id, immediate order does not fire
+  the point trigger.
+- `crates/sim/tests/commands.rs::unregistered_unit_resolves_by_the_model_pair`: the model pair, a non-zero second word
+  and the null handle.
+- `crates/gamedata/tests/unittype.rs::ability_list_is_read_from_unit_abilities_in_file_order`.

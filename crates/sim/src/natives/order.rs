@@ -639,8 +639,11 @@ fn issue(g: &Rc<RefCell<Game>>, rt: &mut dyn ScriptRuntime, unit: ObjKey, order:
 }
 
 /// Runs the issued-order events for record `index`: the owner's player-unit table first, then the unit's table.
-fn fire_issued(
-    g: &Rc<RefCell<Game>>,
+///
+/// Shared by the natives (`issue`, `issue_to_group`) and the replay path (`commands::CommandState::apply_fired`), so an
+/// order from a replay fires the same events as one from a native. The game must not be borrowed by the caller.
+pub(crate) fn fire_issued(
+    g: &RefCell<Game>,
     rt: &mut dyn ScriptRuntime,
     unit: ObjKey,
     class: OrderClass,
@@ -666,7 +669,7 @@ fn fire_issued(
 /// Fires the entries of `agent`'s table with `key`, oldest first, with the order record `index` in their
 /// context. Mirrors `unit_event::fire_observers`.
 fn fire_observers_order(
-    g: &Rc<RefCell<Game>>,
+    g: &RefCell<Game>,
     rt: &mut dyn ScriptRuntime,
     agent: ObjKey,
     key: u32,

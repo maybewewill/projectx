@@ -25,9 +25,11 @@ use gamedata::{Profile, Slk};
 use mpq::Archive;
 use sim::combat::{AttackType, CombatMisc, Defense};
 use sim::damage::{DamageMisc, DamageTypeTable, NegativeArmorTable, SpecDamage};
+use sim::economy::{EconomyConstants, UpkeepTable};
 use sim::natives::game::UnitType;
+use sim::orders::{AbilityKind, TypeOrderData};
 use sim::Game;
-use softfloat::{Tables, F32};
+use softfloat::{conv, Tables, F32};
 
 use crate::Error;
 
@@ -95,6 +97,7 @@ pub fn load(
     let data = read_slk(archives, unittype::UNIT_DATA_FILE, &mut notes)?;
     let balance = read_slk(archives, unittype::UNIT_BALANCE_FILE, &mut notes)?;
     let weapons = read_slk(archives, unittype::UNIT_WEAPONS_FILE, &mut notes)?;
+    let abilities = read_slk(archives, unittype::UNIT_ABILITIES_FILE, &mut notes)?;
     if ui.is_none() || data.is_none() {
         notes.push("UnitUI.slk or UnitData.slk missing: no unit types".to_string());
     }
@@ -103,6 +106,7 @@ pub fn load(
         balance: balance.as_ref(),
         ui: ui.as_ref(),
         weapons: weapons.as_ref(),
+        abilities: abilities.as_ref(),
     });
     for slk in [balance.as_ref(), weapons.as_ref()].into_iter().flatten() {
         for row in slk.rows() {
@@ -143,6 +147,9 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         };
         unit_types += 1;
         game.unit_types_mut().insert(id, sim_unit_type(ty));
+        // The order data (the fixed move and attack ability slots) is set before any unit of the type can be
+        // created: units take their abilities at creation (`natives/unit.rs`).
+        game.set_type_orders(id, type_order_data(ty));
         // Hero attributes (STR, AGI and their gains) of a hero type; a hero starts from them (`sim::heroes`).
         if is_hero_type(id) {
             game.set_hero_attributes(id, hero_attributes(ty));
@@ -205,6 +212,73 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
     }
 }
 
+/// The Misc keys of the economy (see `gamedata::misc`), listed in the boot report when they are absent.
+pub const ECONOMY_KEYS: [&str; 7] = [
+    "UpkeepUsage",
+    "UpkeepGoldTax",
+    "UpkeepLumberTax",
+    "TrainRefundRate",
+    "ResearchRefundRate",
+    "ReviveRefundRate",
+    "LowGoldAmount",
+];
+
+/// What the economy constants were built from (see [`economy_constants`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EconomySetup {
+    /// `true` when some `[Misc]` layer was read; `false` means the built-in defaults of `sim::economy` are in use.
+    pub from_misc: bool,
+    /// How many layers had a `[Misc]` section.
+    pub layers: usize,
+    /// The economy keys that were absent (or malformed) and took the reader's default (`0.0`, or 0 for the integers).
+    pub absent: Vec<&'static str>,
+}
+
+/// Builds the economy constants from the Misc values, or the built-in defaults when no `[Misc]` layer exists at all
+/// (spec `economy-3.md` sections 2.2 and 4). With some layer present, a missing key takes the reader's default, which is
+/// `0.0` (so a missing `UpkeepUsage` is an all-zero threshold row). UNSURE: the original's behaviour for a missing
+/// `UpkeepUsage` key is not traced.
+pub fn economy_constants(misc: &MiscData) -> (EconomyConstants, EconomySetup) {
+    if misc.layers_with_misc == 0 {
+        let setup = EconomySetup {
+            from_misc: false,
+            layers: 0,
+            absent: Vec::new(),
+        };
+        return (EconomyConstants::default(), setup);
+    }
+    let constants = EconomyConstants {
+        upkeep: UpkeepTable {
+            thresholds: misc.upkeep_usage,
+            gold_tax: misc.upkeep_gold_tax,
+            lumber_tax: misc.upkeep_lumber_tax,
+        },
+        train_refund_rate: misc.train_refund_rate,
+        research_refund_rate: misc.research_refund_rate,
+        revive_refund_rate: misc.revive_refund_rate,
+        low_gold_amount: conv::f2i(misc.low_gold_amount),
+    };
+    let absent = misc
+        .defaulted
+        .iter()
+        .copied()
+        .filter(|k| ECONOMY_KEYS.contains(k))
+        .collect();
+    let setup = EconomySetup {
+        from_misc: true,
+        layers: misc.layers_with_misc,
+        absent,
+    };
+    (constants, setup)
+}
+
+/// Installs the economy constants into `game` (see [`economy_constants`]) and returns what they came from.
+pub fn install_economy(game: &mut Game, misc: &MiscData) -> EconomySetup {
+    let (constants, setup) = economy_constants(misc);
+    game.set_economy_constants(constants);
+    setup
+}
+
 /// The simulation's unit type registry entry of a unit record. Every field is a direct copy of the record's value
 /// (no load-time rule beyond the acquire rule already applied by `gamedata::unittype`).
 fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
@@ -224,11 +298,34 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         point_value: ty.points,
         food_used: ty.food_used,
         food_made: ty.food_made,
-        // TODO(gamedata): the type's ability list is not in the record reader yet.
-        abilities: Vec::new(),
+        // The `abilList` rawcodes of `UnitAbilities.slk`, in file order, after the fixed move and attack slots. The
+        // `Amov` and `Aatk` entries are dropped: those two are the fixed slots, decided by the record (`type_order_data`),
+        // and the original keeps them outside the ability factory (`docs/spec/abilities.md`).
+        abilities: ty
+            .abil_list
+            .iter()
+            .filter_map(|c| rawcode(c))
+            .filter(|&id| id != sim::abilities::MOVE && id != sim::abilities::ATTACK)
+            .collect(),
         gold_cost: ty.gold_cost,
         wood_cost: ty.lumber_cost,
     }
+}
+
+/// The order data of a unit type (the fixed ability slots, `docs/spec/orders.md`): a move ability when the record has
+/// a speed and a movement type (`movetp` other than empty or `none`), an attack ability when `weapsOn` is set.
+/// UNVERIFIED rule: the original decides the Amov/Aatk slots from its own type fields; this is the record's reading.
+fn type_order_data(ty: &UnitTypeData) -> TypeOrderData {
+    let mut abilities = Vec::new();
+    let movetp = ty.move_type.trim();
+    let mobile = !movetp.is_empty() && !movetp.eq_ignore_ascii_case("none");
+    if ty.speed > 0.0 && mobile {
+        abilities.push(AbilityKind::Move);
+    }
+    if ty.weapons_on > 0 {
+        abilities.push(AbilityKind::Attack);
+    }
+    TypeOrderData { abilities }
 }
 
 /// The attack record of a weapon row. The placeholder damage (used only without [`SpecDamage`]) is the flat bonus
@@ -268,6 +365,8 @@ fn hero_attributes(ty: &UnitTypeData) -> sim::heroes::HeroAttributes {
         str_plus: soft(ty.attribute_plus[0]),
         agi_base: ty.attributes[1],
         agi_plus: soft(ty.attribute_plus[1]),
+        int_base: ty.attributes[2],
+        int_plus: soft(ty.attribute_plus[2]),
     }
 }
 
