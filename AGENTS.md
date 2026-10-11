@@ -202,6 +202,7 @@ tools/
 - **Checked in Unicorn against the original** (`tools/emu/`): seed, step, GetRandomInt (300 cases), SetRandomSeed + 45 streams: **0 mismatches**.
 - ✅ **Rust port `crates/sim` (rng.rs + softfloat.rs) is bit-exact**: seeder/step/GetRandomInt/GetRandomReal 3000/3000 each (GetRandomReal also on random bit patterns incl. NaN/inf/denormals), SetRandomSeed + 45 streams 300/300, stream init 300/300, soft add/sub/mul 3000+3000 each. Tests with `GAME_DLL=...` compare against vectors from the original.
   - GetRandomReal: range = |b-a|, U = (low23(step) | 0x3F800000) - 1.0, result = a + range*U, always one step, everything through the truncating soft-float.
+  - ⚠ **Fix 2026-10-11**: GetRandomReal first computes d = |sub(a,b)|; if **2.0e-7 > d** (the constant at `0x6FAAE614`, filled in at startup) → returns `a` **without a draw** (NaN still draws). The old harness wrote 0.0 there and hid it; the port and the vectors are fixed and re-checked in Unicorn.
   - GetRandomInt(i32::MIN, i32::MAX): size wraps to 0 → returns lo (one step still taken).
   - Open: the constant at `0x6FAAE464` is assumed = -1.0 (zeros in the file, filled at runtime; needs reading from a live process). The game-start seed fold over slots is not implemented (input to `start_game(s)`).
 - The 256-byte table is **not committed**; the engine should read it from the user's Game.dll (or the original data). Game seed = rotl fold over slots (0x8000 → constant 0x77617233); the link to the seed field in .w3g isn't confirmed yet.
@@ -209,7 +210,7 @@ tools/
 ### 4.3m Constants filled in at startup ✅ (`tools/emu/runtime_consts.py`)
 - Many simulation constants are **zero in the file** and set by the CRT/C++ static initializers. The script runs all initializers (2,061, `jasscomp` harness) in Unicorn and dumps every changed dword in .data (8,989).
 - Confirmed: `0x6FAAE464` = **-1.0** (the GetRandomReal assumption is confirmed), `0x6FAAE4F4` = 1.0, `0x6FAAE4A0` = 0.1, `0x6FAAE5E8` = π/180 (0x3C8EFA35), `0x6FAAE60C` = 180/π (0x42652EE1), `0x6FAAE600` = π, `0x6FAAE570` = 90.0, `0x6FAAE614` = 2e-7, `0x6FAB7748` = -128000.0 (0xC7FA0001), `0x6FAAE470` = 0.0, **`0x6FAAE564` = 32.0** → the rect clamp is `max - 32` (the earlier assumption C = 0 was **wrong**, fixed in location.rs, confirmed by the disassembly of `0x6F469490`).
-- **Rule for agents**: before assuming the value of a constant from .data, check it with this script.
+- **Rule for agents**: before assuming the value of a constant from .data, check it with this script. `tools/emu/emu.py` now writes the real startup values and **fails loudly** if a call doesn't return (it used to silently stop after 200k instructions).
 
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).

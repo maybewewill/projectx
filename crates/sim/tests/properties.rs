@@ -137,21 +137,21 @@ fn full_range_returns_lo_because_size_wraps_to_zero() {
 }
 
 #[test]
-fn random_real_equal_bounds_returns_bound_and_draws_once() {
+fn random_real_equal_bounds_returns_bound_without_drawing() {
     let t = stand_in_table();
     let mut s = Sampler(3);
     for _ in 0..200 {
         let x = f32::from_bits(s.normal_bits());
         let mut rng = s.state();
-        let mut one_step = rng;
-        one_step.next_u32(&t);
+        let before = rng;
         let got = rng.random_real(&t, x, x);
         assert_eq!(
             got.to_bits(),
             x.to_bits(),
             "GetRandomReal(x, x) == x for {x:e}"
         );
-        assert_eq!(rng, one_step, "one step even when the bounds are equal");
+        // |a - b| < 2.0e-7 (start-up value at 0x6FAAE614) returns `a` without a draw (Unicorn-checked).
+        assert_eq!(rng, before, "no draw when the bounds are equal");
     }
 }
 

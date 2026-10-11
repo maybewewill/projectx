@@ -174,6 +174,14 @@ impl Rng {
 
     /// [`Rng::random_real`] on soft-float values (the form the natives use).
     pub fn random_real_soft(&mut self, table: &RngTable, a: F32, b: F32) -> F32 {
+        // 0x6F3B35A0 first computes d = |sub(a, b)| (sign bit cleared) and compares it with the float
+        // at 0x6FAAE614, which the start-up initialisers set to 2.0e-7 (0x3456BF95; zero in the file
+        // image). If 2.0e-7 > d (x87 ordered compare) it returns `a` WITHOUT drawing. A NaN is
+        // unordered, so it draws. Verified in Unicorn with the start-up value in place.
+        let d = F32::from_bits(arith::sub(a, b).to_bits() & 0x7FFF_FFFF);
+        if F32::from_bits(EQUAL_BOUNDS_EPS).to_f32() > d.to_f32() {
+            return a;
+        }
         let range = if b.to_f32() < a.to_f32() {
             arith::sub(a, b)
         } else {
@@ -188,6 +196,9 @@ impl Rng {
         arith::add(a, t)
     }
 }
+
+/// The float at 0x6FAAE614 after start-up: 2.0e-7.
+const EQUAL_BOUNDS_EPS: u32 = 0x3456_BF95;
 
 /// The global generator and the 45 streams.
 #[derive(Debug, Clone, PartialEq, Eq)]
