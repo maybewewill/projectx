@@ -9,7 +9,8 @@
 //!   `{3, 4, 5}` at `0x6FA89154` and the multiplier `m` comes from `0x6F5BE0B0/0xC0`. CONFIRMED
 //!   structure; the runtime value of `m` is UNSURE, default 1.
 //! * Each tick adds 5 to the counter `+0x1C70` (CONFIRMED). We read that as 5 ms of game time per
-//!   tick (LIKELY).
+//!   tick (LIKELY). The same tick also hands the agile clock the f32 0.005 s increment
+//!   ([`TICK_INCREMENT_BITS`], CONFIRMED, section 9).
 //! * The speed factor stored by the game is `SPEED / 5` (`DAT_6F957640` = 5.0 in the image,
 //!   CONFIRMED, section 8), i.e. game ms per turn ms at 5 ms per tick (LIKELY).
 //! * "Steps" below are an accounting value, `game ms / 100`, not an engine event. The original
@@ -17,9 +18,12 @@
 //!   agile clock. Steps per 100 ms of turn time are 0.6 / 0.8 / 1.0 for slow / normal / fast at
 //!   `m = 1`. This replaces the earlier "one step per 100 ms of turn time" model (section 7.5).
 //!
-//! Everything here is integer arithmetic. The wall-clock pacing of the original (the 4000 ms cap,
+//! Everything here is integer arithmetic, except the agile clock step in
+//! [`advance_agile_clock`], which uses the soft-float add. The wall-clock pacing of the original (the 4000 ms cap,
 //! the 200 ms freeze rule, the latency factor) is not modelled: replays run as fast as the caller
 //! pushes turns.
+
+use crate::timer::AgileClock;
 
 /// Milliseconds per consumed unit (`0x19` in `0x6F553470`).
 pub const UNIT_MS: u64 = 25;
@@ -32,6 +36,20 @@ pub const SPEED_TICKS: [u64; 3] = [3, 4, 5];
 
 /// Increment of the per-tick counter `+0x1C70` (CONFIRMED). Read as 5 ms of game time per tick (LIKELY).
 pub const TICK_GAME_MS: u64 = 5;
+
+/// Agile-clock increment per game tick, f32 0.005 (`0x3BA3D70A`). CONFIRMED: the tick event built by
+/// the frame driver carries `[0x6FACC8CC]` at +0x14, the static initializer `0x6F8621C0` stores
+/// `I2R(5) / I2R(1000)` there (run in Unicorn), and the listener `0x6F2F4950` adds that float to
+/// the agile clock (lockstep.md section 9). The clock advances by one soft-float add per tick.
+pub const TICK_INCREMENT_BITS: u32 = 0x3BA3_D70A;
+
+/// Advances the agile clock by `ticks` game ticks: one soft-float add of [`TICK_INCREMENT_BITS`]
+/// per tick. Each add rounds, so the work is linear in `ticks` and cannot be shortcut.
+pub fn advance_agile_clock(clock: &mut AgileClock, ticks: u64) {
+    for _ in 0..ticks {
+        clock.advance(TICK_INCREMENT_BITS);
+    }
+}
 
 /// Game speed as set by the game (`0x6F53E890`): 0 = slow, 1 = normal, anything else = fast.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -373,6 +391,59 @@ mod tests {
         let mut raw = [0u8; 8];
         raw.copy_from_slice(bytes);
         assert_eq!(f64::from_le_bytes(raw), 5.0);
+    }
+
+    /// The tick increment is the f32 0.005, i.e. 5 ms of agile (seconds) time, the same 5 as the
+    /// `+0x1C70` counter. Its bits are the value the static initializer computes (section 9).
+    #[test]
+    fn tick_increment_is_five_milliseconds_as_f32() {
+        let v = f32::from_bits(TICK_INCREMENT_BITS);
+        assert_eq!(v, 0.005f32);
+        assert!((f64::from(v) * 1000.0 - 5.0).abs() < 1e-6);
+    }
+
+    /// The initializer `0x6F8621C0` stores `I2R(5) / I2R(1000)` (div with the 5 as operand A).
+    /// Checked in Unicorn (section 9.2); this test repeats the division with the soft-float
+    /// reciprocal table read from the user's Game.dll.
+    #[test]
+    fn tick_increment_is_five_over_thousand_in_soft_float() {
+        let Ok(path) = std::env::var("GAME_DLL") else {
+            return;
+        };
+        let file = std::fs::read(path).expect("GAME_DLL is readable");
+        let tables = softfloat::Tables::from_game_dll(&file).expect("tables are in the image");
+        let q = softfloat::arith::div(
+            softfloat::conv::i2r(5),
+            softfloat::conv::i2r(1000),
+            &tables,
+        );
+        assert_eq!(q.to_bits(), TICK_INCREMENT_BITS);
+    }
+
+    #[test]
+    fn agile_clock_advances_by_one_soft_float_add_per_tick() {
+        let mut c = AgileClock::new();
+        advance_agile_clock(&mut c, 1);
+        // 0 + x returns x exactly.
+        assert_eq!(c.bits(), TICK_INCREMENT_BITS);
+        advance_agile_clock(&mut c, 1);
+        // 0.005 + 0.005 doubles the exponent with the same mantissa: 0x3C23D70A.
+        assert_eq!(c.bits(), 0x3C23_D70A);
+        // 200 ticks is one second of agile time, up to the drift of truncating adds.
+        advance_agile_clock(&mut c, 198);
+        assert!((f64::from(c.now()) - 1.0).abs() < 1e-3, "{}", c.now());
+        // Same result as folding the soft-float add by hand over 200 ticks.
+        let mut bits = 0u32;
+        for _ in 0..200 {
+            bits = softfloat::arith::add(
+                softfloat::F32::from_bits(bits),
+                softfloat::F32::from_bits(TICK_INCREMENT_BITS),
+            )
+            .to_bits();
+        }
+        let mut direct = AgileClock::new();
+        advance_agile_clock(&mut direct, 200);
+        assert_eq!(direct.bits(), bits);
     }
 
     /// The speed factor is game milliseconds per turn millisecond: at 5 ms per tick and 25 ms per

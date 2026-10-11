@@ -50,7 +50,14 @@ impl AgileClock {
 
     /// Advances the clock by one step.
     pub fn advance_step(&mut self) {
-        self.bits = arith::add(F32::from_bits(self.bits), F32::from_bits(STEP_BITS)).to_bits();
+        self.advance(STEP_BITS);
+    }
+
+    /// Advances the clock by an f32 increment given as a bit pattern, with one soft-float add.
+    /// The frame driver's per-tick increment is `lockstep::TICK_INCREMENT_BITS` (0.005 s,
+    /// lockstep.md section 9).
+    pub fn advance(&mut self, increment_bits: u32) {
+        self.bits = arith::add(F32::from_bits(self.bits), F32::from_bits(increment_bits)).to_bits();
     }
 }
 
