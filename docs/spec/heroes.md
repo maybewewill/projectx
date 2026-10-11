@@ -383,11 +383,11 @@ stores only world `x, y` per unit (`UnitObj`), so there is no normaliser input f
 `O+0x78 = (x - origin)/32` with a zero cell term would reproduce the output only if real units have that cell term
 zero, which is not established. So in-range decisions for real unit pairs are **not** confirmed.
 
-**AHer walk `0x6F46D0B0` (CORRECTED).** `holder = ECX`, `cat = [holder+0x6C]`, head `[cat+0x58]`, next `[node+8]`.
-Per node: skipped when `[node+0x20] != 0`; the reference `[node+0x54]` is looked up (`0x6F03FA30` with ECX = ref+0xC,
-EDX = ref+0x10); the unit must exist, have a tag other than `0x2B61676C`, and not be removed (`[unit+0x20] == 0`). The
-predicate runs; the walk **stops at the first non-zero predicate** and returns the OR (it is an "any" walk). The
-earlier text ("stops when it returns zero") was wrong.
+**AHer walk `0x6F46D0B0` (pass 2 correction, see 8.9).** `holder = ECX`, `cat = [holder+0x6C]`, head `[cat+0x58]`,
+next `[node+8]`. Per node: skipped when `[node+0x20] != 0`; the reference `[node+0x54]` is looked up (`0x6F03FA30`
+with ECX = ref+0xC, EDX = ref+0x10); the object must exist, have tag **equal** to `0x2B61676C`, and not be removed
+(`[obj+0x20] == 0`). The predicate runs; the walk **stops at the first predicate that returns zero** (the 8.7 text
+"non-zero" was wrong, and so was the tag rule). Unicorn: 2,000 lists, 0 mismatches (`tools/emu/category_walk_emu.py`).
 
 **'AHer' insertion order (NOT found).** The only direct writes of a `+0x58` head in `.text` (all forms) are six: `0x6F00EC95`,
 `0x6F00FDBE`, `0x6F02E29C`, `0x6F03EA4F`, `0x6F0513E9`, `0x6F051687`, all object constructors or initialisers. The
@@ -464,6 +464,32 @@ of heroes into the 'AHer' walk is therefore still open. Not confirmed in Unicorn
 **Status (8.8).** Goal 1: getter/setter/round trip measured (above). Goal 2: NOT confirmed, so UnitObj x/y is not used
 for kill XP. Goal 3: open. Goal 4: NOT wired (`sim::heroes::distribute_kill` stays unused, the death path unchanged).
 Counts: 500 Unicorn round-trip cases in total, 0 harness crashes after the assumptions above.
+
+## 8.9 Pass 4: the 'AHer' list walk and membership (2026-10-11, goal 1 partly, goal 2 walk only)
+
+Details and the full walk rules: `docs/spec/groups-events.md` 3.9. Summary for the kill-XP candidate set:
+
+- **Walk (CONFIRMED, Unicorn 2,000 lists, 0 mismatches).** Visit order = the list order from `[cat+0x58]` through
+  `[node+8]`; nodes with `[node+0x20] != 0` are skipped without a call; a reference that does not resolve, an object
+  whose tag is not 0x2B61676C, and a removed object are skipped; the walk stops after the first predicate that
+  returns zero. The candidate builder's predicate `0x6F290770` returns 1, so every valid hero is visited.
+- **Entry (CONFIRMED).** `0x6F2A46F0` calls `0x6F2075E0` (returns 'AHer') and then `0x6F46D1B0` with EDX =
+  `0x6F290770`. The registry entry for 'AHer' is created at start-up by `0x6F2075F0` → `0x6F4716D0`. The entry is
+  used without a NULL check.
+- **Membership (NOT FOUND).** No routine that inserts a node into `cat+0x58` was found: see groups-events.md 3.9 for
+  the writer scan. The most important open point is whether `entry+0x6C` (the category object) is ever set in a
+  normal game. It is written only by the map/save loader `0x6F471460` (inner loop `0x6F471520`) in the static scan
+  (UNSURE across all of `.text`). If it stays 0, the list part is empty and heroes would be reached only through the
+  cells at `entry+0x48` (count `+0x50`): a different candidate order from the one the model assumes.
+- **Order (NOT CONFIRMED).** Insertion order (prepend or append) is unknown, so the candidate order is still LIKELY
+  creation order. The kill-XP split does not depend on it, but the order of level-up side effects does (as before).
+- **Sim (no change).** `sim::heroes::distribute_kill` stays unwired. No `natives/game.rs` change: the order that
+  `GroupEnumUnitsOfType` would need is not confirmed either.
+- **Next step to close it:** run the start-up registrations (`0x6F2075F0`, `0x6F207670`) in Unicorn, then create one
+  hero through the real creation path with a hook on the registry element insert `0x6F471140` and on writes to
+  `entry+0x6C` / `entry+0x48`, and record which of them change. That answers both the list head and the order.
+
+---
 
 ## 9. Derived attribute bonuses
 
