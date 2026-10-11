@@ -271,14 +271,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~44.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~45%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~50% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~41% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
-| JASS VM + ~1000 natives | 12% | ~88% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,110 of 1,167 bound** (57 NotImplemented with a reason; the three player unit counts are now bound), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
+| JASS VM + ~1000 natives | 12% | ~89% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,110 of 1,167 bound** (57 NotImplemented with a reason; the three player unit counts are now bound), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
 | Network/lockstep, wasm, sound | 8% | ~9% | turn scheduler (time slots → steps), lockstep spec; 25 ms units confirmed, step listener open |
@@ -341,6 +341,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (29)**: player unit counters (player+0x2D0; GetPlayerUnitCount/StructureCount/TypedUnitCount bound; Unicorn 1,900 ops + 3,800 walks, lead 600+1,200 fresh, 0 mismatches) → 1,110/1,167 natives bound. ChooseRandomCreep/NPBuilding: draw `0x6F285320` + filters decoded, tileset/movement checks not → still pending. Hero derived bonuses (heroes.md §9): 8 Misc keys read, formulas Unicorn 14,000/14,000; attack bonus = primary × StrAttackBonus; current HP/mana on max change UNSURE; armor/regen/speed computed but not applied yet. ~45%.
 
 - **2026-10-11 (28) game start seed**: `docs/spec/game-start.md`. CONFIRMED (Unicorn, 300/300 each): setup `0x6F5C37A0` seeds G and the streams with S = `0x77617233` if settings flag `0x8000` (settings+0x38), else the fold S; fold step `S := rotl(S ^ X, 3)` at `0x6F5C3A4C`. NOT found: the per-player X (the reader blob of `0x6F545A00`); whether the replay record seed is S. `sim::rng::{slot_fold_step, slot_fold, game_start_seed}`; `engine::game_start`, `w3boot --replay`. The count-XOR claim in rng.md 4.1 is wrong (the count is an allocation size).
 - **2026-10-11 (27)**: vision/fog (vision.md, `sim::vision`): grid at [0x6FAB65F4]+0x34, two 16-bit player masks per cell (visible / unexplored), state table `0x6f00e7a0`, cell/span/rect writers incl. the original's quirks (rect end-exclusive, span writes pairwise past its ends) — Unicorn 4×1,000, 0 mismatches (lead re-ran). Open: grid size/origin/scale (1/128 assumed), circle span expansion for R ≥ 3, unit sight sources, refresh counter. Acquisition reads no vision at one call level.
