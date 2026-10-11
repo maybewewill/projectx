@@ -15,13 +15,16 @@ use jass::vm::{clamp_sleep, NativeRegistry, NativeResult};
 use softfloat::F32;
 
 mod destructable;
+pub mod fog;
 mod force;
 pub mod game;
 mod gamecache;
+pub mod gamestate;
 mod group;
 mod hashtable;
 mod item;
 mod location;
+pub mod misc;
 mod player;
 pub mod presentation;
 mod region;
@@ -68,4 +71,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     group::register(reg, game);
     item::register(reg, game);
     destructable::register(reg, game);
+    gamestate::register(reg, game);
+    fog::register(reg, game);
+    misc::register(reg, game);
 }
