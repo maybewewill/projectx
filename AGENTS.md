@@ -269,17 +269,17 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~32%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~33%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~70% | written, not checked on real files |
 | Game.dll analysis (names, classes, specs) | 10% | ~45% | full decompile export; specs: JASS front end, JASS VM, math, handles |
-| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~31% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
+| Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~32% | RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
 | JASS VM + ~1000 natives | 12% | ~88% | parser/declarations/bytecode = original, VM on softfloat; natives: common **1,107 of 1,167 bound** (60 NotImplemented with a reason), AI 88 of 124 (math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~5% | viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | 0% | |
-| Network/lockstep, wasm, sound | 8% | 0% | |
+| Network/lockstep, wasm, sound | 8% | ~4% | turn scheduler (time slots → steps), lockstep spec; 25 ms units confirmed, step listener open |
 | Replay test harness against the original | 5% | ~15% | w3g parser + Unicorn harness for functions |
 
 ## 6. Status / next steps
@@ -329,12 +329,15 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - [x] Last batch of common natives: **56 more** (pools + PlaceRandom*, Group*Order, defeat conditions, trackable, waygates, gold mine resources, UnitId/food/item data, Get/SetPlayers/Teams, animations as presentation). 60 are explicitly `NotImplemented` (`natives/pending.rs` with reasons: shop stock, selection, neutral/build orders, sync/wait, string tables, guard positions, corpses/mines, ChooseRandomCreep, player stats, GetWorldBounds, Cheat, ChangeLevel); a test checks that the tables are complete. Finds: pool = **one draw from the global G** (not a stream), weighted pick by cumulative sum (first cum > r); Group point/target orders reach **only the first 12 members** (ghosts take slots), immediate orders reach everyone, the return value = "anyone accepted"; GetTriggerEventId = the raw id (fixed).
 - [x] `crates/sim/combat.rs`: **attack cycle** — AttackObj per unit, timers 0xD01AF/B0/B1/C1 on the TimerQueue, swing gate (cooldown → range `D < (range/32+collA+collB)²` through softfloat → facing), reaction delay = stream 9 × ReactionDelay, acquisition every 0.5 s (first enemy in cell order), attack/attack-move orders, chasing through the mover, death through the existing death path, missiles (placeholder delay). **Damage = placeholder** (`DamageModel`, fixed value): the formula from attack-damage.md (dice/armor/types) is still to be implemented. Weapon data in the AttackType registry (TODO(gamedata)). UNSURE: reaction on every swing, instant turning, scan radius = acquire range, stop cancels the swing.
 - [x] `crates/sim/damage.rs`: **SpecDamage** (a DamageModel): dice = one stream-2 step per die, floor(r·sides/2^32) (0..sides-1) + flat bonus, clamp ≥ 0, i2r; >16 dice → placeholder (Gaussian path unknown). Armor (physical only): factor = 1 − R, A ≥ 0: R = div(K·A, 1+K·A) in softfloat; A < 0: R = table[min(trunc(−A),20)]. 7×8 damage-type table passed in by the host (built from Misc DamageBonus* at runtime by `0x6F26D300`, **not** in the file). PlaceholderDamage stays the default until Misc is loaded. ✅ (lead, `runtime_consts.tsv`) the negative-armor table `0x6FAB4300` is in **BSS** and filled by a **static initializer**: entry n = −(1 − 0.94ⁿ) (bits 0, 0xBD75C291, 0xBDEE6321, 0xBE2D79D2 …), followed by −99999.0 at `0x6FAB4354` → **K = 0.06 is hard-coded for negative armor** (not Misc DefenseArmor). `NegativeArmorTable::from_game_dll` therefore fails on a real DLL ("not backed by file data"); the initializer has to be ported bit-exactly. Open: where the +1 per die is added (caller of the sampler not located), ethereal table key, evasion/crit/miss.
+- [x] `crates/sim/lockstep.rs` + docs/spec/lockstep.md: **TurnScheduler** (turn = elapsed ms + actions → actions in stream order, then sim steps; integer ms with remainder carry). CONFIRMED: pump `0x6F54EB00` reads a 16-bit **payload length** (correction to game-loop.md: not the time), the time increment is the first u16 inside the payload, added to CNetData+0x225C in `0x6F54CAD0`; applying a player's commands `0x6F5516E0` moves time from +0x225C to the player buffer +0x284; frame driver `0x6F553470` consumes in **25 ms units** (only when ≥ 25 ms buffered), speed 0/1/2 → 3/4/5 game ticks per unit (table `0x6FA89154`), each dispatch +5 to +0x1C70, +0x22C0 wraps at 250, wall-clock pacing (cap 4000, 200 ms freeze). 0x22 sync record: `0x6F54E140` → `0x6F54CC10`, "csum[%08X], count[%u]" (`0x6F536C30`); the sender/what it covers not found. LIKELY: commands applied before the steps, stream order (player 0 special-cased), no sort by id. **Open contradiction**: 4 ticks per 25 ms = 16 per 100 ms vs the 0.1 s step → the listener that runs sim steps (and the multiplier from `0x6F5BE0B0/C0`) is not found; the model uses 1 step per 100 ms (LIKELY). Not run in Unicorn (needs the whole CNetData).
 - [ ] `crates/inject`: i686-pc-windows hook DLL skeleton (needs the target + mingw)
 - [ ] Wine + WC3 1.26a test environment (the user supplies the game install and replays)
 
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (16)**: merged the damage model (SpecDamage) and the lockstep turn scheduler. Found: negative-armor table built by a static initializer (K=0.06 hard-coded). 680 tests, clippy clean. ~33%.
 
 - **2026-10-11 (15)**: attack cycle merged (combat.rs, placeholder damage). Progress recomputed from the table weights: ~32% (the 45.5% reported in chat was wrong). Merged: damage model (dice/armor/type table); the negative-armor table is computed by a static initializer (K=0.06 hard-coded).
 
