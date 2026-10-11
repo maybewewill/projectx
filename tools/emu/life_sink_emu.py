@@ -120,7 +120,42 @@ def run(life, floor, mx, flags, delta_bits, mode):
 
 
 def draw_case(rng):
-    """One random case: (life, floor, max, flags, delta, mode). Floor is 0.0 or 1.0 (the start of the clamp range)."""
+    """One random case: (life, floor, max, flags, delta, mode).
+
+    Valid states only (floor <= life <= max, zeros of either sign allowed). About half of the draws are aimed at
+    the zero paths: a life at or near the floor, a delta that takes the life exactly to zero or below it, a maximum
+    of zero, and +-0 values as inputs (the zero signs are what the sink's exact bits depend on, heroes.md section 10).
+    """
+    if rng.random() < 0.5:
+        mx = rng.choice([0.0, 1.0, 50.0, 300.0, 600.0, rng.uniform(0.0, 2000.0)])
+        floor = rng.choice([0.0, -0.0, 1.0]) if mx >= 1.0 else rng.choice([0.0, -0.0])
+        if mx == 0.0:
+            floor = rng.choice([0.0, -0.0])
+        kind = rng.randrange(5)
+        if kind == 0:
+            life = floor                                  # life at the floor
+        elif kind == 1:
+            life = rng.choice([0.0, -0.0]) if floor == 0.0 else floor
+            life = min(max(life, floor), mx)
+        elif kind == 2:
+            life = min(mx, floor + rng.choice([0.25, 0.5, 1.0, 2.5]))
+        elif kind == 3:
+            life = mx                                     # life at the maximum (may be zero when mx is zero)
+        else:
+            life = rng.choice([floor, mx, rng.uniform(floor, mx)])
+        life = min(max(life, floor), mx)
+        cut = rng.random()
+        if cut < 0.35 and life != 0.0:
+            delta = -life                                 # takes the life exactly to zero
+        elif cut < 0.5:
+            delta = rng.choice([0.0, -0.0, 0.25, -0.25, 0.4, -0.4, 0.5, -0.5])   # rounds to a zero delta
+        elif cut < 0.7:
+            delta = -rng.choice([1.0, 2.0, 3.0, 5.0, 10.0, 1000.0])  # below the floor
+        else:
+            delta = rng.choice([-(life + 0.5), -(life + 2.5), life, mx, -mx - 1.0, 0.5 - life])
+        mode = rng.choice([1, 2, 3, 2, 3, 0])
+        flags = rng.choice([0, 0x100])
+        return life, floor, mx, flags, delta, mode
     mx = rng.choice([1.0, 50.0, 300.0, 600.0, 1000.0, rng.uniform(0.0, 2000.0)])
     floor = rng.choice([0.0, 1.0])
     # valid states only: floor <= life <= max (the original keeps life inside the pair; states outside it are not

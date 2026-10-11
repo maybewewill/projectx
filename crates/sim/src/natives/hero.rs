@@ -282,8 +282,8 @@ fn hero_key(gm: &Game, a: &[Value]) -> Option<ObjKey> {
 /// The derived values are the readers' results before and after the change (`heroes::derived_bonuses`, factor `1.0`,
 /// see `heroes::DerivedBonuses::hit_points`). The hit-point change goes through the life sink
 /// (`heroes::life_sink`, CONFIRMED by Unicorn). The armor, regeneration, attack speed and attack bonuses are stored
-/// on the unit as totals (section 10); the move bonus is added to the move speed. Mana uses the placeholder rule
-/// (current mana moves with the maximum, clamped to `[0, max]`): its sink is `0x6F278F50`, not decoded (UNVERIFIED).
+/// on the unit as totals (section 10); the move bonus is added to the move speed. The mana change goes through the
+/// mana sink (`heroes::mana_sink`, CONFIRMED by Unicorn), with the mana floor taken as zero (LIKELY).
 fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], permanent: bool, f: impl FnOnce(&mut HeroObj)) {
     let mut gm = g.borrow_mut();
     let Some(k) = hero_key(&gm, a) else {
@@ -302,6 +302,15 @@ fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], permanent: bool, f:
     let mode = if permanent { 2 } else { 1 };
     let hp_delta = heroes::max_life_delta(&before, &after);
     let mana_delta = heroes::max_mana_delta(&before, &after);
+    let (mana, max_mana) = {
+        let u = gm.unit(k);
+        (u.mana, u.max_mana)
+    };
+    let mut mana_cells = heroes::LifeCells {
+        life: mana,
+        max: max_mana,
+        floor: softfloat::F32::ZERO,
+    };
     let move_delta = softfloat::arith::sub(after.move_speed, before.move_speed);
     let (life, max_life, flagged) = {
         let u = gm.unit(k);
@@ -313,27 +322,17 @@ fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], permanent: bool, f:
         floor: softfloat::F32::ZERO,
     };
     heroes::life_sink(&mut cells, flagged, hp_delta, mode, gm.order_tables());
+    heroes::mana_sink(&mut mana_cells, mana_delta, mode, gm.order_tables());
     let u = gm.unit_mut(k);
     u.life = cells.life;
     u.max_life = cells.max;
-    u.max_mana = softfloat::arith::add(u.max_mana, mana_delta);
-    u.mana = clamp_to(softfloat::arith::add(u.mana, mana_delta), u.max_mana);
+    u.mana = mana_cells.life;
+    u.max_mana = mana_cells.max;
     u.move_speed = softfloat::arith::add(u.move_speed, move_delta);
     u.hero_armor = after.armor;
     u.hero_regen = after.regen;
     u.hero_attack_speed = after.attack_speed;
     u.hero_attack = after.attack;
-}
-
-/// `value` clamped to `[0, max]`, with the same comparisons the simulation uses for life (`softfloat::arith::lt`).
-fn clamp_to(value: softfloat::F32, max: softfloat::F32) -> softfloat::F32 {
-    if softfloat::arith::lt(value, softfloat::F32::ZERO) {
-        return softfloat::F32::ZERO;
-    }
-    if softfloat::arith::lt(max, value) {
-        return max;
-    }
-    value
 }
 
 /// The hero state of argument 0, or `None` when the gate fails or the unit has no hero state.

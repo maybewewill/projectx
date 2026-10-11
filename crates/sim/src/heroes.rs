@@ -747,7 +747,22 @@ fn absolute(c: &mut LifeCells, d: F32, min: F32) {
 /// `0x6F4A9390`: the maximum is written and the life is clamped to `[floor, max]`.
 fn set_max(c: &mut LifeCells, new_max: F32) {
     c.max = new_max;
-    c.life = clamp_pair(c.life, c.floor, c.max);
+    c.life = clamp_pair(refresh(c.life), c.floor, c.max);
+}
+
+/// The refresh that the setters run first: the pair setter `0x6F4A9390` and the set-core `0x6F4A92B0` call
+/// `0x6F4A90B0`, which through `0x6F477180` stores `clamp(add(life, mul(+0x7C, w)))` as the new life (`w` is a world
+/// value of the unit). The model's `+0x7C` is `+0.0` (the pair setter writes `+0.0` there, and nothing else writes it
+/// in the model), so the product is `+0.0` whatever `w` is (the original's `mul` gives `+0.0` for any zero operand,
+/// Unicorn probe). `add(x, +0.0)` returns `x` for a non-zero `x`, and returns the second operand (`+0.0`) when the
+/// exponent of `x` is zero: so the refresh changes only a zero (or denormal) life, and turns it into `+0.0`.
+/// CONFIRMED by the trace of case 496 (the final `-0.0` of the set-core becomes `+0.0` in the pair setter).
+fn refresh(life: F32) -> F32 {
+    if life.to_bits() & 0x7f80_0000 == 0 {
+        F32::ZERO
+    } else {
+        life
+    }
 }
 
 /// The clamp of the maximum setter `0x6F4A9390` (through `0x6F477400`). An inverted pair (`hi < lo`) gives `hi`;
@@ -789,7 +804,8 @@ fn set_life(c: &mut LifeCells, value: F32) {
 
 /// `0x6F477350` -> `0x6F4A92B0`: the new life is `life + (v - life)` (the delta is formed first), clamped.
 fn set_core(c: &mut LifeCells, v: F32) {
-    let cur = c.life;
+    // The refresh comes first (the delta is formed from the refreshed life, see `refresh`).
+    let cur = refresh(c.life);
     let delta = arith::sub(v, cur);
     // The original's helpers take the first operand from EDX and the second from the stack, so `add` is formed as
     // `cur + delta` (zero signs follow this order, see the probes in the notes of section 10).
@@ -800,6 +816,81 @@ fn set_core(c: &mut LifeCells, v: F32) {
 /// `vt+0x128` (`0x6F28B230`): the life changes by `d` (the sum is formed first, then set through [`set_core`]).
 fn add_life(c: &mut LifeCells, d: F32) {
     let sum = arith::add(d, c.life);
+    set_core(c, sum);
+}
+
+/// The hero mana sink `0x6F278F50(hero, value, mode)` (CONFIRMED by Unicorn: `tools/emu/mana_sink_emu.py`, vectors in
+/// `tests/mana_sink_vectors.rs`; docs/spec/heroes.md section 10.5). The cells are the mana stat object's pair
+/// (current `+0x78`, floor `+0x80`, maximum `+0x84`), reached through the hero's mana wrapper at `+0xB8`.
+///
+/// Differences from the life sink (all read from the trace of the original):
+/// - there is no minimum flag: the proportional target is not raised;
+/// - the current value is set by `0x6F477350` directly, without the `value <= 0 -> +0.0` substitution of the life
+///   setter (a negative target goes to the set-core and is clamped by the floor there);
+/// - the add of a delta to the current value is `add(current, d)` (the current first).
+///
+/// Steps, in the original's order:
+/// 1. `value == +-0.0` returns at once; `d = floor(value + 0.5)`.
+/// 2. Mode 1: `ratio = current / max` (`+0.0` when the maximum is zero), the maximum becomes `max + d`, then the
+///    current becomes `floor(newmax * ratio + 0.5)`.
+/// 3. Mode 2: `d >= 0`: the maximum rises by `d`, then the current is increased by `d`. `d < 0`: the current is
+///    increased by `d` first, then the maximum becomes `max + d`.
+/// 4. Mode 3: the maximum becomes `max + d` (block A), then, when `d >= 0`, the current is increased by `d`, then the
+///    maximum becomes `max + d` again (block B). So mode 3 moves the maximum twice.
+/// 5. Any other mode: the maximum becomes `max + d` once.
+pub fn mana_sink(c: &mut LifeCells, value: F32, mode: u32, tables: Option<&Tables>) {
+    if value.to_bits() & 0x7fff_ffff == 0 {
+        return;
+    }
+    let d = math::floor(arith::add(value, HALF));
+    match mode {
+        1 => {
+            let ratio = if c.max.to_bits() & 0x7fff_ffff == 0 {
+                F32::ZERO
+            } else {
+                let Some(t) = tables else {
+                    // The division needs the reciprocal table (`MissingTables`): only the maximum moves.
+                    let new_max = arith::add(c.max, d);
+                    set_max(c, new_max);
+                    return;
+                };
+                arith::div(refresh(c.life), c.max, t)
+            };
+            let new_max = arith::add(c.max, d);
+            set_max(c, new_max);
+            let target = math::floor(arith::add(arith::mul(ratio, c.max), HALF));
+            set_core(c, target);
+        }
+        2 if arith::le(F32::ZERO, d) => {
+            let new_max = arith::add(c.max, d);
+            set_max(c, new_max);
+            add_current(c, d);
+        }
+        2 => {
+            add_current(c, d);
+            let new_max = arith::add(c.max, d);
+            set_max(c, new_max);
+        }
+        3 => {
+            let new_max = arith::add(c.max, d);
+            set_max(c, new_max);
+            if arith::le(F32::ZERO, d) {
+                add_current(c, d);
+            }
+            let new_max = arith::add(c.max, d);
+            set_max(c, new_max);
+        }
+        _ => {
+            let new_max = arith::add(c.max, d);
+            set_max(c, new_max);
+        }
+    }
+}
+
+/// The mana current-value add `0x6F275C00`: the current value (refreshed, as `0x6F4773A0` reads it) plus `d`, set
+/// through the set-core path. The add is `add(current, d)`, the current value first.
+fn add_current(c: &mut LifeCells, d: F32) {
+    let sum = arith::add(refresh(c.life), d);
     set_core(c, sum);
 }
 
