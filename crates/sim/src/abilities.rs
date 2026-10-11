@@ -180,7 +180,13 @@ pub struct Ability {
     /// The definition the ability was created from (`+0x54`). A copy: the original keeps a pointer, and the
     /// registry does not change during a game.
     pub definition: Option<AbilityType>,
+    /// Per-player bit mask at `+0x6C`. Only the rescue ability `Arsc` uses it: bit `p` set means player `p` can
+    /// rescue the unit (CONFIRMED by disassembly of `0x6F07B3E0`).
+    pub mask: u32,
 }
+
+/// The rescue ability's base code `'Arsc'` (`0x6F07B3E9` pushes it).
+pub const RESCUE: u32 = 0x4172_7363;
 
 impl Ability {
     /// A new ability at level 1 with permanence 0 and the unit-owned flag (the factory's state before attach).
@@ -192,6 +198,7 @@ impl Ability {
             permanent: 0,
             level_index: 0,
             definition,
+            mask: 0,
         }
     }
 

@@ -157,6 +157,32 @@ pub trait DamageModel: std::fmt::Debug {
         target: ObjKey,
         weapon: &AttackType,
     ) -> F32;
+
+    /// The amount of life `target` loses from a script damage event (`UnitDamageTarget`): the target side of the
+    /// record the native builds. The default passes the raw amount through (the placeholder model has no armor).
+    fn native_hit(&mut self, _game: &Game, hit: &NativeHit) -> F32 {
+        hit.raw
+    }
+}
+
+/// The attack record `UnitDamageTarget` builds (`0x6F3C8850`, CONFIRMED by disassembly) plus the live facts of the
+/// two units the target side reads.
+#[derive(Debug, Clone, Copy)]
+pub struct NativeHit {
+    pub source: ObjKey,
+    pub target: ObjKey,
+    /// Record `+0x10`: the amount argument, unclamped.
+    pub raw: F32,
+    /// Record `+0x14`: `1 << (damage type & 31)` (the shift count is the low byte, taken mod 32 by `shl`).
+    pub class: u32,
+    /// Record `+0x20`: the attack type argument, the damage-type table row.
+    pub row: u32,
+    /// Record `+0x0C`: `0x100` for the attack argument, `|1` for the ranged argument.
+    pub record_flags: u32,
+    /// The source is not allied with the target (LIKELY meaning of `0x6F285B00`).
+    pub not_allied: bool,
+    /// The target is invulnerable (the first gate of the target side).
+    pub invulnerable: bool,
 }
 
 /// PLACEHOLDER damage model: the fixed per-weapon value [`AttackType::damage`]. It ignores armor, types, dice and
@@ -259,6 +285,22 @@ pub struct CombatSystem {
     states: BTreeMap<ObjKey, AttackObj>,
     misc: CombatMisc,
     damage: Option<Box<dyn DamageModel>>,
+    point_damages: BTreeMap<u32, PointDamage>,
+    next_point_damage: u32,
+}
+
+/// The parameters of one `UnitDamagePoint` call (`0x6F3C8770`), kept until a delayed call comes due.
+#[derive(Debug, Clone, Copy)]
+pub struct PointDamage {
+    pub source: ObjKey,
+    pub x: F32,
+    pub y: F32,
+    pub radius: F32,
+    pub amount: F32,
+    pub attack: bool,
+    pub ranged: bool,
+    pub attack_type: u32,
+    pub damage_type: u32,
 }
 
 /// The swing range predicate (attack-cycle-2 section 4.2, CONFIRMED by Unicorn): the attack reaches when the squared
@@ -643,6 +685,100 @@ impl Game {
         damage
     }
 
+    /// `UnitDamageTarget` on a unit target: builds the record, runs the model's target side and applies the result
+    /// to the life. Returns the target when this killed it (the native then runs the death dispatch with `source` as
+    /// the killer, LIKELY). A dead or removed target takes nothing. The invulnerability is a gate of the target side
+    /// (it does not apply to the classes `0x10`, `0x20`, `0x400000`, `0x4000000`), so it is not checked again here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn unit_damage_target(
+        &mut self,
+        source: ObjKey,
+        target: ObjKey,
+        raw: F32,
+        attack: bool,
+        ranged: bool,
+        attack_type: u32,
+        damage_type: u32,
+    ) -> Option<ObjKey> {
+        let (dead, removed, life, t_owner) = {
+            let u = self.unit(target);
+            (u.dead, u.removed, u.life, u.owner)
+        };
+        if dead || removed {
+            return None;
+        }
+        let rec = crate::damage::native_record(attack, ranged, attack_type, damage_type, 0)?;
+        let s_owner = self.unit(source).owner;
+        let hit = NativeHit {
+            source,
+            target,
+            raw,
+            class: rec.class,
+            row: rec.row,
+            record_flags: rec.flags,
+            not_allied: self.is_enemy(s_owner, t_owner),
+            invulnerable: self.unit_is_invulnerable(target),
+        };
+        let mut model: Box<dyn DamageModel> = self
+            .combat
+            .damage
+            .take()
+            .unwrap_or_else(|| Box::new(PlaceholderDamage));
+        let amount = model.native_hit(self, &hit);
+        self.combat.damage = Some(model);
+        if arith::eq(amount, F32::ZERO) {
+            return None;
+        }
+        let next = arith::sub(life, amount);
+        set_life(self, target, next).then_some(target)
+    }
+
+    /// `UnitDamagePoint` body (`0x6F2C31D0`, structure CONFIRMED, membership test UNSURE): collects the live units in
+    /// the circle first (the collector `0x6F2C2E80` runs for every candidate before any damage), then damages each
+    /// through the same per-target path as `UnitDamageTarget` (`0x6F2BFED0` builds the record with the call's class,
+    /// flags and attack type and calls the target's slot `0x120`). The source is not excluded and allies are hit
+    /// (the collector only sorts them into relation buckets, UNSURE for the bucket use). Returns the units this
+    /// killed, in apply order.
+    pub fn apply_point_damage(&mut self, pd: &PointDamage) -> Vec<ObjKey> {
+        let candidates: Vec<ObjKey> = circle_candidates(self, pd.x, pd.y, pd.radius)
+            .into_iter()
+            .filter(|&k| {
+                let u = self.unit(k);
+                !u.dead && !u.removed
+            })
+            .collect();
+        let mut died = Vec::new();
+        for k in candidates {
+            if let Some(t) = self.unit_damage_target(
+                pd.source,
+                k,
+                pd.amount,
+                pd.attack,
+                pd.ranged,
+                pd.attack_type,
+                pd.damage_type,
+            ) {
+                died.push(t);
+            }
+        }
+        died
+    }
+
+    /// Queues a delayed `UnitDamagePoint` (delay above zero, `0x6F2C4D70` builds a delayed object): the damage runs
+    /// when the timer of `delay` seconds expires (UNSURE: the delayed object's own timing is not decoded).
+    pub fn schedule_point_damage(&mut self, delay: F32, pd: PointDamage) {
+        let id = self.combat.next_point_damage;
+        self.combat.next_point_damage += 1;
+        self.combat.point_damages.insert(id, pd);
+        self.timers
+            .start(delay.to_f32(), false, Payload::DamagePoint(id));
+    }
+
+    /// The record of a due delayed `UnitDamagePoint`.
+    pub fn take_point_damage(&mut self, id: u32) -> Option<PointDamage> {
+        self.combat.point_damages.remove(&id)
+    }
+
     /// Applies `amount` to the life of `target` through the life setter (the death event fires from the caller when
     /// it returns the unit). Invulnerable and dead targets take nothing.
     fn apply_damage(&mut self, target: ObjKey, amount: F32) -> Option<ObjKey> {
@@ -794,6 +930,21 @@ fn bearing(dx: F32, dy: F32, tables: &Tables) -> F32 {
         arith::add(a, TWO_PI)
     } else {
         a
+    }
+}
+
+/// A delayed `UnitDamagePoint` comes due: the damage runs and the units it kills get their death events with the
+/// source as the killer (LIKELY).
+pub fn expire_point_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
+    let (died, source) = {
+        let mut gm = game.borrow_mut();
+        let Some(pd) = gm.take_point_damage(id) else {
+            return;
+        };
+        (gm.apply_point_damage(&pd), pd.source)
+    };
+    for t in died {
+        dispatch_unit_death_by(game, rt, t, Some(source));
     }
 }
 

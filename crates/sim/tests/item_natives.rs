@@ -67,6 +67,9 @@ native UnitInventorySize takes unit whichUnit returns integer
 native UnitDropItemPoint takes unit whichUnit, item whichItem, real x, real y returns boolean
 native UnitDropItemSlot takes unit whichUnit, item whichItem, integer slot returns boolean
 native UnitDropItemTarget takes unit whichUnit, item whichItem, widget target returns boolean
+native UnitUseItem takes unit whichUnit, item whichItem returns boolean
+native UnitUseItemPoint takes unit whichUnit, item whichItem, real x, real y returns boolean
+native UnitUseItemTarget takes unit whichUnit, item whichItem, widget target returns boolean
 native EnumItemsInRect takes rect r, boolexpr filter, code actionFunc returns nothing
 native GetEnumItem takes nothing returns item
 native GetFilterItem takes nothing returns item
@@ -689,6 +692,45 @@ endfunction
     assert_eq!(orders[1].kind.order_id(), Some(0x000D_0023));
     assert!(matches!(orders[2].kind, ItemOrderKind::DropTarget { .. }));
     assert_eq!(orders[0].unit, orders[1].unit);
+}
+
+/// `UnitUseItem*` (`0x6F3C9090`, `0x6F3C9100`, `0x6F3C9170`): the unit must have an inventory and carry the item,
+/// then an order is queued and the native returns true. The target form also needs a resolving widget.
+#[test]
+fn use_natives_queue_orders_and_check_the_pack() {
+    let mut host = host_for(&script(
+        r#"
+function main takes nothing returns nothing
+    set pk = CreateUnit(Player(0), 'hpk2', I2R(0), I2R(0), I2R(0))
+    set it1 = CreateItem('ratc', I2R(0), I2R(0))
+    set b1 = UnitUseItem(pk, it1)
+    call UnitAddItem(pk, it1)
+    set b2 = UnitUseItem(pk, it1)
+    set b3 = UnitUseItemPoint(pk, it1, I2R(3), I2R(4))
+    set b4 = UnitUseItemTarget(pk, it1, pk)
+    set b5 = UnitUseItemTarget(pk, it1, null)
+endfunction
+"#,
+    ));
+    host.start("main", &[]).expect("start");
+    run(&mut host);
+    assert!(!boolean(&host, "b1"), "an item outside the pack cannot be used");
+    assert!(boolean(&host, "b2"));
+    assert!(boolean(&host, "b3"));
+    assert!(boolean(&host, "b4"));
+    assert!(!boolean(&host, "b5"), "the widget must resolve");
+    let game = host.game();
+    let orders = game.item_orders();
+    assert_eq!(orders.len(), 3);
+    assert_eq!(orders[0].kind, ItemOrderKind::UseImmediate);
+    assert_eq!(
+        orders[1].kind,
+        ItemOrderKind::UsePoint {
+            x: F32::from_bits(0x4040_0000),
+            y: F32::from_bits(0x4080_0000)
+        }
+    );
+    assert!(matches!(orders[2].kind, ItemOrderKind::UseTarget { .. }));
 }
 
 /// The random item selection (spec 7): the candidate lists are checked by the sequence of results. Each

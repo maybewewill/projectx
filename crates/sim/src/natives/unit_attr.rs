@@ -61,7 +61,7 @@ use super::game::{Game, HandleKind, ObjKey, Object, UnitType};
 use super::group::in_range;
 use super::hero::is_hero_id;
 use super::player::raw_at;
-use crate::abilities::{is_factory_code, Ability};
+use crate::abilities::{is_factory_code, Ability, RESCUE};
 
 /// How a native is implemented here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,9 +389,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SetUnitRescuable",
-        support: Support::NotImplemented(
-            "N:per-player rescuable state is not modelled",
-        ),
+        support: Support::Confirmed,
     },
     NativeEntry {
         name: "SetUnitRescueRange",
@@ -485,15 +483,11 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitDamagePoint",
-        support: Support::NotImplemented(
-            "N:combat (attack-damage spec) is not modelled",
-        ),
+        support: Support::Unsure,
     },
     NativeEntry {
         name: "UnitDamageTarget",
-        support: Support::NotImplemented(
-            "N:combat (attack-damage spec) is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitIgnoreAlarm",
@@ -578,21 +572,15 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "UnitUseItem",
-        support: Support::NotImplemented(
-            "N:item orders (orders agent)",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitUseItemPoint",
-        support: Support::NotImplemented(
-            "N:item orders (orders agent)",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitUseItemTarget",
-        support: Support::NotImplemented(
-            "N:item orders (orders agent)",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "UnitWakeUp",
@@ -678,6 +666,130 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     // The body of `SetUnitFog` is empty in the original (CONFIRMED).
     reg.register("SetUnitFog", |_, _| NativeResult::Return(Value::Null));
+
+    // `UnitDamageTarget(source, target, amount, attack, ranged, attackType, damageType, weaponType)` (`0x6F3C8850`,
+    // CONFIRMED by disassembly). Order: the source unit resolves, the widget resolves, damage type is not above
+    // 0x80000000 (unsigned), attack type is at most 7, weapon type at most 24; any failure returns false with no
+    // effect. Then the attack record is built (amount, class `1 << damageType`, source, flags `0x100` if attack and
+    // `|1` if ranged, weapon type) with the ATTACK TYPE ARGUMENT STORED IN THE RECORD'S ROW FIELD (`+0x20`; the
+    // earlier spec reading "stored only in a local" was wrong: the local is the record's last dword), and the
+    // target's slot `0x120` (the target side, `0x6F2A40D0` for units) runs. The native returns true. A destructable
+    // or item widget is accepted but takes no damage here (UNSURE: their slot `0x120` bodies are not read).
+    let g = Rc::clone(game);
+    reg.register("UnitDamageTarget", move |ctx, a| {
+        let (source, died) = {
+            let mut gm = g.borrow_mut();
+            let Some(source) = unit_at(&gm, a, 0) else {
+                return NativeResult::Return(Value::Boolean(false));
+            };
+            let widget = handle_arg(a, 1);
+            let target = gm.unit_of_handle(widget);
+            let other = gm.destructable_of_handle(widget).is_some() || gm.item_of_handle(widget).is_some();
+            if target.is_none() && !other {
+                return NativeResult::Return(Value::Boolean(false));
+            }
+            let damage_type = super::hashtable::enum_at(a, 6) as u32;
+            let attack_type = super::hashtable::enum_at(a, 5) as u32;
+            let weapon_type = super::hashtable::enum_at(a, 7) as u32;
+            if crate::damage::native_record(false, false, attack_type, damage_type, weapon_type).is_none() {
+                return NativeResult::Return(Value::Boolean(false));
+            }
+            let died = target.and_then(|t| {
+                gm.unit_damage_target(
+                    source,
+                    t,
+                    super::hashtable::real_at(a, 2),
+                    super::hashtable::bool_at(a, 3),
+                    super::hashtable::bool_at(a, 4),
+                    attack_type,
+                    damage_type,
+                )
+            });
+            (source, died)
+        };
+        if let Some(t) = died {
+            super::unit_event::dispatch_unit_death_by(&g, ctx, t, Some(source));
+        }
+        NativeResult::Return(Value::Boolean(true))
+    });
+
+    // `UnitDamagePoint(source, delay, radius, x, y, amount, attack, ranged, attackType, damageType, weaponType)`
+    // (`0x6F3C8770`, checks CONFIRMED): same argument checks as `UnitDamageTarget` (the source must resolve). A delay
+    // that is not above 0.0 (compare `0x6F01FD60`: `0.0 >= delay`, NaN counts as above) damages at once through
+    // `0x6F088050` -> `0x6F2C31D0`; otherwise a delayed object is built (`0x6F1D4440` -> `0x6F2C4D70`). The native
+    // returns true. The membership test is UNSURE (see `combat.rs::apply_point_damage`).
+    let g = Rc::clone(game);
+    reg.register("UnitDamagePoint", move |ctx, a| {
+        let damage_type = super::hashtable::enum_at(a, 9) as u32;
+        let attack_type = super::hashtable::enum_at(a, 8) as u32;
+        let weapon_type = super::hashtable::enum_at(a, 10) as u32;
+        let (source, died) = {
+            let mut gm = g.borrow_mut();
+            let Some(source) = unit_at(&gm, a, 0) else {
+                return NativeResult::Return(Value::Boolean(false));
+            };
+            if crate::damage::native_record(false, false, attack_type, damage_type, weapon_type).is_none() {
+                return NativeResult::Return(Value::Boolean(false));
+            }
+            let delay = super::hashtable::real_at(a, 1);
+            let pd = crate::combat::PointDamage {
+                source,
+                x: super::hashtable::real_at(a, 3),
+                y: super::hashtable::real_at(a, 4),
+                radius: super::hashtable::real_at(a, 2),
+                amount: super::hashtable::real_at(a, 5),
+                attack: super::hashtable::bool_at(a, 6),
+                ranged: super::hashtable::bool_at(a, 7),
+                attack_type,
+                damage_type,
+            };
+            // Immediate when `0.0 >= delay` (ordered compare).
+            if arith::le(delay, F32::ZERO) {
+                (source, gm.apply_point_damage(&pd))
+            } else {
+                gm.schedule_point_damage(delay, pd);
+                (source, Vec::new())
+            }
+        };
+        for t in died {
+            super::unit_event::dispatch_unit_death_by(&g, ctx, t, Some(source));
+        }
+        NativeResult::Return(Value::Boolean(true))
+    });
+
+    // `SetUnitRescuable(unit, player, flag)` (`0x6F3C5F10` -> `0x6F07B3E0`, CONFIRMED by disassembly): the state is a
+    // per-player bit mask in the unit's `Arsc` ability (`+0x6C`, bit = the player's slot index). With the ability
+    // present, a false flag clears the player's bit and a true flag does nothing (the true branch returns before
+    // writing). Without it, a false flag does nothing and a true flag creates the ability and sets the bit. The
+    // ability is built from a built-in definition, not from the registry. A null unit or player does nothing.
+    let g = Rc::clone(game);
+    reg.register("SetUnitRescuable", move |_, a| {
+        let mut gm = g.borrow_mut();
+        let (Some(k), Some(p)) = (
+            unit_at(&gm, a, 0),
+            gm.player_index_of_handle(handle_arg(a, 1)),
+        ) else {
+            return NativeResult::Return(Value::Null);
+        };
+        let flag = super::hashtable::bool_at(a, 2);
+        let bit = 1u32 << (p & 31);
+        let abilities = &mut gm.unit_mut(k).abilities;
+        match abilities.get_mut(RESCUE) {
+            Some(ab) => {
+                if !flag {
+                    ab.mask &= !bit;
+                }
+            }
+            None => {
+                if flag {
+                    let mut ab = Ability::new(RESCUE, None);
+                    ab.mask = bit;
+                    abilities.attach(ab);
+                }
+            }
+        }
+        NativeResult::Return(Value::Null)
+    });
 
     let g = Rc::clone(game);
     reg.register("GetUnitFoodUsed", move |_, a| {

@@ -28,6 +28,8 @@ const GUARD: &str =
     "the guard position list of the AI (creep leash) is not modelled; the helpers are FUN_6f2e5410, FUN_6f2dcf00, FUN_6f2dcec0 (natives-pending.md section 5)";
 /// Reason for the player natives.
 const PLAYER: &str = "the player statistics and the slot removal read counters and unit flags that the model does not keep";
+/// Reason for `GetRescuer`: the firing site is known but is not modelled.
+const RESCUE: &str = "the rescue events (player-unit 0x80213, unit 0x8023E) are posted by 0x6F297EC0 (via 0x6F41C800), called only from the attack swing gate 0x6F0CD350 when a swing against a rescuable unit completes (rescuer = the attacker, ownership change in 0x6F297DA0); the swing branch conditions (0x6F03FDC0, 0x6F27A320, the Arsc mask test) and the rescue transfer are not decoded, and combat.rs has no rescue branch";
 /// Reason for the event response getters whose payload is not produced.
 const EVENT: &str = "the event that carries this payload has no firing site in the model (see event.rs), so the getter has nothing to read";
 
@@ -96,7 +98,7 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry { name: "CachePlayerHeroData", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "GetPlayerScore", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "GetWinningPlayer", support: Support::NotImplemented(EVENT) },
-    NativeEntry { name: "GetRescuer", support: Support::NotImplemented(EVENT) },
+    NativeEntry { name: "GetRescuer", support: Support::NotImplemented(RESCUE) },
     NativeEntry { name: "GetSellingUnit", support: Support::NotImplemented(EVENT) },
     NativeEntry { name: "GetOrderTargetDestructable", support: Support::NotImplemented(EVENT) },
     NativeEntry {
