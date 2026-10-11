@@ -71,6 +71,8 @@ pub enum Payload {
     Vision,
     /// A delayed `UnitDamagePoint` comes due (`combat.rs`, the record is kept in the combat system under `id`).
     DamagePoint(u32),
+    /// A spell timer: cast stages, cooldown end, missile arrival, buff expiry (`cast.rs`).
+    Spell(crate::cast::SpellMsg),
 }
 
 /// The timer or trigger that a script thread runs for.
@@ -1322,6 +1324,8 @@ pub struct Game {
     pub(crate) economy_constants: crate::economy::EconomyConstants,
     /// The attack cycle: type data, Misc values, attack objects and the damage model (see `combat.rs`).
     pub(crate) combat: crate::combat::CombatSystem,
+    /// The spell casting system: level data, active casts, cooldowns, spell buffs (see `cast.rs`).
+    pub(crate) spells: crate::cast::SpellSystem,
     /// The hero experience tables built from the Misc values (see `crate::heroes`). Empty until the engine sets them,
     /// in which case the heroes have no thresholds (`MaxHeroLevel` 0).
     pub(crate) hero_xp: crate::heroes::XpTables,
@@ -1402,6 +1406,7 @@ impl Game {
             economy: (0..PLAYER_SLOTS).map(crate::economy::PlayerEconomy::new).collect(),
             economy_constants: crate::economy::EconomyConstants::default(),
             combat: crate::combat::CombatSystem::default(),
+            spells: crate::cast::SpellSystem::new(),
             hero_xp: crate::heroes::XpTables::default(),
             hero_rates: crate::heroes::BonusRates::default(),
             hero_attributes: BTreeMap::new(),

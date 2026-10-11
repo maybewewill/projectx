@@ -630,6 +630,16 @@ fn instant_point(
 /// Validates and dispatches an order from a native, then fires the issued-order events when the unit accepted
 /// it. Returns the validator's result (the native's return value).
 fn issue(g: &Rc<RefCell<Game>>, rt: &mut dyn ScriptRuntime, unit: ObjKey, order: Order) -> bool {
+    // A spell order (id = the ability's order index on top of 0xD0028, abilities-4 section 2.1) starts the cast
+    // pipeline of `cast.rs`; the native's result is whether the cast started (the readiness errors refuse it).
+    if order.class == OrderClass::Target {
+        let spell = g.borrow().spell_for_order(unit, order.id);
+        if let Some(base) = spell {
+            let target = g.borrow().handle_of_kind(order.target, HandleKind::Unit);
+            let target = target.map_or(crate::cast::CastTarget::None, crate::cast::CastTarget::Unit);
+            return crate::cast::begin_cast(g, rt, unit, base, target).is_ok();
+        }
+    }
     let class = order.class;
     let (validated, index) = g.borrow_mut().issue_order(unit, order, true);
     if let Some(index) = index {

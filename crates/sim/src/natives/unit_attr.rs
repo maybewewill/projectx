@@ -440,8 +440,8 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry {
         name: "UnitResetCooldown",
         // CONFIRMED by disassembly (abilities-2.md section 1.2): the native walks the unit's ability list and
-        // changes no ability field; its only other call is the local-player UI refresh. The simulation has no
-        // cooldowns to reset, so the registered native is a no-op.
+        // changes no ability field itself, but it calls 0x6F037E10 on spell abilities, which re-arms a running
+        // cooldown to 0.01 s (abilities-5.md section 0). `Game::reset_cooldowns` does that.
         support: Support::Likely,
     },
     NativeEntry {

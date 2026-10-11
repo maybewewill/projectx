@@ -765,6 +765,10 @@ impl Game {
             self.mover_halt(unit);
             return;
         }
+        if self.is_stunned(unit) {
+            self.mover_halt(unit);
+            return;
+        }
         let Some(route) = self.orders.units.get(&unit).and_then(|s| s.route.clone()) else {
             return;
         };

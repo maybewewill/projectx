@@ -196,7 +196,7 @@ pub(crate) fn dispatch_unit_death_by(
 /// Fires the entries of `agent`'s table whose key is `key`, oldest first. Returns the OR of the results of
 /// the fired triggers (see [`fire_with_unit`]). `firing` is the index of the [`Firing`] the triggers read (`None`
 /// for no payload, which is the same run as [`fire_with_unit`]).
-fn fire_observers_in(
+pub(crate) fn fire_observers_in(
     game: &RefCell<Game>,
     rt: &mut dyn ScriptRuntime,
     agent: ObjKey,

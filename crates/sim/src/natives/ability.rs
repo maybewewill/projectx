@@ -55,9 +55,14 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         NativeResult::Return(Value::Null)
     });
 
-    // UnitResetCooldown: a no-op in the simulation (CONFIRMED by disassembly, abilities-2.md section 1.2). The
-    // original only refreshes the local player's cooldown display.
-    reg.register("UnitResetCooldown", |_, _| {
+    // UnitResetCooldown: re-arms a running spell cooldown to 0.01 s (CONFIRMED, abilities-5.md section 0: the walk
+    // calls `0x6F037E10`, which abilities-2.md section 1.2 missed).
+    let g = Rc::clone(game);
+    reg.register("UnitResetCooldown", move |_, a| {
+        let mut gm = g.borrow_mut();
+        if let Some(k) = unit_at(&gm, a, 0) {
+            gm.reset_cooldowns(k);
+        }
         NativeResult::Return(Value::Null)
     });
 
