@@ -12,6 +12,19 @@ fn main() {
     );
     println!("map {}", String::from_utf8_lossy(&r.game.settings.map_path));
     println!("seed {:#010x}", r.game.random_seed);
+    let g = &r.game;
+    println!(
+        "game name {:?}  flags {:#010x}  map {}x{} crc {:#010x}  slot_count {}  game_type {:#x}  lang {:#x}",
+        String::from_utf8_lossy(&g.game_name),
+        g.settings.flags,
+        g.settings.map_width,
+        g.settings.map_height,
+        g.settings.map_checksum,
+        g.slot_count,
+        g.game_type,
+        g.language_id
+    );
+    println!("host {:?} players {}", String::from_utf8_lossy(&g.settings.host_name), g.players.len());
     for slot in r.game.slots.iter().filter(|s| s.status == 2) {
         println!(
             "  slot pid={} team={} color={} race={:#04x}",

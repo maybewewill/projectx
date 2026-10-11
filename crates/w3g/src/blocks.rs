@@ -43,9 +43,10 @@ pub enum Block {
         mode: Option<u32>,
         message: Vec<u8>,
     },
-    /// 0x22 — a per-tick value recorded by the game (believed to be a sync checksum;
-    /// to be confirmed against the original). Payload is normally 4 bytes.
-    Checksum { data: Vec<u8> },
+    /// 0x22 — the per-tick sync checksum of the time slot that precedes it (CONFIRMED on a real 1.26a
+    /// replay: one record after every time slot, payload = `u8 4` + `u32` LE). The value is the
+    /// `CNetData+0x1C64` word the original compares with its own (docs/spec/lockstep.md section 12).
+    Checksum { csum: u32 },
     /// 0x23
     Unknown23 { data: [u8; 10] },
     /// 0x2F
@@ -55,9 +56,7 @@ pub enum Block {
 impl Block {
     pub fn checksum_u32(&self) -> Option<u32> {
         match self {
-            Block::Checksum { data } if data.len() == 4 => {
-                Some(u32::from_le_bytes(data[..].try_into().unwrap()))
-            }
+            Block::Checksum { csum } => Some(*csum),
             _ => None,
         }
     }
@@ -126,8 +125,11 @@ pub(crate) fn parse_blocks(r: &mut Reader) -> Result<Vec<Block>, Error> {
             }
             0x22 => {
                 let n = r.u8()? as usize;
+                if n != 4 {
+                    return Err(Error::BadBlockLength { offset, id, len: n });
+                }
                 Block::Checksum {
-                    data: r.bytes(n)?.to_vec(),
+                    csum: r.u32()?,
                 }
             }
             0x23 => Block::Unknown23 { data: r.array()? },

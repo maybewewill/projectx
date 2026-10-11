@@ -75,28 +75,7 @@ fn replay_file(flags: u32, slots: &[[u8; 9]], seed: u32, start_spots: u8) -> Vec
     body.extend_from_slice(&(rec.len() as u16).to_le_bytes());
     body.extend_from_slice(&rec);
 
-    use std::io::Write;
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    z.write_all(&body).unwrap();
-    let data = z.finish().unwrap();
-    let mut f = Vec::new();
-    f.extend_from_slice(w3g::MAGIC);
-    f.extend_from_slice(&0x44u32.to_le_bytes());
-    f.extend_from_slice(&((0x44 + 8 + data.len()) as u32).to_le_bytes());
-    f.extend_from_slice(&1u32.to_le_bytes());
-    f.extend_from_slice(&(body.len() as u32).to_le_bytes());
-    f.extend_from_slice(&1u32.to_le_bytes());
-    f.extend_from_slice(b"PX3W");
-    f.extend_from_slice(&26u32.to_le_bytes());
-    f.extend_from_slice(&6059u16.to_le_bytes());
-    f.extend_from_slice(&0x8000u16.to_le_bytes());
-    f.extend_from_slice(&350u32.to_le_bytes());
-    f.extend_from_slice(&0u32.to_le_bytes());
-    f.extend_from_slice(&(data.len() as u16).to_le_bytes());
-    f.extend_from_slice(&(body.len() as u16).to_le_bytes());
-    f.extend_from_slice(&0u32.to_le_bytes());
-    f.extend_from_slice(&data);
-    f
+    w3g::write_file(&body, body.len().max(1), 6059, 0x8000, 350)
 }
 
 fn three_slots() -> Vec<[u8; 9]> {

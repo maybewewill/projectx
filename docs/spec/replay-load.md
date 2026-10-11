@@ -248,3 +248,67 @@ Not applied (gaps, each a note or a documented field):
 - `crates/engine/src/replay_setup.rs` (unit, 7 tests) and `crates/engine/tests/replay_boot.rs` (integration, 4 tests), unchanged.
 - Emulator: `tools/emu/replay_leading_emu.py` (400 random bodies, 0 mismatches), `tools/emu/embed_leading_vectors.py` (writes the Rust vectors).
 - Workspace: `cargo test --workspace` with and without `GAME_DLL`; clippy `-D warnings`.
+
+## 9. Pass 2 (2026-10-11): container CRCs CONFIRMED, the body consumer, settings on the real file
+
+Supersedes the "CRC not enforced" statements of sections 1 and 2. Labels as in section 0.
+
+### 9.1 CRC rules (CONFIRMED on the real 1.26a file: 152 blocks, 0 failures; enforced in `crates/w3g`)
+
+| check | what is compared | original | Rust |
+|---|---|---|---|
+| header | the whole header, read as 0x44 bytes, with its own u32 at `+0x40` zeroed, CRC-32 (zlib polynomial, zlib init/final), must equal the stored u32 at `+0x40` | `FUN_6f534750`, error `0x0D` | `checksum::header_check`, `Error::HeaderCrc` |
+| block header | the 8 block-header bytes with bytes 4..7 zeroed, CRC-32, folded to 16 bits `(c>>16)^c`, must equal the u16 at block `+4` | block reader `FUN_6f535050`, error `0x13` | `Error::BlockHeaderCrc` |
+| block payload | the `csize` compressed bytes, CRC-32, folded, must equal the u16 at block `+6` (this field is **compared**; section 2 said it was not) | same reader, after the payload read, error `0x19` | `Error::BlockDataCrc` |
+
+- The version-0 header CRC field is at `+0x3C` (section 1, from the reader's size check). Not checked on a file.
+- The folded CRC is the one the original computes with its own table code: `FUN_6f649360` builds the reflected
+  0xEDB88320 table (256 entries at object+0x8E0), `FUN_6f649410` updates it byte by byte from a caller-supplied
+  start value (CONFIRMED). The block and header values equal zlib's CRC-32 with the standard init and final xor.
+- Other block-reader checks (CONFIRMED in the decompile, not all tested): `csize == 0` or `csize > max` → `0x16`;
+  `dsize == 0` or `dsize > max` → `0x17`; `dsize < csize` → `0x15`; the total decompressed size against the header
+  sum (`0x10`); the header size `0x44` for version 1 (section 1). `max` is the reader's field `+0x3C`, value UNSURE.
+- Test: `crates/w3g/tests/checksums.rs` (synthetic flips of the header, a block header and a payload byte give the
+  three errors; real file under `W3G_REPLAY`).
+
+### 9.2 The body's consumer (NOT located; two negative results)
+
+- The loader path: `FUN_6f4061f0` (load-replay path, CONFIRMED caller chain) → `FUN_6f535410` (header then
+  `FUN_6f535050`, which fills the body buffer with the inflated blocks; copies 0x104 bytes, LIKELY `MAX_PATH`
+  for the file name, into object+0x90) → the body buffer is then handed on. The consumer of the buffer is not found yet.
+- Negative 1: the positional reader `0x6F443860` (section 3) does not fit the real body. Its first read is a
+  NUL-terminated string from byte 0, which on the real file is `10 01` (the `0x110` dword is the first 4 bytes).
+  Starting at byte 4 instead gives an empty first string and `03 "ingamero"` as the second, so the 184-byte block
+  that follows is misaligned. So `0x6F443860` is the lobby or in-memory setup reader, not the replay body reader.
+- Negative 2: the record ids `0x16` and `0x19` are never compared as immediates in Game.dll (a linear scan of every
+  `cmp`/`mov`/`push`/`sub` with those values finds only table registrations and error codes). A replay reader
+  that branches on record ids is therefore not a simple compare; the likely form is a dispatch through the
+  message factory table (`0x6F005720` owner, `0x6F005BB0` registration, one entry per message id, LIKELY). The
+  decompile of the block reader's `0x16`/`0x17`/`0x19` hits is error codes (`iStack = 0x16` etc.), not ids.
+- So `crates/w3g::GameInfo` remains the reference layout for real files (it decodes all 15,721 actions of the real
+  file), and the Game.dll reader of it is open.
+
+### 9.3 Settings on the real file (CONFIRMED values, bit meanings UNSURE)
+
+- Real file (DotA Imba, build 6059): settings flags `0x40064802`, map 1984 x 1984, slot count 12, game type `0x1`,
+  language word `0x049E9390` (as parsed), 10 player records, 11 occupied slots (slot records with status 2).
+- Set bits of the flag word: `0x00000002`, `0x00000800`, `0x00004000`, `0x00020000`, `0x00040000`, `0x40000000`.
+- **No `0x8000` and no `0x80000`**: the fixed-seed rules of game-start.md section 2 do not apply, so the setup seed
+  is the `0x19` record seed `0x08F1814A` (`crates/engine/tests/replay_real.rs`, env `W3G_REPLAY`). This confirms the
+  "no fixed seed in a normal replay" case on a real file; the rule itself is unchanged.
+- Speed (LEAD, not a bit): the speed clamp `0x6F53E890` (`0..2`, section lockstep 9) is called from `0x6F3AFE90`
+  with the byte at `[object+0x47]`, where the object is the game-settings holder of that routine. The flag-to-byte
+  mapping is not traced. Teams, visibility and observers: no consumer identified yet.
+
+### 9.4 Encoder note
+
+- `crates/w3g::encode_string` writes groups of 7 bytes with a mask byte and **no** terminating NUL. The original
+  stat string is read as a C string (section 4 says the encoder ends it with NUL, CONFIRMED). Fixtures append the
+  NUL themselves. Not changed here (no caller depends on the missing NUL outside tests).
+
+### 9.5 Tests and tools
+
+- `crates/w3g/src/checksum.rs` (CRC-32 check value, fold), `crates/w3g/src/writer.rs` (`write_file`: a version-1
+  file with the correct CRC fields, used by all synthetic fixtures in `w3g`, `engine` and `engine/tests`).
+- `crates/w3g/examples/checksums.rs` (`--tsv` per-slot export of time and 0x22 values, do not commit its output).
+- `crates/w3g/examples/dump.rs` prints the game name, settings flags, map size, slot count, game type and language.

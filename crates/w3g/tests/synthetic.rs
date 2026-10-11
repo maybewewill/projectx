@@ -1,6 +1,5 @@
 //! Builds a minimal 1.26-style replay in memory and checks that it parses back.
 
-use std::io::Write;
 
 use w3g::{encode_string, Block, Replay};
 
@@ -85,35 +84,7 @@ fn body() -> Vec<u8> {
 }
 
 fn build_file(body: &[u8], block_size: usize) -> Vec<u8> {
-    let mut blocks = Vec::new();
-    let chunks: Vec<&[u8]> = body.chunks(block_size).collect();
-    for chunk in &chunks {
-        let mut padded = chunk.to_vec();
-        padded.resize(block_size, 0);
-        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-        z.write_all(&padded).unwrap();
-        let data = z.finish().unwrap();
-        blocks.extend_from_slice(&(data.len() as u16).to_le_bytes());
-        blocks.extend_from_slice(&(block_size as u16).to_le_bytes());
-        blocks.extend_from_slice(&0u32.to_le_bytes());
-        blocks.extend_from_slice(&data);
-    }
-    let mut f = Vec::new();
-    f.extend_from_slice(w3g::MAGIC);
-    f.extend_from_slice(&0x44u32.to_le_bytes());
-    f.extend_from_slice(&((0x44 + blocks.len()) as u32).to_le_bytes());
-    f.extend_from_slice(&1u32.to_le_bytes());
-    f.extend_from_slice(&(body.len() as u32).to_le_bytes());
-    f.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
-    f.extend_from_slice(b"PX3W");
-    f.extend_from_slice(&26u32.to_le_bytes());
-    f.extend_from_slice(&6059u16.to_le_bytes());
-    f.extend_from_slice(&0x8000u16.to_le_bytes());
-    f.extend_from_slice(&350u32.to_le_bytes());
-    f.extend_from_slice(&0u32.to_le_bytes());
-    assert_eq!(f.len(), 0x44);
-    f.extend_from_slice(&blocks);
-    f
+    w3g::write_file(body, block_size, 6059, 0x8000, 350)
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::checksum;
 use crate::reader::Reader;
 use crate::Error;
 
@@ -95,15 +96,35 @@ pub(crate) fn parse_header(r: &mut Reader) -> Result<Header, Error> {
 }
 
 /// Inflates all zlib blocks following the header into one contiguous buffer.
+///
+/// The CRC rules of the original are enforced (`checksum.rs`): the header CRC, then for each block the
+/// folded CRC of its 8-byte header and the folded CRC of its compressed payload.
 pub(crate) fn decompress_blocks(file: &[u8], header: &Header) -> Result<Vec<u8>, Error> {
     let mut r = Reader::new(file);
-    r.bytes(header.header_size as usize)?;
+    let header_bytes = r.bytes(header.header_size as usize)?;
+    // Version 1 keeps the CRC at +0x40, version 0 at +0x3C (`FUN_6f534750`; version 0 is not seen in a file).
+    let field = if header.header_version == 0 { 0x3C } else { 0x40 };
+    let computed = checksum::header_check(header_bytes, field);
+    if computed != header.sub.header_crc32 {
+        return Err(Error::HeaderCrc {
+            expected: header.sub.header_crc32,
+            computed,
+        });
+    }
     let mut out = Vec::with_capacity(header.decompressed_size as usize);
     for index in 0..header.block_count {
-        let csize = r.u16()? as usize;
-        let dsize = r.u16()? as usize;
-        let _checksum = r.u32()?;
+        let head: [u8; 8] = r.array()?;
+        let csize = u16::from_le_bytes([head[0], head[1]]) as usize;
+        let dsize = u16::from_le_bytes([head[2], head[3]]) as usize;
+        let header_check = u16::from_le_bytes([head[4], head[5]]);
+        let data_check = u16::from_le_bytes([head[6], head[7]]);
+        if checksum::block_header_check(&head) != header_check {
+            return Err(Error::BlockHeaderCrc { block: index });
+        }
         let data = r.bytes(csize)?;
+        if checksum::block_data_check(data) != data_check {
+            return Err(Error::BlockDataCrc { block: index });
+        }
         let start = out.len();
         // Real 1.26a blocks end with a sync flush, not a finished zlib stream, so inflate
         // until `dsize` bytes are out instead of requiring the stream end.
@@ -158,11 +179,17 @@ mod tests {
         let mut block = Vec::with_capacity(16384);
         z.compress_vec(&payload, &mut block, flate2::FlushCompress::Sync)
             .unwrap();
+        let mut head = [0u8; 8];
+        head[0..2].copy_from_slice(&(block.len() as u16).to_le_bytes());
+        head[2..4].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+        let header_check = checksum::block_header_check(&head);
+        head[4..6].copy_from_slice(&header_check.to_le_bytes());
+        head[6..8].copy_from_slice(&checksum::block_data_check(&block).to_le_bytes());
         let mut file = vec![0u8; 0x44];
-        file.extend_from_slice(&(block.len() as u16).to_le_bytes());
-        file.extend_from_slice(&(payload.len() as u16).to_le_bytes());
-        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&head);
         file.extend_from_slice(&block);
+        let crc = checksum::header_check(&file[..0x44], 0x40);
+        file[0x40..0x44].copy_from_slice(&crc.to_le_bytes());
         let header = Header {
             header_size: 0x44,
             compressed_size: file.len() as u32,
@@ -175,7 +202,7 @@ mod tests {
                 build: 6059,
                 flags: 0x8000,
                 length_ms: 0,
-                header_crc32: 0,
+                header_crc32: crc,
             },
         };
         assert_eq!(decompress_blocks(&file, &header).unwrap(), payload);
