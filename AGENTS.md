@@ -284,7 +284,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~47%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~47.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -354,6 +354,8 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 **Needed from the user:** WC3 1.26a install (or War3.mpq/War3x.mpq) and several 1.26a `.w3g` replays. These do not go in the repo.
 
 ## 7. Log
+
+- **2026-10-11 (38)**: construction (construction.md): placement payment `0x6F0EDA70` (cost ≤ stored/10, taken through the changers; pending refund returns the full amounts) — Unicorn 3,000 (agent) + 500 fresh (lead), 0 mismatches; registration transition `0x6F29F850` (food used at start, food made at finish) — Unicorn 3,000, 0 mismatches. **Correction**: `0x6F179000/0x6F1793E0` are upgrade start/finish, not construction. Not found: progress/HP growth, placement validation, completion events. Lead verified the merged tree: 989 tests with and without GAME_DLL, clippy clean. ~47.5%.
 
 - **2026-10-11 (37)**: vision pass 4 (docs only, `docs/spec/vision.md` section 12): time of day is an agile float property
   (FloatModifier + FloatListener created by `0x6f429770`, reads DayLength/DayHours and the scale at game+0x5c; listener
