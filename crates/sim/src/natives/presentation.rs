@@ -4140,6 +4140,7 @@ fn register_visuals(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     native!(reg, game, "FogEnable", |gm, _ctx, a| {
         gm.presentation_mut().fog.fog_enabled = flag(a, 0);
+        gm.fog.grid.set_fog_enabled(flag(a, 0));
         command(&mut gm, "FogEnable", vec![PropValue::Bool(flag(a, 0))]);
         Value::Null
     });
@@ -4150,6 +4151,7 @@ fn register_visuals(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     native!(reg, game, "FogMaskEnable", |gm, _ctx, a| {
         gm.presentation_mut().fog.mask_enabled = flag(a, 0);
+        gm.fog.grid.set_mask_enabled(flag(a, 0));
         command(&mut gm, "FogMaskEnable", vec![PropValue::Bool(flag(a, 0))]);
         Value::Null
     });

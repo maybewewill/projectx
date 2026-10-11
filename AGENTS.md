@@ -223,6 +223,19 @@ tools/
 - Confirmed: `0x6FAAE464` = **-1.0** (the GetRandomReal assumption is confirmed), `0x6FAAE4F4` = 1.0, `0x6FAAE4A0` = 0.1, `0x6FAAE5E8` = π/180 (0x3C8EFA35), `0x6FAAE60C` = 180/π (0x42652EE1), `0x6FAAE600` = π, `0x6FAAE570` = 90.0, `0x6FAAE614` = 2e-7, `0x6FAB7748` = -128000.0 (0xC7FA0001), `0x6FAAE470` = 0.0, **`0x6FAAE564` = 32.0** → the rect clamp is `max - 32` (the earlier assumption C = 0 was **wrong**, fixed in location.rs, confirmed by the disassembly of `0x6F469490`).
 - **Rule for agents**: before assuming the value of a constant from .data, check it with this script. `tools/emu/emu.py` now writes the real startup values and **fails loudly** if a call doesn't return (it used to silently stop after 200k instructions).
 
+### 4.3u Vision / fog of war (spec: docs/spec/vision.md, pass 2, 2026-10-11)
+- Grid = playable area: `width = trunc(range/128)` per axis, origin = playable minimum, **scale = cells/range** (not 1/128;
+  CONFIRMED by Unicorn on 300 rectangles and 40 soft-float vectors). Row pitch = next power of two; flat arrays.
+- Span table of the sight circle (`0x6f408fd0`, octant list `0x6f408800`) decoded; circle writer `0x6f3ba480` checked
+  end to end (300 grids, 0 mismatches). The single-cell writer `0x6f3b0e20` reads row and column as **bytes** (wraps mod 256);
+  the span and rectangle writers use full integers.
+- Refresh `0x6f40a8f0` runs on its own 0.4 s timer (message 0x80269, `0x6f426c50`), **not** on the movement handler (corrected
+  in lockstep.md 11.2). The visible-layer counter `DAT_6fab6a34` has no writer and is 0: the visible layer clears every refresh.
+- Unit sight path: partly decoded (`0x6f409e00` per unit); the walker/source applier `0x6f40a740` pushes 3 arguments into a
+  4-argument circle writer, so it is not the unit path as written. Day/night rule and the unit cell mapping: UNSURE.
+- `IsUnitVisible/Fogged/Masked` = the unit's vtable slot 0xFC (`0x6f285080`), decoded.
+- Tools: `tools/emu/vision_grid_emu.py` (constructor, span table, circle; hooks the Storm heap, memset, `fs:[0]`).
+
 ### 4.4 Known desync traps (must be reproduced)
 - Order of agent/handle allocation (handle IDs are visible from JASS).
 - Iteration order in containers keyed by pointer → the memory layout/allocator has to be emulated.
@@ -271,7 +284,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~45%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~46%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -342,8 +355,17 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (vision pass 2)**: fog grid from the playable area (scale cells/range), span table and circle writer
+  checked in Unicorn (0 mismatches on 300 grids), byte-wide cell writer found, refresh moved to its own 0.4 s timer
+  (message 0x80269; lockstep.md 11.2 corrected), unit visibility natives on the slot-0xFC method.
+
+- **2026-10-11 (31)**: game-start seed (game-start.md rewritten): the setup `0x6F5C37A0` parses the player-0 start blob as exactly the w3g **0x19 GameStartRecord body** (n<16 slots × 9 bytes, u32 seed, mode, start spots; refused if n==0 or spots>n) and, when accepted, **S = the record's seed** (LIKELY that a replay's 0x19 body is the stored blob; loader not found). Refused + mode 5 → fold over per-slot X (X = bytes +0x26..+0x29 of the slot sub-record when its tag byte +0x25 == 8; Unicorn 300, 0 mismatches). Second site `0x6F5C0EE0` (flag 0x80000) seeds from the record seed without the fold. `w3g::start::parse_start_body`, `engine::game_start::setup_seed`.
+
+- **2026-10-11 (30)**: kill-XP numbers (heroes.md §8.2): amount `0x6F2A0230` (grant table by victim level, summoned factor), split `0x6F2A3190` (F = K/N once; in-range list else global list), engine `0x6F20B080` (handicap, upgrade bonus, factor walk across levels, floor(x+0.5)) — Unicorn 6,000 (agent) + 1,000 fresh (lead), 0 mismatches. Not wired yet: candidate selection units (normaliser `0x6F4743A0`), killer tracking (GetKillingUnit null). ~45.5%.
+
 - **2026-10-11 (29)**: player unit counters (player+0x2D0; GetPlayerUnitCount/StructureCount/TypedUnitCount bound; Unicorn 1,900 ops + 3,800 walks, lead 600+1,200 fresh, 0 mismatches) → 1,110/1,167 natives bound. ChooseRandomCreep/NPBuilding: draw `0x6F285320` + filters decoded, tileset/movement checks not → still pending. Hero derived bonuses (heroes.md §9): 8 Misc keys read, formulas Unicorn 14,000/14,000; attack bonus = primary × StrAttackBonus; current HP/mana on max change UNSURE; armor/regen/speed computed but not applied yet. ~45%.
 
+- **2026-10-11 (kill XP)**: the kill XP split is decoded and checked in Unicorn (`tools/emu/hero_kill_xp_emu.py`, 3,000 + 300 cases per mode, 0 mismatches; `crates/sim/tests/kill_xp_vectors.rs`): amount `0x6F2A0230`, split `F = K / N` in `0x6F2A3190`, engine `0x6F20B080` (handicap, upgrade bonus, level walk for owners >= 12, shared tail). Candidate selection is structure-only (`docs/spec/heroes.md` 8.3; the position normaliser `0x6F4743A0` is open). Misc flags at `0x6FA70E94/98/0x6FAB4268` are loaded at runtime by `0x6F26E1xx`. Not wired into the death path (no killer in the sim).
 - **2026-10-11 (28) game start seed**: `docs/spec/game-start.md`. CONFIRMED (Unicorn, 300/300 each): setup `0x6F5C37A0` seeds G and the streams with S = `0x77617233` if settings flag `0x8000` (settings+0x38), else the fold S; fold step `S := rotl(S ^ X, 3)` at `0x6F5C3A4C`. NOT found: the per-player X (the reader blob of `0x6F545A00`); whether the replay record seed is S. `sim::rng::{slot_fold_step, slot_fold, game_start_seed}`; `engine::game_start`, `w3boot --replay`. The count-XOR claim in rng.md 4.1 is wrong (the count is an allocation size).
 - **2026-10-11 (27)**: vision/fog (vision.md, `sim::vision`): grid at [0x6FAB65F4]+0x34, two 16-bit player masks per cell (visible / unexplored), state table `0x6f00e7a0`, cell/span/rect writers incl. the original's quirks (rect end-exclusive, span writes pairwise past its ends) — Unicorn 4×1,000, 0 mismatches (lead re-ran). Open: grid size/origin/scale (1/128 assumed), circle span expansion for R ≥ 3, unit sight sources, refresh counter. Acquisition reads no vision at one call level.
 - **2026-10-11 (26)**: boot now registers type orders (moves accepted on booted maps); replay orders fire ISSUED_ORDER; replay object pair → agent: the lookup table `0x6F4428B0` found, its producer not (sim uses an UNSURE handle-id model). Training (economy-4.md): **correction** — the 0.1 s 0xD01C1 tick is CBuffAuraRegenLife's aura pulse, not training; CAbilityTrain completion = 0xD01C4; queue shift `0x6F1652A0` Unicorn 3,000/3,000; progress timer NOT found (TrainQueue uses bldtm, UNSURE). Pending natives: findings spec natives-pending.md (0 implemented; each blocked on missing state). ~43.5%.

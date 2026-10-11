@@ -8,6 +8,7 @@ mod blocks;
 mod game;
 mod header;
 mod reader;
+pub mod start;
 
 pub use actions::{
     decode_actions, Action, AbilityHeader, AbilityPointObject, ObjectId, Point, NO_OBJECT,
