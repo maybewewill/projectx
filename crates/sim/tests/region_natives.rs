@@ -129,6 +129,7 @@ fn host_for(src: &str) -> ScriptHost {
             max_life: F32::from_bits(0x43D2_0000),
             max_mana: F32::ZERO,
             start_mana: F32::ZERO,
+            inventory_size: 0,
         };
         types.insert(FOOTMAN as u32, ty("Footman"));
         types.insert(MAGE as u32, ty("Mage"));
