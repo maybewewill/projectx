@@ -18,11 +18,26 @@ use softfloat::F32;
 
 use super::presentation::{PresObj, PresentationState};
 use crate::abilities::{Buff, UnitAbilities};
+use crate::shop::{StockList, TypeStock};
 use crate::handles::HandleTable;
 use crate::rng::{RngTable, Streams};
 use crate::timer::{TimerId, TimerQueue};
 
 pub use crate::abilities::{AbilityType, AbilityTypes};
+
+/// The shop stock lists of the game and the type data they read. Lists are created on first use for a unit that has
+/// the sell ability; the host fills the type data (`stockMax`, `stockRegen` of the item and unit type rows).
+#[derive(Debug, Clone, Default)]
+pub struct ShopState {
+    /// Item shop lists (`Asid`) by unit.
+    pub items: BTreeMap<ObjKey, StockList>,
+    /// Unit shop lists (`Asud`) by unit.
+    pub units: BTreeMap<ObjKey, StockList>,
+    /// Stock data of item types; a missing type reads as `stockMax` 0, regen 1.0.
+    pub item_stock: BTreeMap<u32, TypeStock>,
+    /// Stock data of unit types; a missing type reads as `stockMax` 0, regen 0.0.
+    pub unit_stock: BTreeMap<u32, TypeStock>,
+}
 
 /// Index of a game object in the arena. The handle table keys objects by it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1166,6 +1181,8 @@ pub struct Game {
     filter_units: Vec<u32>,
     /// The item type registry the host fills (see [`ItemTypes`]).
     item_types: ItemTypes,
+    /// Shop stock data and lists (`crate::shop`, `natives/shop.rs`).
+    pub shops: ShopState,
     /// The pack of each unit that has one: one entry per slot, `None` for an empty slot. A pack grows to the
     /// slot it is first used at and never has more slots than the unit's capacity (the type's
     /// `inventory_size`).
@@ -1257,6 +1274,7 @@ impl Game {
             rng_table: None,
             pres: PresentationState::default(),
             unit_types: UnitTypes::new(),
+            shops: ShopState::default(),
             unit_events: Vec::new(),
             observers: BTreeMap::new(),
             enum_units: Vec::new(),
