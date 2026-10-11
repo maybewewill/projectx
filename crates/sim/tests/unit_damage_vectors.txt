@@ -1,0 +1,1200 @@
+T unit=1 widget=1 attack=0 ranged=0 atk=8 dmg=0 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=4294967295 dmg=4 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=0 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=2 wpn=15 ret=1 rec=2102272,15,0,257,1119485952,4,0,0,6
+T unit=1 widget=1 attack=256 ranged=1 atk=4294967295 dmg=4 wpn=0 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=4 dmg=8 wpn=6 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=9 dmg=4 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=4294967295 dmg=13 wpn=19 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=5 dmg=33 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=2147483648 wpn=16 ret=1 rec=2102272,16,0,257,1104150528,1,0,0,0
+T unit=1 widget=0 attack=1 ranged=1 atk=7 dmg=4294967295 wpn=6 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=0 wpn=9 ret=1 rec=2102272,9,0,257,1096810496,1,0,0,7
+T unit=1 widget=0 attack=256 ranged=1 atk=6 dmg=20 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=2 dmg=8 wpn=17 ret=1 rec=2102272,17,0,1,1124139008,256,0,0,2
+T unit=1 widget=0 attack=0 ranged=3 atk=9 dmg=14 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=3 dmg=16 wpn=15 ret=1 rec=2102272,15,0,1,1102577664,65536,0,0,3
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=9 wpn=5 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=5 dmg=2 wpn=8 ret=1 rec=2102272,8,0,257,1128595456,4,0,0,5
+T unit=1 widget=1 attack=1 ranged=3 atk=4294967295 dmg=2147483648 wpn=14 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=21 wpn=17 ret=1 rec=2102272,17,0,257,1127219200,2097152,0,0,6
+T unit=1 widget=1 attack=2 ranged=3 atk=6 dmg=2147483647 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4 dmg=13 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=1 atk=9 dmg=2147483648 wpn=20 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=7 dmg=260 wpn=14 ret=1 rec=2102272,14,0,256,1124663296,16,0,0,7
+T unit=1 widget=1 attack=1 ranged=0 atk=3 dmg=8 wpn=23 ret=1 rec=2102272,23,0,256,1109131264,256,0,0,3
+T unit=1 widget=1 attack=2 ranged=1 atk=4 dmg=4 wpn=26 ret=0 rec=-
+T unit=0 widget=1 attack=0 ranged=1 atk=0 dmg=33 wpn=13 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=4 dmg=7 wpn=20 ret=1 rec=2102272,20,0,256,1103101952,128,0,0,4
+T unit=1 widget=1 attack=2 ranged=3 atk=6 dmg=11 wpn=4 ret=1 rec=2102272,4,0,257,1107820544,2048,0,0,6
+T unit=1 widget=1 attack=1 ranged=0 atk=1 dmg=33 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=6 dmg=32 wpn=23 ret=1 rec=2102272,23,0,1,1122238464,1,0,0,6
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=19 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=0 dmg=23 wpn=23 ret=1 rec=2102272,23,0,257,1124663296,8388608,0,0,0
+T unit=1 widget=1 attack=256 ranged=3 atk=7 dmg=21 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=0 dmg=33 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=9 dmg=32 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=3 dmg=20 wpn=9 ret=1 rec=2102272,9,0,1,1124532224,1048576,0,0,3
+T unit=1 widget=1 attack=0 ranged=1 atk=4 dmg=17 wpn=21 ret=1 rec=2102272,21,0,1,1118568448,131072,0,0,4
+T unit=1 widget=1 attack=0 ranged=3 atk=5 dmg=2147483647 wpn=0 ret=1 rec=2102272,0,0,1,1128529920,2147483648,0,0,5
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=13 wpn=5 ret=1 rec=2102272,5,0,257,1124925440,8192,0,0,0
+T unit=1 widget=1 attack=256 ranged=0 atk=7 dmg=20 wpn=0 ret=1 rec=2102272,0,0,256,1124401152,1048576,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=7 wpn=14 ret=1 rec=2102272,14,0,257,1127677952,128,0,0,0
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=3 wpn=14 ret=1 rec=2102272,14,0,256,1110441984,8,0,0,6
+T unit=1 widget=1 attack=0 ranged=1 atk=1 dmg=16 wpn=23 ret=1 rec=2102272,23,0,1,1125318656,65536,0,0,1
+T unit=1 widget=1 attack=1 ranged=0 atk=2 dmg=4294967295 wpn=4 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=6 dmg=14 wpn=7 ret=1 rec=2102272,7,0,0,1116340224,16384,0,0,6
+T unit=1 widget=0 attack=2 ranged=0 atk=6 dmg=9 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=8 dmg=2147483649 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=8 dmg=31 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=7 wpn=7 ret=1 rec=2102272,7,0,257,1093664768,128,0,0,6
+T unit=1 widget=1 attack=0 ranged=0 atk=6 dmg=1 wpn=17 ret=1 rec=2102272,17,0,0,1124335616,2,0,0,6
+T unit=1 widget=1 attack=2 ranged=3 atk=0 dmg=5 wpn=0 ret=1 rec=2102272,0,0,257,1110966272,32,0,0,0
+T unit=1 widget=1 attack=0 ranged=0 atk=1 dmg=11 wpn=13 ret=1 rec=2102272,13,0,0,1111490560,2048,0,0,1
+T unit=1 widget=1 attack=2 ranged=0 atk=5 dmg=0 wpn=4294967295 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=3 atk=0 dmg=32 wpn=18 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=4 dmg=4294967295 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=8 wpn=23 ret=1 rec=2102272,23,0,257,1128464384,256,0,0,6
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=260 wpn=24 ret=1 rec=2102272,24,0,257,1124794368,16,0,0,6
+T unit=1 widget=1 attack=0 ranged=0 atk=5 dmg=24 wpn=15 ret=1 rec=2102272,15,0,0,1119354880,16777216,0,0,5
+T unit=1 widget=1 attack=0 ranged=1 atk=4294967295 dmg=2147483648 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=3 atk=7 dmg=22 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=3 atk=9 dmg=2 wpn=19 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=1 dmg=2147483648 wpn=3 ret=1 rec=2102272,3,0,257,1126367232,1,0,0,1
+T unit=1 widget=1 attack=0 ranged=1 atk=4 dmg=4 wpn=21 ret=1 rec=2102272,21,0,1,1111752704,16,0,0,4
+T unit=1 widget=1 attack=0 ranged=3 atk=3 dmg=2147483649 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=8 dmg=260 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=25 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=4 dmg=21 wpn=3 ret=1 rec=2102272,3,0,256,1101004800,2097152,0,0,4
+T unit=1 widget=1 attack=256 ranged=1 atk=5 dmg=12 wpn=0 ret=1 rec=2102272,0,0,257,1123942400,4096,0,0,5
+T unit=1 widget=1 attack=0 ranged=0 atk=0 dmg=4 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=0 dmg=4 wpn=4 ret=1 rec=2102272,4,0,256,1082130432,16,0,0,0
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=15 wpn=12 ret=1 rec=2102272,12,0,257,1122762752,32768,0,0,6
+T unit=1 widget=1 attack=0 ranged=1 atk=1 dmg=15 wpn=21 ret=1 rec=2102272,21,0,1,1112276992,32768,0,0,1
+T unit=1 widget=1 attack=2 ranged=1 atk=4294967295 dmg=23 wpn=18 ret=0 rec=-
+T unit=0 widget=0 attack=0 ranged=0 atk=0 dmg=19 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=5 dmg=16 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=1 dmg=260 wpn=9 ret=1 rec=2102272,9,0,257,1126629376,16,0,0,1
+T unit=1 widget=1 attack=1 ranged=3 atk=7 dmg=11 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=2 dmg=10 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=9 dmg=6 wpn=26 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=7 dmg=0 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=8 dmg=20 wpn=12 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=9 dmg=1 wpn=23 ret=0 rec=-
+T unit=0 widget=1 attack=256 ranged=1 atk=9 dmg=14 wpn=17 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=1 dmg=23 wpn=19 ret=1 rec=2102272,19,0,257,1123155968,8388608,0,0,1
+T unit=1 widget=1 attack=0 ranged=1 atk=4 dmg=0 wpn=1 ret=1 rec=2102272,1,0,1,1123418112,1,0,0,4
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=17 wpn=23 ret=1 rec=2102272,23,0,257,1124466688,131072,0,0,6
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=22 wpn=5 ret=1 rec=2102272,5,0,257,1116602368,4194304,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=3 dmg=33 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=5 dmg=18 wpn=24 ret=1 rec=2102272,24,0,257,1119223808,262144,0,0,5
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=2147483647 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=0 dmg=18 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=4294967295 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=8 dmg=4294967295 wpn=8 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=7 dmg=25 wpn=24 ret=1 rec=2102272,24,0,257,1112276992,33554432,0,0,7
+T unit=1 widget=1 attack=0 ranged=1 atk=9 dmg=2147483647 wpn=4 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=1 dmg=2147483648 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=0 dmg=2147483647 wpn=23 ret=1 rec=2102272,23,0,257,1088421888,2147483648,0,0,0
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=19 wpn=23 ret=1 rec=2102272,23,0,257,1125842944,524288,0,0,6
+T unit=1 widget=1 attack=1 ranged=3 atk=5 dmg=2147483648 wpn=12 ret=1 rec=2102272,12,0,257,1110704128,1,0,0,5
+T unit=1 widget=1 attack=256 ranged=1 atk=1 dmg=2147483647 wpn=24 ret=1 rec=2102272,24,0,257,1121845248,2147483648,0,0,1
+T unit=1 widget=1 attack=1 ranged=0 atk=4294967295 dmg=2147483648 wpn=23 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=2 dmg=1 wpn=1 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=1 atk=4 dmg=10 wpn=7 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=1 atk=0 dmg=0 wpn=11 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=2147483649 wpn=11 ret=0 rec=-
+T unit=0 widget=1 attack=0 ranged=1 atk=9 dmg=4294967295 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=6 dmg=9 wpn=3 ret=1 rec=2102272,3,0,1,1119617024,512,0,0,6
+T unit=1 widget=1 attack=256 ranged=1 atk=4 dmg=4 wpn=6 ret=1 rec=2102272,6,0,257,1111490560,16,0,0,4
+T unit=1 widget=1 attack=256 ranged=0 atk=7 dmg=2147483647 wpn=23 ret=1 rec=2102272,23,0,256,1107558400,2147483648,0,0,7
+T unit=1 widget=1 attack=1 ranged=0 atk=0 dmg=5 wpn=10 ret=1 rec=2102272,10,0,256,1128529920,32,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=17 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=7 dmg=260 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=0 dmg=4 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=4 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=9 wpn=16 ret=1 rec=2102272,16,0,257,0,512,0,0,0
+T unit=1 widget=1 attack=0 ranged=1 atk=8 dmg=2147483649 wpn=0 ret=0 rec=-
+T unit=1 widget=0 attack=256 ranged=3 atk=4294967295 dmg=23 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=4294967295 dmg=20 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=4294967295 dmg=4 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=2147483647 wpn=3 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=1 atk=3 dmg=31 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=0 dmg=6 wpn=24 ret=1 rec=2102272,24,0,257,1124270080,64,0,0,0
+T unit=1 widget=0 attack=256 ranged=3 atk=8 dmg=14 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=7 dmg=2147483648 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=8 dmg=17 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=5 dmg=20 wpn=7 ret=1 rec=2102272,7,0,257,1123287040,1048576,0,0,5
+T unit=1 widget=1 attack=256 ranged=1 atk=4 dmg=5 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=9 dmg=18 wpn=9 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=0 dmg=4294967295 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=32 wpn=14 ret=1 rec=2102272,14,0,257,1126039552,1,0,0,7
+T unit=0 widget=1 attack=1 ranged=3 atk=1 dmg=9 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=8 dmg=33 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=4 dmg=14 wpn=0 ret=1 rec=2102272,0,0,0,1109917696,16384,0,0,4
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=260 wpn=24 ret=1 rec=2102272,24,0,256,1113325568,16,0,0,6
+T unit=1 widget=1 attack=256 ranged=0 atk=1 dmg=2147483648 wpn=24 ret=1 rec=2102272,24,0,256,1125711872,1,0,0,1
+T unit=1 widget=1 attack=0 ranged=0 atk=0 dmg=2147483648 wpn=20 ret=1 rec=2102272,20,0,0,1108344832,1,0,0,0
+T unit=1 widget=0 attack=1 ranged=1 atk=7 dmg=13 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=5 dmg=16 wpn=23 ret=1 rec=2102272,23,0,257,1126301696,65536,0,0,5
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=4 wpn=23 ret=1 rec=2102272,23,0,257,1126301696,16,0,0,7
+T unit=1 widget=1 attack=0 ranged=1 atk=6 dmg=23 wpn=8 ret=1 rec=2102272,8,0,1,1128726528,8388608,0,0,6
+T unit=1 widget=0 attack=256 ranged=1 atk=7 dmg=33 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=5 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=3 dmg=0 wpn=7 ret=1 rec=2102272,7,0,257,1124925440,1,0,0,3
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=2 wpn=23 ret=1 rec=2102272,23,0,257,1121845248,4,0,0,0
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=12 wpn=12 ret=1 rec=2102272,12,0,257,1102577664,4096,0,0,6
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=23 wpn=5 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=0 dmg=5 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=0 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=7 dmg=2147483648 wpn=23 ret=1 rec=2102272,23,0,1,1128136704,1,0,0,7
+T unit=1 widget=0 attack=1 ranged=1 atk=6 dmg=0 wpn=24 ret=0 rec=-
+T unit=0 widget=1 attack=0 ranged=1 atk=6 dmg=20 wpn=11 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=4294967295 dmg=4 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=5 dmg=4 wpn=20 ret=1 rec=2102272,20,0,257,1120010240,16,0,0,5
+T unit=1 widget=1 attack=256 ranged=3 atk=7 dmg=19 wpn=23 ret=1 rec=2102272,23,0,257,1113063424,524288,0,0,7
+T unit=1 widget=0 attack=1 ranged=1 atk=6 dmg=33 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=0 dmg=22 wpn=19 ret=1 rec=2102272,19,0,256,1091567616,4194304,0,0,0
+T unit=1 widget=1 attack=2 ranged=3 atk=1 dmg=8 wpn=0 ret=1 rec=2102272,0,0,257,1102577664,256,0,0,1
+T unit=1 widget=0 attack=1 ranged=1 atk=9 dmg=31 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=7 dmg=32 wpn=24 ret=1 rec=2102272,24,0,1,1116078080,1,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=1 dmg=0 wpn=0 ret=1 rec=2102272,0,0,257,1107820544,1,0,0,1
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=260 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=8 dmg=2147483649 wpn=25 ret=0 rec=-
+T unit=1 widget=0 attack=256 ranged=1 atk=0 dmg=2147483647 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=0 dmg=24 wpn=8 ret=1 rec=2102272,8,0,257,1107820544,16777216,0,0,0
+T unit=1 widget=1 attack=2 ranged=0 atk=5 dmg=5 wpn=23 ret=1 rec=2102272,23,0,256,1127743488,32,0,0,5
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=4294967295 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=4294967295 dmg=2147483649 wpn=3 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=7 dmg=18 wpn=4 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=3 atk=6 dmg=19 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=0 dmg=11 wpn=1 ret=1 rec=2102272,1,0,256,1110704128,2048,0,0,0
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=2147483648 wpn=0 ret=1 rec=2102272,0,0,256,1111490560,1,0,0,6
+T unit=1 widget=1 attack=256 ranged=1 atk=4 dmg=21 wpn=12 ret=1 rec=2102272,12,0,257,1125646336,2097152,0,0,4
+T unit=1 widget=1 attack=2 ranged=0 atk=0 dmg=8 wpn=22 ret=1 rec=2102272,22,0,256,1107820544,256,0,0,0
+T unit=0 widget=1 attack=256 ranged=1 atk=5 dmg=2147483648 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=2 wpn=8 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=0 dmg=2147483649 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=9 dmg=5 wpn=4294967295 ret=0 rec=-
+T unit=0 widget=0 attack=1 ranged=3 atk=0 dmg=2147483649 wpn=21 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=0 dmg=2147483649 wpn=7 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=3 atk=1 dmg=33 wpn=25 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=1 atk=3 dmg=14 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=7 dmg=2147483647 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=1 dmg=2147483648 wpn=0 ret=1 rec=2102272,0,0,256,1124597760,1,0,0,1
+T unit=1 widget=1 attack=256 ranged=3 atk=4294967295 dmg=23 wpn=1 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=9 dmg=31 wpn=9 ret=0 rec=-
+T unit=1 widget=0 attack=256 ranged=1 atk=9 dmg=9 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=4 dmg=3 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=32 wpn=0 ret=1 rec=2102272,0,0,257,1121845248,1,0,0,0
+T unit=1 widget=1 attack=0 ranged=1 atk=3 dmg=32 wpn=0 ret=1 rec=2102272,0,0,1,1127481344,1,0,0,3
+T unit=1 widget=1 attack=2 ranged=3 atk=1 dmg=32 wpn=24 ret=1 rec=2102272,24,0,257,1122893824,1,0,0,1
+T unit=0 widget=1 attack=0 ranged=3 atk=8 dmg=17 wpn=22 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=3 atk=4294967295 dmg=2147483648 wpn=10 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=2147483647 wpn=15 ret=1 rec=2102272,15,0,257,1108082688,2147483648,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=5 wpn=24 ret=1 rec=2102272,24,0,257,1116995584,32,0,0,6
+T unit=1 widget=1 attack=2 ranged=1 atk=4294967295 dmg=4294967295 wpn=17 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=5 dmg=2147483647 wpn=3 ret=1 rec=2102272,3,0,257,1123680256,2147483648,0,0,5
+T unit=1 widget=1 attack=2 ranged=1 atk=3 dmg=0 wpn=10 ret=1 rec=2102272,10,0,257,1128529920,1,0,0,3
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=13 wpn=22 ret=1 rec=2102272,22,0,256,1124270080,8192,0,0,6
+T unit=0 widget=1 attack=0 ranged=1 atk=4294967295 dmg=32 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=8 dmg=33 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=260 wpn=8 ret=1 rec=2102272,8,0,257,1128071168,16,0,0,7
+T unit=1 widget=0 attack=1 ranged=1 atk=0 dmg=12 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=2 dmg=2147483649 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=4 dmg=33 wpn=23 ret=1 rec=2102272,23,0,257,1127481344,2,0,0,4
+T unit=1 widget=1 attack=256 ranged=1 atk=5 dmg=2147483649 wpn=21 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=3 atk=9 dmg=11 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=7 dmg=4294967295 wpn=21 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=0 wpn=9 ret=1 rec=2102272,9,0,257,1117913088,1,0,0,0
+T unit=1 widget=0 attack=0 ranged=1 atk=4 dmg=33 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=2 dmg=4 wpn=10 ret=1 rec=2102272,10,0,0,1096810496,16,0,0,2
+T unit=1 widget=1 attack=1 ranged=0 atk=8 dmg=1 wpn=11 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=7 dmg=17 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=9 dmg=23 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=9 dmg=0 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=3 atk=0 dmg=3 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=2 dmg=11 wpn=6 ret=1 rec=2102272,6,0,257,1121976320,2048,0,0,2
+T unit=1 widget=1 attack=0 ranged=0 atk=6 dmg=4294967295 wpn=6 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=4294967295 dmg=2 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=1 dmg=7 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=1 dmg=2147483648 wpn=8 ret=1 rec=2102272,8,0,257,1128136704,1,0,0,1
+T unit=0 widget=1 attack=1 ranged=1 atk=6 dmg=22 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=25 wpn=16 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=9 dmg=25 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=0 dmg=24 wpn=12 ret=1 rec=2102272,12,0,1,1128529920,16777216,0,0,0
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=6 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=3 dmg=4 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=0 wpn=8 ret=1 rec=2102272,8,0,257,1102577664,1,0,0,6
+T unit=1 widget=1 attack=1 ranged=0 atk=2 dmg=4 wpn=17 ret=1 rec=2102272,17,0,256,1127088128,16,0,0,2
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=15 wpn=4 ret=1 rec=2102272,4,0,256,1118437376,32768,0,0,6
+T unit=1 widget=0 attack=2 ranged=1 atk=0 dmg=2147483647 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=31 wpn=15 ret=1 rec=2102272,15,0,257,1126694912,2147483648,0,0,7
+T unit=0 widget=1 attack=1 ranged=1 atk=2 dmg=1 wpn=24 ret=0 rec=-
+T unit=0 widget=1 attack=256 ranged=1 atk=0 dmg=17 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=9 dmg=25 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=4294967295 dmg=16 wpn=4 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=4294967295 dmg=23 wpn=14 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=4294967295 dmg=20 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=4 dmg=31 wpn=17 ret=1 rec=2102272,17,0,257,1109917696,2147483648,0,0,4
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=20 wpn=3 ret=1 rec=2102272,3,0,257,1117388800,1048576,0,0,6
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=8 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=7 dmg=5 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=7 dmg=12 wpn=0 ret=1 rec=2102272,0,0,256,1122762752,4096,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=260 wpn=17 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=4294967295 dmg=22 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=4294967295 dmg=8 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=4 wpn=6 ret=1 rec=2102272,6,0,257,1124204544,16,0,0,0
+T unit=1 widget=1 attack=256 ranged=1 atk=8 dmg=10 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=16 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=7 dmg=7 wpn=4 ret=1 rec=2102272,4,0,256,1113325568,128,0,0,7
+T unit=1 widget=1 attack=2 ranged=1 atk=7 dmg=0 wpn=13 ret=1 rec=2102272,13,0,257,1118175232,1,0,0,7
+T unit=1 widget=1 attack=2 ranged=0 atk=4294967295 dmg=2147483649 wpn=13 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=9 dmg=260 wpn=6 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=7 dmg=32 wpn=24 ret=1 rec=2102272,24,0,0,1094713344,1,0,0,7
+T unit=0 widget=1 attack=1 ranged=0 atk=5 dmg=31 wpn=22 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=8 dmg=24 wpn=4294967295 ret=0 rec=-
+T unit=0 widget=1 attack=256 ranged=0 atk=2 dmg=25 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=4 dmg=21 wpn=0 ret=1 rec=2102272,0,0,256,1109131264,2097152,0,0,4
+T unit=1 widget=1 attack=256 ranged=0 atk=9 dmg=22 wpn=9 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=1 atk=7 dmg=2147483648 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=7 dmg=4 wpn=0 ret=1 rec=2102272,0,0,256,1126957056,16,0,0,7
+T unit=1 widget=1 attack=1 ranged=3 atk=3 dmg=2147483648 wpn=11 ret=1 rec=2102272,11,0,257,1118175232,1,0,0,3
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=4294967295 wpn=19 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=2 dmg=31 wpn=7 ret=1 rec=2102272,7,0,256,1124794368,2147483648,0,0,2
+T unit=1 widget=1 attack=0 ranged=1 atk=5 dmg=33 wpn=1 ret=1 rec=2102272,1,0,1,1117257728,2,0,0,5
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=9 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=32 wpn=15 ret=1 rec=2102272,15,0,257,1125187584,1,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=21 wpn=0 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=2 dmg=25 wpn=1 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=8 dmg=13 wpn=15 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=9 dmg=25 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=7 dmg=31 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=4 dmg=5 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=2 dmg=33 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=9 dmg=5 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=8 dmg=8 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=2 dmg=0 wpn=24 ret=1 rec=2102272,24,0,256,1103101952,1,0,0,2
+T unit=0 widget=1 attack=2 ranged=1 atk=0 dmg=11 wpn=21 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=4294967295 dmg=13 wpn=25 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=0 atk=9 dmg=0 wpn=5 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=6 dmg=18 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=8 dmg=7 wpn=7 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=4 dmg=260 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=31 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=8 wpn=2 ret=1 rec=2102272,2,0,257,1116340224,256,0,0,0
+T unit=1 widget=1 attack=0 ranged=0 atk=4 dmg=11 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=0 atk=0 dmg=4294967295 wpn=8 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=0 dmg=5 wpn=20 ret=1 rec=2102272,20,0,1,1112014848,32,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=2 dmg=4 wpn=5 ret=1 rec=2102272,5,0,257,1126170624,16,0,0,2
+T unit=1 widget=0 attack=0 ranged=3 atk=6 dmg=32 wpn=9 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=7 dmg=2147483648 wpn=3 ret=1 rec=2102272,3,0,257,1120403456,1,0,0,7
+T unit=1 widget=0 attack=0 ranged=3 atk=6 dmg=2147483649 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=1 dmg=15 wpn=23 ret=1 rec=2102272,23,0,257,1111490560,32768,0,0,1
+T unit=1 widget=1 attack=0 ranged=0 atk=0 dmg=260 wpn=8 ret=1 rec=2102272,8,0,0,1128595456,16,0,0,0
+T unit=1 widget=0 attack=1 ranged=1 atk=8 dmg=2147483648 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=3 dmg=5 wpn=12 ret=1 rec=2102272,12,0,1,1124925440,32,0,0,3
+T unit=1 widget=1 attack=0 ranged=1 atk=9 dmg=5 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=24 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=13 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=4294967295 dmg=31 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=7 dmg=31 wpn=0 ret=1 rec=2102272,0,0,1,1115815936,2147483648,0,0,7
+T unit=1 widget=1 attack=2 ranged=3 atk=2 dmg=2147483648 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=18 wpn=24 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=0 atk=9 dmg=4 wpn=25 ret=0 rec=-
+T unit=1 widget=0 attack=256 ranged=1 atk=9 dmg=7 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=4294967295 dmg=22 wpn=24 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=0 dmg=25 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=0 wpn=23 ret=1 rec=2102272,23,0,257,1114636288,1,0,0,7
+T unit=1 widget=0 attack=1 ranged=1 atk=7 dmg=0 wpn=15 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=3 dmg=23 wpn=15 ret=1 rec=2102272,15,0,257,1120927744,8388608,0,0,3
+T unit=1 widget=1 attack=0 ranged=1 atk=7 dmg=10 wpn=0 ret=1 rec=2102272,0,0,1,1110441984,1024,0,0,7
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=2147483648 wpn=0 ret=1 rec=2102272,0,0,257,1128529920,1,0,0,0
+T unit=1 widget=1 attack=2 ranged=0 atk=6 dmg=13 wpn=19 ret=1 rec=2102272,19,0,256,1116602368,8192,0,0,6
+T unit=1 widget=1 attack=256 ranged=0 atk=3 dmg=4294967295 wpn=24 ret=0 rec=-
+T unit=1 widget=0 attack=256 ranged=3 atk=4 dmg=7 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=8 dmg=33 wpn=17 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=1 atk=6 dmg=4 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=6 dmg=2147483649 wpn=26 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=0 atk=0 dmg=2147483649 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=7 dmg=14 wpn=24 ret=1 rec=2102272,24,0,256,1120403456,16384,0,0,7
+T unit=1 widget=1 attack=2 ranged=1 atk=7 dmg=0 wpn=0 ret=1 rec=2102272,0,0,257,1116602368,1,0,0,7
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=0 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=7 dmg=32 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=7 dmg=7 wpn=4 ret=1 rec=2102272,4,0,0,1109131264,128,0,0,7
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=9 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=32 wpn=17 ret=1 rec=2102272,17,0,256,1091567616,1,0,0,6
+T unit=1 widget=1 attack=2 ranged=3 atk=1 dmg=5 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=0 atk=4294967295 dmg=2147483648 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=0 dmg=33 wpn=19 ret=1 rec=2102272,19,0,0,1128202240,2,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=1 dmg=2147483647 wpn=10 ret=1 rec=2102272,10,0,257,1110179840,2147483648,0,0,1
+T unit=0 widget=0 attack=1 ranged=3 atk=4 dmg=12 wpn=22 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=2 dmg=5 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=4 dmg=2147483648 wpn=0 ret=1 rec=2102272,0,0,1,1122500608,1,0,0,4
+T unit=1 widget=1 attack=1 ranged=1 atk=2 dmg=14 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=2 dmg=2147483647 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=2 dmg=4294967295 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=14 wpn=0 ret=1 rec=2102272,0,0,257,1104150528,16384,0,0,7
+T unit=0 widget=1 attack=1 ranged=1 atk=0 dmg=5 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=4294967295 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=0 dmg=5 wpn=0 ret=1 rec=2102272,0,0,256,1128726528,32,0,0,0
+T unit=1 widget=1 attack=0 ranged=3 atk=4294967295 dmg=14 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=9 dmg=17 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=11 wpn=20 ret=1 rec=2102272,20,0,257,1117126656,2048,0,0,6
+T unit=1 widget=1 attack=0 ranged=0 atk=7 dmg=4 wpn=14 ret=1 rec=2102272,14,0,0,1126301696,16,0,0,7
+T unit=1 widget=1 attack=0 ranged=0 atk=7 dmg=260 wpn=0 ret=1 rec=2102272,0,0,0,1118568448,16,0,0,7
+T unit=1 widget=1 attack=256 ranged=1 atk=3 dmg=2147483649 wpn=17 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=5 dmg=31 wpn=1 ret=1 rec=2102272,1,0,1,1110179840,2147483648,0,0,5
+T unit=1 widget=1 attack=0 ranged=1 atk=4 dmg=31 wpn=2 ret=1 rec=2102272,2,0,1,1110441984,2147483648,0,0,4
+T unit=1 widget=1 attack=2 ranged=0 atk=6 dmg=2 wpn=1 ret=1 rec=2102272,1,0,256,1125842944,4,0,0,6
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=13 wpn=16 ret=1 rec=2102272,16,0,257,1065353216,8192,0,0,6
+T unit=0 widget=1 attack=0 ranged=1 atk=6 dmg=17 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=2 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=2147483649 wpn=14 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=0 dmg=4 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=2 dmg=2147483648 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=0 dmg=10 wpn=7 ret=1 rec=2102272,7,0,257,1106771968,1024,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=5 dmg=18 wpn=14 ret=1 rec=2102272,14,0,257,1104674816,262144,0,0,5
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=2147483648 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=0 wpn=24 ret=1 rec=2102272,24,0,257,1092616192,1,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=4 dmg=2 wpn=4 ret=1 rec=2102272,4,0,257,1112801280,4,0,0,4
+T unit=1 widget=1 attack=0 ranged=1 atk=5 dmg=2147483649 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=2147483647 wpn=17 ret=1 rec=2102272,17,0,257,1121452032,2147483648,0,0,0
+T unit=1 widget=1 attack=1 ranged=0 atk=7 dmg=16 wpn=9 ret=1 rec=2102272,9,0,256,1122762752,65536,0,0,7
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=32 wpn=24 ret=1 rec=2102272,24,0,257,1119354880,1,0,0,6
+T unit=1 widget=0 attack=1 ranged=1 atk=7 dmg=5 wpn=6 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=1 dmg=33 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=4294967295 dmg=33 wpn=10 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=5 dmg=2147483649 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=0 dmg=23 wpn=17 ret=1 rec=2102272,17,0,257,1126563840,8388608,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=3 dmg=2147483648 wpn=21 ret=1 rec=2102272,21,0,257,1109393408,1,0,0,3
+T unit=1 widget=1 attack=1 ranged=0 atk=7 dmg=4 wpn=0 ret=1 rec=2102272,0,0,256,1125318656,16,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=0 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=3 dmg=260 wpn=7 ret=1 rec=2102272,7,0,257,1115947008,16,0,0,3
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=21 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=6 dmg=20 wpn=4294967295 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=1 atk=4294967295 dmg=2147483648 wpn=24 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=3 atk=4 dmg=4294967295 wpn=15 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=5 dmg=19 wpn=24 ret=1 rec=2102272,24,0,257,1122631680,524288,0,0,5
+T unit=1 widget=0 attack=2 ranged=3 atk=4 dmg=0 wpn=12 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=0 dmg=2147483647 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=4 dmg=1 wpn=26 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=3 atk=6 dmg=5 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=0 dmg=25 wpn=10 ret=1 rec=2102272,10,0,257,1103101952,33554432,0,0,0
+T unit=0 widget=1 attack=2 ranged=3 atk=7 dmg=2 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=4294967295 wpn=25 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=1 atk=9 dmg=2147483649 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=2147483649 wpn=9 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=9 dmg=260 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=5 dmg=0 wpn=16 ret=1 rec=2102272,16,0,1,1118044160,1,0,0,5
+T unit=1 widget=0 attack=0 ranged=1 atk=4294967295 dmg=4 wpn=17 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=31 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=7 dmg=31 wpn=24 ret=1 rec=2102272,24,0,257,1103101952,2147483648,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=22 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=0 dmg=0 wpn=0 ret=1 rec=2102272,0,0,257,1117650944,1,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=4 wpn=23 ret=1 rec=2102272,23,0,257,1095761920,16,0,0,0
+T unit=1 widget=1 attack=2 ranged=1 atk=4 dmg=18 wpn=1 ret=1 rec=2102272,1,0,257,1126957056,262144,0,0,4
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=33 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=7 wpn=15 ret=1 rec=2102272,15,0,257,1103101952,128,0,0,7
+T unit=1 widget=1 attack=2 ranged=0 atk=0 dmg=33 wpn=17 ret=1 rec=2102272,17,0,256,1128136704,2,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=3 dmg=4 wpn=21 ret=1 rec=2102272,21,0,257,1112014848,16,0,0,3
+T unit=0 widget=1 attack=1 ranged=0 atk=6 dmg=33 wpn=4294967295 ret=0 rec=-
+T unit=0 widget=1 attack=0 ranged=3 atk=4 dmg=4294967295 wpn=21 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=1 dmg=4294967295 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=3 dmg=2147483647 wpn=0 ret=1 rec=2102272,0,0,256,1124466688,2147483648,0,0,3
+T unit=0 widget=1 attack=256 ranged=0 atk=3 dmg=260 wpn=22 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=5 dmg=32 wpn=6 ret=1 rec=2102272,6,0,1,1116995584,1,0,0,5
+T unit=1 widget=1 attack=0 ranged=0 atk=7 dmg=0 wpn=6 ret=1 rec=2102272,6,0,0,1116733440,1,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=1 dmg=18 wpn=0 ret=1 rec=2102272,0,0,257,1124139008,262144,0,0,1
+T unit=1 widget=1 attack=256 ranged=0 atk=7 dmg=4 wpn=0 ret=1 rec=2102272,0,0,256,1109917696,16,0,0,7
+T unit=1 widget=1 attack=2 ranged=0 atk=3 dmg=13 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=9 wpn=7 ret=1 rec=2102272,7,0,257,1124794368,512,0,0,7
+T unit=1 widget=1 attack=256 ranged=3 atk=0 dmg=20 wpn=8 ret=1 rec=2102272,8,0,257,1120010240,1048576,0,0,0
+T unit=1 widget=1 attack=1 ranged=0 atk=1 dmg=23 wpn=13 ret=1 rec=2102272,13,0,256,1102053376,8388608,0,0,1
+T unit=1 widget=1 attack=2 ranged=0 atk=7 dmg=7 wpn=17 ret=1 rec=2102272,17,0,256,1124728832,128,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=8 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=7 dmg=4 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=1 dmg=9 wpn=22 ret=1 rec=2102272,22,0,257,1097859072,512,0,0,1
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=3 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=21 wpn=23 ret=1 rec=2102272,23,0,257,1117257728,2097152,0,0,6
+T unit=1 widget=1 attack=256 ranged=1 atk=4294967295 dmg=12 wpn=19 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=5 dmg=8 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=4294967295 dmg=5 wpn=6 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=5 wpn=4294967295 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=3 atk=6 dmg=2147483647 wpn=0 ret=0 rec=-
+T unit=0 widget=1 attack=0 ranged=1 atk=0 dmg=21 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=7 dmg=20 wpn=23 ret=1 rec=2102272,23,0,257,1121714176,1048576,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=33 wpn=0 ret=1 rec=2102272,0,0,257,1122107392,2,0,0,6
+T unit=1 widget=1 attack=2 ranged=1 atk=7 dmg=4294967295 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=0 dmg=24 wpn=0 ret=1 rec=2102272,0,0,1,1128202240,16777216,0,0,0
+T unit=0 widget=1 attack=2 ranged=1 atk=8 dmg=31 wpn=12 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=1 dmg=0 wpn=1 ret=1 rec=2102272,1,0,257,1125384192,1,0,0,1
+T unit=0 widget=1 attack=1 ranged=3 atk=3 dmg=260 wpn=12 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=4294967295 dmg=9 wpn=0 ret=0 rec=-
+T unit=1 widget=0 attack=0 ranged=1 atk=4294967295 dmg=3 wpn=14 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=9 wpn=9 ret=1 rec=2102272,9,0,257,1122500608,512,0,0,0
+T unit=1 widget=0 attack=2 ranged=1 atk=6 dmg=2147483648 wpn=26 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=3 atk=5 dmg=5 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=6 dmg=16 wpn=1 ret=1 rec=2102272,1,0,0,1116864512,65536,0,0,6
+T unit=1 widget=1 attack=2 ranged=1 atk=5 dmg=32 wpn=0 ret=1 rec=2102272,0,0,257,1119092736,1,0,0,5
+T unit=1 widget=1 attack=1 ranged=0 atk=9 dmg=2 wpn=5 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=0 dmg=260 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=1 dmg=8 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=33 wpn=0 ret=1 rec=2102272,0,0,257,1117126656,2,0,0,0
+T unit=0 widget=1 attack=2 ranged=3 atk=4 dmg=21 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=9 dmg=260 wpn=23 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=9 dmg=3 wpn=6 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=4 dmg=2147483649 wpn=5 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=7 dmg=23 wpn=3 ret=1 rec=2102272,3,0,257,1120927744,8388608,0,0,7
+T unit=1 widget=1 attack=256 ranged=0 atk=8 dmg=4294967295 wpn=23 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=3 atk=4294967295 dmg=10 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=0 dmg=32 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=0 dmg=3 wpn=24 ret=1 rec=2102272,24,0,257,1118044160,8,0,0,0
+T unit=1 widget=0 attack=256 ranged=0 atk=2 dmg=2147483647 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=2 dmg=14 wpn=14 ret=1 rec=2102272,14,0,257,1128464384,16384,0,0,2
+T unit=1 widget=1 attack=256 ranged=3 atk=7 dmg=31 wpn=18 ret=1 rec=2102272,18,0,257,1121714176,2147483648,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=0 wpn=12 ret=1 rec=2102272,12,0,257,1127022592,1,0,0,7
+T unit=1 widget=1 attack=256 ranged=3 atk=0 dmg=25 wpn=23 ret=1 rec=2102272,23,0,257,1123811328,33554432,0,0,0
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=0 wpn=22 ret=1 rec=2102272,22,0,257,1124401152,1,0,0,0
+T unit=1 widget=1 attack=2 ranged=3 atk=4 dmg=31 wpn=3 ret=1 rec=2102272,3,0,257,1110966272,2147483648,0,0,4
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=7 wpn=23 ret=1 rec=2102272,23,0,257,1118961664,128,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=10 wpn=12 ret=1 rec=2102272,12,0,257,1120272384,1024,0,0,6
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=2147483648 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=1 dmg=31 wpn=5 ret=1 rec=2102272,5,0,257,1118437376,2147483648,0,0,1
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=33 wpn=11 ret=1 rec=2102272,11,0,257,1121714176,2,0,0,6
+T unit=1 widget=1 attack=2 ranged=3 atk=8 dmg=4 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=2 dmg=6 wpn=24 ret=1 rec=2102272,24,0,257,1086324736,64,0,0,2
+T unit=1 widget=1 attack=1 ranged=3 atk=1 dmg=33 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=0 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=1 dmg=2147483649 wpn=24 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=3 atk=8 dmg=32 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=7 dmg=2147483647 wpn=22 ret=1 rec=2102272,22,0,1,1126694912,2147483648,0,0,7
+T unit=1 widget=1 attack=2 ranged=1 atk=4 dmg=12 wpn=24 ret=1 rec=2102272,24,0,257,1125842944,4096,0,0,4
+T unit=1 widget=1 attack=256 ranged=0 atk=3 dmg=2147483649 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=8 dmg=22 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=0 dmg=33 wpn=16 ret=1 rec=2102272,16,0,1,1118961664,2,0,0,0
+T unit=1 widget=1 attack=2 ranged=3 atk=6 dmg=2 wpn=3 ret=1 rec=2102272,3,0,257,1114112000,4,0,0,6
+T unit=1 widget=1 attack=0 ranged=0 atk=3 dmg=8 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=2 wpn=7 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=6 dmg=21 wpn=19 ret=1 rec=2102272,19,0,257,1124990976,2097152,0,0,6
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=9 wpn=5 ret=1 rec=2102272,5,0,257,1126891520,512,0,0,6
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=4 wpn=17 ret=1 rec=2102272,17,0,257,1113325568,16,0,0,7
+T unit=0 widget=0 attack=256 ranged=0 atk=7 dmg=2147483648 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=8 dmg=8 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=5 wpn=20 ret=1 rec=2102272,20,0,257,1126694912,32,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=18 wpn=8 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=5 dmg=4 wpn=2 ret=1 rec=2102272,2,0,257,1098907648,16,0,0,5
+T unit=1 widget=0 attack=0 ranged=1 atk=0 dmg=31 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=18 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=1 dmg=11 wpn=24 ret=1 rec=2102272,24,0,256,1101004800,2048,0,0,1
+T unit=1 widget=1 attack=0 ranged=1 atk=4294967295 dmg=32 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=2 dmg=10 wpn=2 ret=1 rec=2102272,2,0,256,1120534528,1024,0,0,2
+T unit=1 widget=0 attack=256 ranged=1 atk=4294967295 dmg=5 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=3 wpn=5 ret=1 rec=2102272,5,0,257,1082130432,8,0,0,6
+T unit=1 widget=1 attack=1 ranged=3 atk=0 dmg=33 wpn=24 ret=1 rec=2102272,24,0,257,1123418112,2,0,0,0
+T unit=1 widget=1 attack=2 ranged=1 atk=9 dmg=4 wpn=24 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=9 dmg=260 wpn=0 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=7 dmg=21 wpn=7 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=1 atk=6 dmg=31 wpn=10 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=2 dmg=2 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=7 dmg=24 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=0 atk=2 dmg=21 wpn=16 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=0 atk=4 dmg=12 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=20 wpn=14 ret=1 rec=2102272,14,0,257,1117257728,1048576,0,0,0
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=32 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=0 atk=6 dmg=4 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=7 dmg=4 wpn=22 ret=1 rec=2102272,22,0,257,1127415808,16,0,0,7
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=19 wpn=4 ret=1 rec=2102272,4,0,257,1117650944,524288,0,0,6
+T unit=1 widget=1 attack=1 ranged=0 atk=3 dmg=0 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=0 dmg=10 wpn=23 ret=1 rec=2102272,23,0,257,1118830592,1024,0,0,0
+T unit=1 widget=0 attack=0 ranged=1 atk=8 dmg=33 wpn=24 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=7 dmg=2147483648 wpn=4 ret=1 rec=2102272,4,0,257,1116471296,1,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=3 dmg=32 wpn=0 ret=1 rec=2102272,0,0,257,1127219200,1,0,0,3
+T unit=1 widget=1 attack=0 ranged=0 atk=0 dmg=3 wpn=4 ret=1 rec=2102272,4,0,0,1113063424,8,0,0,0
+T unit=1 widget=1 attack=2 ranged=3 atk=0 dmg=5 wpn=3 ret=1 rec=2102272,3,0,257,1127940096,32,0,0,0
+T unit=1 widget=1 attack=2 ranged=0 atk=1 dmg=4294967295 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=4 wpn=14 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=6 dmg=18 wpn=14 ret=1 rec=2102272,14,0,257,1125187584,262144,0,0,6
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=13 wpn=26 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=0 atk=0 dmg=33 wpn=8 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=1 dmg=2147483647 wpn=23 ret=1 rec=2102272,23,0,1,1126432768,2147483648,0,0,1
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=0 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=4 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=5 wpn=4 ret=1 rec=2102272,4,0,257,1124663296,32,0,0,6
+T unit=1 widget=1 attack=1 ranged=1 atk=2 dmg=2147483649 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=1 dmg=1 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=7 dmg=25 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=0 attack=2 ranged=1 atk=0 dmg=5 wpn=11 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=25 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4 dmg=31 wpn=24 ret=1 rec=2102272,24,0,257,1120796672,2147483648,0,0,4
+T unit=1 widget=1 attack=1 ranged=3 atk=6 dmg=2147483649 wpn=3 ret=0 rec=-
+T unit=1 widget=0 attack=256 ranged=1 atk=4 dmg=14 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=4 dmg=16 wpn=0 ret=1 rec=2102272,0,0,1,1125974016,65536,0,0,4
+T unit=0 widget=1 attack=0 ranged=3 atk=3 dmg=11 wpn=18 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=0 dmg=25 wpn=12 ret=1 rec=2102272,12,0,257,1109131264,33554432,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=2147483647 wpn=0 ret=0 rec=-
+T unit=0 widget=1 attack=2 ranged=1 atk=4 dmg=4294967295 wpn=22 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=8 dmg=3 wpn=17 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=9 dmg=15 wpn=13 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=8 dmg=14 wpn=11 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=0 dmg=4 wpn=24 ret=1 rec=2102272,24,0,257,1114374144,16,0,0,0
+T unit=1 widget=1 attack=1 ranged=1 atk=7 dmg=2147483647 wpn=6 ret=1 rec=2102272,6,0,257,1110179840,2147483648,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=0 dmg=32 wpn=23 ret=1 rec=2102272,23,0,257,1119223808,1,0,0,0
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=5 wpn=24 ret=1 rec=2102272,24,0,257,1128529920,32,0,0,0
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=0 wpn=4294967295 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=1 atk=6 dmg=10 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=0 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=0 dmg=2147483647 wpn=6 ret=1 rec=2102272,6,0,257,1127022592,2147483648,0,0,0
+T unit=0 widget=1 attack=1 ranged=3 atk=1 dmg=11 wpn=13 ret=0 rec=-
+T unit=1 widget=0 attack=1 ranged=1 atk=2 dmg=2147483649 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=0 atk=3 dmg=17 wpn=22 ret=1 rec=2102272,22,0,256,1107820544,131072,0,0,3
+T unit=1 widget=1 attack=2 ranged=3 atk=3 dmg=4 wpn=2 ret=1 rec=2102272,2,0,257,1127481344,16,0,0,3
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=4294967295 wpn=7 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=7 dmg=2147483647 wpn=2 ret=1 rec=2102272,2,0,257,1121583104,2147483648,0,0,7
+T unit=1 widget=1 attack=256 ranged=0 atk=8 dmg=2147483647 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=16 wpn=3 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=0 atk=3 dmg=3 wpn=23 ret=1 rec=2102272,23,0,256,1110704128,8,0,0,3
+T unit=1 widget=1 attack=256 ranged=0 atk=7 dmg=16 wpn=8 ret=1 rec=2102272,8,0,256,1119617024,65536,0,0,7
+T unit=0 widget=1 attack=2 ranged=3 atk=7 dmg=0 wpn=19 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=4294967295 dmg=20 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=2147483648 wpn=8 ret=1 rec=2102272,8,0,256,1124204544,1,0,0,6
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=2 wpn=21 ret=1 rec=2102272,21,0,257,1119485952,4,0,0,0
+T unit=1 widget=1 attack=0 ranged=3 atk=0 dmg=21 wpn=25 ret=0 rec=-
+T unit=0 widget=1 attack=0 ranged=3 atk=7 dmg=2 wpn=7 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=6 dmg=2147483649 wpn=16 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=3 dmg=11 wpn=0 ret=1 rec=2102272,0,0,257,1123024896,2048,0,0,3
+T unit=1 widget=1 attack=2 ranged=3 atk=6 dmg=260 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=0 dmg=4294967295 wpn=3 ret=0 rec=-
+T unit=0 widget=1 attack=1 ranged=0 atk=2 dmg=5 wpn=19 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=3 atk=6 dmg=3 wpn=11 ret=1 rec=2102272,11,0,257,1109393408,8,0,0,6
+T unit=1 widget=1 attack=256 ranged=0 atk=6 dmg=22 wpn=24 ret=1 rec=2102272,24,0,256,1124335616,4194304,0,0,6
+T unit=1 widget=1 attack=0 ranged=0 atk=0 dmg=31 wpn=23 ret=1 rec=2102272,23,0,0,1126891520,2147483648,0,0,0
+T unit=0 widget=1 attack=1 ranged=1 atk=4294967295 dmg=11 wpn=16 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=3 dmg=5 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=5 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=4 dmg=0 wpn=4294967295 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=0 dmg=19 wpn=1 ret=1 rec=2102272,1,0,257,1115815936,524288,0,0,0
+T unit=1 widget=1 attack=1 ranged=3 atk=2 dmg=19 wpn=10 ret=1 rec=2102272,10,0,257,1120796672,524288,0,0,2
+T unit=1 widget=1 attack=2 ranged=0 atk=0 dmg=22 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=1 atk=1 dmg=33 wpn=23 ret=1 rec=2102272,23,0,1,1127415808,2,0,0,1
+T unit=1 widget=1 attack=1 ranged=1 atk=9 dmg=260 wpn=23 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=2 dmg=5 wpn=23 ret=1 rec=2102272,23,0,257,1095761920,32,0,0,2
+T unit=1 widget=1 attack=1 ranged=3 atk=9 dmg=25 wpn=16 ret=0 rec=-
+T unit=0 widget=0 attack=2 ranged=3 atk=0 dmg=9 wpn=10 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=7 dmg=2147483649 wpn=4 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=6 dmg=0 wpn=18 ret=1 rec=2102272,18,0,257,1115815936,1,0,0,6
+T unit=1 widget=1 attack=2 ranged=1 atk=9 dmg=3 wpn=22 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=0 atk=6 dmg=14 wpn=0 ret=1 rec=2102272,0,0,256,1116340224,16384,0,0,6
+T unit=1 widget=1 attack=256 ranged=1 atk=6 dmg=22 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=3 atk=7 dmg=2147483648 wpn=0 ret=1 rec=2102272,0,0,257,1124663296,1,0,0,7
+T unit=0 widget=1 attack=1 ranged=0 atk=3 dmg=2147483647 wpn=22 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=4 dmg=15 wpn=25 ret=0 rec=-
+T unit=1 widget=1 attack=0 ranged=3 atk=1 dmg=12 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=2 ranged=1 atk=8 dmg=2147483649 wpn=0 ret=0 rec=-
+T unit=1 widget=1 attack=256 ranged=1 atk=7 dmg=5 wpn=24 ret=1 rec=2102272,24,0,257,1124990976,32,0,0,7
+T unit=1 widget=1 attack=1 ranged=0 atk=0 dmg=22 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=3 atk=7 dmg=33 wpn=4 ret=1 rec=2102272,4,0,257,1119485952,2,0,0,7
+T unit=1 widget=1 attack=1 ranged=1 atk=8 dmg=31 wpn=26 ret=0 rec=-
+T unit=1 widget=1 attack=1 ranged=1 atk=2 dmg=32 wpn=1 ret=1 rec=2102272,1,0,257,1088421888,1,0,0,2
+T unit=1 widget=1 attack=1 ranged=0 atk=4 dmg=14 wpn=0 ret=1 rec=2102272,0,0,256,1110704128,16384,0,0,4
+T unit=1 widget=1 attack=2 ranged=3 atk=4294967295 dmg=33 wpn=23 ret=0 rec=-
+P unit=1 delay=40400000 attack=0 ranged=3 atk=1 dmg=11 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,2048,1,1,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=0 dmg=4294967295 wpn=13 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=0 atk=1 dmg=21 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=4 dmg=2147483648 wpn=4 ret=1 area=delayed args=2117648,2117640,2117652,1,0,4,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=1 dmg=32 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=7 dmg=20 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=7 dmg=15 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,32768,256,7,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=7 dmg=2147483649 wpn=8 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=5 dmg=2147483648 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,1,257,5,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=2 ranged=1 atk=6 dmg=0 wpn=3 ret=1 area=immediate args=2117640,2117652,1,257,6,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=1 ranged=0 atk=4 dmg=31 wpn=11 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,256,4,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=2 ranged=1 atk=4294967295 dmg=3 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=4294967295 dmg=4294967295 wpn=25 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=0 atk=2 dmg=2147483648 wpn=14 ret=1 area=immediate args=2117640,2117652,1,256,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=2 ranged=1 atk=7 dmg=33 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,2,257,7,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=1 atk=1 dmg=19 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=0 atk=0 dmg=6 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,64,256,0,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=7 dmg=2147483649 wpn=14 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=7 dmg=19 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,524288,0,7,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=1 ranged=3 atk=8 dmg=32 wpn=0 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=3 dmg=6 wpn=6 ret=1 area=delayed args=2117648,2117640,2117652,64,0,3,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=1 atk=3 dmg=7 wpn=22 ret=1 area=delayed args=2117648,2117640,2117652,128,1,3,-36573170,2102272,-1,0
+P unit=0 delay=3f800000 attack=2 ranged=1 atk=3 dmg=1 wpn=20 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=0 atk=6 dmg=0 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1,256,6,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=1 atk=3 dmg=7 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,128,1,3,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=3 atk=7 dmg=0 wpn=24 ret=1 area=immediate args=2117640,2117652,1,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=4 dmg=14 wpn=18 ret=1 area=delayed args=2117648,2117640,2117652,16384,257,4,-36573170,2102272,-1,0
+P unit=0 delay=7fc00000 attack=1 ranged=0 atk=8 dmg=4 wpn=8 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=1 atk=0 dmg=15 wpn=15 ret=1 area=immediate args=2117640,2117652,32768,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=1 ranged=3 atk=3 dmg=14 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,16384,257,3,-36573170,2102272,-1,0
+P unit=0 delay=00000000 attack=1 ranged=0 atk=3 dmg=0 wpn=0 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=8 dmg=9 wpn=5 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=1 atk=4294967295 dmg=16 wpn=18 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=3 atk=3 dmg=0 wpn=5 ret=1 area=immediate args=2117640,2117652,1,1,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=4 dmg=31 wpn=1 ret=1 area=immediate args=2117640,2117652,-2147483648,257,4,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=bf800000 attack=1 ranged=3 atk=7 dmg=20 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=8 dmg=20 wpn=14 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=1 dmg=10 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1024,0,1,-36573170,2102272,-1,0
+P unit=0 delay=3f800000 attack=0 ranged=1 atk=3 dmg=24 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=5 dmg=15 wpn=16 ret=1 area=delayed args=2117648,2117640,2117652,32768,257,5,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=1 ranged=3 atk=0 dmg=0 wpn=25 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=4294967295 dmg=2147483649 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=3 atk=3 dmg=12 wpn=4294967295 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=2 ranged=1 atk=4294967295 dmg=4294967295 wpn=25 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=0 atk=6 dmg=25 wpn=24 ret=1 area=immediate args=2117640,2117652,33554432,256,6,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=1 ranged=3 atk=0 dmg=4 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,16,257,0,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=2 ranged=1 atk=1 dmg=4 wpn=20 ret=1 area=delayed args=2117648,2117640,2117652,16,257,1,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=0 atk=7 dmg=17 wpn=0 ret=1 area=immediate args=2117640,2117652,131072,256,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=1 ranged=0 atk=1 dmg=22 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=3 atk=4294967295 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=0 atk=4294967295 dmg=15 wpn=0 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=5 dmg=2 wpn=0 ret=1 area=immediate args=2117640,2117652,4,257,5,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=7 dmg=2147483649 wpn=16 ret=0 area=- args=-
+P unit=0 delay=bf800000 attack=1 ranged=3 atk=7 dmg=18 wpn=2 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=0 dmg=13 wpn=6 ret=1 area=immediate args=2117640,2117652,8192,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=2 ranged=3 atk=0 dmg=3 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,8,257,0,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=0 dmg=7 wpn=21 ret=1 area=delayed args=2117648,2117640,2117652,128,257,0,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=1 ranged=0 atk=5 dmg=4 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,16,256,5,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=2 ranged=3 atk=1 dmg=11 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=7 dmg=23 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,8388608,257,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=2 dmg=2147483649 wpn=25 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=0 atk=0 dmg=2147483649 wpn=0 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=4294967295 dmg=2147483648 wpn=11 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=1 atk=0 dmg=2147483649 wpn=12 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=7 dmg=19 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=1 dmg=18 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,262144,257,1,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=3 atk=6 dmg=6 wpn=23 ret=1 area=delayed args=2117648,2117640,2117652,64,257,6,-36573170,2102272,-1,0
+P unit=0 delay=40400000 attack=1 ranged=1 atk=4 dmg=24 wpn=0 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=0 atk=4294967295 dmg=33 wpn=24 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=4294967295 dmg=32 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=7 dmg=11 wpn=12 ret=1 area=delayed args=2117648,2117640,2117652,2048,257,7,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=2 dmg=5 wpn=17 ret=1 area=immediate args=2117640,2117652,32,257,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=8 dmg=9 wpn=0 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=0 atk=0 dmg=1 wpn=20 ret=1 area=delayed args=2117648,2117640,2117652,2,256,0,-36573170,2102272,-1,0
+P unit=0 delay=3f000000 attack=0 ranged=0 atk=2 dmg=2147483649 wpn=16 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=0 atk=8 dmg=6 wpn=9 ret=0 area=- args=-
+P unit=0 delay=3f800000 attack=2 ranged=3 atk=7 dmg=18 wpn=3 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=1 ranged=1 atk=4294967295 dmg=23 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=0 atk=8 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=0 ranged=1 atk=0 dmg=0 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=0 atk=5 dmg=14 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=1 atk=2 dmg=12 wpn=1 ret=1 area=delayed args=2117648,2117640,2117652,4096,1,2,-36573170,2102272,-1,0
+P unit=0 delay=3f800000 attack=2 ranged=1 atk=7 dmg=17 wpn=10 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=0 atk=8 dmg=18 wpn=4294967295 ret=0 area=- args=-
+P unit=0 delay=7fc00000 attack=1 ranged=1 atk=7 dmg=0 wpn=20 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=0 atk=7 dmg=4 wpn=25 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=1 atk=3 dmg=7 wpn=22 ret=1 area=immediate args=2117640,2117652,128,257,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=2 ranged=0 atk=0 dmg=4 wpn=5 ret=1 area=delayed args=2117648,2117640,2117652,16,256,0,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=7 dmg=2147483649 wpn=0 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=1 atk=1 dmg=32 wpn=14 ret=1 area=delayed args=2117648,2117640,2117652,1,257,1,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=5 dmg=0 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=4294967295 dmg=4294967295 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=4 dmg=33 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,2,0,4,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=0 ranged=3 atk=5 dmg=8 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,256,1,5,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=3 dmg=18 wpn=20 ret=1 area=immediate args=2117640,2117652,262144,257,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=2 ranged=3 atk=0 dmg=2147483649 wpn=20 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=3 atk=0 dmg=4294967295 wpn=0 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=4294967295 dmg=0 wpn=2 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=8 dmg=15 wpn=7 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=3 atk=4294967295 dmg=5 wpn=16 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=6 dmg=18 wpn=20 ret=1 area=immediate args=2117640,2117652,262144,257,6,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=7 dmg=14 wpn=0 ret=1 area=immediate args=2117640,2117652,16384,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=2 ranged=0 atk=4294967295 dmg=21 wpn=19 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=0 atk=7 dmg=0 wpn=4 ret=1 area=immediate args=2117640,2117652,1,256,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=0 ranged=1 atk=5 dmg=13 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,8192,1,5,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=7 dmg=4294967295 wpn=24 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=0 dmg=23 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,8388608,0,0,-36573170,2102272,-1,0
+P unit=0 delay=bf800000 attack=0 ranged=0 atk=2 dmg=24 wpn=2 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=7 dmg=33 wpn=1 ret=1 area=immediate args=2117640,2117652,2,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=0 ranged=3 atk=8 dmg=20 wpn=0 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=1 atk=0 dmg=2 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=4 dmg=2 wpn=1 ret=1 area=delayed args=2117648,2117640,2117652,4,257,4,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=0 ranged=1 atk=0 dmg=14 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=3 atk=2 dmg=32 wpn=25 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=0 ranged=1 atk=6 dmg=17 wpn=0 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=3 atk=2 dmg=4294967295 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=1 atk=1 dmg=16 wpn=11 ret=1 area=immediate args=2117640,2117652,65536,257,1,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=0 ranged=1 atk=4 dmg=21 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,2097152,1,4,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=1 ranged=1 atk=8 dmg=13 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=8 dmg=7 wpn=25 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=1 atk=6 dmg=7 wpn=0 ret=1 area=immediate args=2117640,2117652,128,257,6,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=1 ranged=3 atk=0 dmg=21 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,2097152,257,0,-36573170,2102272,-1,0
+P unit=0 delay=3f800000 attack=0 ranged=0 atk=0 dmg=33 wpn=6 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=0 atk=7 dmg=4 wpn=25 ret=0 area=- args=-
+P unit=0 delay=0da24260 attack=1 ranged=1 atk=8 dmg=5 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=3 atk=2 dmg=24 wpn=17 ret=1 area=delayed args=2117648,2117640,2117652,16777216,1,2,-36573170,2102272,-1,0
+P unit=0 delay=7fc00000 attack=2 ranged=3 atk=0 dmg=6 wpn=25 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=7 dmg=21 wpn=23 ret=1 area=immediate args=2117640,2117652,2097152,256,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=2 ranged=1 atk=8 dmg=0 wpn=5 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=1 atk=8 dmg=33 wpn=4 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=3 atk=8 dmg=31 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=1 dmg=13 wpn=5 ret=1 area=delayed args=2117648,2117640,2117652,8192,1,1,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=3 dmg=2147483649 wpn=14 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=6 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=1 atk=1 dmg=0 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1,257,1,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=0 ranged=0 atk=8 dmg=19 wpn=24 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=0 atk=6 dmg=0 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=3 atk=7 dmg=33 wpn=4 ret=1 area=delayed args=2117648,2117640,2117652,2,257,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=8 dmg=15 wpn=0 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=0 ranged=3 atk=1 dmg=4294967295 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=8 dmg=0 wpn=6 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=8 dmg=8 wpn=23 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=1 atk=0 dmg=12 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=2 dmg=5 wpn=17 ret=1 area=immediate args=2117640,2117652,32,256,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=0 ranged=3 atk=2 dmg=10 wpn=6 ret=1 area=immediate args=2117640,2117652,1024,1,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=0 ranged=1 atk=0 dmg=13 wpn=9 ret=1 area=delayed args=2117648,2117640,2117652,8192,1,0,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=8 dmg=1 wpn=21 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=2 dmg=0 wpn=12 ret=1 area=delayed args=2117648,2117640,2117652,1,257,2,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=2 ranged=3 atk=3 dmg=0 wpn=16 ret=1 area=immediate args=2117640,2117652,1,257,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=7 dmg=2 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=7 dmg=31 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,256,7,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=0 ranged=1 atk=7 dmg=2147483648 wpn=2 ret=1 area=immediate args=2117640,2117652,1,1,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=8 dmg=32 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=1 atk=4294967295 dmg=16 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=1 atk=4 dmg=31 wpn=19 ret=1 area=immediate args=2117640,2117652,-2147483648,1,4,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=4294967295 dmg=4 wpn=8 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=1 atk=5 dmg=13 wpn=21 ret=1 area=immediate args=2117640,2117652,8192,1,5,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=3f800000 attack=2 ranged=3 atk=3 dmg=8 wpn=15 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=0 dmg=24 wpn=19 ret=1 area=immediate args=2117640,2117652,16777216,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=7 dmg=4294967295 wpn=24 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=8 dmg=15 wpn=0 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=0 atk=6 dmg=15 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=1 atk=4294967295 dmg=2147483648 wpn=2 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=0 ranged=3 atk=8 dmg=10 wpn=7 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=3 dmg=24 wpn=20 ret=1 area=immediate args=2117640,2117652,16777216,256,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=1 ranged=3 atk=2 dmg=25 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,33554432,257,2,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=2 ranged=0 atk=5 dmg=32 wpn=25 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=3 atk=0 dmg=13 wpn=0 ret=1 area=immediate args=2117640,2117652,8192,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=1 ranged=3 atk=2 dmg=23 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,8388608,257,2,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=2 ranged=0 atk=4294967295 dmg=32 wpn=24 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=8 dmg=6 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=3 atk=8 dmg=19 wpn=7 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=4294967295 dmg=4294967295 wpn=22 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=1 atk=2 dmg=5 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=0 atk=4 dmg=31 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,256,4,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=0 ranged=3 atk=0 dmg=8 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,256,1,0,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=6 dmg=8 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=0 dmg=2147483648 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,1,257,0,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=0 atk=5 dmg=0 wpn=1 ret=1 area=delayed args=2117648,2117640,2117652,1,0,5,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=0 atk=0 dmg=31 wpn=3 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,256,0,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=0 atk=4 dmg=33 wpn=0 ret=1 area=immediate args=2117640,2117652,2,256,4,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=1 ranged=3 atk=4294967295 dmg=8 wpn=8 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=3 atk=8 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=4294967295 dmg=0 wpn=6 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=5 dmg=32 wpn=5 ret=1 area=delayed args=2117648,2117640,2117652,1,257,5,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=0 atk=7 dmg=15 wpn=21 ret=1 area=delayed args=2117648,2117640,2117652,32768,256,7,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=6 dmg=32 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=0 atk=4294967295 dmg=32 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=1 atk=4294967295 dmg=7 wpn=20 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=4294967295 dmg=13 wpn=23 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=3 atk=7 dmg=31 wpn=1 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,1,7,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=2 ranged=1 atk=2 dmg=17 wpn=0 ret=1 area=immediate args=2117640,2117652,131072,257,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=0 ranged=1 atk=4294967295 dmg=33 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=3 atk=7 dmg=31 wpn=0 ret=1 area=immediate args=2117640,2117652,-2147483648,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=1 ranged=0 atk=3 dmg=4 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=3 atk=8 dmg=4 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=1 atk=1 dmg=31 wpn=25 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=2 ranged=0 atk=0 dmg=6 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=1 atk=6 dmg=32 wpn=10 ret=1 area=delayed args=2117648,2117640,2117652,1,1,6,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=1 ranged=0 atk=0 dmg=32 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,1,256,0,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=3 atk=4294967295 dmg=33 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=3 atk=1 dmg=0 wpn=15 ret=1 area=immediate args=2117640,2117652,1,1,1,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=2 ranged=1 atk=2 dmg=9 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=3 atk=3 dmg=0 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=1 dmg=2147483649 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=0 atk=2 dmg=31 wpn=25 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=6 dmg=31 wpn=8 ret=1 area=immediate args=2117640,2117652,-2147483648,257,6,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=7 dmg=33 wpn=12 ret=1 area=delayed args=2117648,2117640,2117652,2,256,7,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=0 atk=7 dmg=1 wpn=20 ret=1 area=delayed args=2117648,2117640,2117652,2,0,7,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=2 ranged=0 atk=0 dmg=1 wpn=25 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=1 ranged=0 atk=7 dmg=20 wpn=9 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=0 atk=0 dmg=9 wpn=0 ret=1 area=immediate args=2117640,2117652,512,256,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=7 dmg=7 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,128,257,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=7 dmg=4294967295 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=0 atk=0 dmg=3 wpn=12 ret=1 area=delayed args=2117648,2117640,2117652,8,256,0,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=0 ranged=0 atk=0 dmg=2147483648 wpn=13 ret=1 area=immediate args=2117640,2117652,1,0,0,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=8da24260 attack=2 ranged=3 atk=6 dmg=32 wpn=24 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=3 dmg=2147483648 wpn=18 ret=1 area=delayed args=2117648,2117640,2117652,1,256,3,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=1 ranged=3 atk=8 dmg=15 wpn=0 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=8 dmg=1 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=4294967295 dmg=24 wpn=7 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=3 atk=3 dmg=6 wpn=16 ret=1 area=delayed args=2117648,2117640,2117652,64,257,3,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=2 ranged=1 atk=4294967295 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=0 atk=6 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=1 atk=4294967295 dmg=10 wpn=5 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=4294967295 dmg=33 wpn=19 ret=0 area=- args=-
+P unit=0 delay=3f000000 attack=2 ranged=0 atk=0 dmg=21 wpn=10 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=1 dmg=33 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=0 atk=7 dmg=8 wpn=6 ret=1 area=immediate args=2117640,2117652,256,256,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=0 ranged=3 atk=4 dmg=11 wpn=25 ret=0 area=- args=-
+P unit=0 delay=3f000000 attack=1 ranged=1 atk=4 dmg=24 wpn=24 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=1 atk=4 dmg=21 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=3 atk=3 dmg=10 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=4 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=2 dmg=10 wpn=21 ret=1 area=delayed args=2117648,2117640,2117652,1024,257,2,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=1 ranged=0 atk=7 dmg=4 wpn=18 ret=1 area=delayed args=2117648,2117640,2117652,16,256,7,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=2 ranged=1 atk=4294967295 dmg=1 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=0 atk=2 dmg=2147483648 wpn=19 ret=1 area=delayed args=2117648,2117640,2117652,1,256,2,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=0 dmg=2147483648 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1,256,0,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=5 dmg=33 wpn=4 ret=1 area=delayed args=2117648,2117640,2117652,2,257,5,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=4 dmg=19 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=3 atk=5 dmg=0 wpn=16 ret=1 area=immediate args=2117640,2117652,1,1,5,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=2 ranged=3 atk=0 dmg=2147483648 wpn=25 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=0 ranged=0 atk=4294967295 dmg=32 wpn=0 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=1 atk=4294967295 dmg=21 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=4 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=1 atk=4294967295 dmg=33 wpn=9 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=3 atk=4294967295 dmg=11 wpn=0 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=1 atk=5 dmg=2147483649 wpn=5 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=3 atk=4294967295 dmg=14 wpn=0 ret=0 area=- args=-
+P unit=0 delay=8da24260 attack=2 ranged=0 atk=4 dmg=31 wpn=18 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=0 atk=4294967295 dmg=12 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=4 dmg=32 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,1,0,4,-36573170,2102272,-1,0
+P unit=0 delay=00000000 attack=0 ranged=3 atk=7 dmg=15 wpn=0 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=1 dmg=4 wpn=17 ret=1 area=delayed args=2117648,2117640,2117652,16,0,1,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=0 atk=8 dmg=2147483648 wpn=0 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=0 atk=7 dmg=10 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1024,256,7,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=2 ranged=0 atk=3 dmg=31 wpn=24 ret=1 area=immediate args=2117640,2117652,-2147483648,256,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=2 ranged=0 atk=1 dmg=4294967295 wpn=16 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=1 dmg=9 wpn=14 ret=1 area=immediate args=2117640,2117652,512,256,1,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=1 ranged=1 atk=2 dmg=23 wpn=18 ret=1 area=delayed args=2117648,2117640,2117652,8388608,257,2,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=0 ranged=3 atk=7 dmg=0 wpn=25 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=3 dmg=13 wpn=9 ret=1 area=immediate args=2117640,2117652,8192,256,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=6 dmg=15 wpn=2 ret=1 area=delayed args=2117648,2117640,2117652,32768,1,6,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=2 dmg=8 wpn=9 ret=1 area=immediate args=2117640,2117652,256,0,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=7 dmg=2147483649 wpn=1 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=3 atk=4294967295 dmg=32 wpn=23 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=4 dmg=5 wpn=10 ret=1 area=delayed args=2117648,2117640,2117652,32,256,4,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=0 ranged=1 atk=4294967295 dmg=12 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=0 atk=0 dmg=32 wpn=11 ret=1 area=delayed args=2117648,2117640,2117652,1,256,0,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=1 dmg=5 wpn=4 ret=1 area=delayed args=2117648,2117640,2117652,32,257,1,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=0 atk=3 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=1 atk=6 dmg=0 wpn=8 ret=1 area=delayed args=2117648,2117640,2117652,1,257,6,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=1 atk=4 dmg=11 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=0 dmg=21 wpn=17 ret=1 area=delayed args=2117648,2117640,2117652,2097152,0,0,-36573170,2102272,-1,0
+P unit=0 delay=00000000 attack=1 ranged=1 atk=4294967295 dmg=2147483649 wpn=0 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=0 atk=8 dmg=14 wpn=4 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=0 dmg=14 wpn=4 ret=1 area=delayed args=2117648,2117640,2117652,16384,257,0,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=8 dmg=13 wpn=10 ret=0 area=- args=-
+P unit=0 delay=0da24260 attack=0 ranged=0 atk=0 dmg=23 wpn=21 ret=0 area=- args=-
+P unit=0 delay=bf800000 attack=1 ranged=0 atk=7 dmg=24 wpn=23 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=8 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=1 atk=4294967295 dmg=4294967295 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=1 atk=0 dmg=18 wpn=6 ret=1 area=immediate args=2117640,2117652,262144,1,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=2 ranged=1 atk=4294967295 dmg=2147483649 wpn=21 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=3 atk=3 dmg=10 wpn=3 ret=1 area=immediate args=2117640,2117652,1024,1,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=4 dmg=14 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,16384,1,4,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=8 dmg=22 wpn=24 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=0 atk=1 dmg=33 wpn=10 ret=1 area=delayed args=2117648,2117640,2117652,2,0,1,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=0 dmg=8 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,256,257,0,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=7 dmg=4 wpn=17 ret=1 area=delayed args=2117648,2117640,2117652,16,1,7,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=0 dmg=9 wpn=23 ret=1 area=delayed args=2117648,2117640,2117652,512,257,0,-36573170,2102272,-1,0
+P unit=0 delay=3f000000 attack=2 ranged=3 atk=4 dmg=5 wpn=0 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=3 atk=8 dmg=1 wpn=0 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=7 dmg=6 wpn=14 ret=1 area=delayed args=2117648,2117640,2117652,64,257,7,-36573170,2102272,-1,0
+P unit=0 delay=3f800000 attack=2 ranged=0 atk=8 dmg=20 wpn=24 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=0 atk=7 dmg=4294967295 wpn=0 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=8 dmg=1 wpn=0 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=0 atk=8 dmg=11 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=3 atk=2 dmg=7 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=1 atk=0 dmg=4294967295 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=1 atk=0 dmg=4294967295 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=0 atk=8 dmg=15 wpn=2 ret=0 area=- args=-
+P unit=0 delay=0da24260 attack=1 ranged=3 atk=4294967295 dmg=2147483648 wpn=25 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=1 atk=0 dmg=4 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=8 dmg=15 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=0 dmg=8 wpn=21 ret=1 area=delayed args=2117648,2117640,2117652,256,257,0,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=2 dmg=16 wpn=23 ret=1 area=immediate args=2117640,2117652,65536,257,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=2 ranged=3 atk=0 dmg=6 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,64,257,0,-36573170,2102272,-1,0
+P unit=0 delay=00000000 attack=2 ranged=0 atk=3 dmg=33 wpn=24 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=1 dmg=3 wpn=22 ret=1 area=delayed args=2117648,2117640,2117652,8,257,1,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=7 dmg=6 wpn=0 ret=1 area=immediate args=2117640,2117652,64,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=0 ranged=1 atk=1 dmg=7 wpn=1 ret=1 area=delayed args=2117648,2117640,2117652,128,1,1,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=0 ranged=3 atk=3 dmg=32 wpn=6 ret=1 area=delayed args=2117648,2117640,2117652,1,1,3,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=2 ranged=0 atk=0 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=0 atk=4294967295 dmg=0 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=1 atk=7 dmg=18 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,262144,257,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=0 dmg=4294967295 wpn=3 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=1 atk=8 dmg=19 wpn=12 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=4 dmg=22 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,4194304,257,4,-36573170,2102272,-1,0
+P unit=0 delay=3f000000 attack=1 ranged=3 atk=0 dmg=24 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=6 dmg=7 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,128,256,6,-36573170,2102272,-1,0
+P unit=0 delay=3f800000 attack=1 ranged=0 atk=5 dmg=12 wpn=23 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=1 atk=0 dmg=32 wpn=21 ret=1 area=immediate args=2117640,2117652,1,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=7 dmg=33 wpn=25 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=2 dmg=3 wpn=1 ret=1 area=immediate args=2117640,2117652,8,1,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=1 ranged=3 atk=4294967295 dmg=4294967295 wpn=0 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=3 dmg=33 wpn=4294967295 ret=0 area=- args=-
+P unit=0 delay=00000000 attack=0 ranged=0 atk=7 dmg=31 wpn=5 ret=0 area=- args=-
+P unit=0 delay=3f800000 attack=0 ranged=0 atk=3 dmg=4 wpn=16 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=0 atk=4294967295 dmg=31 wpn=20 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=3 atk=8 dmg=23 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=1 atk=8 dmg=33 wpn=10 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=1 atk=8 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=0 dmg=4294967295 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=0 atk=0 dmg=14 wpn=6 ret=1 area=delayed args=2117648,2117640,2117652,16384,256,0,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=2 dmg=0 wpn=0 ret=1 area=immediate args=2117640,2117652,1,256,2,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=40400000 attack=1 ranged=3 atk=6 dmg=21 wpn=6 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=4294967295 dmg=4294967295 wpn=1 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=1 atk=4294967295 dmg=3 wpn=15 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=0 atk=8 dmg=4 wpn=9 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=0 dmg=2147483648 wpn=5 ret=1 area=delayed args=2117648,2117640,2117652,1,256,0,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=0 dmg=14 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,16384,257,0,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=3 atk=7 dmg=22 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,4194304,1,7,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=0 atk=7 dmg=32 wpn=19 ret=1 area=delayed args=2117648,2117640,2117652,1,256,7,-36573170,2102272,-1,0
+P unit=0 delay=3f800000 attack=2 ranged=3 atk=7 dmg=8 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=0 atk=6 dmg=32 wpn=3 ret=1 area=delayed args=2117648,2117640,2117652,1,0,6,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=2 dmg=31 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,0,2,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=4 dmg=2147483648 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=3 atk=8 dmg=15 wpn=13 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=0 dmg=32 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,1,257,0,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=0 ranged=3 atk=3 dmg=31 wpn=13 ret=1 area=immediate args=2117640,2117652,-2147483648,1,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=0 ranged=1 atk=7 dmg=7 wpn=24 ret=1 area=immediate args=2117640,2117652,128,1,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=7 dmg=16 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,65536,1,7,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=0 dmg=1 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,2,256,0,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=7 dmg=2147483648 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=1 atk=7 dmg=0 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,1,257,7,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=0 atk=5 dmg=5 wpn=17 ret=1 area=immediate args=2117640,2117652,32,256,5,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=0 ranged=3 atk=7 dmg=9 wpn=14 ret=1 area=delayed args=2117648,2117640,2117652,512,1,7,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=7 dmg=4294967295 wpn=24 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=3 dmg=14 wpn=10 ret=1 area=delayed args=2117648,2117640,2117652,16384,257,3,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=0 atk=3 dmg=13 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=3 atk=5 dmg=6 wpn=8 ret=1 area=immediate args=2117640,2117652,64,1,5,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=1 ranged=3 atk=0 dmg=33 wpn=8 ret=1 area=immediate args=2117640,2117652,2,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=7fc00000 attack=1 ranged=0 atk=0 dmg=13 wpn=25 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=2 dmg=4 wpn=0 ret=1 area=immediate args=2117640,2117652,16,0,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=1 ranged=0 atk=0 dmg=31 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,256,0,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=2 ranged=3 atk=2 dmg=13 wpn=25 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=3 atk=8 dmg=33 wpn=13 ret=0 area=- args=-
+P unit=0 delay=8da24260 attack=0 ranged=1 atk=8 dmg=2147483649 wpn=0 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=0 atk=7 dmg=0 wpn=19 ret=1 area=delayed args=2117648,2117640,2117652,1,0,7,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=0 ranged=1 atk=4294967295 dmg=11 wpn=0 ret=0 area=- args=-
+P unit=0 delay=00000000 attack=0 ranged=3 atk=3 dmg=3 wpn=11 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=8 dmg=4 wpn=24 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=2 dmg=2147483648 wpn=2 ret=1 area=delayed args=2117648,2117640,2117652,1,0,2,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=4294967295 dmg=21 wpn=22 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=1 atk=2 dmg=15 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=7 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=7 dmg=33 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,2,256,7,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=0 dmg=0 wpn=7 ret=1 area=immediate args=2117640,2117652,1,256,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=7fc00000 attack=1 ranged=0 atk=1 dmg=2147483649 wpn=24 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=4294967295 dmg=25 wpn=4 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=3 atk=2 dmg=12 wpn=25 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=0 atk=8 dmg=20 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=0 atk=7 dmg=33 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=7 dmg=2147483649 wpn=6 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=0 dmg=31 wpn=16 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,257,0,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=4 dmg=20 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1048576,1,4,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=2 dmg=17 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=3 dmg=23 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,8388608,0,3,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=7 dmg=6 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=3 atk=0 dmg=2147483648 wpn=21 ret=1 area=immediate args=2117640,2117652,1,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=1 dmg=4 wpn=18 ret=1 area=delayed args=2117648,2117640,2117652,16,257,1,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=1 ranged=1 atk=0 dmg=4294967295 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=1 atk=5 dmg=31 wpn=4 ret=1 area=immediate args=2117640,2117652,-2147483648,257,5,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=2 ranged=1 atk=4 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=0 atk=7 dmg=2147483648 wpn=22 ret=1 area=delayed args=2117648,2117640,2117652,1,0,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=4 dmg=0 wpn=14 ret=1 area=delayed args=2117648,2117640,2117652,1,1,4,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=0 dmg=31 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=1 atk=1 dmg=4 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=0 atk=7 dmg=18 wpn=1 ret=1 area=delayed args=2117648,2117640,2117652,262144,256,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=1 ranged=0 atk=8 dmg=32 wpn=0 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=8 dmg=13 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=5 dmg=24 wpn=10 ret=1 area=immediate args=2117640,2117652,16777216,256,5,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=1 ranged=3 atk=4294967295 dmg=22 wpn=19 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=8 dmg=0 wpn=11 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=8 dmg=2147483649 wpn=19 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=8 dmg=15 wpn=1 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=3 atk=0 dmg=2147483649 wpn=4 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=4294967295 dmg=14 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=3 atk=8 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=4294967295 dmg=14 wpn=2 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=1 atk=3 dmg=21 wpn=17 ret=1 area=delayed args=2117648,2117640,2117652,2097152,257,3,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=4 dmg=32 wpn=18 ret=1 area=delayed args=2117648,2117640,2117652,1,1,4,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=0 dmg=31 wpn=13 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,1,0,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=0 dmg=24 wpn=24 ret=1 area=immediate args=2117640,2117652,16777216,256,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=4 dmg=4 wpn=13 ret=1 area=delayed args=2117648,2117640,2117652,16,1,4,-36573170,2102272,-1,0
+P unit=0 delay=40400000 attack=0 ranged=1 atk=8 dmg=0 wpn=17 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=0 atk=6 dmg=11 wpn=24 ret=1 area=immediate args=2117640,2117652,2048,256,6,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=3 dmg=6 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,64,256,3,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=4294967295 dmg=4294967295 wpn=4294967295 ret=0 area=- args=-
+P unit=0 delay=7fc00000 attack=0 ranged=3 atk=8 dmg=11 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=0 atk=1 dmg=2 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,4,256,1,-36573170,2102272,-1,0
+P unit=0 delay=40400000 attack=2 ranged=1 atk=7 dmg=12 wpn=0 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=0 dmg=10 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=7 dmg=4294967295 wpn=12 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=4 dmg=2147483648 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1,1,4,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=1 atk=6 dmg=32 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=8 dmg=2147483648 wpn=13 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=7 dmg=2147483649 wpn=16 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=4 dmg=2 wpn=21 ret=1 area=delayed args=2117648,2117640,2117652,4,256,4,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=2 ranged=3 atk=2 dmg=4294967295 wpn=11 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=3 atk=4 dmg=31 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,257,4,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=7 dmg=25 wpn=25 ret=0 area=- args=-
+P unit=0 delay=40400000 attack=2 ranged=1 atk=6 dmg=33 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=1 atk=0 dmg=25 wpn=7 ret=1 area=immediate args=2117640,2117652,33554432,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=1 ranged=3 atk=0 dmg=14 wpn=14 ret=1 area=immediate args=2117640,2117652,16384,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=0 ranged=1 atk=4294967295 dmg=33 wpn=25 ret=0 area=- args=-
+P unit=0 delay=3f000000 attack=0 ranged=1 atk=0 dmg=13 wpn=1 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=1 atk=7 dmg=20 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=3 atk=0 dmg=5 wpn=25 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=0 atk=8 dmg=31 wpn=12 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=0 dmg=10 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=7 dmg=10 wpn=2 ret=1 area=delayed args=2117648,2117640,2117652,1024,257,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=5 dmg=0 wpn=8 ret=1 area=delayed args=2117648,2117640,2117652,1,0,5,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=2 ranged=3 atk=8 dmg=4 wpn=0 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=1 atk=6 dmg=31 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=1 atk=0 dmg=33 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,2,1,0,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=0 dmg=32 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=1 atk=8 dmg=33 wpn=24 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=4 dmg=2 wpn=8 ret=1 area=delayed args=2117648,2117640,2117652,4,1,4,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=8 dmg=33 wpn=0 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=3 atk=7 dmg=31 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,257,7,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=2 ranged=3 atk=4 dmg=8 wpn=4294967295 ret=0 area=- args=-
+P unit=0 delay=8da24260 attack=2 ranged=0 atk=6 dmg=4 wpn=21 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=8 dmg=4294967295 wpn=11 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=0 ranged=1 atk=4 dmg=0 wpn=2 ret=1 area=delayed args=2117648,2117640,2117652,1,1,4,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=2 ranged=0 atk=0 dmg=2147483649 wpn=0 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=7 dmg=13 wpn=16 ret=1 area=immediate args=2117640,2117652,8192,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=2 ranged=0 atk=1 dmg=4 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=7 dmg=2147483649 wpn=8 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=0 atk=4294967295 dmg=6 wpn=2 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=1 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=2 ranged=0 atk=3 dmg=32 wpn=24 ret=1 area=immediate args=2117640,2117652,1,256,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=5 dmg=33 wpn=19 ret=1 area=delayed args=2117648,2117640,2117652,2,257,5,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=1 ranged=3 atk=5 dmg=10 wpn=8 ret=1 area=delayed args=2117648,2117640,2117652,1024,257,5,-36573170,2102272,-1,0
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=8 dmg=9 wpn=22 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=7 dmg=2147483648 wpn=19 ret=1 area=delayed args=2117648,2117640,2117652,1,1,7,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=1 ranged=1 atk=7 dmg=31 wpn=23 ret=1 area=delayed args=2117648,2117640,2117652,-2147483648,257,7,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=0 dmg=12 wpn=24 ret=1 area=immediate args=2117640,2117652,4096,256,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=0 ranged=0 atk=7 dmg=2 wpn=1 ret=1 area=immediate args=2117640,2117652,4,0,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=1 ranged=3 atk=6 dmg=2147483648 wpn=9 ret=1 area=delayed args=2117648,2117640,2117652,1,257,6,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=0 ranged=3 atk=7 dmg=18 wpn=16 ret=1 area=immediate args=2117640,2117652,262144,1,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=4 dmg=23 wpn=3 ret=1 area=immediate args=2117640,2117652,8388608,0,4,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=1 ranged=0 atk=5 dmg=22 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=2 ranged=1 atk=4294967295 dmg=2147483649 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=7 dmg=15 wpn=4 ret=1 area=delayed args=2117648,2117640,2117652,32768,257,7,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=3 atk=4294967295 dmg=0 wpn=24 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=3 dmg=15 wpn=16 ret=1 area=immediate args=2117640,2117652,32768,256,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=2 ranged=1 atk=4294967295 dmg=2 wpn=24 ret=0 area=- args=-
+P unit=0 delay=00000000 attack=0 ranged=3 atk=7 dmg=4294967295 wpn=0 ret=0 area=- args=-
+P unit=0 delay=3f800000 attack=2 ranged=0 atk=4294967295 dmg=2147483648 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=5 dmg=25 wpn=13 ret=1 area=delayed args=2117648,2117640,2117652,33554432,0,5,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=2 ranged=1 atk=2 dmg=23 wpn=21 ret=1 area=delayed args=2117648,2117640,2117652,8388608,257,2,-36573170,2102272,-1,0
+P unit=0 delay=00000000 attack=2 ranged=0 atk=3 dmg=16 wpn=19 ret=0 area=- args=-
+P unit=0 delay=00000000 attack=1 ranged=0 atk=4 dmg=15 wpn=24 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=4 dmg=25 wpn=20 ret=1 area=immediate args=2117640,2117652,33554432,257,4,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=0 ranged=3 atk=2 dmg=33 wpn=15 ret=1 area=delayed args=2117648,2117640,2117652,2,1,2,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=0 dmg=32 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=0 atk=3 dmg=9 wpn=22 ret=1 area=immediate args=2117640,2117652,512,256,3,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=3f000000 attack=0 ranged=1 atk=7 dmg=12 wpn=1 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=3 dmg=2147483649 wpn=1 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=5 dmg=3 wpn=14 ret=1 area=immediate args=2117640,2117652,8,1,5,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=0da24260 attack=1 ranged=0 atk=8 dmg=20 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=0 atk=4294967295 dmg=0 wpn=0 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=8 dmg=0 wpn=0 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=1 atk=0 dmg=16 wpn=25 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=3 atk=5 dmg=33 wpn=24 ret=1 area=immediate args=2117640,2117652,2,257,5,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=3f000000 attack=2 ranged=3 atk=2 dmg=12 wpn=11 ret=0 area=- args=-
+P unit=0 delay=8da24260 attack=2 ranged=3 atk=4 dmg=9 wpn=24 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=1 dmg=13 wpn=11 ret=1 area=delayed args=2117648,2117640,2117652,8192,257,1,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=1 ranged=3 atk=0 dmg=0 wpn=24 ret=1 area=immediate args=2117640,2117652,1,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=1 ranged=3 atk=7 dmg=22 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,4194304,257,7,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=0 dmg=23 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,8388608,0,0,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=3 atk=8 dmg=33 wpn=11 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=0 ranged=1 atk=0 dmg=23 wpn=10 ret=1 area=delayed args=2117648,2117640,2117652,8388608,1,0,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=2 ranged=3 atk=7 dmg=16 wpn=4 ret=1 area=immediate args=2117640,2117652,65536,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=2 dmg=0 wpn=3 ret=1 area=delayed args=2117648,2117640,2117652,1,1,2,-36573170,2102272,-1,0
+P unit=0 delay=8da24260 attack=0 ranged=1 atk=4 dmg=32 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=1 atk=0 dmg=24 wpn=17 ret=1 area=delayed args=2117648,2117640,2117652,16777216,257,0,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=0 ranged=1 atk=5 dmg=31 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=5 dmg=18 wpn=5 ret=1 area=delayed args=2117648,2117640,2117652,262144,257,5,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=3 atk=0 dmg=32 wpn=9 ret=1 area=delayed args=2117648,2117640,2117652,1,257,0,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=5 dmg=10 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1024,1,5,-36573170,2102272,-1,0
+P unit=0 delay=8da24260 attack=2 ranged=1 atk=7 dmg=0 wpn=20 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=6 dmg=32 wpn=12 ret=1 area=delayed args=2117648,2117640,2117652,1,256,6,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=3 dmg=4294967295 wpn=13 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=0 ranged=1 atk=0 dmg=32 wpn=2 ret=1 area=delayed args=2117648,2117640,2117652,1,1,0,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=1 ranged=1 atk=4294967295 dmg=32 wpn=24 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=3 atk=4 dmg=31 wpn=25 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=1 atk=4294967295 dmg=25 wpn=24 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=1 atk=1 dmg=4 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,16,257,1,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=0 ranged=3 atk=4294967295 dmg=21 wpn=17 ret=0 area=- args=-
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=2 dmg=2147483649 wpn=8 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=1 atk=3 dmg=4294967295 wpn=2 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=2 dmg=20 wpn=15 ret=1 area=immediate args=2117640,2117652,1048576,257,2,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=1 ranged=3 atk=0 dmg=18 wpn=19 ret=1 area=delayed args=2117648,2117640,2117652,262144,257,0,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=1 ranged=0 atk=4 dmg=23 wpn=7 ret=1 area=immediate args=2117640,2117652,8388608,256,4,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=1 ranged=3 atk=0 dmg=0 wpn=11 ret=1 area=immediate args=2117640,2117652,1,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=2 ranged=1 atk=3 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=1 atk=0 dmg=12 wpn=19 ret=1 area=immediate args=2117640,2117652,4096,1,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=7 dmg=31 wpn=5 ret=1 area=immediate args=2117640,2117652,-2147483648,1,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=0 ranged=1 atk=0 dmg=24 wpn=24 ret=1 area=immediate args=2117640,2117652,16777216,1,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=1 ranged=3 atk=7 dmg=0 wpn=18 ret=1 area=immediate args=2117640,2117652,1,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=3f000000 attack=2 ranged=1 atk=0 dmg=2147483648 wpn=12 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=0 atk=3 dmg=32 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=1 atk=4294967295 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=0 atk=7 dmg=24 wpn=8 ret=1 area=delayed args=2117648,2117640,2117652,16777216,256,7,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=0 ranged=3 atk=7 dmg=4294967295 wpn=0 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=1 atk=6 dmg=4 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=1 dmg=8 wpn=4 ret=1 area=delayed args=2117648,2117640,2117652,256,1,1,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=2 ranged=0 atk=7 dmg=0 wpn=11 ret=1 area=immediate args=2117640,2117652,1,256,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=8da24260 attack=0 ranged=1 atk=0 dmg=22 wpn=14 ret=1 area=immediate args=2117640,2117652,4194304,1,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=0 ranged=0 atk=4294967295 dmg=7 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=1 ranged=3 atk=8 dmg=1 wpn=25 ret=0 area=- args=-
+P unit=0 delay=bf800000 attack=1 ranged=3 atk=5 dmg=5 wpn=10 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=0 dmg=4 wpn=24 ret=1 area=immediate args=2117640,2117652,16,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=0 ranged=0 atk=4294967295 dmg=32 wpn=25 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=1 ranged=3 atk=1 dmg=33 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,2,257,1,-36573170,2102272,-1,0
+P unit=0 delay=bf800000 attack=2 ranged=1 atk=5 dmg=2147483648 wpn=0 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=3 atk=0 dmg=4 wpn=17 ret=1 area=immediate args=2117640,2117652,16,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=0 ranged=0 atk=7 dmg=17 wpn=19 ret=1 area=delayed args=2117648,2117640,2117652,131072,0,7,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=4294967295 dmg=3 wpn=17 ret=0 area=- args=-
+P unit=0 delay=bf800000 attack=0 ranged=3 atk=5 dmg=9 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=1 atk=0 dmg=20 wpn=12 ret=1 area=immediate args=2117640,2117652,1048576,1,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f000000 attack=0 ranged=1 atk=3 dmg=4 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,16,1,3,-36573170,2102272,-1,0
+P unit=1 delay=7fc00000 attack=0 ranged=0 atk=8 dmg=22 wpn=14 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=2 ranged=0 atk=0 dmg=12 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,4096,256,0,-36573170,2102272,-1,0
+P unit=0 delay=00000000 attack=2 ranged=1 atk=3 dmg=20 wpn=17 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=0 atk=3 dmg=2147483648 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1,256,3,-36573170,2102272,-1,0
+P unit=1 delay=8da24260 attack=2 ranged=1 atk=6 dmg=32 wpn=12 ret=1 area=immediate args=2117640,2117652,1,257,6,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=0 ranged=1 atk=5 dmg=2147483649 wpn=24 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=1 atk=7 dmg=10 wpn=18 ret=1 area=immediate args=2117640,2117652,1024,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=00000000 attack=1 ranged=0 atk=7 dmg=4 wpn=0 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=1 atk=2 dmg=32 wpn=7 ret=1 area=delayed args=2117648,2117640,2117652,1,1,2,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=2 ranged=1 atk=4 dmg=0 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,1,257,4,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=2 ranged=1 atk=3 dmg=25 wpn=0 ret=1 area=immediate args=2117640,2117652,33554432,257,3,-36573170,2102272,-1,0,0,1,0
+P unit=0 delay=bf800000 attack=1 ranged=0 atk=4 dmg=4294967295 wpn=23 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=0 dmg=6 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=0 ranged=1 atk=0 dmg=0 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=0 dmg=0 wpn=0 ret=1 area=immediate args=2117640,2117652,1,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=1 ranged=3 atk=8 dmg=4294967295 wpn=24 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=3 atk=2 dmg=21 wpn=25 ret=0 area=- args=-
+P unit=1 delay=40400000 attack=1 ranged=1 atk=3 dmg=16 wpn=18 ret=1 area=delayed args=2117648,2117640,2117652,65536,257,3,-36573170,2102272,-1,0
+P unit=1 delay=3f800000 attack=1 ranged=1 atk=4294967295 dmg=24 wpn=13 ret=0 area=- args=-
+P unit=1 delay=3f800000 attack=2 ranged=3 atk=0 dmg=7 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=1 ranged=1 atk=3 dmg=11 wpn=0 ret=1 area=immediate args=2117640,2117652,2048,257,3,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=3f800000 attack=2 ranged=1 atk=0 dmg=0 wpn=13 ret=1 area=delayed args=2117648,2117640,2117652,1,257,0,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=0 ranged=0 atk=4294967295 dmg=7 wpn=3 ret=0 area=- args=-
+P unit=1 delay=8da24260 attack=0 ranged=0 atk=0 dmg=16 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=0 atk=7 dmg=0 wpn=13 ret=1 area=delayed args=2117648,2117640,2117652,1,256,7,-36573170,2102272,-1,0
+P unit=0 delay=8da24260 attack=1 ranged=3 atk=0 dmg=15 wpn=18 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=2 ranged=3 atk=0 dmg=21 wpn=22 ret=1 area=delayed args=2117648,2117640,2117652,2097152,257,0,-36573170,2102272,-1,0
+P unit=1 delay=00000000 attack=1 ranged=3 atk=7 dmg=6 wpn=21 ret=1 area=immediate args=2117640,2117652,64,257,7,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=0 dmg=13 wpn=2 ret=1 area=immediate args=2117640,2117652,8192,257,0,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=40400000 attack=2 ranged=1 atk=3 dmg=5 wpn=16 ret=1 area=delayed args=2117648,2117640,2117652,32,257,3,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=1 ranged=0 atk=4294967295 dmg=16 wpn=25 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=1 ranged=1 atk=8 dmg=18 wpn=17 ret=0 area=- args=-
+P unit=1 delay=3f000000 attack=0 ranged=3 atk=2 dmg=2 wpn=24 ret=1 area=delayed args=2117648,2117640,2117652,4,1,2,-36573170,2102272,-1,0
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=1 dmg=13 wpn=16 ret=1 area=delayed args=2117648,2117640,2117652,8192,1,1,-36573170,2102272,-1,0
+P unit=1 delay=40400000 attack=0 ranged=0 atk=4294967295 dmg=0 wpn=13 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=2 ranged=1 atk=0 dmg=2147483649 wpn=6 ret=0 area=- args=-
+P unit=1 delay=0da24260 attack=0 ranged=1 atk=0 dmg=20 wpn=25 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=1 ranged=3 atk=6 dmg=4294967295 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=00000000 attack=1 ranged=1 atk=1 dmg=21 wpn=24 ret=1 area=immediate args=2117640,2117652,2097152,257,1,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=0da24260 attack=0 ranged=3 atk=2 dmg=13 wpn=0 ret=1 area=delayed args=2117648,2117640,2117652,8192,1,2,-36573170,2102272,-1,0
+P unit=1 delay=bf800000 attack=1 ranged=1 atk=6 dmg=21 wpn=4294967295 ret=0 area=- args=-
+P unit=1 delay=bf800000 attack=2 ranged=0 atk=1 dmg=8 wpn=5 ret=1 area=immediate args=2117640,2117652,256,256,1,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=00000000 attack=2 ranged=3 atk=4 dmg=18 wpn=2 ret=1 area=immediate args=2117640,2117652,262144,257,4,-36573170,2102272,-1,0,0,1,0
+P unit=1 delay=7fc00000 attack=1 ranged=3 atk=4294967295 dmg=20 wpn=14 ret=0 area=- args=-

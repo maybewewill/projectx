@@ -69,6 +69,8 @@ pub enum Payload {
     /// The vision refresh (message 0x80269): a repeating timer with period
     /// [`crate::lockstep::VISION_PERIOD_BITS`] (0.4 s), `docs/spec/vision.md` section 11.
     Vision,
+    /// A delayed `UnitDamagePoint` comes due (`combat.rs`, the record is kept in the combat system under `id`).
+    DamagePoint(u32),
 }
 
 /// The timer or trigger that a script thread runs for.
@@ -793,6 +795,13 @@ pub enum ItemOrderKind {
     /// `UnitDropItemTarget`: the target order (its id is not read, UNSURE). The target is the handle id of
     /// the widget argument.
     DropTarget { target: u32 },
+    /// `UnitUseItem`: an immediate order whose id is the item's ability order (`0xD0028` + the ability order
+    /// index, data driven: the item ability tables are not modelled, so the id is not stored).
+    UseImmediate,
+    /// `UnitUseItemPoint`: a point order of the item's ability, to `(x, y)`.
+    UsePoint { x: F32, y: F32 },
+    /// `UnitUseItemTarget`: a target order of the item's ability. The target is the widget's handle id.
+    UseTarget { target: u32 },
 }
 
 impl ItemOrderKind {
@@ -802,7 +811,10 @@ impl ItemOrderKind {
         match *self {
             ItemOrderKind::DropPoint { .. } => Some(0x000D_0021),
             ItemOrderKind::DropSlot { slot } => Some(0x000D_0022 + slot),
-            ItemOrderKind::DropTarget { .. } => None,
+            ItemOrderKind::DropTarget { .. }
+            | ItemOrderKind::UseImmediate
+            | ItemOrderKind::UsePoint { .. }
+            | ItemOrderKind::UseTarget { .. } => None,
         }
     }
 }

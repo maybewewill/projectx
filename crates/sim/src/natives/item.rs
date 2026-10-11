@@ -30,7 +30,7 @@
 //!   its pack), and for the slot form the slot range, then record an [`ItemOrder`] on the game and return `true`.
 //!   The order check of the original (its code `0` or `0xDC`) is not modelled, so it always passes (UNSURE). The
 //!   move happens later in the order system, which does not exist yet. `UnitDropItemTarget` accepts a live unit as
-//!   its target (UNSURE: the original's widget rule is not read). Use orders are not implemented.
+//!   its target (UNSURE: the original's widget rule is not read). Use orders (`UnitUseItem*`) are recorded the same way (see [`queue_use`]).
 //! * `SetItemVisible(false)` and `RemoveItem` set the hidden bit (bit 0 of the flag word). `SetItemVisible(true)`
 //!   clears it (UNSURE, spec 9.4). A carried item cannot be shown or hidden: the call does nothing (CONFIRMED).
 //! * Charges (CONFIRMED, spec 4): `n <= 0` sets the no-charges flag (0x1000) and the charges to 0, `n > 0` clears
@@ -377,6 +377,34 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let target = handle_arg(a, 2);
         let ok = gm.unit_of_handle(target).is_some()
             && queue_drop(&mut gm, a, ItemOrderKind::DropTarget { target });
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("UnitUseItem", move |_, a| {
+        let mut gm = g.borrow_mut();
+        let ok = queue_use(&mut gm, a, ItemOrderKind::UseImmediate);
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("UnitUseItemPoint", move |_, a| {
+        let mut gm = g.borrow_mut();
+        let kind = ItemOrderKind::UsePoint {
+            x: real_at(a, 2),
+            y: real_at(a, 3),
+        };
+        let ok = queue_use(&mut gm, a, kind);
+        NativeResult::Return(Value::Boolean(ok))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("UnitUseItemTarget", move |_, a| {
+        let mut gm = g.borrow_mut();
+        // The widget must resolve (0x6F3BE5B0). Only units are modelled as widgets here (UNSURE for the others).
+        let target = handle_arg(a, 2);
+        let ok = gm.unit_of_handle(target).is_some()
+            && queue_use(&mut gm, a, ItemOrderKind::UseTarget { target });
         NativeResult::Return(Value::Boolean(ok))
     });
 
@@ -748,6 +776,22 @@ fn queue_drop(gm: &mut Game, a: &[Value], kind: ItemOrderKind) -> bool {
         return false;
     };
     if slot_of(gm, unit, item).is_none() {
+        return false;
+    }
+    gm.push_item_order(ItemOrder { unit, item, kind });
+    true
+}
+
+/// The shared checks and the queue of the use natives (`0x6F3C9090`, `0x6F3C9100`, `0x6F3C9170`, CONFIRMED by
+/// disassembly): the unit resolves and can use items (`0x6F282C60`: it has an inventory), the item resolves and is in
+/// the unit's pack (`0x6F26EC40`), then the item's ability order id is read (`0x6F2B6CC0`) and the order is issued
+/// with the owner as the issuer (replace = 1, drain = 1). The ability order id is data driven and not modelled, so
+/// only the order kind is recorded. The validator result of the issue is not modelled (UNSURE, as for the drops).
+fn queue_use(gm: &mut Game, a: &[Value], kind: ItemOrderKind) -> bool {
+    let (Some(unit), Some(item)) = (unit_at(gm, a, 0), item_at(gm, a, 1)) else {
+        return false;
+    };
+    if capacity(gm, unit) == 0 || slot_of(gm, unit, item).is_none() {
         return false;
     }
     gm.push_item_order(ItemOrder { unit, item, kind });

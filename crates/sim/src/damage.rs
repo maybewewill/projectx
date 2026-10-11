@@ -28,7 +28,7 @@
 
 use softfloat::{arith, conv, Tables, F32};
 
-use crate::combat::{AttackType, DamageModel};
+use crate::combat::{AttackType, DamageModel, NativeHit};
 use crate::natives::game::{Game, ObjKey};
 use crate::pe;
 use crate::rng::{Rng, RngTable};
@@ -426,6 +426,42 @@ pub fn target_side_amount(
     sent
 }
 
+/// The attack record that `UnitDamageTarget` (`0x6F3C8850`) and the per-target step of `UnitDamagePoint`
+/// (`0x6F2BFED0`) build from their script arguments. Field offsets are the record's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeRecord {
+    /// `+0x04`: the weapon type argument.
+    pub weapon: u32,
+    /// `+0x0C`: `0x100` for the attack flag, `|1` for the ranged flag.
+    pub flags: u32,
+    /// `+0x14`: `1 << (damage type & 31)` (the shift count is the low byte of the damage type, taken mod 32).
+    pub class: u32,
+    /// `+0x20`: the attack type argument, the damage-type table row.
+    pub row: u32,
+}
+
+/// The record built from the script arguments, or `None` when the native rejects them (CONFIRMED by disassembly
+/// of `0x6F3C8850` and checked in Unicorn, `tools/emu/unit_damage_target_emu.py`): the damage type must not be
+/// above `0x80000000` (unsigned), the attack type at most 7 and the weapon type at most 24. Any nonzero flag
+/// argument counts as true.
+pub fn native_record(
+    attack: bool,
+    ranged: bool,
+    attack_type: u32,
+    damage_type: u32,
+    weapon_type: u32,
+) -> Option<NativeRecord> {
+    if damage_type > 0x8000_0000 || attack_type > 7 || weapon_type > 0x18 {
+        return None;
+    }
+    Some(NativeRecord {
+        weapon: weapon_type,
+        flags: (if attack { 0x100 } else { 0 }) | u32::from(ranged),
+        class: 1u32 << (damage_type & 31),
+        row: attack_type,
+    })
+}
+
 /// The RNG stream of the evasion draw (`0x6F08BD20` sets `edx = 2` before the draw, CONFIRMED; spec section 12.2).
 pub const EVASION_STREAM: usize = 2;
 
@@ -508,7 +544,36 @@ impl SpecDamage {
     }
 }
 
+impl SpecDamage {
+    /// The target side of a script damage record ([`NativeHit`]): the same routine as an attack, with the class word
+    /// `1 << damage type` and the attack-type argument as the table row. Counters and flags are zero as in `roll`.
+    pub fn hit_amount(&self, game: &Game, hit: &NativeHit) -> F32 {
+        let defense = game.unit_defense(hit.target);
+        let side = TargetSide {
+            raw: hit.raw,
+            class: hit.class,
+            category: hit.row,
+            source_present: true,
+            record_flags: hit.record_flags,
+            target_flags: 0,
+            target_flags20: 0,
+            armor: defense.armor,
+            armor_type: defense.armor_type,
+            counter_158: 0,
+            counter_15c: 0,
+            invulnerable: hit.invulnerable,
+            not_allied: hit.not_allied,
+            relation: None,
+        };
+        target_side_amount(&side, &self.misc, &self.rules, &self.negative, &self.tables)
+    }
+}
+
 impl DamageModel for SpecDamage {
+    fn native_hit(&mut self, game: &Game, hit: &NativeHit) -> F32 {
+        self.hit_amount(game, hit)
+    }
+
     fn roll(
         &mut self,
         game: &mut Game,

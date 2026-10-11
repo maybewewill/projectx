@@ -279,6 +279,10 @@ impl ScriptHost {
                     self.vm.set_now(expiry);
                     combat::expire_attack_timer(&self.game, &mut self.vm, unit, msg);
                 }
+                Payload::DamagePoint(id) => {
+                    self.vm.set_now(expiry);
+                    combat::expire_point_damage(&self.game, &mut self.vm, id);
+                }
                 Payload::Movement => {
                     // The movement walk runs at its own expiry (the game time during the callback).
                     self.vm.set_now(expiry);
