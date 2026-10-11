@@ -14,6 +14,7 @@ pub mod offscreen;
 pub mod model;
 pub mod renderer;
 pub mod scene;
+pub mod scene_objects;
 pub mod terrain;
 pub mod terrain_camera;
 pub mod terrain_gpu;

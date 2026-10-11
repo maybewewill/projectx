@@ -11,12 +11,14 @@
 mod doo;
 mod reader;
 mod shd;
+mod units;
 mod w3e;
 mod w3i;
 mod wpm;
 
 pub use doo::{Doodad, Doodads, DroppedItem, SpecialDoodad};
 pub use shd::ShadowMap;
+pub use units::{PlacedUnit, PlacedUnits, UnitAbility, UnitItem};
 pub use w3e::{Terrain, TilePoint};
 pub use w3i::{Fog, Force, MapInfo, Player, Screen};
 pub use wpm::PathMap;

@@ -371,10 +371,10 @@ fn doodads_reject_bad_header() {
     ));
 
     let mut version = doo_bytes();
-    version[4] = 7; // ROC
+    version[4] = 6; // neither TFT (8) nor ROC (7)
     assert!(matches!(
         Doodads::parse(&version),
-        Err(Error::UnsupportedVersion { found: 7, .. })
+        Err(Error::UnsupportedVersion { found: 6, .. })
     ));
 
     let mut subversion = doo_bytes();
