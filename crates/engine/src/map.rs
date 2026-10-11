@@ -19,19 +19,54 @@ pub const CONTROL_NEUTRAL: u32 = 3;
 /// `MAP_CONTROL_NONE`, the controller of an empty slot.
 pub const CONTROL_NONE: u32 = 5;
 
-/// Playable area for [`sim::ScriptHost::set_playable`].
+/// World units per terrain tile.
+const TILE_UNITS: f32 = 128.0;
+
+/// The whole map size in tiles: the playable size plus the left/right and bottom/top margins
+/// (`w3i` camera complements, stored left, right, bottom, top).
+pub fn map_tiles(info: &MapInfo) -> (u32, u32) {
+    let c = info.camera_complements;
+    (
+        info.playable_width + (c[0] + c[1]) as u32,
+        info.playable_height + (c[2] + c[3]) as u32,
+    )
+}
+
+/// The minimum corner of the whole map in world units: the `w3e` center offset when the terrain
+/// file is there. Without it the map is assumed centered on the origin (UNSURE).
+pub fn map_corner(info: &MapInfo, w3e_center: Option<[f32; 2]>) -> (f32, f32) {
+    match w3e_center {
+        Some([x, y]) => (x, y),
+        None => {
+            let (w, h) = map_tiles(info);
+            (
+                -(w as f32) * TILE_UNITS / 2.0,
+                -(h as f32) * TILE_UNITS / 2.0,
+            )
+        }
+    }
+}
+
+/// Playable area for [`sim::ScriptHost::set_playable`]: the map corner moved in by the left and
+/// bottom margins, `playable_width` x `playable_height` tiles in size.
 ///
-/// UNSURE. No spec in `docs/spec` gives the formula. This uses the camera bounds as stored in
-/// `w3i` (left, right, bottom, top) as the playable rectangle and ignores the camera complements
-/// and the playable width and height. The real game may derive it differently, for example from
-/// the terrain grid, so this must be checked against a 1.26a run.
-pub fn playable_area(info: &MapInfo) -> Playable {
-    let b = info.camera_bounds;
+/// Checked on a real 1.26a melee map ((2)Circumvention): w3e center (-6144, -6144), complements
+/// 7, 7, 5, 9, playable 82 x 82 give x -5248..5248, y -5504..4992, the same rectangle the map's own
+/// `SetCameraBounds` call starts from. (The `w3i` camera bounds are four corner points, already
+/// inset by the camera margins, so they are not the playable area.)
+pub fn playable_area(info: &MapInfo, corner: (f32, f32)) -> Playable {
+    let c = info.camera_complements;
+    let min_x = corner.0 + c[0] as f32 * TILE_UNITS;
+    let min_y = corner.1 + c[2] as f32 * TILE_UNITS;
+    let max_x = min_x + info.playable_width as f32 * TILE_UNITS;
+    let max_y = min_y + info.playable_height as f32 * TILE_UNITS;
+    // The values are small multiples of 128, exact in f32; build the soft floats from the bits.
+    let f = |v: f32| F32::from_bits(v.to_bits());
     Playable {
-        min_x: F32::from_bits(b[0].to_bits()),
-        min_y: F32::from_bits(b[2].to_bits()),
-        max_x: F32::from_bits(b[1].to_bits()),
-        max_y: F32::from_bits(b[3].to_bits()),
+        min_x: f(min_x),
+        min_y: f(min_y),
+        max_x: f(max_x),
+        max_y: f(max_y),
     }
 }
 

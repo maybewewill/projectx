@@ -79,7 +79,7 @@ use jass::vm::{NativeCtx, NativeRegistry, NativeResult, Value};
 use softfloat::F32;
 
 use super::game::{Game, PLAYER_SLOTS};
-use super::hashtable::{bool_at, int_at, real_at, str_at};
+use super::hashtable::{bool_at, enum_at, enum_ret, int_at, real_at, str_at};
 use super::misc::MiscEvent;
 use super::player::index_at;
 
@@ -278,53 +278,53 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     // Speed and difficulty.
     native(reg, game, "GetGameSpeed", |gm, _, _| {
-        Value::Integer(gm.game_state.speed)
+        enum_ret(gm.game_state.speed)
     });
     native(reg, game, "SetGameSpeed", |gm, _, a| {
         if gm.game_state.map_flags & FLAG_SPEED_LOCKED == 0 {
-            gm.game_state.speed = int_at(a, 0);
+            gm.game_state.speed = enum_at(a, 0);
         }
         Value::Null
     });
     native(reg, game, "GetGameDifficulty", |gm, _, _| {
-        Value::Integer(gm.game_state.difficulty)
+        enum_ret(gm.game_state.difficulty)
     });
     native(reg, game, "SetGameDifficulty", |gm, _, a| {
-        gm.game_state.difficulty = int_at(a, 0);
+        gm.game_state.difficulty = enum_at(a, 0);
         Value::Null
     });
     native(reg, game, "GetDefaultDifficulty", |gm, _, _| {
-        Value::Integer(gm.game_state.default_difficulty)
+        enum_ret(gm.game_state.default_difficulty)
     });
     native(reg, game, "SetDefaultDifficulty", |gm, _, a| {
-        gm.game_state.default_difficulty = int_at(a, 0);
+        gm.game_state.default_difficulty = enum_at(a, 0);
         Value::Null
     });
     native(reg, game, "GetAIDifficulty", |gm, _, a| {
         // A null player gives 0 (the original's default).
         match index_at(gm, a, 0) {
-            Some(p) => Value::Integer(gm.game_state.ai_difficulty[p as usize]),
-            None => Value::Integer(0),
+            Some(p) => enum_ret(gm.game_state.ai_difficulty[p as usize]),
+            None => enum_ret(0),
         }
     });
 
     // Placement, game type and map flags.
     native(reg, game, "GetGamePlacement", |gm, _, _| {
-        Value::Integer(gm.game_state.placement)
+        enum_ret(gm.game_state.placement)
     });
     native(reg, game, "SetGamePlacement", |gm, _, a| {
-        gm.game_state.placement = int_at(a, 0);
+        gm.game_state.placement = enum_at(a, 0);
         Value::Null
     });
     native(reg, game, "GetGameTypeSelected", |gm, _, _| {
-        Value::Integer((gm.game_state.game_type_selected & GAME_TYPE_MASK) as i32)
+        enum_ret((gm.game_state.game_type_selected & GAME_TYPE_MASK) as i32)
     });
     native(reg, game, "IsGameTypeSupported", |gm, _, a| {
-        let bits = int_at(a, 0) as u32;
+        let bits = enum_at(a, 0) as u32;
         Value::Boolean(gm.game_state.game_types_supported & bits != 0)
     });
     native(reg, game, "SetGameTypeSupported", |gm, _, a| {
-        let bits = int_at(a, 0) as u32;
+        let bits = enum_at(a, 0) as u32;
         if bool_at(a, 1) {
             gm.game_state.game_types_supported |= bits;
         } else {
@@ -333,11 +333,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         Value::Null
     });
     native(reg, game, "IsMapFlagSet", |gm, _, a| {
-        let bits = int_at(a, 0) as u32;
+        let bits = enum_at(a, 0) as u32;
         Value::Boolean(gm.game_state.map_flags & bits != 0)
     });
     native(reg, game, "SetMapFlag", |gm, _, a| {
-        let bits = int_at(a, 0) as u32;
+        let bits = enum_at(a, 0) as u32;
         if bool_at(a, 1) {
             gm.game_state.map_flags |= bits;
         } else {
@@ -348,23 +348,23 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     // Densities.
     native(reg, game, "GetResourceDensity", |gm, _, _| {
-        Value::Integer(gm.game_state.resource_density)
+        enum_ret(gm.game_state.resource_density)
     });
     native(reg, game, "SetResourceDensity", |gm, _, a| {
-        gm.game_state.resource_density = int_at(a, 0);
+        gm.game_state.resource_density = enum_at(a, 0);
         Value::Null
     });
     native(reg, game, "GetCreatureDensity", |gm, _, _| {
-        Value::Integer(gm.game_state.creature_density)
+        enum_ret(gm.game_state.creature_density)
     });
     native(reg, game, "SetCreatureDensity", |gm, _, a| {
-        gm.game_state.creature_density = int_at(a, 0);
+        gm.game_state.creature_density = enum_at(a, 0);
         Value::Null
     });
 
     // Game-state slots.
     native(reg, game, "GetFloatGameState", |gm, _, a| {
-        let i = int_at(a, 0);
+        let i = enum_at(a, 0);
         let v = if i == FLOAT_STATE_INDEX {
             gm.game_state.float_state
         } else {
@@ -373,13 +373,13 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         Value::Real(v)
     });
     native(reg, game, "SetFloatGameState", |gm, _, a| {
-        if int_at(a, 0) == FLOAT_STATE_INDEX {
+        if enum_at(a, 0) == FLOAT_STATE_INDEX {
             gm.game_state.float_state = real_at(a, 1);
         }
         Value::Null
     });
     native(reg, game, "GetIntegerGameState", |gm, _, a| {
-        let i = int_at(a, 0);
+        let i = enum_at(a, 0);
         let v = usize::try_from(i)
             .ok()
             .and_then(|i| gm.game_state.int_states.get(i).copied())
@@ -387,7 +387,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         Value::Integer(v)
     });
     native(reg, game, "SetIntegerGameState", |gm, _, a| {
-        let i = int_at(a, 0);
+        let i = enum_at(a, 0);
         if let Some(slot) = usize::try_from(i)
             .ok()
             .and_then(|i| gm.game_state.int_states.get_mut(i))
@@ -454,13 +454,13 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     // Version.
     native(reg, game, "VersionGet", |gm, _, _| {
-        Value::Integer(gm.game_state.version)
+        enum_ret(gm.game_state.version)
     });
     native(reg, game, "VersionCompatible", |gm, _, a| {
-        Value::Boolean(version_ok(gm, int_at(a, 0)))
+        Value::Boolean(version_ok(gm, enum_at(a, 0)))
     });
     native(reg, game, "VersionSupported", |gm, _, a| {
-        Value::Boolean(version_ok(gm, int_at(a, 0)))
+        Value::Boolean(version_ok(gm, enum_at(a, 0)))
     });
 
     // Tournament (zero unless the host sets a phase).
@@ -524,7 +524,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         Value::Null
     });
     native(reg, game, "SetCampaignMenuRace", |gm, _, a| {
-        gm.game_state.campaign_menu_race = int_at(a, 0);
+        gm.game_state.campaign_menu_race = enum_at(a, 0);
         Value::Null
     });
     native(reg, game, "SetCampaignMenuRaceEx", |gm, _, a| {

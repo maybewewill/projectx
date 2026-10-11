@@ -8,7 +8,7 @@ use engine::data;
 use engine::{Engine, Inputs};
 use mpq::Archive;
 
-const BOUNDS: [f32; 8] = [-1000.0, 1000.0, -800.0, 800.0, 0.0, 0.0, 0.0, 0.0];
+const BOUNDS: [f32; 8] = [-1024.0, 1024.0, -896.0, 896.0, 0.0, 0.0, 0.0, 0.0];
 const HFOO: u32 = 0x6866_6F6F;
 
 fn map_with(extra: &[(&str, Vec<u8>)]) -> Vec<u8> {

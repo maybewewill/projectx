@@ -88,7 +88,7 @@ use softfloat::{arith, F32};
 use super::fog::{circle_cells, rect_cells};
 use super::game::{Game, HandleKind, LocationObj, ObjKey, Object, Playable, PLAYER_SLOTS};
 use super::gamestate::native;
-use super::hashtable::{bool_at, int_at, real_at, str_at};
+use super::hashtable::{bool_at, enum_at, enum_ret, int_at, real_at, str_at};
 use super::player::{index_at, raw_at};
 
 /// The blight and pathing cell width (32 world units, as the pathing grid).
@@ -567,7 +567,7 @@ fn register_start_locations(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) 
         else {
             return Value::Null;
         };
-        let ty = int_at(a, 3);
+        let ty = enum_at(a, 3);
         if (0..3).contains(&ty) {
             gm.misc.start_prio[loc][slot] = (other as u32, ty as u32);
         }
@@ -585,7 +585,7 @@ fn register_start_locations(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) 
             (Some(loc), Some(slot)) => gm.misc.start_prio[loc][slot].1 as i32,
             _ => 0,
         };
-        Value::Integer(v)
+        enum_ret(v)
     });
     native(reg, game, "ForcePlayerStartLocation", |gm, _, a| {
         if let Some(p) = index_at(gm, a, 0) {
@@ -687,7 +687,7 @@ fn register_players(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let (Some(giver), Some(receiver)) = (index_at(gm, a, 0), index_at(gm, a, 1)) else {
             return Value::Null;
         };
-        let state = int_at(a, 2);
+        let state = enum_at(a, 2);
         if state == 1 || state == 2 {
             gm.misc.players[giver as usize]
                 .tax
@@ -699,7 +699,7 @@ fn register_players(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let (Some(giver), Some(receiver)) = (index_at(gm, a, 0), index_at(gm, a, 1)) else {
             return Value::Integer(0);
         };
-        let state = int_at(a, 2);
+        let state = enum_at(a, 2);
         let v = if state == 1 || state == 2 {
             gm.misc.players[giver as usize]
                 .tax

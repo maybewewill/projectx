@@ -14,10 +14,12 @@ const PRELUDE: &str = r#"
 type player extends handle
 type location extends handle
 type rect extends handle
+type startlocprio extends handle
 
 native I2R takes integer i returns real
 native Player takes integer i returns player
 native Location takes real x, real y returns location
+native ConvertStartLocPrio takes integer i returns startlocprio
 
 native SetBlightPoint takes player p, real x, real y, boolean add returns nothing
 native SetBlight takes player p, real x, real y, real radius, boolean add returns nothing
@@ -37,9 +39,9 @@ native DefineStartLocation takes integer i, real x, real y returns nothing
 native GetStartLocationX takes integer i returns real
 native GetStartLocationY takes integer i returns real
 native SetStartLocPrioCount takes integer i, integer n returns nothing
-native SetStartLocPrio takes integer i, integer slot, integer other, integer t returns nothing
+native SetStartLocPrio takes integer i, integer slot, integer other, startlocprio t returns nothing
 native GetStartLocPrioSlot takes integer i, integer slot returns integer
-native GetStartLocPrio takes integer i, integer slot returns integer
+native GetStartLocPrio takes integer i, integer slot returns startlocprio
 native ForcePlayerStartLocation takes player p, integer i returns nothing
 native GetPlayerStartLocation takes player p returns integer
 native GetPlayerStartLocationX takes player p returns real
@@ -282,9 +284,9 @@ function main takes nothing returns nothing
     set a = GetPlayerStartLocation(Player(2))
     set r3 = GetStartLocationX(12)
     call SetStartLocPrioCount(0, 3)
-    call SetStartLocPrio(0, 1, 5, 2)
+    call SetStartLocPrio(0, 1, 5, ConvertStartLocPrio(2))
     set c = GetStartLocPrioSlot(0, 1)
-    set d = GetStartLocPrio(0, 1)
+    set d = GetHandleId(GetStartLocPrio(0, 1))
 endfunction
 "#
     ));

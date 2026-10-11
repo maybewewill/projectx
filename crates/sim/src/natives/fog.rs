@@ -57,7 +57,7 @@ use softfloat::{arith, conv, F32};
 
 use super::game::{Game, HandleKind, LocationObj, ObjKey, Object, RectObj};
 use super::gamestate::native;
-use super::hashtable::{bool_at, int_at, real_at};
+use super::hashtable::{bool_at, enum_at, real_at};
 use super::player::index_at;
 use crate::vision::VisionGrid;
 
@@ -68,7 +68,6 @@ pub const FOG_CELL: i32 = 128;
 
 /// The alliance type whose row gives the players that a shared-vision modifier covers (UNSURE, see the module notes).
 pub const SHARED_VISION_ALLIANCE: usize = 5;
-
 
 /// A fog modifier (`fogmodifier` in JASS). Its cells and players are fixed at creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,7 +158,9 @@ impl Game {
         let active = self.fog.active.clone();
         for k in active {
             let m = self.fog_modifier(k).clone();
-            self.fog.grid.write_indices(m.state, (m.players & 0xFFFF) as u16, &m.cells);
+            self.fog
+                .grid
+                .write_indices(m.state, (m.players & 0xFFFF) as u16, &m.cells);
         }
         let night = self.is_night();
         for (x, y, radius, mask) in self.unit_sight_sources(night) {
@@ -186,7 +187,11 @@ impl Game {
             }
             // The night sight is used at night when it is set; an unset (zero) night sight falls back to the day sight
             // (UNSURE: the original's choice between the two values is not read).
-            let radius = if night && arith::lt(F32::ZERO, u.night_sight) { u.night_sight } else { u.sight };
+            let radius = if night && arith::lt(F32::ZERO, u.night_sight) {
+                u.night_sight
+            } else {
+                u.sight
+            };
             if !arith::lt(F32::ZERO, radius) {
                 continue;
             }
@@ -244,13 +249,17 @@ impl Game {
     /// shape at its next refresh; the write is immediate here (UNSURE).
     fn fog_apply(&mut self, k: ObjKey) {
         let m = self.fog_modifier(k).clone();
-        self.fog.grid.write_indices(m.state, (m.players & 0xFFFF) as u16, &m.cells);
+        self.fog
+            .grid
+            .write_indices(m.state, (m.players & 0xFFFF) as u16, &m.cells);
     }
 
     /// Writes an explicit state (`SetFogState*`) for each player in `players`, with the modifier writer
     /// (CONFIRMED: `0x6f3c1a30` and its siblings reach the same writers as the modifiers).
     fn fog_set_explicit(&mut self, players: u32, cells: &BTreeSet<usize>, state: i32) {
-        self.fog.grid.write_indices(state, (players & 0xFFFF) as u16, cells);
+        self.fog
+            .grid
+            .write_indices(state, (players & 0xFFFF) as u16, cells);
     }
 
     /// Creates a fog modifier (inactive) and returns its handle, or 0 when the player is not live.
@@ -285,7 +294,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         };
         let (x, y, r) = (real_at(a, 2), real_at(a, 3), real_at(a, 4));
         let cells = gm.fog.grid.circle_shape(x, y, r);
-        Value::Handle(gm.fog_create(p, int_at(a, 1), cells, bool_at(a, 5), bool_at(a, 6)))
+        Value::Handle(gm.fog_create(p, enum_at(a, 1), cells, bool_at(a, 5), bool_at(a, 6)))
     });
 
     native(reg, game, "CreateFogModifierRadiusLoc", |gm, _, a| {
@@ -297,7 +306,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             return Value::Handle(0);
         };
         let cells = gm.fog.grid.circle_shape(loc.x, loc.y, real_at(a, 3));
-        Value::Handle(gm.fog_create(p, int_at(a, 1), cells, bool_at(a, 4), bool_at(a, 5)))
+        Value::Handle(gm.fog_create(p, enum_at(a, 1), cells, bool_at(a, 4), bool_at(a, 5)))
     });
 
     native(reg, game, "CreateFogModifierRect", |gm, _, a| {
@@ -308,8 +317,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let Some(r) = rect_of(gm, a, 2) else {
             return Value::Handle(0);
         };
-        let cells = gm.fog.grid.rect_shape((r.min_x, r.min_y), (r.max_x, r.max_y));
-        Value::Handle(gm.fog_create(p, int_at(a, 1), cells, bool_at(a, 3), bool_at(a, 4)))
+        let cells = gm
+            .fog
+            .grid
+            .rect_shape((r.min_x, r.min_y), (r.max_x, r.max_y));
+        Value::Handle(gm.fog_create(p, enum_at(a, 1), cells, bool_at(a, 3), bool_at(a, 4)))
     });
 
     native(reg, game, "DestroyFogModifier", |gm, _, a| {
@@ -344,8 +356,11 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             return Value::Null;
         };
         let players = gm.fog_player_mask(p, bool_at(a, 3));
-        let cells = gm.fog.grid.rect_shape((r.min_x, r.min_y), (r.max_x, r.max_y));
-        gm.fog_set_explicit(players, &cells, int_at(a, 1));
+        let cells = gm
+            .fog
+            .grid
+            .rect_shape((r.min_x, r.min_y), (r.max_x, r.max_y));
+        gm.fog_set_explicit(players, &cells, enum_at(a, 1));
         Value::Null
     });
 
@@ -354,9 +369,12 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let Some(p) = index_at(gm, a, 0) else {
             return Value::Null;
         };
-        let cells = gm.fog.grid.circle_shape(real_at(a, 2), real_at(a, 3), real_at(a, 4));
+        let cells = gm
+            .fog
+            .grid
+            .circle_shape(real_at(a, 2), real_at(a, 3), real_at(a, 4));
         let players = gm.fog_player_mask(p, bool_at(a, 5));
-        gm.fog_set_explicit(players, &cells, int_at(a, 1));
+        gm.fog_set_explicit(players, &cells, enum_at(a, 1));
         Value::Null
     });
 
@@ -370,7 +388,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         };
         let cells = gm.fog.grid.circle_shape(loc.x, loc.y, real_at(a, 3));
         let players = gm.fog_player_mask(p, bool_at(a, 4));
-        gm.fog_set_explicit(players, &cells, int_at(a, 1));
+        gm.fog_set_explicit(players, &cells, enum_at(a, 1));
         Value::Null
     });
 

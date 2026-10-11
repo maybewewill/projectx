@@ -18,7 +18,7 @@ const FOOTMAN: u32 = 0x6866_6F6F;
 const ORDER_MOVE: u32 = 0x000D_0012;
 const ORDER_ATTACK: u32 = 0x000D_000F;
 
-const BOUNDS: [f32; 8] = [-1000.0, 1000.0, -800.0, 800.0, 0.0, 0.0, 0.0, 0.0];
+const BOUNDS: [f32; 8] = [-1024.0, 1024.0, -896.0, 896.0, 0.0, 0.0, 0.0, 0.0];
 
 const MISC: &str =
     "[Misc]\nDefenseArmor=0.05\nDamageBonusNormal=1,1,1,1,1,1,1,1\nReactionDelay=0.3\n";

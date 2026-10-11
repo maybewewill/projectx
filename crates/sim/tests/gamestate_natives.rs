@@ -15,30 +15,44 @@ const PRELUDE: &str = r#"
 type player extends handle
 type location extends handle
 type timer extends handle
+type gamespeed extends handle
+type gamedifficulty extends handle
+type aidifficulty extends handle
+type placement extends handle
+type gametype extends handle
+type mapdensity extends handle
+type version extends handle
 
 native I2R takes integer i returns real
 native R2I takes real r returns integer
 native Player takes integer i returns player
 native Location takes real x, real y returns location
+native ConvertGameSpeed takes integer i returns gamespeed
+native ConvertGameDifficulty takes integer i returns gamedifficulty
+native ConvertAIDifficulty takes integer i returns aidifficulty
+native ConvertPlacement takes integer i returns placement
+native ConvertGameType takes integer i returns gametype
+native ConvertMapDensity takes integer i returns mapdensity
+native ConvertVersion takes integer i returns version
 
-native SetGameSpeed takes integer s returns nothing
-native GetGameSpeed takes nothing returns integer
-native SetGameDifficulty takes integer d returns nothing
-native GetGameDifficulty takes nothing returns integer
-native SetDefaultDifficulty takes integer d returns nothing
-native GetDefaultDifficulty takes nothing returns integer
-native GetAIDifficulty takes player p returns integer
-native SetGamePlacement takes integer p returns nothing
-native GetGamePlacement takes nothing returns integer
-native GetGameTypeSelected takes nothing returns integer
-native IsGameTypeSupported takes integer t returns boolean
-native SetGameTypeSupported takes integer t, boolean flag returns nothing
+native SetGameSpeed takes gamespeed s returns nothing
+native GetGameSpeed takes nothing returns gamespeed
+native SetGameDifficulty takes gamedifficulty d returns nothing
+native GetGameDifficulty takes nothing returns gamedifficulty
+native SetDefaultDifficulty takes gamedifficulty d returns nothing
+native GetDefaultDifficulty takes nothing returns gamedifficulty
+native GetAIDifficulty takes player p returns aidifficulty
+native SetGamePlacement takes placement p returns nothing
+native GetGamePlacement takes nothing returns placement
+native GetGameTypeSelected takes nothing returns gametype
+native IsGameTypeSupported takes gametype t returns boolean
+native SetGameTypeSupported takes gametype t, boolean flag returns nothing
 native IsMapFlagSet takes integer f returns boolean
 native SetMapFlag takes integer f, boolean flag returns nothing
-native GetResourceDensity takes nothing returns integer
-native SetResourceDensity takes integer d returns nothing
-native GetCreatureDensity takes nothing returns integer
-native SetCreatureDensity takes integer d returns nothing
+native GetResourceDensity takes nothing returns mapdensity
+native SetResourceDensity takes mapdensity d returns nothing
+native GetCreatureDensity takes nothing returns mapdensity
+native SetCreatureDensity takes mapdensity d returns nothing
 native GetFloatGameState takes integer s returns real
 native SetFloatGameState takes integer s, real v returns nothing
 native GetIntegerGameState takes integer s returns integer
@@ -55,9 +69,9 @@ native DisableRestartMission takes boolean flag returns nothing
 native SuspendTimeOfDay takes boolean flag returns nothing
 native IsNoVictoryCheat takes nothing returns boolean
 native IsNoDefeatCheat takes nothing returns boolean
-native VersionGet takes nothing returns integer
-native VersionCompatible takes integer v returns boolean
-native VersionSupported takes integer v returns boolean
+native VersionGet takes nothing returns version
+native VersionCompatible takes version v returns boolean
+native VersionSupported takes version v returns boolean
 native GetTournamentFinishSoonTimeRemaining takes nothing returns real
 native GetTournamentFinishNowRule takes nothing returns integer
 native GetTournamentFinishNowPlayer takes nothing returns player
@@ -126,18 +140,18 @@ fn speed_and_difficulty_round_trip_and_the_speed_lock() {
     let mut host = host_for(&format!(
         r#"{GLOBALS}
 function main takes nothing returns nothing
-    set a = GetGameSpeed()
-    call SetGameSpeed(3)
-    set b = GetGameSpeed()
+    set a = GetHandleId(GetGameSpeed())
+    call SetGameSpeed(ConvertGameSpeed(3))
+    set b = GetHandleId(GetGameSpeed())
     call SetMapFlag(16384, true)
-    call SetGameSpeed(0)
-    set c = GetGameSpeed()
+    call SetGameSpeed(ConvertGameSpeed(0))
+    set c = GetHandleId(GetGameSpeed())
     set ok = IsMapFlagSet(16384)
     call SetMapFlag(16384, false)
-    call SetGameSpeed(4)
-    set ok2 = GetGameSpeed() == 4
-    call SetGameDifficulty(2)
-    call SetDefaultDifficulty(3)
+    call SetGameSpeed(ConvertGameSpeed(4))
+    set ok2 = GetHandleId(GetGameSpeed()) == 4
+    call SetGameDifficulty(ConvertGameDifficulty(2))
+    call SetDefaultDifficulty(ConvertGameDifficulty(3))
 endfunction
 "#
     ));
@@ -158,17 +172,17 @@ fn game_type_map_flags_and_densities_round_trip() {
     let mut host = host_for(&format!(
         r#"{GLOBALS}
 function main takes nothing returns nothing
-    call SetGameTypeSupported(2, true)
-    call SetGameTypeSupported(4, true)
-    call SetGameTypeSupported(4, false)
-    set ok = IsGameTypeSupported(2)
-    set ok2 = IsGameTypeSupported(4)
-    call SetGamePlacement(5)
-    set a = GetGamePlacement()
-    call SetResourceDensity(2)
-    call SetCreatureDensity(3)
-    set b = GetResourceDensity()
-    set c = GetCreatureDensity()
+    call SetGameTypeSupported(ConvertGameType(2), true)
+    call SetGameTypeSupported(ConvertGameType(4), true)
+    call SetGameTypeSupported(ConvertGameType(4), false)
+    set ok = IsGameTypeSupported(ConvertGameType(2))
+    set ok2 = IsGameTypeSupported(ConvertGameType(4))
+    call SetGamePlacement(ConvertPlacement(5))
+    set a = GetHandleId(GetGamePlacement())
+    call SetResourceDensity(ConvertMapDensity(2))
+    call SetCreatureDensity(ConvertMapDensity(3))
+    set b = GetHandleId(GetResourceDensity())
+    set c = GetHandleId(GetCreatureDensity())
     call SetMapFlag(1, true)
     call SetMapFlag(2, true)
     call SetMapFlag(1, false)
@@ -258,9 +272,9 @@ fn version_and_cheats_have_the_documented_values() {
     let mut host = host_for(&format!(
         r#"{GLOBALS}
 function main takes nothing returns nothing
-    set a = VersionGet()
-    set ok = VersionCompatible(1)
-    set ok2 = VersionCompatible(7)
+    set a = GetHandleId(VersionGet())
+    set ok = VersionCompatible(ConvertVersion(1))
+    set ok2 = VersionCompatible(ConvertVersion(7))
 endfunction
 "#
     ));

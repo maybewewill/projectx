@@ -9,7 +9,7 @@ use engine::{Engine, Error, Inputs};
 use jass::vm::Value;
 use softfloat::F32;
 
-const BOUNDS: [f32; 8] = [-1000.0, 1000.0, -800.0, 800.0, 0.0, 0.0, 0.0, 0.0];
+const BOUNDS: [f32; 8] = [-1024.0, 1024.0, -896.0, 896.0, 0.0, 0.0, 0.0, 0.0];
 
 fn players() -> Vec<PlayerRec> {
     vec![
@@ -112,11 +112,11 @@ fn synthetic_map_boots_and_applies_w3i() {
     assert_eq!(game.player(2).start_location, 2);
 
     let playable = game.playable().expect("playable area set at boot");
-    assert_eq!(playable.min_x.to_f32(), -1000.0);
-    assert_eq!(playable.max_x.to_f32(), 1000.0);
-    assert_eq!(playable.min_y.to_f32(), -800.0);
-    assert_eq!(playable.max_y.to_f32(), 800.0);
-    assert_eq!(playable.min_x, F32::from_bits((-1000.0f32).to_bits()));
+    assert_eq!(playable.min_x.to_f32(), -1024.0);
+    assert_eq!(playable.max_x.to_f32(), 1024.0);
+    assert_eq!(playable.min_y.to_f32(), -896.0);
+    assert_eq!(playable.max_y.to_f32(), 896.0);
+    assert_eq!(playable.min_x, F32::from_bits((-1024.0f32).to_bits()));
 }
 
 #[test]

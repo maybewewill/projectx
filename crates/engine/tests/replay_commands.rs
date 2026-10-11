@@ -14,7 +14,7 @@ use sim::lockstep::{GameSpeed, TurnScheduler};
 use sim::natives::game::ObjKey;
 use w3g::CommandBlock;
 
-const BOUNDS: [f32; 8] = [-1000.0, 1000.0, -800.0, 800.0, 0.0, 0.0, 0.0, 0.0];
+const BOUNDS: [f32; 8] = [-1024.0, 1024.0, -896.0, 896.0, 0.0, 0.0, 0.0, 0.0];
 const HFOO: u32 = 0x6866_6F6F;
 
 const MISC: &str =
@@ -194,7 +194,11 @@ fn a_turn_applies_its_commands_in_stream_order_before_its_ticks() {
         .iter()
         .map(|r| (r.unit, r.order.id))
         .collect();
-    assert_eq!(issued, vec![(a, 0x000D_0012)], "the move went to the selected unit only");
+    assert_eq!(
+        issued,
+        vec![(a, 0x000D_0012)],
+        "the move went to the selected unit only"
+    );
 }
 
 #[test]
@@ -248,7 +252,13 @@ fn speed_and_recorded_actions_go_through_the_same_path() {
     assert_eq!(outcomes[1], Outcome::Recorded);
     assert_eq!(outcomes[2], Outcome::Recorded);
     assert_eq!(engine.commands().speed_setting(), 0);
-    assert!(matches!(report.actions[0].1, Command::SetSpeed { player: 1, setting: 0 }));
+    assert!(matches!(
+        report.actions[0].1,
+        Command::SetSpeed {
+            player: 1,
+            setting: 0
+        }
+    ));
 }
 
 #[test]
@@ -272,7 +282,7 @@ fn an_unknown_action_fails_the_slot_with_its_offset() {
 #[test]
 fn a_selection_mode_other_than_add_or_remove_fails_the_slot() {
     let blocks = [block(1, vec![0x16, 0x07, 0x00, 0x00])];
-    let err = push_time_slot(&mut TurnScheduler::new(GameSpeed::Normal), 0, &blocks)
-        .expect_err("mode 7");
+    let err =
+        push_time_slot(&mut TurnScheduler::new(GameSpeed::Normal), 0, &blocks).expect_err("mode 7");
     assert!(matches!(err, ReplayError::SelectionMode { mode: 7, .. }));
 }

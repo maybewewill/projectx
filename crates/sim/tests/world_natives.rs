@@ -19,6 +19,7 @@ type item extends widget
 type rect extends handle
 type defeatcondition extends handle
 type trackable extends handle
+type itemtype extends handle
 
 native I2R takes integer i returns real
 native Player takes integer i returns player
@@ -49,7 +50,7 @@ native IsItemIdPowerup takes integer itemId returns boolean
 native IsItemIdSellable takes integer itemId returns boolean
 native IsItemIdPawnable takes integer itemId returns boolean
 native IsItemSellable takes item theItem returns boolean
-native GetItemType takes item i returns integer
+native GetItemType takes item i returns itemtype
 native GetItemLevel takes item i returns integer
 native GetItemUserData takes item i returns integer
 native SetItemUserData takes item i, integer data returns nothing
@@ -57,6 +58,7 @@ native SetItemDropID takes item i, integer id returns nothing
 native QueueUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
 native AddUnitAnimationProperties takes unit whichUnit, string animProperties, boolean add returns nothing
 native ResetUnitLookAt takes unit whichUnit returns nothing
+native GetHandleId takes handle h returns integer
 "#;
 
 const FOOTMAN: u32 = 0x6866_6F6F;
@@ -349,12 +351,12 @@ function Main takes nothing returns nothing
   set gPowerSell = IsItemIdSellable('ItmB')
   set gPowerPawn = IsItemIdPawnable('ItmA')
   set gIt = CreateItem('ItmA', I2R(0), I2R(0))
-  set gClass = GetItemType(gIt)
+  set gClass = GetHandleId(GetItemType(gIt))
   set gLevel = GetItemLevel(gIt)
   call SetItemUserData(gIt, 42)
   set gUser = GetItemUserData(gIt)
   call SetItemDropID(gIt, 7)
-  set gUnknownClass = GetItemType(null)
+  set gUnknownClass = GetHandleId(GetItemType(null))
 endfunction
 "#;
     let mut host = host_for(src);

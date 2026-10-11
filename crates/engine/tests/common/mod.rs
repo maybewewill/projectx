@@ -59,8 +59,10 @@ pub struct PlayerRec {
     pub start: (f32, f32),
 }
 
-/// Writes a format-25 `war3map.w3i` with the given players, forces (`(player mask, name)`) and camera
-/// bounds (left, right, bottom, top, then four more).
+/// Writes a format-25 `war3map.w3i` with the given players, forces (`(player mask, name)`) and
+/// playable rectangle `bounds` (left, right, bottom, top, then four unused values; tile-aligned,
+/// centered). The camera bounds are written as the same values; the engine derives the playable
+/// area from the size in tiles and the (zero) complements, with the map centered on the origin.
 pub fn w3i(
     map_name: &str,
     bounds: [f32; 8],
@@ -90,9 +92,17 @@ pub fn w3i(
     for _ in 0..4 {
         o.extend(0i32.to_le_bytes()); // complements
     }
-    // Playable size: the camera bounds' extent (no complements), as a real map has it.
-    o.extend(((bounds[1] - bounds[0]) as u32).to_le_bytes()); // playable width
-    o.extend(((bounds[3] - bounds[2]) as u32).to_le_bytes()); // playable height
+    // Playable size in tiles (128 units), as a real map stores it.
+    let tiles = |lo: f32, hi: f32| {
+        let t = (hi - lo) / 128.0;
+        assert!(
+            t.fract() == 0.0 && lo == -hi,
+            "test bounds must be tile-aligned and centered"
+        );
+        t as u32
+    };
+    o.extend(tiles(bounds[0], bounds[1]).to_le_bytes()); // playable width
+    o.extend(tiles(bounds[2], bounds[3]).to_le_bytes()); // playable height
     o.extend(0u32.to_le_bytes()); // flags
     o.push(0); // main tileset
     o.extend(0u32.to_le_bytes()); // campaign background

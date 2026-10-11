@@ -1,10 +1,10 @@
 //! Pathing data at boot: `war3map.wpm` → cell words → pyramid → [`sim::orders::PathingMap`].
 //!
-//! The cell grid is the wpm grid (one cell is 32 world units, CONFIRMED). The world origin of the
-//! grid is the minimum corner of the playable area. UNSURE: the original takes the origin from its
-//! playable bounds (`docs/spec/pathing-build.md` section 1.1), and the w3i camera bounds used by
-//! [`crate::playable_area`] are only an approximation of those, so the origin is the least certain
-//! part of the boot. A size mismatch between the grid and the w3i playable size is reported.
+//! The cell grid is the wpm grid (one cell is 32 world units, CONFIRMED). The grid covers the whole
+//! map (on a real melee map the wpm is 4 cells per tile of playable size plus margins), so its world
+//! origin is the whole-map corner (the `w3e` center offset). LIKELY, not confirmed: the source of
+//! the bounds the original passes to the wpm reader is still open (`docs/spec/pathing-build.md`
+//! section 1.1). A size mismatch between the grid and the w3i map size is reported.
 
 use sim::orders::PathingMap;
 use sim::pathing::build::{build_pyramid, cell_words};
@@ -12,8 +12,8 @@ use sim::pathing::{FlagLink, Search};
 use softfloat::F32;
 use w3map::PathMap;
 
-/// Length of a pathing cell in world units.
-const CELL_UNITS: u32 = 32;
+/// Pathing cells per terrain tile side (a tile is 128 units).
+const CELLS_PER_TILE: u32 = 4;
 /// Growth step and initial capacity of the search's node list (UNSURE: the original's values).
 const LIST_GROW: usize = 8;
 const LIST_CAPACITY: usize = 0;
@@ -32,13 +32,13 @@ pub struct PathingSummary {
 /// Builds the pathing data from the wpm bytes and installs it in the game.
 ///
 /// Returns `Ok(None)` when the grid cannot be used (the reason is pushed to `notes`); the game then
-/// keeps its straight-line movement. `playable` is the playable rectangle `(min_x, min_y, width,
-/// height)` in world units, from the w3i data.
+/// keeps its straight-line movement. `origin` is the playable area's minimum corner in world units,
+/// and `tiles` is the whole map size in terrain tiles from the w3i data (playable size plus margins).
 pub fn install(
     game: &mut sim::natives::Game,
     wpm: &[u8],
     origin: (F32, F32),
-    playable: (u32, u32),
+    tiles: (u32, u32),
     notes: &mut Vec<String>,
 ) -> Option<PathingSummary> {
     let map = match PathMap::parse(wpm) {
@@ -62,10 +62,10 @@ pub fn install(
             return None;
         }
     };
-    let (pw, ph) = playable;
-    if pw != map.width * CELL_UNITS || ph != map.height * CELL_UNITS {
+    let (tw, th) = tiles;
+    if tw * CELLS_PER_TILE != map.width || th * CELLS_PER_TILE != map.height {
         notes.push(format!(
-            "war3map.wpm is {} x {} cells but the w3i playable size is {pw} x {ph} units \
+            "war3map.wpm is {} x {} cells but the w3i map size is {tw} x {th} tiles \
              (UNSURE which one the origin and the grid follow)",
             map.width, map.height
         ));

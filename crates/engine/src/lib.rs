@@ -273,15 +273,33 @@ impl Engine {
             library.add_script(name, source);
         }
         let ai = AiHost::new(game, ai_shared, library, tables.clone());
-        let playable = playable_area(&info);
+        let w3e_center = match archive.read("war3map.w3e") {
+            Ok(data) => match w3map::Terrain::parse(&data) {
+                Ok(t) => Some(t.center),
+                Err(e) => {
+                    notes.push(format!("war3map.w3e not used: {e}"));
+                    None
+                }
+            },
+            Err(_) => {
+                notes.push("no war3map.w3e: map assumed centered on the origin".to_string());
+                None
+            }
+        };
+        let corner = map::map_corner(&info, w3e_center);
+        let playable = playable_area(&info, corner);
         host.set_playable(Some(playable));
         apply_players(&mut host.game_mut(), &info, &mut notes);
         let pathing = match &wpm {
+            // The wpm grid covers the whole map, so its origin is the map corner.
             Some(wpm) => pathing::install(
                 &mut host.game_mut(),
                 wpm,
-                (playable.min_x, playable.min_y),
-                (info.playable_width, info.playable_height),
+                (
+                    F32::from_bits(corner.0.to_bits()),
+                    F32::from_bits(corner.1.to_bits()),
+                ),
+                map::map_tiles(&info),
                 &mut notes,
             ),
             None => {

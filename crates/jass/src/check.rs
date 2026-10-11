@@ -229,6 +229,8 @@ struct FuncInfo {
     params: Vec<Option<Ty>>,
     /// `Some(Ty::Nothing)` for `returns nothing`; `None` if the return type was unknown.
     ret: Option<Ty>,
+    /// The name as written (lookup folds case; the local-name clash rule does not).
+    name: String,
 }
 
 /// Per-function context for expressions and statements.
@@ -275,43 +277,57 @@ pub fn check(programs: &[Program]) -> Vec<Diagnostic> {
     let mut order = 0usize;
     for (pi, p) in programs.iter().enumerate() {
         c.prog = pi;
-        for g in &p.globals {
-            c.line = g.line;
-            let info = VarInfo {
-                ty: c.var_type(&g.ty, (pi, g.line)),
-                array: g.array,
-                constant: g.constant,
-                order,
-            };
-            if g.constant && g.init.is_none() {
-                c.err(format!("constant '{}' needs an initializer", g.name));
-            }
-            let key = ident_key(&g.name);
-            if c.globals.contains_key(&key) || c.funcs.contains_key(&key) {
-                c.err(format!("duplicate global '{}'", g.name));
-            } else {
-                c.globals.insert(key, info.clone());
-            }
-            globals.push((pi, g, info));
-            order += 1;
+        // Number declarations in source order: common.j declares natives above the globals that
+        // call them (e.g. `ConvertPlayerColor` before `PLAYER_COLOR_RED`).
+        enum Decl<'a> {
+            Global(&'a Global),
+            Native(&'a Native),
+            Function(&'a Function),
         }
-        for n in &p.natives {
-            c.line = n.line;
-            let info = FuncInfo {
-                order,
-                ..c.func_info(&n.sig, (pi, n.line))
-            };
-            c.declare_func(&n.sig.name, info);
-            order += 1;
-        }
-        for f in &p.functions {
-            c.line = f.line;
-            let info = FuncInfo {
-                order,
-                ..c.func_info(&f.sig, (pi, f.line))
-            };
-            c.declare_func(&f.sig.name, info.clone());
-            functions.push((pi, f, info));
+        let mut decls: Vec<(u32, Decl)> = Vec::new();
+        decls.extend(p.globals.iter().map(|g| (g.line, Decl::Global(g))));
+        decls.extend(p.natives.iter().map(|n| (n.line, Decl::Native(n))));
+        decls.extend(p.functions.iter().map(|f| (f.line, Decl::Function(f))));
+        decls.sort_by_key(|d| d.0); // stable: same-line ties keep the old kind order
+        for (_, d) in decls {
+            match d {
+                Decl::Global(g) => {
+                    c.line = g.line;
+                    let info = VarInfo {
+                        ty: c.var_type(&g.ty, (pi, g.line)),
+                        array: g.array,
+                        constant: g.constant,
+                        order,
+                    };
+                    if g.constant && g.init.is_none() {
+                        c.err(format!("constant '{}' needs an initializer", g.name));
+                    }
+                    let key = ident_key(&g.name);
+                    if c.globals.contains_key(&key) || c.funcs.contains_key(&key) {
+                        c.err(format!("duplicate global '{}'", g.name));
+                    } else {
+                        c.globals.insert(key, info.clone());
+                    }
+                    globals.push((pi, g, info));
+                }
+                Decl::Native(n) => {
+                    c.line = n.line;
+                    let info = FuncInfo {
+                        order,
+                        ..c.func_info(&n.sig, (pi, n.line))
+                    };
+                    c.declare_func(&n.sig.name, info);
+                }
+                Decl::Function(f) => {
+                    c.line = f.line;
+                    let info = FuncInfo {
+                        order,
+                        ..c.func_info(&f.sig, (pi, f.line))
+                    };
+                    c.declare_func(&f.sig.name, info.clone());
+                    functions.push((pi, f, info));
+                }
+            }
             order += 1;
         }
     }
@@ -413,6 +429,7 @@ impl Checker {
             order: 0,
             params,
             ret,
+            name: sig.name.clone(),
         }
     }
 
@@ -439,8 +456,13 @@ impl Checker {
         let key = ident_key(name);
         // A local or parameter may shadow a global (harness q08, r04). It may not take the name of a
         // function that is already declared, the function being checked included (harness q02, q03,
-        // q12, r03). It may take the name of a later function (harness q01).
-        if self.funcs.get(&key).is_some_and(|f| f.order < ctx.limit) {
+        // q12, r03). It may take the name of a later function (harness q01). The clash compares the
+        // exact spelling: retail Blizzard.j has `function CommentString takes string commentString`.
+        if self
+            .funcs
+            .get(&key)
+            .is_some_and(|f| f.order < ctx.limit && f.name == name)
+        {
             self.err(format!("'{name}' is already the name of a function"));
         }
         // A repeated local or parameter replaces the earlier one, so the last declaration sets the

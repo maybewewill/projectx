@@ -64,6 +64,7 @@ use super::game::{
     item_flags, Game, HandleKind, ItemObj, ItemOrder, ItemOrderKind, ObjKey, Object, RectObj,
 };
 use super::group::in_rect;
+use super::hashtable::enum_ret;
 use super::player::raw_at;
 use super::trigger::eval_boolexpr;
 use super::unit_attr::{NativeEntry, Support};
@@ -477,7 +478,7 @@ fn register_types(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let class = item_at(&gm, a, 0)
             .and_then(|k| gm.item_types().get(gm.item(k).type_id))
             .map_or(7, |t| t.class as i32);
-        NativeResult::Return(Value::Integer(class))
+        NativeResult::Return(enum_ret(class))
     });
 
     let g = Rc::clone(game);

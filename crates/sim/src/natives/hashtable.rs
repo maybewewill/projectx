@@ -484,6 +484,22 @@ pub(super) fn int_at(a: &[Value], i: usize) -> i32 {
     a.get(i).and_then(|v| v.as_integer()).unwrap_or(0)
 }
 
+/// The value of an enum-like handle argument (`gametype`, `mapflag`, `fogstate`, ...). common.j
+/// declares these as handles and `Convert*` makes the handle value the integer itself, so the
+/// script passes `Value::Handle`. An integer is accepted too (test stubs that declare `integer`).
+pub(super) fn enum_at(a: &[Value], i: usize) -> i32 {
+    match a.get(i) {
+        Some(Value::Handle(h)) => *h as i32,
+        Some(Value::Integer(v)) => *v,
+        _ => 0,
+    }
+}
+
+/// The script value of an enum-like handle return (the inverse of [`enum_at`]).
+pub(super) fn enum_ret(v: i32) -> Value {
+    Value::Handle(v as u32)
+}
+
 pub(super) fn real_at(a: &[Value], i: usize) -> F32 {
     a.get(i).and_then(|v| v.as_real()).unwrap_or(F32::ZERO)
 }

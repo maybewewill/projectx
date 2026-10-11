@@ -708,3 +708,16 @@ fn globals_and_types_must_precede_functions() {
     assert!(jass::parse(src).is_err());
     // Natives are not covered by the harness (the original rejects `native` in user text).
 }
+
+#[test]
+fn global_initializer_sees_native_declared_above() {
+    // common.j shape: natives first, then a globals block whose initializers call them.
+    let src = "type playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nglobals\n    constant playercolor RED = ConvertPlayerColor(0)\nendglobals\n";
+    assert_eq!(run(src), vec![]);
+}
+
+#[test]
+fn global_initializer_does_not_see_native_declared_below() {
+    let src = "globals\n    integer g = Later()\nendglobals\nnative Later takes nothing returns integer\n";
+    expect_err(&run(src), "undefined function 'Later'");
+}

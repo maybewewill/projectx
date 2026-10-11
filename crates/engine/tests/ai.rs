@@ -10,7 +10,7 @@ use engine::{Engine, Inputs};
 use jass::vm::Value;
 use sim::ai::{AiArg, AiEvent, StartKind};
 
-const BOUNDS: [f32; 8] = [-1000.0, 1000.0, -800.0, 800.0, 0.0, 0.0, 0.0, 0.0];
+const BOUNDS: [f32; 8] = [-1024.0, 1024.0, -896.0, 896.0, 0.0, 0.0, 0.0, 0.0];
 
 /// The map's `common.j` (also the AI prelude): the types and the main-VM natives the test scripts use.
 const COMMON_J: &str = r#"
