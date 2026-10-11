@@ -34,6 +34,21 @@ native GetAllianceTarget takes nothing returns unit
 native SetAllianceTarget takes unit u returns nothing
 native SetHeroesFlee takes boolean b returns nothing
 native SetReplacementCount takes integer n returns nothing
+native SetCaptainChanges takes boolean b returns nothing
+native GroupTimedLife takes boolean b returns nothing
+native SetMeleeAI takes nothing returns nothing
+native SetCampaignAI takes nothing returns nothing
+native DisablePathing takes nothing returns nothing
+native SetAmphibious takes nothing returns nothing
+native CaptainIsFull takes nothing returns boolean
+native CaptainRetreating takes nothing returns boolean
+native SuicidePlayer takes player p, boolean b returns boolean
+native SetUpgrade takes integer t returns boolean
+native ConvertUnits takes integer a, integer b returns boolean
+native SetProduce takes integer n, integer t, integer x returns boolean
+native MeleeDifficulty takes nothing returns integer
+native GetEnemyPower takes nothing returns integer
+native GetUnitWoodCost takes integer t returns integer
 "#;
 
 /// Declarations and natives of the main script.
@@ -171,9 +186,10 @@ endfunction
     assert_eq!(run(), run());
 }
 
-/// `CommandAI` from the main script reaches the AI's queue, and the AI reads it in order.
+/// `CommandAI` from the main script reaches the AI's command stack. The AI reads the newest pair first (CONFIRMED:
+/// the stack is read at its count), and an empty stack reads -1.
 #[test]
-fn command_ai_fills_the_queue_the_ai_reads() {
+fn command_ai_fills_the_stack_the_ai_reads() {
     let main = r#"
 function main takes nothing returns nothing
     call StartMeleeAI(Player(0), "queue.ai")
@@ -188,6 +204,7 @@ globals
     integer first = -1
     integer firstData = -1
     integer second = -1
+    integer third = 0
 endglobals
 function main takes nothing returns nothing
     set waiting = CommandsWaiting()
@@ -196,6 +213,7 @@ function main takes nothing returns nothing
     call PopLastCommand()
     set second = GetLastCommand()
     call PopLastCommand()
+    set third = GetLastCommand()
 endfunction
 "#;
     let mut lib = library();
@@ -203,9 +221,10 @@ endfunction
     let mut r = rig(main, lib);
     tick(&mut r);
     assert_eq!(ai_int(&r, 0, "waiting"), 2);
-    assert_eq!(ai_int(&r, 0, "first"), 7);
-    assert_eq!(ai_int(&r, 0, "firstData"), 42);
-    assert_eq!(ai_int(&r, 0, "second"), 8);
+    assert_eq!(ai_int(&r, 0, "first"), 8);
+    assert_eq!(ai_int(&r, 0, "firstData"), 43);
+    assert_eq!(ai_int(&r, 0, "second"), 7);
+    assert_eq!(ai_int(&r, 0, "third"), -1);
     // Player 1 has no AI: its command was dropped, and it has no VM.
     assert!(r.ai.vm(1).is_none());
     assert!(r
@@ -230,11 +249,13 @@ fn command_queue_is_limited_to_twelve() {
     let c = sh.control(0).expect("player 0 control");
     assert_eq!(c.queue.len(), ai::COMMAND_QUEUE_LIMIT);
     assert_eq!(c.dropped_commands, 2);
-    assert_eq!(c.queue.front().copied(), Some((0, 0)));
-    assert_eq!(c.queue.back().copied(), Some((11, 11)));
+    // The stack keeps the oldest twelve: the first pushed is at the bottom, the last one on top.
+    assert_eq!(c.queue.first().copied(), Some((0, 0)));
+    assert_eq!(c.queue.last().copied(), Some((11, 11)));
 }
 
-/// Unit counts and gold come from the game, for the AI's own player.
+/// Unit counts come from the game, for the AI's own player. Unit costs come from the type registry. The gold query is
+/// not implemented: its body sums the AI's town slots, not the player's gold, so it returns 0 and is counted.
 #[test]
 fn unit_and_gold_queries_read_the_game() {
     let main = r#"
@@ -253,6 +274,8 @@ globals
     integer other = -1
     integer gold = -1
     integer goldCost = -1
+    integer woodCost = -1
+    integer unknownCost = -1
 endglobals
 function main takes nothing returns nothing
     set own = GetUnitCount('hfoo')
@@ -260,6 +283,8 @@ function main takes nothing returns nothing
     set other = GetPlayerUnitTypeCount(Player(1), 'hfoo')
     set gold = GetGoldOwned()
     set goldCost = GetUnitGoldCost('hfoo')
+    set woodCost = GetUnitWoodCost('hfoo')
+    set unknownCost = GetUnitGoldCost('hbar')
 endfunction
 "#;
     let mut lib = library();
@@ -270,6 +295,8 @@ endfunction
         UnitType {
             name: "hfoo".to_string(),
             max_life: F32::from_bits(0x42C8_0000),
+            gold_cost: 150,
+            wood_cost: 50,
             ..Default::default()
         },
     );
@@ -278,16 +305,168 @@ endfunction
     assert_eq!(ai_int(&r, 0, "own"), 2);
     assert_eq!(ai_int(&r, 0, "done"), 2);
     assert_eq!(ai_int(&r, 0, "other"), 1);
-    assert_eq!(ai_int(&r, 0, "gold"), 500);
+    assert_eq!(ai_int(&r, 0, "goldCost"), 150);
+    assert_eq!(ai_int(&r, 0, "woodCost"), 50);
+    // An id that is not in the registry costs 0.
+    assert_eq!(ai_int(&r, 0, "unknownCost"), 0);
     // Not implemented: the call returns 0 and is counted.
-    assert_eq!(ai_int(&r, 0, "goldCost"), 0);
+    assert_eq!(ai_int(&r, 0, "gold"), 0);
     assert_eq!(
-        r.shared
-            .borrow()
-            .unimplemented
-            .get("GetUnitGoldCost")
-            .copied(),
+        r.shared.borrow().unimplemented.get("GetGoldOwned").copied(),
         Some(1)
+    );
+}
+
+/// The boolean natives whose bodies fix their value: `SetUpgrade` and `ConvertUnits` return false, `SetProduce` with
+/// a count of 0 returns true and with a positive count false, and `GetEnemyPower` is 0.
+#[test]
+fn fixed_return_values_follow_the_bodies() {
+    let main = r#"
+function main takes nothing returns nothing
+    call StartMeleeAI(Player(0), "fixed.ai")
+endfunction
+"#;
+    let fixed_ai = r#"
+globals
+    boolean upgrade = true
+    boolean convert = true
+    boolean produce0 = false
+    boolean produce2 = true
+    integer power = -1
+endglobals
+function main takes nothing returns nothing
+    set upgrade = SetUpgrade(3)
+    set convert = ConvertUnits(1, 2)
+    set produce0 = SetProduce(0, 'hfoo', 0)
+    set produce2 = SetProduce(2, 'hfoo', 0)
+    set power = GetEnemyPower()
+endfunction
+"#;
+    let mut lib = library();
+    lib.add_script("fixed.ai", fixed_ai);
+    let mut r = rig(main, lib);
+    tick(&mut r);
+    let vm = r.ai.vm(0).expect("AI VM");
+    assert_eq!(
+        vm.global("upgrade").and_then(|v| v.as_boolean()),
+        Some(false)
+    );
+    assert_eq!(
+        vm.global("convert").and_then(|v| v.as_boolean()),
+        Some(false)
+    );
+    assert_eq!(
+        vm.global("produce0").and_then(|v| v.as_boolean()),
+        Some(true)
+    );
+    assert_eq!(
+        vm.global("produce2").and_then(|v| v.as_boolean()),
+        Some(false)
+    );
+    assert_eq!(ai_int(&r, 0, "power"), 0);
+    // The requests are recorded: they have no other effect in the model.
+    let sh = r.shared.borrow();
+    assert!(sh.commands.iter().any(|c| c.name == "SetUpgrade"));
+    assert!(sh.commands.iter().any(|c| c.name == "SetProduce"));
+    assert!(sh.unimplemented.is_empty());
+}
+
+/// The flag setters change their bits of the AI flag word, and `SetMeleeAI` / `SetCampaignAI` move the melee bit.
+#[test]
+fn flag_setters_change_their_bits() {
+    let main = r#"
+function main takes nothing returns nothing
+    call StartMeleeAI(Player(0), "flags.ai")
+endfunction
+"#;
+    let flags_ai = r#"
+function main takes nothing returns nothing
+    call SetCaptainChanges(true)
+    call GroupTimedLife(true)
+    call SetHeroesFlee(true)
+    call SetHeroesFlee(false)
+    call SetCampaignAI()
+    call SetMeleeAI()
+endfunction
+"#;
+    let mut lib = library();
+    lib.add_script("flags.ai", flags_ai);
+    let mut r = rig(main, lib);
+    tick(&mut r);
+    let sh = r.shared.borrow();
+    let c = sh.control(0).expect("control");
+    // Captain changes 0x80, group timed life 0x100, melee 0x4000 (set last); heroes flee 0x8 was cleared again.
+    assert_eq!(c.flags, 0x80 | 0x100 | 0x4000);
+}
+
+/// `MeleeDifficulty` reads the difficulty bits of the flag word: 1 when `0x8000` is set (even with `0x10000`), 3 for
+/// `0x10000` alone, 2 without them.
+#[test]
+fn melee_difficulty_follows_the_difficulty_bits() {
+    let main = r#"
+function main takes nothing returns nothing
+    call StartMeleeAI(Player(0), "diff.ai")
+endfunction
+"#;
+    let diff_ai = r#"
+globals
+    integer level = -1
+endglobals
+function main takes nothing returns nothing
+    set level = MeleeDifficulty()
+endfunction
+"#;
+    for (bits, expected) in [(0, 2), (0x8000, 1), (0x1_8000, 1), (0x1_0000, 3)] {
+        let mut lib = library();
+        lib.add_script("diff.ai", diff_ai);
+        let mut r = rig(main, lib);
+        r.shared.borrow_mut().control_mut(0).flags = bits;
+        tick(&mut r);
+        assert_eq!(ai_int(&r, 0, "level"), expected, "bits {bits:#x}");
+    }
+}
+
+/// The captain record bits: `DisablePathing` and `SetAmphibious` set theirs. `CaptainIsFull` and `CaptainRetreating`
+/// read the full and retreating bits, which the model's natives never set. `SuicidePlayer` with `true` needs the full
+/// bit (so it is false here), and with `false` it passes the gate (true).
+#[test]
+fn captain_record_bits_and_the_suicide_gate() {
+    let main = r#"
+function main takes nothing returns nothing
+    call StartMeleeAI(Player(0), "captain.ai")
+endfunction
+"#;
+    let captain_ai = r#"
+globals
+    boolean full = true
+    boolean retreat = true
+    boolean plain = false
+    boolean gated = true
+endglobals
+function main takes nothing returns nothing
+    call DisablePathing()
+    call SetAmphibious()
+    set full = CaptainIsFull()
+    set retreat = CaptainRetreating()
+    set plain = SuicidePlayer(Player(1), false)
+    set gated = SuicidePlayer(Player(1), true)
+endfunction
+"#;
+    let mut lib = library();
+    lib.add_script("captain.ai", captain_ai);
+    let mut r = rig(main, lib);
+    tick(&mut r);
+    let vm = r.ai.vm(0).expect("AI VM");
+    assert_eq!(vm.global("full").and_then(|v| v.as_boolean()), Some(false));
+    assert_eq!(
+        vm.global("retreat").and_then(|v| v.as_boolean()),
+        Some(false)
+    );
+    assert_eq!(vm.global("plain").and_then(|v| v.as_boolean()), Some(true));
+    assert_eq!(vm.global("gated").and_then(|v| v.as_boolean()), Some(false));
+    assert_eq!(
+        r.shared.borrow().control(0).map(|c| c.captain_flags),
+        Some(0x4000 | 0x8000)
     );
 }
 
@@ -427,8 +606,10 @@ endfunction
     assert_eq!(ai_int(&r, 0, "target"), 0);
     let sh = r.shared.borrow();
     let c = sh.control(0).expect("control");
-    assert_eq!(c.settings.get("SetHeroesFlee"), Some(&AiArg::Bool(true)));
+    // The boolean setter is a bit of the flag word (0x8); the count is an integer setting.
+    assert_eq!(c.flags & 0x8, 0x8);
     assert_eq!(c.settings.get("SetReplacementCount"), Some(&AiArg::Int(4)));
+    assert!(!c.settings.contains_key("SetHeroesFlee"));
     // The alliance target is stored and logged; the flag and the count are stored only.
     assert!(sh.commands.iter().any(|c| c.name == "SetAllianceTarget"));
     assert!(!sh.commands.iter().any(|c| c.name == "SetHeroesFlee"));
@@ -502,6 +683,98 @@ endfunction
         vm.unbound_natives()
     );
     assert_eq!(AI_NATIVES.len(), 124);
+}
+
+/// The argument text of a call to a row: one value of each parameter type.
+fn arg_values(row: &AiNative) -> Vec<String> {
+    let body = row.sig.strip_prefix('(').expect("signature starts with (");
+    let (params, _) = body.split_once(')').expect("signature has )");
+    let mut out = Vec::new();
+    let mut chars = params.chars();
+    while let Some(c) = chars.next() {
+        out.push(match c {
+            'I' => "0".to_string(),
+            'R' => "0.0".to_string(),
+            'S' => "\"\"".to_string(),
+            'B' => "false".to_string(),
+            'C' => "function dummy".to_string(),
+            'H' => {
+                let ty: String = chars.by_ref().take_while(|&c| c != ';').collect();
+                if ty == "player" {
+                    "Player(0)".to_string()
+                } else {
+                    "null".to_string()
+                }
+            }
+            other => panic!("unknown signature character {other}"),
+        });
+    }
+    out
+}
+
+/// The global that receives a row's result, by its return type (`None` for a row without a result).
+fn result_slot(row: &AiNative) -> Option<&'static str> {
+    let ret = row.sig.rsplit_once(')').map_or("V", |(_, r)| r);
+    match ret.as_bytes().first() {
+        Some(b'I') => Some("rInt"),
+        Some(b'R') => Some("rReal"),
+        Some(b'B') => Some("rBool"),
+        Some(b'S') => Some("rStr"),
+        Some(b'H') if ret.starts_with("Hplayer") => Some("rPlayer"),
+        Some(b'H') => Some("rUnit"),
+        _ => None,
+    }
+}
+
+/// Every row is dispatched: a script that calls each of the 124 natives once reaches the not-implemented fallback for
+/// exactly the rows marked not implemented, and no other row.
+#[test]
+fn every_row_is_dispatched_and_only_the_missing_rows_fall_back() {
+    let mut decls = String::from("type player extends handle\ntype unit extends handle\n");
+    decls.push_str("native Player takes integer number returns player\n");
+    for row in AI_NATIVES {
+        decls.push_str(&declaration(row));
+        decls.push('\n');
+    }
+    let mut script = String::from(
+        "globals\n    integer rInt = 0\n    real rReal = 0.0\n    boolean rBool = false\n    string rStr = \"\"\n    unit rUnit = null\n    player rPlayer = null\nendglobals\n",
+    );
+    script.push_str("function dummy takes nothing returns nothing\nendfunction\n");
+    script.push_str("function main takes nothing returns nothing\n");
+    for row in AI_NATIVES {
+        let args = arg_values(row).join(", ");
+        match result_slot(row) {
+            None => script.push_str(&format!("    call {}({args})\n", row.name)),
+            Some(slot) => script.push_str(&format!("    set {slot} = {}({args})\n", row.name)),
+        }
+    }
+    script.push_str("endfunction\n");
+    let mut lib = AiLibrary::new(&decls);
+    lib.add_script("call.ai", &script);
+    let main = r#"
+function main takes nothing returns nothing
+    call StartMeleeAI(Player(0), "call.ai")
+endfunction
+"#;
+    let mut r = rig(main, lib);
+    ticks(&mut r, 5);
+    let vm = r.ai.vm(0).expect("AI VM built");
+    assert!(
+        vm.unbound_natives().is_empty(),
+        "{:?}",
+        vm.unbound_natives()
+    );
+    let sh = r.shared.borrow();
+    let mut missing: Vec<&str> = AI_NATIVES
+        .iter()
+        .filter(|row| !row.implemented)
+        .map(|row| row.name)
+        .collect();
+    let mut fell_back: Vec<&str> = sh.unimplemented.keys().copied().collect();
+    missing.sort_unstable();
+    fell_back.sort_unstable();
+    assert_eq!(fell_back, missing);
+    assert!(sh.unimplemented.values().all(|&n| n == 1));
 }
 
 /// The table's level labels and the not-implemented list are consistent: a not-implemented row always has a reason.

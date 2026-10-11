@@ -376,6 +376,11 @@ pub struct UnitType {
     /// The abilities a new unit gets, in list order, at level 1 (LIKELY). TODO(gamedata): from the type's ability
     /// list.
     pub abilities: Vec<u32>,
+    /// Gold cost, read by `GetUnitGoldCost` (CONFIRMED: the cost native returns the type record's gold field, `+0x20`
+    /// of the type object, through `FUN_6f29b800`). A registry input: the host fills it from the unit data.
+    pub gold_cost: i32,
+    /// Wood cost, read by `GetUnitWoodCost` (CONFIRMED: the type record's wood field, `+0x24`, `FUN_6f29b830`).
+    pub wood_cost: i32,
 }
 
 /// The unit type registry, keyed by the raw type id (the four-character code as an integer).

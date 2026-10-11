@@ -12,16 +12,28 @@
 //! * Each AI VM gets the world natives (units, players, groups, items, ...) registered on the shared [`Game`], without
 //!   the timer and trigger natives, because their expiries run on the main host's queue. Its sleeps are the VM's own
 //!   sleeps (`NativeResult::Sleep`), resumed by [`Vm::step`] at the time the AI host passes in.
-//! * `CommandAI` from the main script pushes a `(command, data)` pair onto the AI player's queue. The AI reads the
-//!   queue with `CommandsWaiting`, `GetLastCommand`, `GetLastData` and `PopLastCommand`.
+//! * `CommandAI` from the main script pushes a `(command, data)` pair onto the AI player's command stack (CONFIRMED).
+//!   The AI reads the newest pair first with `GetLastCommand` and `GetLastData` (-1 when empty), counts them with
+//!   `CommandsWaiting` and drops the newest with `PopLastCommand`.
 //!
-//! Ordering (UNSURE against the original; not in the spec): the main VM runs first in a tick, then the AI VMs run in
-//! ascending player index, each once with `Vm::step` at the same time. Start requests are built before the first AI
-//! step. A player whose pause counter is above zero (`PauseCompAI`) is skipped (UNSURE: the skip is inferred from the
-//! counter, not read).
+//! What the binary shows for the AI VM (decompile of `FUN_6f2db0f0`, `FUN_6f2db4b0`, `FUN_6f2da590`, `FUN_6f2d0f90`):
+//!
+//! * The start loads `common.j`, `common.ai` and the race script into one VM for the player and starts one thread with
+//!   code 0 (CONFIRMED: one `StartThread` call on the start path). The model starts `config` and then `main`. Whether
+//!   the engine runs `config` is UNSURE, and the model does not load `common.j` (open: the host has no such input).
+//! * Each AI has six thread slots (`+0x254`, index 0 to 5, LIKELY): a `StartThread` takes a free slot and is dropped when
+//!   none is free. The model does not cap threads (the freeing rule is UNSURE).
+//! * `Sleep` passes its duration to the thread's agent timer (`FUN_6f2d0f90`, a virtual call with the duration). The
+//!   AI dispatcher `FUN_6f2db4b0` runs the AI agents in turn under a budget that starts at 5000 ms and schedules the
+//!   next run at the agent's time plus 100 ms (LIKELY: the AI cycle is at least 0.1 s; the exact base is UNSURE).
+//!
+//! Ordering (UNSURE against the original; the list walk direction of the dispatcher is not decoded): the main VM runs
+//! first in a tick, then the AI VMs run in ascending player index, each once with `Vm::step` at the same time, every
+//! 0.1 s. Start requests are built before the first AI step. A player whose pause counter is above zero
+//! (`PauseCompAI`) is skipped (UNSURE: the skip is inferred from the counter, not read).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use jass::compile::{compile, Module};
@@ -107,11 +119,18 @@ pub struct AiControl {
     /// `PauseCompAI` counter: `+1` for `true`, `-1` (not below zero) for `false`. An AI with a count above zero is
     /// not stepped (UNSURE).
     pub pause: i32,
-    /// `(command, data)` pairs that `CommandAI` queued, oldest first, at most [`COMMAND_QUEUE_LIMIT`].
-    pub queue: VecDeque<(i32, i32)>,
+    /// `(command, data)` pairs that `CommandAI` queued, oldest first, at most [`COMMAND_QUEUE_LIMIT`]. The AI reads
+    /// the newest pair first: the queue is a stack (CONFIRMED: `FUN_6f2d4990` pushes at the count, `GetLastCommand`
+    /// reads the entry at the count, `PopLastCommand` lowers the count).
+    pub queue: Vec<(i32, i32)>,
     /// `CommandAI` calls dropped because the queue was full.
     pub dropped_commands: u32,
-    /// Values stored by the AI's setter natives (heroes, flags, replacement count), by native name.
+    /// The AI state's flag word (`+0x2D0`): the bits that the boolean setters change. See `natives::ai::FLAG_BITS`.
+    pub flags: u32,
+    /// The captain record's flag word (`+0x6C`): bit 1 full, bit 2 retreating, `0x4000` pathing disabled, `0x8000`
+    /// amphibious (CONFIRMED bits, as the natives and the captain queries read them).
+    pub captain_flags: u32,
+    /// Values stored by the AI's setter natives that are not flag bits (code and integer settings), by native name.
     pub settings: BTreeMap<&'static str, AiArg>,
     /// The alliance target handle (`SetAllianceTarget`), 0 when none.
     pub alliance_target: u32,
