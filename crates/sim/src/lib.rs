@@ -30,6 +30,7 @@ pub mod pathing;
 pub mod rng;
 pub mod script;
 pub mod timer;
+pub mod vision;
 
 mod pe;
 

@@ -271,7 +271,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~43.5%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~44%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -342,10 +342,17 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
-- **2026-10-11 (27) game start seed**: `docs/spec/game-start.md`. CONFIRMED (Unicorn, 300/300 each): setup `0x6F5C37A0` seeds G and the streams with S = `0x77617233` if settings flag `0x8000` (settings+0x38), else the fold S; fold step `S := rotl(S ^ X, 3)` at `0x6F5C3A4C`. NOT found: the per-player X (the reader blob of `0x6F545A00`); whether the replay record seed is S. `sim::rng::{slot_fold_step, slot_fold, game_start_seed}`; `engine::game_start`, `w3boot --replay`. The count-XOR claim in rng.md 4.1 is wrong (the count is an allocation size).
+- **2026-10-11 (28) game start seed**: `docs/spec/game-start.md`. CONFIRMED (Unicorn, 300/300 each): setup `0x6F5C37A0` seeds G and the streams with S = `0x77617233` if settings flag `0x8000` (settings+0x38), else the fold S; fold step `S := rotl(S ^ X, 3)` at `0x6F5C3A4C`. NOT found: the per-player X (the reader blob of `0x6F545A00`); whether the replay record seed is S. `sim::rng::{slot_fold_step, slot_fold, game_start_seed}`; `engine::game_start`, `w3boot --replay`. The count-XOR claim in rng.md 4.1 is wrong (the count is an allocation size).
+- **2026-10-11 (27)**: vision/fog (vision.md, `sim::vision`): grid at [0x6FAB65F4]+0x34, two 16-bit player masks per cell (visible / unexplored), state table `0x6f00e7a0`, cell/span/rect writers incl. the original's quirks (rect end-exclusive, span writes pairwise past its ends) — Unicorn 4×1,000, 0 mismatches (lead re-ran). Open: grid size/origin/scale (1/128 assumed), circle span expansion for R ≥ 3, unit sight sources, refresh counter. Acquisition reads no vision at one call level.
 - **2026-10-11 (26)**: boot now registers type orders (moves accepted on booted maps); replay orders fire ISSUED_ORDER; replay object pair → agent: the lookup table `0x6F4428B0` found, its producer not (sim uses an UNSURE handle-id model). Training (economy-4.md): **correction** — the 0.1 s 0xD01C1 tick is CBuffAuraRegenLife's aura pulse, not training; CAbilityTrain completion = 0xD01C4; queue shift `0x6F1652A0` Unicorn 3,000/3,000; progress timer NOT found (TrainQueue uses bldtm, UNSURE). Pending natives: findings spec natives-pending.md (0 implemented; each blocked on missing state). ~43.5%.
 
 - **2026-10-11 (25)**: hero intelligence = c1 + trunc(gain·level) (core `0x6F0DB3A0`, Unicorn 300 + lead 400 fresh); kill-XP chain located (`0x6F2A4880` → `0x6F2A46F0` HeroExpRange → `0x6F2A3190` → `0x6F20B080`), split formula NOT resolved, so kill XP is not implemented (a wrong split would desync). Economy wired into Game (single gold/lumber store, Misc constants, mines).
+
+- **2026-10-11 (vision)**: `docs/spec/vision.md` (fog grid, writers, state table, shapes, query natives). Unicorn
+  (`tools/emu/vision_emu.py`, 1,000 cases per item, 0 mismatches): state table, span writers, cell writer, rect
+  writer (end exclusive; odd-start quirk in the span writer). `crates/sim/src/vision.rs` + `natives/fog.rs` rewired
+  from counts to the last-writer grid. Open: grid size/scale, circle row expansion `0x6f408fd0`, refresh counter.
+  Acquisition does not read vision (direct callees checked).
 
 - **2026-10-11 (24)**: abilities pass 3 (abilities-3.md): builder `0x6F2657A0` fills the definition + 0x68-byte level record (targs +0x00, Cast +0x04, Dur +0x08, HeroDur +0x0C, Cost +0x10 int, Cool +0x14 (negative/NaN → 0), Area +0x18, Rng +0x1C, DataA..I +0x20..+0x40, UnitID +0x44, BuffID/EfctID lists), getter per offset (Unicorn 94/94, lead re-ran). Correction: ability +0x4C is the targs flag word, not a record pointer. `gamedata::abilitytype`. Still NOT FOUND: cooldown countdown/ready check, mana payment, Dur vs HeroDur choice (the sim has a model, marked as such).
 
