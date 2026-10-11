@@ -31,6 +31,7 @@ mod hashtable;
 pub mod hero;
 pub mod item;
 mod location;
+pub mod melee_start;
 pub mod misc;
 pub mod object;
 pub mod order;
@@ -48,7 +49,7 @@ mod unit_event;
 
 pub use ability::expire_timed_life;
 pub use game::{
-    Ctx, Game, HandleKind, ObjKey, Payload, Playable, ScriptRuntime, UnitEvent, UnitObj, UnitType,
+    Ctx, Game, HandleKind, ObjKey, Payload, PickRecord, Playable, ScriptRuntime, UnitEvent, UnitObj, UnitType,
     UnitTypes,
 };
 pub(crate) use group::circle_candidates;
@@ -108,4 +109,5 @@ pub fn register_world(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     economy::register(reg, game);
     object::register(reg, game);
     animation::register(reg, game);
+    melee_start::register(reg, game);
 }

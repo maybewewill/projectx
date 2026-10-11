@@ -342,6 +342,12 @@ fn load_all_skips_invalid_units_and_is_ordered() {
     let keys: Vec<&str> = all.keys().map(String::as_str).collect();
     // "hbad" has a UI row but no UnitData row, so it is skipped
     assert_eq!(keys, vec!["hfoo", "hmil"]);
+    // the ordered form keeps the UnitUI row order (hmil before hfoo)
+    let order: Vec<String> = gamedata::unittype::load_all_ordered(&tables)
+        .into_iter()
+        .map(|(code, _)| code)
+        .collect();
+    assert_eq!(order, vec!["hmil", "hfoo"]);
 }
 
 #[test]

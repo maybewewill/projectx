@@ -442,6 +442,31 @@ pub struct UnitTypes {
     /// The typed-count lists of each type: (first list, upgrade list). UNSURE: the data columns (see
     /// `unit_counts::TypeLinks`). Filled by the host.
     count_links: BTreeMap<u32, (Vec<u32>, Vec<u32>)>,
+    /// The fields the random creep and neutral building picks test, per type, with the types in the order the original
+    /// inserted them into its global list (UnitUI row order, verified by `tools/emu/unit_order_growth.py`). Filled by
+    /// the host with [`UnitTypes::set_pick_record`].
+    picks: Vec<(u32, PickRecord)>,
+}
+
+/// The unit type fields that `ChooseRandomCreep` (`0x6F29FD90`) and `ChooseRandomNPBuilding` (`0x6F294740`) test.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PickRecord {
+    /// The first byte of the raw code is an uppercase ASCII letter (the creep walk skips those).
+    pub code_upper_first: bool,
+    /// The race enum (record `+0x1C0`): creeps 8, `other` 7.
+    pub race: i32,
+    /// `level` (record `+0x68`).
+    pub level: i32,
+    /// `isbldg` (record `+0x28C`).
+    pub is_building: bool,
+    /// `special` (record `+0x290`).
+    pub special: i32,
+    /// `hostilePal` (record `+0x294`).
+    pub hostile_pal: i32,
+    /// `nbrandom` (record `+0x298`).
+    pub nb_random: i32,
+    /// The tilesets text (record `+0x29C`).
+    pub tilesets: String,
 }
 
 impl crate::unit_counts::TypeLinks for UnitTypes {
@@ -467,6 +492,20 @@ impl UnitTypes {
         }
         self.by_name.insert(ty.name.clone(), id);
         self.by_id.insert(id, ty)
+    }
+
+    /// Registers the pick fields of type `id`. The first call for an id appends it to the pick order; a later call
+    /// replaces the fields and keeps the position (the original inserts a record only when its code is absent).
+    pub fn set_pick_record(&mut self, id: u32, record: PickRecord) {
+        match self.picks.iter_mut().find(|(i, _)| *i == id) {
+            Some(entry) => entry.1 = record,
+            None => self.picks.push((id, record)),
+        }
+    }
+
+    /// The pick records in insertion order.
+    pub fn pick_records(&self) -> &[(u32, PickRecord)] {
+        &self.picks
     }
 
     /// Sets whether type `id` is a building (the `isbldg` column). Counted in the structure pair of the counters.
@@ -1132,6 +1171,12 @@ pub struct Game {
     caches: BTreeMap<String, ObjKey>,
     /// The playable area that rect coordinates are clamped to, or `None` (no clamp) until a host sets it.
     playable: Option<Playable>,
+    /// The whole-map rectangle `GetWorldBounds` returns (the terrain getter `0x6F73F500`), or `None` until a host
+    /// sets it. See `natives/melee_start.rs`.
+    world_bounds: Option<Playable>,
+    /// The map's tileset character (the byte at `+0x1D0` of the map object, read by `0x6F00F520`); 0 skips the
+    /// tileset test of the random creep and neutral building picks.
+    map_tileset: u8,
     /// Whether the movement timer (0x8026A, [`Payload::Movement`]) has been armed. Armed once per game.
     pub movement_armed: bool,
     /// Movement walks run so far (one per firing of the movement timer).
@@ -1250,6 +1295,8 @@ impl Game {
             context_keys: BTreeMap::new(),
             caches: BTreeMap::new(),
             playable: None,
+            world_bounds: None,
+            map_tileset: 0,
             local_player: 0,
             enum_players: Vec::new(),
             filter_players: Vec::new(),
@@ -1774,6 +1821,26 @@ impl Game {
         self.playable
     }
 
+    /// Sets the whole-map rectangle returned by `GetWorldBounds` (`None` clears it).
+    pub fn set_world_bounds(&mut self, bounds: Option<Playable>) {
+        self.world_bounds = bounds;
+    }
+
+    /// The whole-map rectangle, if one is set.
+    pub fn world_bounds(&self) -> Option<Playable> {
+        self.world_bounds
+    }
+
+    /// Sets the map tileset character (0 = none) used by the random creep and neutral building picks.
+    pub fn set_map_tileset(&mut self, tileset: u8) {
+        self.map_tileset = tileset;
+    }
+
+    /// The map tileset character.
+    pub fn map_tileset(&self) -> u8 {
+        self.map_tileset
+    }
+
     /// The game cache named `name`, if `InitGameCache` created it and it is still alive.
     pub fn cache_named(&self, name: &str) -> Option<ObjKey> {
         self.caches.get(name).copied().filter(|&k| self.is_alive(k))
@@ -1819,6 +1886,13 @@ impl Game {
         self.objects.push(object);
         let id = self.handles.create(key, flag);
         (key, id)
+    }
+
+    /// Adds an object without a handle (the original builds units without one; only the natives allocate it).
+    pub fn add_object_unhandled(&mut self, object: Object) -> ObjKey {
+        let key = ObjKey(self.objects.len() as u32);
+        self.objects.push(object);
+        key
     }
 
     /// The live object of a handle id, or `None` for the null handle, a freed id, or an object that
