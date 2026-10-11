@@ -12,6 +12,8 @@ use winit::window::{Window, WindowId};
 
 use crate::renderer::Renderer;
 use crate::scene::{OrbitCamera, Scene};
+use crate::terrain::TerrainScene;
+use crate::terrain_camera::TerrainCamera;
 
 /// Pixels of wheel delta that count as one line of zoom (for touchpads that report pixels).
 const PIXELS_PER_LINE: f64 = 40.0;
@@ -21,6 +23,20 @@ pub fn run(scene: Scene) -> Result<(), winit::error::EventLoopError> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     run_app(event_loop, App::new(scene))
+}
+
+/// Opens a window that shows a map's terrain instead of a model until it is closed.
+pub fn run_terrain(terrain: TerrainScene) -> Result<(), winit::error::EventLoopError> {
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
+    run_app(event_loop, App::new_terrain(terrain))
+}
+
+/// Terrain mode: the scene and its camera. The model scene is not drawn in this mode.
+struct TerrainView {
+    scene: TerrainScene,
+    camera: TerrainCamera,
+    uploaded: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,8 +59,10 @@ struct App {
     window: Option<Arc<Window>>,
     // Filled by `Renderer::new`. On the web this happens later, asynchronously.
     renderer: Rc<RefCell<Option<Renderer>>>,
-    dragging: bool,
+    /// Button held down during a drag: left orbits (or rotates the terrain), right pans.
+    drag: Option<MouseButton>,
     last_cursor: Option<(f64, f64)>,
+    terrain: Option<TerrainView>,
 }
 
 impl App {
@@ -57,9 +75,22 @@ impl App {
             aspect,
             window: None,
             renderer: Rc::new(RefCell::new(None)),
-            dragging: false,
+            drag: None,
             last_cursor: None,
+            terrain: None,
         }
+    }
+
+    fn new_terrain(terrain: TerrainScene) -> App {
+        let aspect = 1.0;
+        let camera = TerrainCamera::fit(&terrain.bounds, aspect);
+        let mut app = App::new(Scene::builtin_cube());
+        app.terrain = Some(TerrainView {
+            scene: terrain,
+            camera,
+            uploaded: false,
+        });
+        app
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -75,6 +106,9 @@ impl App {
         }
         self.aspect = size.width as f32 / size.height as f32;
         self.camera.set_aspect(self.aspect);
+        if let Some(terrain) = self.terrain.as_mut() {
+            terrain.camera.set_aspect(self.aspect);
+        }
         if let Some(renderer) = self.renderer.borrow_mut().as_mut() {
             renderer.resize(size.width, size.height);
         }
@@ -107,7 +141,16 @@ impl App {
             renderer.upload_scene(&self.scene);
             self.needs_upload = false;
         }
-        renderer.render(self.camera.view_projection());
+        match self.terrain.as_mut() {
+            Some(terrain) => {
+                if !terrain.uploaded {
+                    renderer.upload_terrain(&terrain.scene.mesh, &terrain.scene.atlas);
+                    terrain.uploaded = true;
+                }
+                renderer.render(terrain.camera.view_projection(), false);
+            }
+            None => renderer.render(self.camera.view_projection(), true),
+        }
     }
 }
 
@@ -151,17 +194,21 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => self.resize(size),
             WindowEvent::MouseInput { state, button, .. } => {
-                if button == MouseButton::Left {
-                    self.dragging = state == ElementState::Pressed;
+                if matches!(button, MouseButton::Left | MouseButton::Right) {
+                    self.drag = (state == ElementState::Pressed).then_some(button);
                     self.last_cursor = None;
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let current = (position.x, position.y);
-                if self.dragging {
-                    if let Some((last_x, last_y)) = self.last_cursor {
-                        self.camera
-                            .orbit((current.0 - last_x) as f32, (current.1 - last_y) as f32);
+                if let Some((last_x, last_y)) = self.last_cursor {
+                    let dx = (current.0 - last_x) as f32;
+                    let dy = (current.1 - last_y) as f32;
+                    match (self.terrain.as_mut(), self.drag) {
+                        (Some(terrain), Some(MouseButton::Left)) => terrain.camera.rotate(dx, dy),
+                        (Some(terrain), Some(MouseButton::Right)) => terrain.camera.pan(dx, dy),
+                        (None, Some(MouseButton::Left)) => self.camera.orbit(dx, dy),
+                        _ => {}
                     }
                 }
                 self.last_cursor = Some(current);
@@ -171,7 +218,10 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => (p.y / PIXELS_PER_LINE) as f32,
                 };
-                self.camera.zoom(lines);
+                match self.terrain.as_mut() {
+                    Some(terrain) => terrain.camera.zoom(lines),
+                    None => self.camera.zoom(lines),
+                }
             }
             WindowEvent::RedrawRequested => self.frame(),
             _ => {}
