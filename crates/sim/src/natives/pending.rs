@@ -84,11 +84,11 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "ChooseRandomCreep",
-        support: Support::NotImplemented("the candidate walk (0x6F29FD90, race at record +0x1C0 = 8, not a building, special 0, level) and the draw (0x6F285320 on stream 0x20, index = high32(r*n)) are read; the tileset string check and the movement-type check (0x6F29C240, +0x1A8) are not decoded, and the race enum values are not confirmed (natives-pending.md section 3)"),
+        support: Support::NotImplemented("the race enum (creeps = 8) and the candidate rules are confirmed (gamedata::unittype::is_creep_candidate, checked in Unicorn by tools/emu/random_pick_emu.py), and the draw is the shared one (stream 0x20, high32(r*n)). Not confirmed: the candidate ORDER (the walk follows the global unit-type list at 0x6FAB4468, whose insertion code does not match its head cell), and the Storm ordinal 571 behind the tileset test (assumed a character search). natives-pending.md section 3"),
     },
     NativeEntry {
         name: "ChooseRandomNPBuilding",
-        support: Support::NotImplemented("the candidate walk (0x6F294740, race +0x1C0 = 7, building, hostile pal 0, special 0, nbrandom != 0) and the draw (0x6F285320 on stream 0x22) are read; the race enum values are not confirmed (natives-pending.md section 3)"),
+        support: Support::NotImplemented("the race enum (other = 7) and the candidate rules are confirmed (gamedata::unittype::is_neutral_building_candidate, checked in Unicorn by tools/emu/random_pick_emu.py), and the draw is the shared one (stream 0x22). Not confirmed: the candidate ORDER (same global unit-type list as the creep walk) and the Storm ordinal 571 behind the tileset test. natives-pending.md section 3"),
     },
     NativeEntry { name: "CripplePlayer", support: Support::NotImplemented(PLAYER) },
     NativeEntry { name: "RemovePlayer", support: Support::NotImplemented(PLAYER) },
@@ -101,7 +101,7 @@ pub const NATIVES: &[NativeEntry] = &[
     NativeEntry { name: "GetOrderTargetDestructable", support: Support::NotImplemented(EVENT) },
     NativeEntry {
         name: "GetWorldBounds",
-        support: Support::NotImplemented("the four bounds come from the global object (+0x70, via 0x6F001EC0) and the pathing object (+0x54, via 0x6F48AB80) through about ten helpers whose argument flow the decompile loses; the rect is allocated last (docs/spec/natives-pending.md section 2)"),
+        support: Support::NotImplemented("disassembly confirms the four stores: a 16-byte copy of the terrain getter's result (0x6F73F500 on the global map object, via 0x6F00F560) goes into the new rect at +0x24, +0x28, +0x2C, +0x30, and the rect is allocated last. The getter computes the values from the terrain grid, which is not decoded, so the values are unknown (natives-pending.md section 2)"),
     },
     NativeEntry {
         name: "Cheat",

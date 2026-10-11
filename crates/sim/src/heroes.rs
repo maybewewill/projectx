@@ -662,6 +662,175 @@ pub fn max_mana_delta(before: &DerivedBonuses, after: &DerivedBonuses) -> F32 {
     arith::sub(after.mana, before.mana)
 }
 
+/// The life cells of a unit as the life sink `0x6F2AC450` sees them (`docs/spec/heroes.md`, section 10).
+///
+/// The original keeps the current life at `+0x78`, the lower clamp at `+0x80` and the maximum at `+0x84` (the stat
+/// block helpers and the pair setter `0x6F4A9390` are read in section 10). The model has no lower clamp field: it is
+/// passed in as `floor` (`0.0` for every unit the model creates, LIKELY; the writer of `+0x80` is not found).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LifeCells {
+    /// Current life (`+0x78`).
+    pub life: F32,
+    /// Maximum life (`+0x84`).
+    pub max: F32,
+    /// Lower clamp of the pair (`+0x80`).
+    pub floor: F32,
+}
+
+/// The unit life sink `0x6F2AC450(unit, value, mode)` (CONFIRMED by Unicorn: `tools/emu/life_sink_emu.py`, the
+/// vectors are in `tests/life_sink_vectors.rs`). `flagged` is the unit flag `+0x5C` bit 8 read by `vt+0x13C`.
+///
+/// Steps, in the original's order:
+///
+/// 1. `value == 0.0` (either zero) returns at once.
+/// 2. `d = floor(value + 0.5)` (`0x6F6EF330`): every change is rounded half up to a whole number before it is used.
+/// 3. `min = 0.0` when `flagged`, else `1.0` (the living minimum of the mode-1 path).
+/// 4. Mode 1 (temporary, `permanent` false): proportional (without `tables` only the maximum moves). `ratio = life / max` (`0` when `max` is zero), the maximum
+///    becomes `max + d`, the life becomes `floor(newmax * ratio + 0.5)` raised to `min`.
+/// 5. Mode 2 (permanent), and mode 3 when `d >= 0`: absolute. Non-negative `d` (zero included): the maximum rises by `d` and the life
+///    rises by `d` (clamped by the new maximum). Non-positive `d`: the life is `max(life + d, min)` (read before the
+///    maximum changes), then the maximum becomes `max + d`.
+/// 6. Any other mode, and mode 3 when `d < 0`: only the maximum changes by `d` (the life is clamped to it).
+///
+/// Setters: `set_max` writes the maximum and clamps the life to `[floor, max]` (`0x6F4A9390`). `set_life` clamps a
+/// non-positive value to `0.0` (`vt+0x124`), then sets through the delta path `life + (v - life)` and clamps to
+/// `[floor, max]` (`0x6F477350` / `0x6F4A92B0`). `add_life` is `set_core(d + life)` (`vt+0x128`, no zero clamp).
+pub fn life_sink(c: &mut LifeCells, flagged: bool, value: F32, mode: u32, tables: Option<&Tables>) {
+    if value.to_bits() & 0x7fff_ffff == 0 {
+        return;
+    }
+    let d = math::floor(arith::add(value, HALF));
+    let min = if flagged { F32::ZERO } else { F32::ONE };
+    match mode {
+        1 => {
+            let new_max = arith::add(c.max, d);
+            let Some(t) = tables else {
+                // The division needs the reciprocal table of the original (`MissingTables`): only the maximum moves.
+                set_max(c, new_max);
+                return;
+            };
+            let ratio = if c.max.to_bits() & 0x7fff_ffff == 0 {
+                F32::ZERO
+            } else {
+                arith::div(c.life, c.max, t)
+            };
+            set_max(c, new_max);
+            let target = math::floor(arith::add(arith::mul(c.max, ratio), HALF));
+            let target = if arith::lt(target, min) { min } else { target };
+            set_life(c, target);
+        }
+        2 => absolute(c, d, min),
+        3 if arith::le(F32::ZERO, d) => absolute(c, d, min),
+        _ => {
+            let new_max = arith::add(c.max, d);
+            set_max(c, new_max);
+        }
+    }
+}
+
+/// The absolute branches of [`life_sink`] (modes 2 and 3 with the rules of step 5).
+fn absolute(c: &mut LifeCells, d: F32, min: F32) {
+    // Zero takes the rising branch (the flag test of the original falls through on equal), NaN the falling one.
+    if arith::le(F32::ZERO, d) {
+        let new_max = arith::add(c.max, d);
+        set_max(c, new_max);
+        add_life(c, d);
+    } else {
+        let lowered = arith::add(c.life, d);
+        let target = if arith::lt(lowered, min) { min } else { lowered };
+        set_life(c, target);
+        let new_max = arith::add(c.max, d);
+        set_max(c, new_max);
+    }
+}
+
+/// `0x6F4A9390`: the maximum is written and the life is clamped to `[floor, max]`.
+fn set_max(c: &mut LifeCells, new_max: F32) {
+    c.max = new_max;
+    c.life = clamp_pair(c.life, c.floor, c.max);
+}
+
+/// The clamp of the maximum setter `0x6F4A9390` (through `0x6F477400`). An inverted pair (`hi < lo`) gives `hi`;
+/// otherwise below `lo` gives `lo` and above `hi` gives `hi`. CONFIRMED on a 90-point grid in Unicorn (current life,
+/// floor and maximum in {-5..300}, 0 mismatches).
+pub fn clamp_pair(v: F32, lo: F32, hi: F32) -> F32 {
+    if arith::lt(hi, lo) {
+        hi
+    } else if arith::lt(v, lo) {
+        lo
+    } else if arith::lt(hi, v) {
+        hi
+    } else {
+        v
+    }
+}
+
+/// The clamp of the life setter `0x6F4A92B0` (through `0x6F477350`): below `lo` gives `lo`, above `hi` gives `hi`,
+/// with no inverted-pair test. CONFIRMED by the life sink vectors (an inverted pair gives the floor, case 83).
+pub fn clamp_life(v: F32, lo: F32, hi: F32) -> F32 {
+    if arith::lt(v, lo) {
+        lo
+    } else if arith::lt(hi, v) {
+        hi
+    } else {
+        v
+    }
+}
+
+/// `vt+0x124` (`0x6F28B1F0`): a non-positive value becomes `0.0`, then the value is set.
+fn set_life(c: &mut LifeCells, value: F32) {
+    let v = if arith::le(value, F32::ZERO) {
+        F32::ZERO
+    } else {
+        value
+    };
+    set_core(c, v);
+}
+
+/// `0x6F477350` -> `0x6F4A92B0`: the new life is `life + (v - life)` (the delta is formed first), clamped.
+fn set_core(c: &mut LifeCells, v: F32) {
+    let cur = c.life;
+    let delta = arith::sub(v, cur);
+    // The original's helpers take the first operand from EDX and the second from the stack, so `add` is formed as
+    // `cur + delta` (zero signs follow this order, see the probes in the notes of section 10).
+    let next = arith::add(cur, delta);
+    c.life = clamp_life(next, c.floor, c.max);
+}
+
+/// `vt+0x128` (`0x6F28B230`): the life changes by `d` (the sum is formed first, then set through [`set_core`]).
+fn add_life(c: &mut LifeCells, d: F32) {
+    let sum = arith::add(d, c.life);
+    set_core(c, sum);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Kill candidates (docs/spec/heroes.md, section 8.3). The per-candidate routine `0x6F28B990` gates and tests each hero
+// of the killer's candidate list. Checked in Unicorn by `tools/emu/hero_candidate_emu.py` (2,000 cases with the
+// normaliser, the distance and the comparison run as the binary runs them). The position normaliser is NOT modelled:
+// its cell term is not decoded, so the candidate positions are not confirmed (UNSURE), and nothing calls these
+// helpers from the death path yet.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// The unit flags that exclude a kill candidate: `0x40000100` (bit 30, the illusion flag, and bit 8, `0x100`, which
+/// the removal sequence sets; death alone does not set it, LIKELY from `docs/spec/unit-core.md`).
+pub const CANDIDATE_EXCLUDED_FLAGS: u32 = 0x4000_0100;
+
+/// Whether a hero passes the eligibility of `0x6F28B990` (CONFIRMED): `MaxLevelHeroesDrainExp` (`drain_on`) or the hero
+/// below its maximum level (`at_max` is the answer of `0x6F26EB10`), the flags free of [`CANDIDATE_EXCLUDED_FLAGS`],
+/// and the candidate's owner bit set in the killer's shared-experience mask (`shares_xp`, the test `0x6F3A34E0`). No
+/// life test appears in the routine, so a dead hero that is not removed passes (LIKELY, see `docs/spec/heroes.md`).
+pub fn is_candidate(drain_on: bool, at_max: bool, flags: u32, shares_xp: bool) -> bool {
+    (drain_on || !at_max) && flags & CANDIDATE_EXCLUDED_FLAGS == 0 && shares_xp
+}
+
+/// The range test of `0x6F28B990` (CONFIRMED by Unicorn): a candidate is listed in range unless `v < d`, with `d` the
+/// squared distance of the normalised positions and `v = R * R` (the record's `+0x0C`, the `HeroExpRange` squared,
+/// with no division by 32). A tie is listed. NaN on either side is listed too: the x87 compare is unordered and the
+/// original rejects only the strictly-less case (`fcompp`, `test ah,5`, `jnp`).
+pub fn in_range(d: F32, v: F32) -> bool {
+    !arith::lt(v, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,5 +1016,33 @@ mod tests {
         let base = rebase(12, gain, 2, 40);
         assert_eq!(base, 37);
         assert_eq!(intelligence(base, gain, 2), 40);
+    }
+
+    #[test]
+    fn candidate_gate_follows_the_routine() {
+        // Drain on lets a maximum-level hero through; drain off rejects it.
+        assert!(is_candidate(true, true, 0, true));
+        assert!(!is_candidate(false, true, 0, true));
+        assert!(is_candidate(false, false, 0, true));
+        // The flags 0x40000100 exclude, any other bit does not (0x10 is the parent substitution, not an exclusion).
+        assert!(!is_candidate(true, false, 0x0000_0100, true));
+        assert!(!is_candidate(true, false, 0x4000_0000, true));
+        assert!(is_candidate(true, false, 0x0000_0010 | 0x0000_0020, true));
+        // The shared-experience bit is required.
+        assert!(!is_candidate(true, false, 0, false));
+    }
+
+    #[test]
+    fn in_range_rejects_only_strictly_less_v() {
+        let (one, two) = (f(1.0), f(2.0));
+        // d <= v is listed, including the tie.
+        assert!(in_range(one, two));
+        assert!(in_range(two, two));
+        // v < d is rejected.
+        assert!(!in_range(two, one));
+        // NaN on either side is listed (unordered compare).
+        let nan = F32::from_bits(0x7FC0_0000);
+        assert!(in_range(nan, one));
+        assert!(in_range(one, nan));
     }
 }

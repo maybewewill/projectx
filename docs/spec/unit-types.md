@@ -187,9 +187,12 @@ string table (the three enum columns; see section 4.2).
 | +0x2b8 | Data | `requireWaterRadius` | real | FUN_6f25fc60 |
 
 Notes on the table above:
-- Read but not stored in the record (the builder passes them to other routines): `race` (`UnitData`), `sort`
-  (`UnitData`), `type` and `upgrades` (`UnitBalance`; `upgrades` is also split into a list of ids), `tilesets`
-  (`UnitBalance`, passed to a global set routine `0x6F4C5CF0`). CONFIRMED that no record store follows the reads.
+- Read but not stored in the record (the builder passes them to other routines): `sort`
+  (`UnitData`), `type` and `upgrades` (`UnitBalance`; `upgrades` is also split into a list of ids). CONFIRMED that no
+  record store follows the reads.
+- Pass 3 (2026-10-11, natives-pending.md section 10): `race` is stored at record `+0x1C0` as the enum of
+  `0x6F26E210` (`UnitTypeData::race_id`), and the `tilesets` text sits in the object at `+0x29C` (set through
+  `0x6F4C5CF0`; `UnitTypeData::tilesets`, table UNSURE).
 - Text fields that the builder turns into enum values through name tables (`regenType`, `movetp`, `defType`,
   `buffType`, `Primary`): the record holds the enum, not the text. The name tables and the enum values are UNSURE
   (not decoded). The defaults used when the cell is missing are UNSURE.

@@ -44,6 +44,20 @@ pub(crate) fn parse_header(r: &mut Reader) -> Result<Header, Error> {
     let header_version = r.u32()?;
     let decompressed_size = r.u32()?;
     let block_count = r.u32()?;
+    // The original refuses a header whose size field does not match its version (0x40 for version 0,
+    // 0x44 for version 1; `FUN_6f534750`, docs/spec/replay-load.md section 2).
+    let expected = match header_version {
+        0 => 0x40,
+        1 => 0x44,
+        v => return Err(Error::UnsupportedHeaderVersion(v)),
+    };
+    if header_size != expected {
+        return Err(Error::BadHeaderSize {
+            version: header_version,
+            size: header_size,
+            expected,
+        });
+    }
     let sub = match header_version {
         0 => {
             let _unknown = r.u16()?;
@@ -111,4 +125,31 @@ pub(crate) fn decompress_blocks(file: &[u8], header: &Header) -> Result<Vec<u8>,
     // The last block is padded with zeros up to the fixed block size.
     out.truncate(header.decompressed_size as usize);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The header size must match the version (`FUN_6f534750`: 0x40 for version 0, 0x44 for version 1).
+    #[test]
+    fn header_size_must_match_the_version() {
+        let mut file = Vec::new();
+        file.extend_from_slice(MAGIC);
+        file.extend_from_slice(&0x40u32.to_le_bytes()); // size: wrong for version 1
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&1u32.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&[0u8; 20]);
+        let err = parse_header(&mut Reader::new(&file)).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::BadHeaderSize {
+                version: 1,
+                size: 0x40,
+                expected: 0x44
+            }
+        ));
+    }
 }

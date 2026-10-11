@@ -56,7 +56,7 @@ pub use presentation::{PresentationEvent, PresentationLog, PresentationState};
 pub use timer::expire as expire_timer;
 pub use trigger::fire as fire_trigger;
 pub(crate) use unit::set_life;
-pub(crate) use unit_event::dispatch_unit_death;
+pub(crate) use unit_event::dispatch_unit_death_by;
 
 /// Registers the sleep, timer and trigger natives on `reg`, bound to `game`.
 ///

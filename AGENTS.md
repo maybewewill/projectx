@@ -284,7 +284,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~46%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
+**Overall: ~47%** of the 1:1 rewrite (weighted sum of the table below; an earlier chat report of 45.5% was an arithmetic error).
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
@@ -355,6 +355,14 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 7. Log
 
+- **2026-10-11 (35)**: hero life sink `0x6F2AC450` (heroes.md §10; Unicorn 800 cases): mode 1 proportional (life = floor(newmax·life/max + 0.5)), mode 2/3 absolute, clamp rules of the max/life setters. ⚠ **Known divergence**: 1 of 800 cases differs only in the sign of a zero (mode 2, min path) — the test tolerates ≤ 4 such cases; this is NOT bit-exact and must be fixed (signed zero can matter downstream). Hero bonuses applied: HP via the sink, armor/move added (LIKELY), attack bonus added to the dice bonus (UNSURE which field), regen/attack speed stored only; mana sink `0x6F278F50` not run. Factor at global+0x29C unknown (1.0 used).
+
+- **2026-10-11 (34)**: replay load (replay-load.md): header magic/reader `0x6F534750` (size 0x40 v0 / 0x44 v1 enforced in w3g), block reader `0x6F535050` (8-byte block header with a 16-bit folded CRC), stat-string encoder `0x6F651860` (our decoder is its exact inverse), setup builder `0x6F443860`. `Engine::boot_from_replay` (seed + slots from the replay; races/colors/teams LIKELY). Open: the game-info record reader (replay → start blob link still LIKELY), settings flag meanings, game speed bits, handicap not stored in the sim.
+
+- **2026-10-11 (33)**: killer tracking: a unit killed by an attack fires its death events with the attacker as Killer (GetKillingUnit for 0x14/0x35); KillUnit/SetWidgetLife keep null. Kill-XP candidate routine `0x6F28B990` (Unicorn 2,000, 0 mismatches): listed unless V < D (ties and NaN listed); gate = illusion/removed flags + shared-XP bit + max-level rule; dead-but-not-removed heroes qualify (LIKELY). Normaliser cell term and 'AHer' list order still open → kill XP not wired into the death path. ~46.5%.
+
+- **2026-10-11 (32)**: race enum table `0x6FA70FE8` (human 1 … other 7, creeps 8, commoner 9, critters 10, naga 11; NULL → 7, no match → 0), creep walk `0x6F29FD90` and neutral-building walk `0x6F294740` filters (Unicorn 3×2,000, 0 mismatches); candidate list ORDER still unresolved → ChooseRandomCreep/NPBuilding stay pending. GetWorldBounds: rect = 16-byte copy of terrain getter `0x6F73F500`, handle last; getter values not decoded. Vision pass 2 (grid = playable area, scale = cells/range; midpoint-circle span table; refresh on its own 0.4 s timer 0x80269) verified by the lead (Unicorn 200/118/200/11,640, 0 mismatches).
+
 - **2026-10-11 (vision pass 2)**: fog grid from the playable area (scale cells/range), span table and circle writer
   checked in Unicorn (0 mismatches on 300 grids), byte-wide cell writer found, refresh moved to its own 0.4 s timer
   (message 0x80269; lockstep.md 11.2 corrected), unit visibility natives on the slot-0xFC method.
@@ -400,6 +408,7 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 - **2026-10-11 (lockstep cadence, pass 7)**: unit movement is a repeating timer, not a batch: message 0x8026A is posted by a CAgentTimer whose timeout is the f32 `"0.03"` (S2R at 0x6F942DD8 → 0x6FAB7370, Unicorn 0x3CF5C290), so the walk `0x6F483300` runs every 0.03 s of agile clock in the timer pump (`Payload::Movement`, `MOVE_PERIOD_BITS`). Tick hook `0x6F470C70` drives four timer queues (queue A + world G1/G2/G3). AI ticks: 0xD01C2 timers 0.02 s one-shot / 1.0 s periodic (values confirmed), mapping UNSURE. JASS runs have no tick pass in the original (LIKELY). Per-call movement cap `unit+0x88` writer not found (UNSURE). lockstep.md section 11. Tests: `movement_cadence.rs` (4 new). Combat/JASS/AI batch of 20 ticks kept, UNSURE.
 - **2026-10-11 (damage target side)**: `0x6F2A40D0` (target side of a hit) run in Unicorn against `sim::damage::target_side_amount`: 15,000 cases, 0 mismatches. Details in `docs/spec/attack-damage.md` section 11. A basic attack's class word is the literal 0x10 (natives use 1 << damage type). The status flag tests bit 7 of the low byte (not bit 31). The minimum-one rule is on the target side. A relation case replaces the amount with raw × 100. OPEN: no writer found for the damage-type row (+0x20) of a basic attack; the evasion consultation point is unknown.
 >- **2026-10-11 (lockstep driver)**: the simulation advances one game tick (0.005 s soft-float add) per tick with the timer pump after each add (`ScriptHost::step_ticks`, `Engine::step_ticks`, `Engine::run_turn`). `step()` = one batch of 20 ticks. Order/JASS/AI cadence kept at 100 ms, UNSURE (lockstep.md section 10).
+- **2026-10-11 (replay load)**: replay header reader `0x6F534750` and block reader `0x6F535050` read (header size per version 0x40/0x44 now enforced in `w3g`; the header and block CRC rule is recorded but not enforced). Stat-string encoder `0x6F651860` confirmed (`b|1`, mask bit = low bit of the byte); the decoder is its inverse. Setup builder `0x6F443860` read (slot defaults: handicap 100). The game-info record reader is still not located. `engine::Engine::boot_from_replay` boots the map with the replay's seed, slots, names, teams, colors and races (synthetic tests). Speed, handicap and random races not applied. Spec: `docs/spec/replay-load.md`.
 - **2026-10-11 (19)**: damage table layout, Misc reader (S2R, default 0.0) and attack/armor name tables taken from Game.dll (Unicorn 122/122, re-run by the lead). Lockstep pass 4. 714 tests. ~34.5%.
 
 - **2026-10-11 (damage tables)**: the Misc damage tables are read from the binary (attack-damage.md section 10). Reader default is `0.0` (not 1.0, and `DefenseArmor` 0.0, not 0.06). Attack-type names: unknown/empty/`melee` = Spells (0); armor names: unknown = Normal (4). Ethereal slot = attack row, with elements 5,0,1,2,3,4,6. `tools/emu/damage_table_emu.py`: 122 checks, 0 mismatches. Physical armor = damage class word `0x10` (compare confirmed; atkType to class mapping still open).
