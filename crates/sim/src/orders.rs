@@ -764,10 +764,11 @@ impl Game {
         };
         let dir_x = arith::div(vx, r, t);
         let dir_y = arith::div(vy, r, t);
-        let u = self.unit_mut(unit);
-        u.facing = heading;
-        u.x = arith::add(u.x, arith::mul(dir_x, step));
-        u.y = arith::add(u.y, arith::mul(dir_y, step));
+        let nx = arith::add(x, arith::mul(dir_x, step));
+        let ny = arith::add(y, arith::mul(dir_y, step));
+        self.unit_mut(unit).facing = heading;
+        // The step is written through the cell storage (unit_position.rs).
+        self.store_unit_position(unit, nx, ny);
     }
 }
 

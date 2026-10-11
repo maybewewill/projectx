@@ -215,7 +215,9 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SetUnitX", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = unit_at(&gm, a, 0) {
-            gm.unit_mut(k).x = real_at(a, 1);
+            // The original sends {new x, normalised y} to the cell setter, so y is written back too.
+            let y = gm.unit(k).y;
+            gm.store_unit_position(k, real_at(a, 1), y);
         }
         NativeResult::Return(Value::Null)
     });
@@ -224,7 +226,8 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     reg.register("SetUnitY", move |_, a| {
         let mut gm = g.borrow_mut();
         if let Some(k) = unit_at(&gm, a, 0) {
-            gm.unit_mut(k).y = real_at(a, 1);
+            let x = gm.unit(k).x;
+            gm.store_unit_position(k, x, real_at(a, 1));
         }
         NativeResult::Return(Value::Null)
     });
@@ -471,8 +474,11 @@ pub(crate) fn create(
     let unit = UnitObj {
         type_id,
         owner,
-        x,
-        y,
+        // The position is written through the cell storage after the unit is added (see below).
+        cell_x: F32::ZERO,
+        cell_y: F32::ZERO,
+        x: F32::ZERO,
+        y: F32::ZERO,
         facing: arith::mul(face, DEG_TO_RAD),
         life: ty.max_life,
         max_life: ty.max_life,
@@ -512,6 +518,7 @@ pub(crate) fn create(
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
     // of units is UNSURE; 0 is used, as for the other handle types the scripts create on demand.
     let (key, id) = gm.add_object(Object::Unit(unit), 0);
+    gm.place_new_unit(key, x, y);
     count_add_completed(gm, key);
     gm.combat_on_create(key);
     id
@@ -639,10 +646,8 @@ fn set_state(gm: &mut Game, k: ObjKey, state: u32, value: F32) -> bool {
 /// Stores a position as given (see the module notes on the position model). Returns the position it
 /// replaces, so the move path can detect region crossings.
 fn set_position(gm: &mut Game, k: ObjKey, x: F32, y: F32) -> (F32, F32) {
-    let u = gm.unit_mut(k);
-    let from = (u.x, u.y);
-    u.x = x;
-    u.y = y;
+    let from = (gm.unit(k).x, gm.unit(k).y);
+    gm.store_unit_position(k, x, y);
     from
 }
 

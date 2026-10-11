@@ -520,7 +520,14 @@ pub struct UnitObj {
     pub type_id: u32,
     /// The owning player's slot index, 0 to 15 (the original's owner index at `+0x58`).
     pub owner: u32,
+    /// Cell coordinates of the position (unit+0x78 / +0x7C, `docs/spec/unit-position.md`). Written only by
+    /// [`Game::store_unit_position`].
+    pub cell_x: F32,
+    pub cell_y: F32,
+    /// World x, cached: the normaliser's output for `cell_x` at the current origin (what `GetUnitX` returns).
+    /// Written only through [`Game::store_unit_position`] (or [`Game::refresh_unit_positions`]).
     pub x: F32,
+    /// World y, cached as `x` (see there).
     pub y: F32,
     /// Facing in radians, as the mover stores it. The natives convert to and from degrees.
     pub facing: F32,
@@ -1738,6 +1745,7 @@ impl Game {
     /// size until the tables arrive.
     pub fn set_playable(&mut self, playable: Option<Playable>) {
         self.playable = playable;
+        self.refresh_unit_positions();
         if let (Some(p), Some(t)) = (playable, self.vision_tables.as_ref()) {
             self.fog.grid = crate::vision::VisionGrid::from_playable(p.min_x, p.min_y, p.max_x, p.max_y, t);
         }
