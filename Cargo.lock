@@ -1946,10 +1946,13 @@ version = "0.1.0"
 dependencies = [
  "blp",
  "bytemuck",
+ "gamedata",
  "glam",
  "mdx",
+ "mpq",
  "pollster",
  "thiserror 2.0.21",
+ "w3map",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
