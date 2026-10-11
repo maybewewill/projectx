@@ -23,7 +23,33 @@
 
 use softfloat::{arith, F32};
 
-use crate::natives::game::{Game, ObjKey, Object};
+use crate::natives::game::{Game, ObjKey, Object, Playable};
+
+/// The margin subtracted from the playable maximum by the clamp (the float at `0x6FAAE564`, 32.0 after start-up,
+/// CONFIRMED by the Unicorn vectors of `tools/emu/unit_clamp_emu.py`).
+pub const PLAYABLE_CLAMP_MARGIN: F32 = F32::from_bits(0x4200_0000);
+
+/// Clamps the pair (x, y) into the playable area, as the real `0x6F469490` does (CONFIRMED, Unicorn 3,000 cases,
+/// `docs/spec/unit-position.md` 3a). x is kept in [min x, max x - 32], y in [min y, max y - 32]. The lower bound is
+/// tested first: a value below it becomes the bound and the upper bound is not applied. Otherwise a value above the
+/// upper bound becomes that bound. The compares are IEEE (NaN is kept), as the original's x87 `fcompp` sequence.
+pub fn clamp_to_playable(p: Playable, x: F32, y: F32) -> (F32, F32) {
+    (
+        clamp_axis(x, p.min_x, p.max_x),
+        clamp_axis(y, p.min_y, p.max_y),
+    )
+}
+
+fn clamp_axis(v: F32, lo: F32, hi: F32) -> F32 {
+    if lo.to_f32() > v.to_f32() {
+        return lo;
+    }
+    let hi = arith::sub(hi, PLAYABLE_CLAMP_MARGIN);
+    if hi.to_f32() < v.to_f32() {
+        return hi;
+    }
+    v
+}
 
 /// The cell coordinate of a world coordinate `v` for the origin `origin` (the setter's arithmetic, CONFIRMED).
 pub fn world_to_cell(v: F32, origin: F32) -> F32 {
@@ -68,6 +94,16 @@ impl Game {
             .map_or((F32::ZERO, F32::ZERO), |p| (p.min_x, p.min_y))
     }
 
+    /// The position a move to (x, y) stores: the playable clamp when a playable area is set (SetUnitPosition path,
+    /// `docs/spec/unit-position.md` 3a), otherwise the point as it is. SetUnitX/SetUnitY do not clamp (CONFIRMED,
+    /// `0x6F3C5970` goes straight to the cell setter).
+    pub fn clamp_unit_move(&self, x: F32, y: F32) -> (F32, F32) {
+        match self.playable() {
+            Some(p) => clamp_to_playable(p, x, y),
+            None => (x, y),
+        }
+    }
+
     /// Stores a world position of unit `k` through the cell setter: the cells are kept and the cached world
     /// coordinates become the normaliser's output for them. Does nothing for a non-unit key.
     pub fn store_unit_position(&mut self, k: ObjKey, x: F32, y: F32) {
@@ -92,7 +128,8 @@ impl Game {
         }
     }
 
-    /// The creation placement of unit `k` (LIKELY the setter, see the module notes): the placement is stored, then
+    /// The creation placement of unit `k`. UNSURE: the original's route of the placement into the cells is not
+    /// found (`docs/spec/unit-position.md` 8.2); only the read-back of `vf107` (CONFIRMED) is reproduced. The placement is stored, then
     /// the init reads the position back through the normaliser and writes it again (CONFIRMED structure of
     /// `0x6F2A0E30`).
     pub fn place_new_unit(&mut self, k: ObjKey, x: F32, y: F32) {
@@ -108,6 +145,74 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+const EMBEDDED: &[[u32; 8]] = &[
+    [0x46d92566, 0xc4facf2f, 0x46f8c03d, 0xc4f3fa7d, 0xc525496b, 0x45c85e44, 0x46d92566, 0xc4f7fa7d],
+    [0x454a9c36, 0xc53d94e2, 0x454e3866, 0x458b19fd, 0xc5e104f4, 0xc583d5b0, 0x454a9c36, 0xc53d94e2],
+    [0x43cfb825, 0xc4d0d941, 0x44372d0b, 0xc4a6e631, 0xc5fc2417, 0x459b28ad, 0x43cfb825, 0xc4aae631],
+    [0xb99821f0, 0xc51bb408, 0x422b0785, 0xc51a5c48, 0xb7d0891a, 0xb914dc3c, 0xb7d0891a, 0xc51c5c48],
+    [0xc50412e7, 0x453e1a7e, 0xc4fe2dde, 0x45e71ac2, 0xba4d4952, 0xc6107a22, 0xc50116ef, 0x453e1a7e],
+    [0x4504ed50, 0x44e38d9f, 0x4599aaaf, 0x45ffd221, 0x458290dc, 0x459ed4f4, 0x458290dc, 0x459ed4f4],
+    [0x455e81af, 0x454baf3b, 0x45d3c3dc, 0x454aea2a, 0xc60c5693, 0xc529ee56, 0x455e81af, 0x454baf3b],
+    [0x80000000, 0x3a150116, 0x42881072, 0xc21da35d, 0xb960a12c, 0x449dd4f0, 0x80000000, 0xc28ed1ae],
+    [0x80000000, 0x455107ab, 0x4143ef3d, 0x45542702, 0x458ec2a9, 0xc4c0b399, 0xc19e0862, 0x455107ab],
+    [0x44e339ae, 0xc5657589, 0x45ea7e1b, 0xc5635c38, 0xc62b3b92, 0x00000000, 0x44e339ae, 0xc5655c38],
+    [0xc5586b35, 0x457fef90, 0x43473894, 0x45f0c0da, 0x45c964ae, 0xb9cd9a2a, 0x43273894, 0x457fef90],
+    [0xc51be291, 0x00000000, 0xc51c13b6, 0x41bd3b2b, 0x45e72ee7, 0xc628fbdf, 0xc51e13b6, 0x00000000],
+    [0xc5000dbd, 0xc6ac4584, 0x450c8dd0, 0xc6ab9013, 0xc5001dbd, 0x45c64acf, 0xc5000dbd, 0xc6abd013],
+    [0xc54cfc08, 0x450310e8, 0xc5482b30, 0x4502a6c3, 0xc4cd0373, 0xc5a2db08, 0xc54a2b30, 0x450310e8],
+    [0x44f25817, 0x454031e0, 0x4608bce9, 0x4544ed43, 0x00000000, 0x4544fd43, 0x44f25817, 0x4542ed43],
+    [0xc31a4928, 0xc558b145, 0xc327d822, 0xc5567649, 0x44efdfe9, 0x46143b78, 0xc347d822, 0xc5587649],
+    [0x448387b9, 0xc53d36a6, 0x45f14c00, 0x458bd96b, 0xc62c8884, 0x45ca1ba6, 0x448387b9, 0x458ad96b],
+    [0x452add55, 0xc5299249, 0x461a7a94, 0xc526b6f5, 0x4611b3d4, 0x00000000, 0x4611b3d4, 0xc528b6f5],
+    [0x4556f03b, 0xc5642d0e, 0x459ce817, 0xc5664c00, 0x4551291a, 0xc4b896c1, 0x4556f03b, 0xc5684c00],
+    [0x454e2e9c, 0x3a456bbf, 0x4570517d, 0x45d67453, 0x467679c5, 0x46053467, 0x456e517d, 0x45d57453],
+    [0x3a0f644f, 0x00000000, 0x4581766e, 0x42197966, 0x00000000, 0x451513b7, 0x3a0f644f, 0x40cbcb30],
+    [0x41aabac9, 0xc579537f, 0xc1277b5e, 0xc5797239, 0xc615b043, 0xc602e735, 0x41aabac9, 0xc579537f],
+    [0x3a2f47cf, 0xc42fa893, 0x45b0fe8c, 0xc438f5bc, 0xc589f4f9, 0x4407ce5d, 0x3a2f47cf, 0xc440f5bc],
+    [0x45117b21, 0x80000000, 0x45100254, 0x4286d417, 0x00000000, 0x00000000, 0x45117b21, 0x00000000],
+    [0x43f0a37f, 0x4520d66b, 0x43e8580a, 0x4521e338, 0xc60dbf82, 0x45fc0d7a, 0x43f0a37f, 0x451fe338],
+    [0x454b4147, 0xc62175f8, 0x45c3c94c, 0xc57a298e, 0xc5804a5a, 0x4555ccb6, 0x454b4147, 0xc57c298e],
+    [0xc5123446, 0x453a9f24, 0xc50e0a98, 0x45d8cc21, 0x458eabd3, 0xc70f5994, 0xc5100a98, 0x453a9f24],
+    [0x446e5cb8, 0xc535fcda, 0x4617078d, 0x44817acd, 0x45b7c60d, 0x45c5277d, 0x45b7c60d, 0x447af59a],
+    [0xc4e5a0fb, 0x445e6970, 0x45893c17, 0x458c11b2, 0xc611d753, 0x45d19422, 0xc4e5a0fb, 0x458b11b2],
+    [0xc5587393, 0x44c416d8, 0xc485f7d3, 0x44c274f2, 0xc62f6213, 0xc5ca20de, 0xc5587393, 0x44c416d8],
+    [0x3a41cd87, 0x4504a5ee, 0x417e8f54, 0x45e001d8, 0xba58b36e, 0x45ed86ea, 0x3a41cd87, 0x45df01d8],
+    [0xc566c1d9, 0x442e2c60, 0xc561e3a9, 0x44315461, 0xc719cc42, 0xc506225e, 0xc566c1d9, 0x442e2c60],
+    [0xc5147b5b, 0x451663ba, 0x438b614d, 0x460f6b11, 0xb9f9454f, 0xc534b180, 0xb9f9454f, 0x451663ba],
+    [0x454fde54, 0xc462d298, 0x454f85cd, 0xc4699318, 0xc627e88a, 0x4401f0ee, 0x454fde54, 0xc4719318],
+    [0x43b1db87, 0x44aab924, 0x43a648bb, 0x44afd170, 0x45c380c0, 0xc61de5d6, 0x439648bb, 0x44aab924],
+    [0xc2458918, 0xc5520604, 0x4565d668, 0xc4316e6c, 0x456dd7bc, 0x44da423c, 0x4563d668, 0xc4396e6c],
+    [0x440c48d1, 0x44fe14e7, 0x458e055e, 0x44fa5410, 0x39c755f5, 0x461abc8b, 0x440c48d1, 0x44f65410],
+    [0x424e06d3, 0xc49baefb, 0x42257bb0, 0x45330c9f, 0x45a78f11, 0x4569ab68, 0x4115eec0, 0x45310c9f],
+    [0x44dc39f4, 0x45562c2d, 0x44dbfa31, 0x4554b20b, 0x44cc92e7, 0x44bd62ac, 0x44dc39f4, 0x45562c2d],
+    [0xc571294e, 0xc4600c26, 0xc56eb461, 0x45d3e35e, 0xc509a27d, 0xc4a2dc1c, 0xc570b461, 0xc4600c26],
+    [0x3a810264, 0xc5361852, 0xbfabcc88, 0xc5345bff, 0xbf7fbf7f, 0x461c8f3b, 0x3a810264, 0xc5365bff],
+    [0xc3052576, 0x45272de1, 0x44bd51c8, 0x46037d68, 0x455cd7fc, 0x460bc7a8, 0x44b951c8, 0x4602fd68],
+    [0x44f43345, 0xc434d51d, 0x453880a4, 0xc42e5099, 0x458eff05, 0xc636d5fa, 0x453680a4, 0xc434d51d],
+    [0xc1f9685b, 0xc48e70ca, 0x45973156, 0xc48ef717, 0x00000000, 0x45b1f843, 0x00000000, 0xc492f717],
+    [0x00000000, 0x453a5b87, 0x40b64eca, 0x45e9d63e, 0x45aa7f74, 0x45e9de3e, 0xc1d26c4e, 0x45e8d63e],
+    [0x406e859a, 0xc4477092, 0x415ed968, 0xc43823de, 0xc5d808fd, 0x45f1a8bf, 0x406e859a, 0xc44023de],
+    [0x431cdb85, 0x453993c9, 0x45f4c00e, 0x453a4396, 0xb9a77bca, 0x4617d18c, 0x431cdb85, 0x45384396],
+    [0x43280289, 0x4468b007, 0x43399d4e, 0x4594e030, 0x00000000, 0x462c527e, 0x43280289, 0x4593e030],
+    [0xc554a23b, 0xc4b18691, 0x458f7e02, 0xc4b1df3b, 0x4513d496, 0xc6370957, 0x4513d496, 0xc4b18691],
+    [0x44be25bb, 0x80000000, 0x45c0a0e9, 0xc1007dd5, 0xc5c19fc3, 0xc714bb95, 0x44be25bb, 0x80000000],
+    [0xc4857086, 0x4538fc0a, 0xc47ad3b5, 0x453a9e04, 0x4613ff6d, 0x453aae04, 0xc48169da, 0x45389e04],
+    [0x3a44c4d8, 0xc4898d46, 0x458e4216, 0xc484d5af, 0x43af341a, 0x45f08495, 0x43af341a, 0xc488d5af],
+    [0xc550f843, 0xc4b1e161, 0x459e1157, 0xc4b6b91d, 0xc586d63a, 0x45c770cf, 0xc550f843, 0xc4bab91d],
+    [0x451586dd, 0x45361b23, 0x45164a65, 0x4537db6a, 0x00000000, 0x4537eb6a, 0x451586dd, 0x4535db6a],
+    [0x00000000, 0x3a585eef, 0x454c935c, 0x459b07bc, 0xc51869a4, 0xc510e3e8, 0x00000000, 0x3a585eef],
+    [0xc576e889, 0x00000000, 0xc574525e, 0x45f6d6b4, 0x458452a9, 0xc6275581, 0xc576525e, 0x00000000],
+    [0xc5186b72, 0x4482df47, 0xc516b94d, 0x44f061b3, 0x4482b0b1, 0x80000000, 0xc518b94d, 0x4482df47],
+    [0xc520d829, 0x46d09ebc, 0xc51f976c, 0x46d0be17, 0x45d98382, 0x00000000, 0xc521976c, 0x46d09ebc],
+    [0xc4a382bc, 0x44a325e9, 0xc4a2b122, 0x44a874d9, 0xc6f36061, 0x45cabdfb, 0xc4a382bc, 0x44a474d9],
+    [0xc56a3478, 0x00000000, 0x436cf959, 0x45b5ba00, 0x47107ac0, 0x45f84777, 0x434cf959, 0x45b4ba00],
+    [0xc477ab9e, 0x44e22660, 0xc472ed24, 0x461e669b, 0xc5617a9d, 0xc5975f9f, 0xc477ab9e, 0x44e22660],
+    [0xc5585745, 0xc4e4711b, 0x45819c04, 0xc4e277b4, 0x462061b3, 0xc62372c3, 0x45809c04, 0xc4e4711b],
+    [0xc57cd811, 0xb9e225b6, 0xc57b444e, 0x426a56a9, 0xc583c010, 0x462bc69a, 0xc57cd811, 0x41d4ad52],
+    [0x4567c4d1, 0x3a71e7f5, 0x456b3914, 0xc1cf34e6, 0x45698df1, 0x46203802, 0x45693914, 0xc2679a73],
+];
+
 
     fn f(v: f32) -> F32 {
         F32(v.to_bits())
@@ -145,5 +250,66 @@ mod tests {
         assert!((back.0 as i64 - x.0 as i64).abs() > 0);
         let err = (f32::from_bits(back.0) - 0.1).abs();
         assert!(err <= 2.0f32.powi(-12), "error {err}");
+    }
+
+    // Unicorn vectors of the real `0x6F469490` (tools/emu/unit_clamp_emu.py, seed 1, every 47th of 3,000 cases):
+    // [w6c, w70, w74, w78, x, y, out_x, out_y], as IEEE bit patterns.
+    #[test]
+    fn playable_clamp_matches_the_original_embedded() {
+        for v in EMBEDDED {
+            let p = Playable {
+                min_x: F32(v[0]),
+                min_y: F32(v[1]),
+                max_x: F32(v[2]),
+                max_y: F32(v[3]),
+            };
+            let (x, y) = clamp_to_playable(p, F32(v[4]), F32(v[5]));
+            assert_eq!((x, y), (F32(v[6]), F32(v[7])), "case {v:08x?}");
+        }
+    }
+
+    /// Full vector file from the Unicorn harness (set `UNIT_CLAMP_VECTORS` to its path; skipped otherwise).
+    #[test]
+    fn playable_clamp_matches_the_original_file() {
+        let Ok(path) = std::env::var("UNIT_CLAMP_VECTORS") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).expect("vector file");
+        let mut n = 0;
+        for line in text.lines() {
+            let f: Vec<u32> = line
+                .split_whitespace()
+                .skip(1)
+                .map(|h| u32::from_str_radix(h, 16).expect("hex"))
+                .collect();
+            let p = Playable {
+                min_x: F32(f[0]),
+                min_y: F32(f[1]),
+                max_x: F32(f[2]),
+                max_y: F32(f[3]),
+            };
+            let (x, y) = clamp_to_playable(p, F32(f[4]), F32(f[5]));
+            assert_eq!((x, y), (F32(f[6]), F32(f[7])), "line {n}");
+            n += 1;
+        }
+        assert!(n > 0);
+    }
+
+    #[test]
+    fn clamp_keeps_inside_points_and_applies_the_margin() {
+        let p = Playable {
+            min_x: F32::from_bits(0x4400_0000), // 512.0
+            min_y: F32::from_bits(0x4400_0000),
+            max_x: F32::from_bits(0x4500_0000), // 2048.0
+            max_y: F32::from_bits(0x4500_0000),
+        };
+        let inside = (F32::from_bits(0x4480_0000), F32::from_bits(0x4480_0000)); // 1024.0
+        assert_eq!(clamp_to_playable(p, inside.0, inside.1), inside);
+        // Above the upper bound: max - 32 = 2016.0 (0x44FC0000).
+        let (x, _) = clamp_to_playable(p, F32::from_bits(0x4600_0000), inside.1);
+        assert_eq!(x, F32::from_bits(0x44FC_0000));
+        // Below the lower bound: min, and the upper bound is not applied.
+        let (x, _) = clamp_to_playable(p, F32::from_bits(0x4300_0000), inside.1);
+        assert_eq!(x, p.min_x);
     }
 }

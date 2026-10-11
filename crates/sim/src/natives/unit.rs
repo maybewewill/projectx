@@ -643,10 +643,13 @@ fn set_state(gm: &mut Game, k: ObjKey, state: u32, value: F32) -> bool {
     }
 }
 
-/// Stores a position as given (see the module notes on the position model). Returns the position it
+/// Stores a move-path position (clamped to the playable area, see the body). Returns the position it
 /// replaces, so the move path can detect region crossings.
 fn set_position(gm: &mut Game, k: ObjKey, x: F32, y: F32) -> (F32, F32) {
     let from = (gm.unit(k).x, gm.unit(k).y);
+    // SetUnitPosition(Loc) goes through the move slot, whose core clamps the point into the playable area
+    // (CONFIRMED: `0x6F2AC220` calls `0x6F469490` before the cell setter; `docs/spec/unit-position.md` 3a).
+    let (x, y) = gm.clamp_unit_move(x, y);
     gm.store_unit_position(k, x, y);
     from
 }

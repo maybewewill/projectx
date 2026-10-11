@@ -109,10 +109,10 @@ Findings from the same runs (CONFIRMED):
 3. **Step vector writers during a walk** (`0x6F4A70D0` callers, movement-5 section 6): the value of the step term only
    enters through `U+0x80*v` and `F`, so it is invisible while `v` is +0. Its real values during a walk are not needed
    for the getters, but the walk's own arithmetic is still open.
-4. **SetUnitPosition / SetUnitPositionLoc** go through the move path (slot 96, `0x6F2A9CA0`), not through `0x6F474250`
-   directly. The model assumes the same setter arithmetic (LIKELY); the move path was not run in Unicorn.
-5. **Creation placement.** Whether the placement is written by the setter (the model assumes so, LIKELY) or by another
-   writer such as `0x6F474D40` (also a writer of unit+0x78, per movement-5) is not traced.
+4. **SetUnitPosition / SetUnitPositionLoc** go through the move path (slot 96 = `0x6F2A5D50`, core `0x6F2AC220`). The
+   clamp of that path is CONFIRMED and modelled (section 8.1). The notify in slot 55 (`0x6F2A5FB0`) is not modelled.
+5. **Creation placement.** NOT resolved: the placement record does not reach the cells in the code read (section 8.2).
+   `0x6F474D40` is the move-issue routine (events 0xD0196/0xD0198), not the placement.
 6. **Pathing hooks** `0x6F4A6D70` (projection on unit+0x94) and `0x6F4A6E40` (gate on unit+0x98) are not modelled; the
    harness stubs them (they write no position field, from their bodies). The vtable +0x54 notification is not modelled.
 7. **Map origin** (section 5): LIKELY, not checked on a real map.
@@ -122,3 +122,93 @@ Findings from the same runs (CONFIRMED):
 - Unit tests (no Game.dll): `unit_position.rs` (zero-origin round trip exact, exponent flush, far-origin loss).
 - Vector test: `crates/sim/tests/unit_position_vectors.rs`, skipped without `UNIT_POSITION_VECTORS`. Vectors are generated
   by `tools/emu/unit_position_emu.py GAME_DLL...` and not committed (they are outputs of the user's own Game.dll).
+
+## 8. Pass 2 (2026-10-11): move path clamp, creation, walk, grid B
+
+Labels as above. Addresses are Game.dll VAs. Harness and vectors: `tools/emu/unit_clamp_emu.py` (new), `tools/emu/unit_position_emu.py`.
+
+### 8.1 SetUnitPosition clamps into the playable area (CONFIRMED, fixed in the sim)
+
+- `SetUnitPosition` `0x6F3C5A50` → `FUN_6F3BDCB0` (unit) → `FUN_6F2A4B80(1)` → vtable slot 96 (`0x180`) = `CUnit::vf96`
+  `0x6F2A5D50` with (x*, y*, 1, 1, -1, 0, 0, 0, -1, 0). `SetUnitPositionLoc` `0x6F3C5AB0` reads the location and calls
+  `0x6F3C5A50`, so it takes the same path.
+- `vf96` → core move `0x6F2AC220` (CONFIRMED call, all arguments passed through). Its first step, before any other
+  use of the pair: copies `*x`, `*y` into a local pair and calls **`0x6F469490`** with ECX = that pair (CONFIRMED,
+  disassembly at `0x6F2AC242`). Then, when its 4th argument is non-zero, it calls vtable slot 55 (`0x6F2A5FB0`, a
+  notify that also writes globals `0x6FAB425C/4260/4264` and may read the pair; NOT modelled, UNSURE). Then the
+  mover's cell setter `0x6F474250` on the (clamped) pair, flag = (9th argument == 0) = 1 for SetUnitPosition.
+- `0x6F469490` (CONFIRMED by disassembly, and by 3,000 Unicorn vectors, `tools/emu/unit_clamp_emu.py`, seed 1: Rust
+  `unit_position::clamp_to_playable`, 3000/3000 match, `playable_clamp_matches_the_original_file`):
+  x is clamped to [W+0x6C, W+0x74 - 32.0]; y to [W+0x70, W+0x78 - 32.0]. The lower bound is tested first and, when it
+  applies, the upper bound is not tested. The constant 32.0 is `0x6FAAE564`. The compares are x87 `fcom`, so NaN is kept.
+- Sim change: `natives/unit.rs::set_position` (SetUnitPosition and SetUnitPositionLoc only) now clamps through
+  `Game::clamp_unit_move` when a playable area is set. **SetUnitX/SetUnitY do not clamp** (CONFIRMED: `0x6F3C5970`
+  → `0x6F4743C0` → `0x6F474250`, no clamp call). Before this pass the sim stored the raw point for all of them.
+- The playable rectangle is W+0x6C..W+0x78 (min x, min y, max x, max y) as used by `0x6F469490`. This matches
+  `location.rs`. The map loader still has to fill it (see section 5, UNSURE).
+
+Also seen in `vf96`/core move, still open (UNSURE): `0x6F32D0B0` (a flag from the object at `[0x6F938C6C]`, field
++0xCC) decides whether a second clamp `0x6F3E0B50` runs (see 8.2).
+
+### 8.2 Creation placement (goal 1): the route into the cells is NOT found
+
+Facts (CONFIRMED by disassembly):
+- `CreateUnit` `0x6F3C5230` → `0x6F24F1F0` (the wrapper: `0x6F29F990` with flags 0x502, then vtable slot 35 at `0x8C`,
+  which is the handle/owner step; no position write in the wrapper) → `0x6F29F990` (the body).
+- `0x6F29F990`: resolves the type (`0x6F29F3E0`), computes the corner mode from the facing (0.0 / 90.0 / 180.0 tests),
+  and, when `0x6F32D0B0` is non-zero, clamps the pair with `0x6F3E0B50` (which first calls `0x6F469490`, then adds a
+  signed inset `±[0x6FAB68A8]`). Then it builds a 0x174+-byte placement block on the stack and calls the init
+  `CUnit::vf107` `0x6F2A0E30` with it as the template argument.
+- `0x6F3E0B50`'s inset reads `[0x6FAB68A8]`, which is in `.data`, zero in the file, and **written at run time by
+  `0x6F3DB4F0`** (`i2r` of a field, used as a scratch slot). Its value at a creation is therefore whatever the last call
+  left. This is a state dependency on the call history; not modelled (UNSURE).
+- `vf107` (`0x6F2A0E30`): writes no unit cell field itself (no store to +0x78/+0x7C/+0x80/+0x84 in the function body).
+  Its only position step is the read-back at the end: normaliser of `vf46` (`0x6F2A1E74`), then the setter with ECX =
+  `unit+0x164` (`0x6F2A1E9E`), flag 1. So the setter is a read-back of whatever the cells are when `vf107` runs.
+- `0x6F29F3E0` (the type copy, called before `vf107`) writes into the new unit: `+0x78` ← `FUN_6F29C2D0()`, `+0x7C/+0x80/+0x84`
+  ← three floats of `FUN_6F29C790()`, `+0x88` ← `FUN_6F29C830()`. These getters read the unit-data table at `0x6FAB445C`
+  by key. Their meaning is not decoded; they are the only cell-range writes on the creation path that were found.
+
+Consequence (UNSURE, important): **the placement record never reaches the cells in the code read so far.** Either
+`+0x78/+0x7C` are not the position at creation (the type copy then matters for the first read), or the placement is
+written by a function not yet found. The sim's `place_new_unit` (store the placement, then read it back and store
+again, the `vf107` pattern) is therefore **unverified**: it reproduces the read-back but not the initial write. Next
+step: a Unicorn run of `0x6F29F990` with a stubbed `vf107` (record the pair at `0x6F2A1E9E`), to see the cells that
+the read-back sees.
+
+### 8.3 Mover walk (goal 3): the per-record step and where the walk ends (CONFIRMED structure, step arithmetic UNSURE)
+
+- `0x6F4907F0` (per record R, owner U = `R+0x14`): reads V = (U+0x80, U+0x84); `d = |V|` (softfloat mul/add/sqrt);
+  `R+0x20 = d` (0 if `d < 4e-7`); `R+0x24` = heading `0x6F4B2DE0(R+0x20)`, or U+0x8C when d = 0. Then either
+  (flag `R+0x28 & 0x200000` clear) `0x6F38B0B0(start, 0x6F497460(...))`, `0x6F495320(start, R+0x18 (target),
+  R+0x20, R+0x24, ...)`, then `if U+0x88 < R+0x20: R+0x20 = U+0x88`; or (flag set) `0x6F4940C0`, which is the same
+  without the path step. This re-confirms movement-5 section 9.
+- `0x6F495320` (path step): calls `0x6F493EA0` (a validity/arrival test), then `0x6F493FA0` (or `0x6F49E020` for the path
+  node). `0x6F493FA0` (read from the decompile this pass): if the input is non-zero, the output is
+  `sign(x) * min(U+0xB8, |x|)` (the turn-rate cap of movement.md, field `+0xB8`). **It writes an angle-like scalar,
+  not a position.** `0x6F4940C0` calls `0x6F493FA0` the same way.
+- **No function on this chain writes U+0x78/U+0x7C.** The position writes found on the walk side: `0x6F4944A0` (a
+  test-then-apply routine: `0x6F4A3810` test, `0x6F4A3FF0` apply, then `0x6F4737D0(P, 1)` on success; CONFIRMED calls;
+  its purpose is a guess: a spot search for a placed object).
+  So the walk's position update is not through `0x6F4907F0`; it is one of `0x6F494EE0`, `0x6F496EB0` or `0x6F497080`
+  (`0x6F497080`, the move-target routine, calls `0x6F4737D0` in its body; not read in full). **Consequently the
+  "old + step*v" model of orders.rs (`step_unit` → `store_unit_position` in world units) is NOT verified and the
+  Unicorn walk comparison asked for could not be run: the per-step write is not found.**
+- `[mgr+0x80]` (the cap bound in `Position::vf6` `0x6F4747B0`, CONFIRMED reads): no writer found in the decompile
+  (grep of `DAT_6fab7368 + 0x80` gives reads only). The constructor `0x6F470A60` does not set it (movement-5). Open.
+
+### 8.4 Grid B (goal 4): the selector is CONFIRMED, the writer of unit+0x14 bit 31 is NOT found
+
+- `0x6F483270` (CONFIRMED, decompile): returns `mgr+0x14` (grid A) when `(unit+0x14) & 0x80000000 == 0`, else `mgr+0x68`
+  (grid B). `0x6F483290` selects the same way between `mgr+0xBC` and `mgr+0x110`.
+- Writers of bit 31 of the unit's `+0x14` word: not found by a decompile search (`0x80000000` masks in chunk_019 are
+  reads, and the `|0x80000000` writes found are the 2-bit state words of the pathing grid, not this field). Not
+  implemented. The sim keeps grid A only (unchanged).
+
+### 8.5 Tests and counts (this pass)
+
+- `tools/emu/unit_clamp_emu.py`: 3,000 cases (seed 1), 3,000/3,000 match the Rust `clamp_to_playable` (test
+  `playable_clamp_matches_the_original_file` with `UNIT_CLAMP_VECTORS`); 64 cases embedded in the unit tests
+  (`playable_clamp_matches_the_original_embedded`).
+- `tools/emu/unit_position_emu.py`: 2,000 cases (seed 11), setter comparison `unit_position_vectors` passes.
+- Unit tests in `unit_position.rs` (margin, inside points, below-min rule) pass.
