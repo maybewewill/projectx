@@ -1401,7 +1401,7 @@ impl Game {
         let e = &self.economy[owner as usize];
         let st = &self.production.stats;
         format!(
-            "gold {} lumber {} food {}/{} | gold_h {} wood_h {} | deposited gold {} lumber {} | trained {} built {} researched {} | {:?}",
+            "gold {} lumber {} food {}/{} | all players: gold_h {} wood_h {} deposited gold {} lumber {} trained {} built {} researched {} | {:?}",
             e.stored(Res::Gold) / 10,
             e.stored(Res::Lumber) / 10,
             self.food_used_of(owner),

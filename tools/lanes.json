@@ -1,6 +1,6 @@
 {
  "wave": "3",
- "updated": "2026-10-12 21:00 (UTC+5)",
+ "updated": "2026-10-12 21:15 (UTC+5)",
  "lanes": [
   {
    "id": "S9",
@@ -27,10 +27,22 @@
    "status": "running"
   },
   {
+   "id": "S14",
+   "model": "Sonnet",
+   "task": "AI building placement: where the AI puts a new building (replace the stand-in spot finder)",
+   "status": "running"
+  },
+  {
+   "id": "H19",
+   "model": "Haiku",
+   "task": "Model render fixes: black slabs (geoset visibility/GEOA alpha, team glow), Stand pose",
+   "status": "running"
+  },
+  {
    "id": "H18",
    "model": "Haiku",
-   "task": "Watch a game: render the running simulation (units from the engine) over the map to PNG frames",
-   "status": "running"
+   "task": "Watch a game: render the running simulation (units from the engine) over the map to PNG frames (merged)",
+   "status": "done"
   },
   {
    "id": "S10",
