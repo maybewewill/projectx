@@ -558,7 +558,6 @@ impl Game {
             (u.x, u.y)
         };
         let straight = vec![goal];
-        self.pr_path_request();
         let Some(map) = self.orders.pathing.as_mut() else {
             return straight;
         };
@@ -656,6 +655,8 @@ impl Game {
         };
         self.mover_issue(unit, F32::ZERO, &t);
         self.orders.tables = Some(t);
+        // CAbilityMove's start reaches the mover start 0x6F474D40 (docs/spec/lockstep.md section 17)
+        self.pr_mover_start(unit);
     }
 
     /// The softfloat tables of the order system, when the host set them.
@@ -735,6 +736,7 @@ impl Game {
     /// [`crate::lockstep::MOVE_PERIOD_BITS`] = 0.03 s of agile clock (lockstep.md section 11.2-11.3).
     pub fn tick_movement(&mut self) {
         self.movement_calls += 1;
+        self.pr_walk_release();
         self.tick_turns();
         let Some(tables) = self.orders.tables.take() else {
             return;
@@ -801,6 +803,8 @@ impl Game {
             if let Some(rt) = self.orders.units.get_mut(&unit).and_then(|s| s.route.as_mut()) {
                 rt.next = next;
             }
+            // a new leg starts the mover again (UNSURE: that the original does this per leg, section 17.4)
+            self.pr_mover_start(unit);
         }
         let goal = self.cells_of(route.points[last]);
         let waypoint = self.cells_of(route.points[next]);

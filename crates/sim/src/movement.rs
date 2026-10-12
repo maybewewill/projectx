@@ -219,6 +219,7 @@ impl Game {
         if let Some(rt) = self.movers.get_mut(&unit) {
             rt.listed = true;
         }
+        self.pr_mover_idle(unit);
     }
 
     /// `SetUnitFacing` (`0x6F3C5AF0` -> `Position::set` `0x6F474830` -> `0x6F4945F0`): the angle (radians) is folded into

@@ -86,25 +86,87 @@ pub fn cell_to_world(c: F32, origin: F32) -> F32 {
     arith::add(scaled, origin)
 }
 
+/// The registrations behind the movement objects (docs/spec/lockstep.md section 17).
+#[derive(Debug, Default)]
+pub struct PrObjects {
+    /// Each unit's own path object (unit+0xA8), created with the unit.
+    pub(crate) unit_path: std::collections::BTreeMap<ObjKey, crate::sync::PrHandle>,
+    /// The (cluster, path) pair of each unit that is part of a movement cluster.
+    pub(crate) cluster: std::collections::BTreeMap<ObjKey, (crate::sync::PrHandle, crate::sync::PrHandle)>,
+    /// Pairs the next walk releases.
+    pub(crate) release: Vec<(crate::sync::PrHandle, crate::sync::PrHandle)>,
+    /// Pairs of the missiles in flight, oldest first.
+    pub(crate) missiles: std::collections::VecDeque<(crate::sync::PrHandle, crate::sync::PrHandle)>,
+}
+
 impl Game {
-    /// Sync-registry hook (docs/spec/lockstep.md section 16): a unit creation fills a 44-byte mover record; a new
-    /// `CPrCluster` (12 records, registered through `0x6F4AEFF0` from `0x6F4924D0`) is created when the previous
-    /// one is full. LIKELY: the cluster registers once, records never unregister it. The unit-to-record mapping
-    /// (who else registers at creation) is UNSURE.
-    pub(crate) fn pr_unit_created(&mut self) {
-        if self.pr_units % 12 == 0 {
-            let h = self.pr.register();
-            self.pr_clusters.push(h);
+    /// Sync-registry hook, unit creation (docs/spec/lockstep.md section 17.3): `CUnit::vf107` (`0x6F2A0E30`) calls
+    /// `0x6F474C10` on the unit's mover (unit+0x164) with a clear flag; that creates the mover's own `CLrPath` (one
+    /// registration) because unit+0xA8 is still empty. CONFIRMED structure and count (Unicorn, `births_emu.py` C6).
+    pub(crate) fn pr_unit_created(&mut self, k: ObjKey) {
+        if self.pr_objs.unit_path.contains_key(&k) {
+            return;
         }
-        self.pr_units += 1;
+        let h = self.pr.register();
+        self.pr_objs.unit_path.insert(k, h);
     }
 
-    /// Sync-registry hook: a path request creates a `CLrPath` object (`0x6F49B680`) that is released when the
-    /// request finishes. UNSURE: the real object lifetime (the request may be kept by the mover); modelled as a
-    /// register followed by an immediate unregister, which advances `Y` by one and leaves `X` unchanged.
-    pub(crate) fn pr_path_request(&mut self) {
-        let h = self.pr.register();
-        self.pr.unregister(h);
+    /// Sync-registry hook, a mover start (`0x6F474D40` and its siblings `0x6F475030`, `0x6F475230`, `0x6F493620`):
+    /// a `CPrClusterGen` is created and attached (one registration), the unit joins it as its only member, and the
+    /// flush `0x6F493590` creates one `CPrCluster` plus its `CLrPath` for the member (two registrations) before it
+    /// releases the generator. Net: three registrations (Y + 3), the generator's slot is the first free one again.
+    /// CONFIRMED counts (Unicorn C1, C2, C5); that a unit's previous cluster pair is released at the next walk is
+    /// UNSURE (`pr_walk_release`).
+    pub(crate) fn pr_mover_start(&mut self, k: ObjKey) {
+        let generator = self.pr.register();
+        let cluster = self.pr.register();
+        let path = self.pr.register();
+        self.pr.unregister(generator);
+        if let Some(old) = self.pr_objs.cluster.insert(k, (cluster, path)) {
+            self.pr_objs.release.push(old);
+        }
+    }
+
+    /// Sync-registry hook, a unit stops moving for good (order finished or cleared, removal): its cluster pair is
+    /// released by the next walk (`0x6F493410` -> slot 4 `0x6F493130`, which unregisters the path and then the
+    /// cluster, CONFIRMED count 2 by Unicorn C7). UNSURE: the trigger (the walk releases a cluster without a live member).
+    pub(crate) fn pr_mover_idle(&mut self, k: ObjKey) {
+        if let Some(old) = self.pr_objs.cluster.remove(&k) {
+            self.pr_objs.release.push(old);
+        }
+    }
+
+    /// Sync-registry hook, a missile launch: the missile's mover starts like a unit's (three registrations); the pair
+    /// is released at the impact. UNSURE: the missile object's own registrations (behaviour object) are not modelled.
+    pub(crate) fn pr_missile_launch(&mut self) {
+        let generator = self.pr.register();
+        let cluster = self.pr.register();
+        let path = self.pr.register();
+        self.pr.unregister(generator);
+        self.pr_objs.missiles.push_back((cluster, path));
+    }
+
+    /// Sync-registry hook, a missile impact: the oldest launched missile's pair is released at the next walk.
+    pub(crate) fn pr_missile_impact(&mut self) {
+        if let Some(old) = self.pr_objs.missiles.pop_front() {
+            self.pr_objs.release.push(old);
+        }
+    }
+
+    /// Sync-registry hook, a unit removal: the mover path goes with the unit; the cluster pair is released by the walk.
+    pub(crate) fn pr_unit_removed(&mut self, k: ObjKey) {
+        self.pr_mover_idle(k);
+        if let Some(h) = self.pr_objs.unit_path.remove(&k) {
+            self.pr.unregister(h);
+        }
+    }
+
+    /// The movement walk (`0x6F483300`) releases the clusters that lost their members: path first, then the cluster.
+    pub(crate) fn pr_walk_release(&mut self) {
+        for (cluster, path) in std::mem::take(&mut self.pr_objs.release) {
+            self.pr.unregister(path);
+            self.pr.unregister(cluster);
+        }
     }
 
     /// The world origin of the cell storage: `(min x, min y)` of the playable area, or zero before a host sets one
@@ -166,7 +228,7 @@ impl Game {
     /// the init reads the position back through the normaliser and writes it again (CONFIRMED structure of
     /// `0x6F2A0E30`).
     pub fn place_new_unit(&mut self, k: ObjKey, x: F32, y: F32) {
-        self.pr_unit_created();
+        self.pr_unit_created(k);
         self.store_unit_position(k, x, y);
         let (x, y) = {
             let u = self.unit(k);
@@ -345,5 +407,40 @@ const EMBEDDED: &[[u32; 8]] = &[
         // Below the lower bound: min, and the upper bound is not applied.
         let (x, _) = clamp_to_playable(p, F32::from_bits(0x4300_0000), inside.1);
         assert_eq!(x, p.min_x);
+    }
+    #[test]
+    fn registrations_follow_the_movement_object_counts() {
+        // docs/spec/lockstep.md section 17 (counts CONFIRMED by tools/emu/births_emu.py): a unit's mover path is one
+        // registration, a mover start is three (generator, cluster, path) with the generator released again, and a
+        // cluster pair is released path first, then cluster.
+        let mut g = Game::new();
+        let u = ObjKey(0);
+        g.pr_unit_created(u);
+        assert_eq!(g.pr.world_words().f50, 1);
+        g.pr_unit_created(u); // creating twice is not a second birth
+        assert_eq!(g.pr.world_words().f50, 1);
+        g.pr_mover_start(u);
+        let w = g.pr.world_words();
+        assert_eq!((w.f50, w.f1c, w.f40), (4, 4, 1)); // slots: path 0, generator 1 (free), cluster 2, path 3
+        g.pr_mover_start(u); // the old pair waits for the walk
+        let w = g.pr.world_words();
+        assert_eq!((w.f50, w.f1c, w.f40), (7, 6, 1));
+        g.pr_walk_release();
+        let w = g.pr.world_words();
+        // released path (3), then cluster (2): the last freed slot is the free-list head
+        assert_eq!((w.f50, w.f40), (7, 2));
+        g.pr_unit_removed(u);
+        assert_eq!(g.pr.world_words().f50, 7);
+    }
+
+    #[test]
+    fn missiles_release_oldest_first() {
+        let mut g = Game::new();
+        g.pr_missile_launch();
+        g.pr_missile_launch();
+        assert_eq!(g.pr.world_words().f50, 6);
+        g.pr_missile_impact();
+        g.pr_walk_release();
+        assert_eq!(g.pr_objs.missiles.len(), 1);
     }
 }
