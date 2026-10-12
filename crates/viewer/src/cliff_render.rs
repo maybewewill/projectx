@@ -1,28 +1,37 @@
 //! Cliff models: find cliff tiles, load their MDX models and place their triangles in the terrain.
 //!
-//! A tile is a cliff tile when its four corners do not share one cliff layer. The model name is
-//! chosen from the corner levels relative to the lowest corner (so a flat-bottomed tile at layers
-//! 5,5,5,6 is `CliffsAAAB0`), and the model is placed at the tile centre on the lowest corner's
-//! height. Placement is presentation only: the positions are not verified against the game.
+//! A tile is a cliff tile when its four corners do not share one cliff layer. Its cliff type
+//! comes from the map's cliff tileset list and `TerrainArt\CliffTypes.slk` (see
+//! [`crate::terrain_objects::tile_cliff`]), so a CityCliffs map gets the `CityCliffs` models.
+//! The model name is chosen from the corner levels relative to the lowest corner (so a
+//! flat-bottomed tile at layers 5,5,5,6 is `CliffsAAAB0`), and the model is placed at the tile
+//! centre on the lowest corner's height. Placement is presentation only: the positions are not
+//! verified against the game.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use w3map::Terrain as W3eTerrain;
 
+use crate::scene_objects::Archives;
 use crate::terrain::{ground_height, Mesh, TerrainVertex, CLIFF_COLOR, TILE_SIZE};
-use crate::terrain_objects::cliff_model_path;
+use crate::terrain_objects::{cliff_model_path, tile_cliff, CliffTypes};
 
 /// Counts from one cliff scan.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct CliffStatistics {
     /// Tiles whose corners do not share one cliff layer.
     pub cliff_tiles_found: usize,
     /// Cliff tiles that were drawn with a model.
     pub tiles_modeled: usize,
-    /// Distinct model paths that were read and parsed.
+    /// Distinct model paths that were read, parsed and placed.
     pub models_loaded: usize,
-    /// Distinct model paths that were not found or did not parse.
+    /// Distinct model paths that were wanted by a tile but not found (or did not parse), after
+    /// the variation-0 fallback. Tiles that have a model through the fallback do not count.
     pub models_missing: usize,
+    /// The paths counted in `models_missing`, sorted.
+    pub missing_paths: Vec<String>,
+    /// Cliff tiles whose cliff id is not in `CliffTypes.slk`: drawn with the default folder.
+    pub tiles_default_type: usize,
 }
 
 /// The result of scanning a terrain for cliffs.
@@ -88,41 +97,35 @@ fn push_triangle(mesh: &mut Mesh, tri: [[f32; 3]; 3]) {
 
 /// Model cache over the archives: each path is read once, later archives override earlier ones.
 struct ModelCache<'a, 'b> {
-    archives: &'a [mpq::Archive<'b>],
+    archives: &'a Archives<'b>,
     models: HashMap<String, Option<mdx::Model>>,
 }
 
 impl ModelCache<'_, '_> {
-    /// Returns the model at `path`, reading it on first use. Counts the first outcome per path.
-    fn get(&mut self, path: &str, stats: &mut CliffStatistics) -> Option<&mdx::Model> {
+    /// Returns the model at `path`, reading it on first use. `None` when it is not in the
+    /// archives or does not parse.
+    fn get(&mut self, path: &str) -> Option<&mdx::Model> {
         if !self.models.contains_key(path) {
-            let model = self.archives.iter().rev().find_map(|archive| {
-                let bytes = archive.read(path).ok()?;
-                mdx::Model::parse(&bytes).ok()
-            });
-            if model.is_some() {
-                stats.models_loaded += 1;
-            } else {
-                stats.models_missing += 1;
-            }
+            let model = self
+                .archives
+                .read(path)
+                .and_then(|bytes| mdx::Model::parse(&bytes).ok());
             self.models.insert(path.to_string(), model);
         }
         self.models.get(path).and_then(Option::as_ref)
     }
 }
 
-/// Scans `terrain` for cliff tiles of `cliff_tileset` and places their models.
-///
-/// `archives` are the game archives in load order (later ones override earlier ones).
-pub fn plan_cliffs(terrain: &W3eTerrain, cliff_tileset: &str, archives: &[&[u8]]) -> CliffPlan {
-    let opened: Vec<mpq::Archive<'_>> = archives
-        .iter()
-        .filter_map(|bytes| mpq::Archive::open(bytes).ok())
-        .collect();
+/// Scans `terrain` for cliff tiles, picks each tile's cliff type from `types` and places the
+/// model of that type. `archives` are the game archives in load order (later ones override).
+pub fn plan_cliffs(terrain: &W3eTerrain, types: &CliffTypes, archives: &Archives<'_>) -> CliffPlan {
     let mut cache = ModelCache {
-        archives: &opened,
+        archives,
         models: HashMap::new(),
     };
+    // Distinct model paths that were placed, and the first candidate of each tile that found none.
+    let mut used = BTreeSet::new();
+    let mut missing = BTreeSet::new();
 
     let width = terrain.width as usize;
     let (tiles_x, tiles_y) = (width.saturating_sub(1), (terrain.height as usize).saturating_sub(1));
@@ -142,10 +145,22 @@ pub fn plan_cliffs(terrain: &W3eTerrain, cliff_tileset: &str, archives: &[&[u8]]
             }
             plan.stats.cliff_tiles_found += 1;
 
-            let path = cliff_model_path(cliff_tileset, relative_corner_layers(layers), 0);
-            let Some(model) = cache.get(&path, &mut plan.stats) else {
+            let tile = tile_cliff(corners, &terrain.cliff_tilesets, types);
+            if !tile.from_table {
+                plan.stats.tiles_default_type += 1;
+            }
+            // The tile's variation first, then variation 0, which every cliff type has.
+            let relative = relative_corner_layers(layers);
+            let candidates: Vec<String> = [tile.variation, 0]
+                .iter()
+                .map(|&variation| cliff_model_path(&tile.model_dir, relative, u32::from(variation)))
+                .collect();
+            let Some(path) = candidates.iter().find(|p| cache.get(p).is_some()).cloned() else {
+                missing.extend(candidates);
                 continue;
             };
+            used.insert(path.clone());
+            let model = cache.get(&path).expect("the path was just found");
 
             // Centre of the tile, on the height of its lowest corner (cliff layer included).
             let origin = [
@@ -165,6 +180,9 @@ pub fn plan_cliffs(terrain: &W3eTerrain, cliff_tileset: &str, archives: &[&[u8]]
             plan.stats.tiles_modeled += 1;
         }
     }
+    plan.stats.models_loaded = used.len();
+    plan.stats.models_missing = missing.len();
+    plan.stats.missing_paths = missing.into_iter().collect();
     plan
 }
 

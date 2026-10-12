@@ -24,31 +24,34 @@ use raster::{Canvas, View, CLASS_DOODAD, CLASS_UNIT};
 /// Archives in priority order: a later archive overrides an earlier one. Names are matched
 /// exactly first, then case-insensitively through each archive's `(listfile)` (the game
 /// matches names case-insensitively, and SLK paths differ in case from the archive names).
-pub struct Archives {
-    files: Vec<Vec<u8>>,
-    /// Lower-cased name to the archive's own spelling, per archive, in priority order.
-    names: Vec<HashMap<String, String>>,
+/// The archives are opened once and borrow the bytes they were read from.
+pub struct Archives<'a> {
+    /// Each opened archive with its lower-cased name to the archive's own spelling.
+    archives: Vec<(mpq::Archive<'a>, HashMap<String, String>)>,
 }
 
-impl Archives {
-    pub fn new(files: Vec<Vec<u8>>) -> Self {
-        let names = files
+impl<'a> Archives<'a> {
+    /// `files` are the archive bytes in priority order (later ones win). Archives that do not
+    /// open are skipped.
+    pub fn new(files: &[&'a [u8]]) -> Self {
+        let archives = files
             .iter()
-            .map(|bytes| {
-                mpq::Archive::open(bytes)
-                    .and_then(|a| a.listfile())
+            .filter_map(|bytes| mpq::Archive::open(bytes).ok())
+            .map(|archive| {
+                let names = archive
+                    .listfile()
                     .map(|list| list.into_iter().map(|n| (n.to_ascii_lowercase(), n)).collect())
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                (archive, names)
             })
             .collect();
-        Self { files, names }
+        Self { archives }
     }
 
     /// Reads a file from the last archive that has it.
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
         let lower = name.to_ascii_lowercase();
-        self.files.iter().zip(&self.names).rev().find_map(|(bytes, names)| {
-            let archive = mpq::Archive::open(bytes).ok()?;
+        self.archives.iter().rev().find_map(|(archive, names)| {
             archive.read(name).ok().or_else(|| {
                 let spelled = names.get(&lower)?;
                 archive.read(spelled).ok()
@@ -75,7 +78,7 @@ fn clean_path(text: &str) -> String {
 }
 
 /// Reads the `file` column of one SLK table into a type-id map; missing files are notes.
-fn load_table(archives: &Archives, name: &str, out: &mut HashMap<[u8; 4], String>, notes: &mut Vec<String>) {
+fn load_table(archives: &Archives<'_>, name: &str, out: &mut HashMap<[u8; 4], String>, notes: &mut Vec<String>) {
     let Some(bytes) = archives.read(name) else {
         notes.push(format!("{name} not found in the archives"));
         return;
@@ -96,7 +99,7 @@ fn load_table(archives: &Archives, name: &str, out: &mut HashMap<[u8; 4], String
 }
 
 impl Catalog {
-    pub fn load(archives: &Archives) -> Self {
+    pub fn load(archives: &Archives<'_>) -> Self {
         let mut c = Catalog::default();
         let mut notes = Vec::new();
         load_table(archives, "Doodads\\Doodads.slk", &mut c.doodads, &mut notes);
@@ -256,7 +259,7 @@ fn mesh_of(model: &Model, tint_base: Option<[u8; 3]>) -> Mesh {
 /// SLK model paths have no extension or a `.mdl` one; the archives store `.mdx` files.
 /// Loads and parses a model; the error names the first candidate that failed to parse, or
 /// says that no candidate exists in the archives.
-fn load_model(archives: &Archives, path: &str) -> Result<Model, String> {
+fn load_model(archives: &Archives<'_>, path: &str) -> Result<Model, String> {
     let stem = [".mdl", ".mdx", ".MDL", ".MDX"]
         .iter()
         .find_map(|ext| path.strip_suffix(ext))
@@ -320,7 +323,7 @@ fn grow(bounds: &mut Option<([f32; 3], [f32; 3])>, w: [f32; 3]) {
 }
 
 /// Renders the instances into an RGB canvas. Returns the canvas and a report.
-pub fn render(instances: &[Instance], archives: &Archives, width: usize, height: usize) -> (Canvas, RenderReport) {
+pub fn render(instances: &[Instance], archives: &Archives<'_>, width: usize, height: usize) -> (Canvas, RenderReport) {
     let mut cache: HashMap<String, Option<Mesh>> = HashMap::new();
     let mut missing = Vec::new();
     let mut models_loaded = 0;
@@ -458,7 +461,9 @@ pub fn cli(args: &[String]) -> Result<(), Box<dyn Error>> {
     let (Some(map), Some(out)) = (map, out) else {
         return Err("usage: viewer --map MAP --mpq ARCHIVE [--mpq ...] --objects-png OUT.png".into());
     };
-    let archives = Archives::new(mpqs.iter().map(std::fs::read).collect::<Result<_, _>>()?);
+    let archive_bytes: Vec<Vec<u8>> = mpqs.iter().map(std::fs::read).collect::<Result<_, _>>()?;
+    let sources: Vec<&[u8]> = archive_bytes.iter().map(Vec::as_slice).collect();
+    let archives = Archives::new(&sources);
     let map_bytes = std::fs::read(&map)?;
 
     let catalog = Catalog::load(&archives);

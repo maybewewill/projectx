@@ -184,11 +184,21 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         terrain.mesh.ground.quad_count() + terrain.mesh.overlays.quad_count()
     );
 
-    let cliffs = terrain.cliffs;
+    let cliffs = terrain.cliffs.clone();
     eprintln!(
-        "viewer: cliffs: {} tiles found, {} drawn with a model; {} models loaded, {} missing",
-        cliffs.cliff_tiles_found, cliffs.tiles_modeled, cliffs.models_loaded, cliffs.models_missing
+        "viewer: cliffs: {} tiles found, {} drawn with a model; {} models loaded, {} missing; {} tiles with a cliff id not in CliffTypes.slk",
+        cliffs.cliff_tiles_found,
+        cliffs.tiles_modeled,
+        cliffs.models_loaded,
+        cliffs.models_missing,
+        cliffs.tiles_default_type
     );
+    for path in cliffs.missing_paths.iter().take(8) {
+        eprintln!("viewer: cliff model not found: {path}");
+    }
+    if let Some(ids) = cliff_tileset_ids(&map_bytes) {
+        eprintln!("viewer: cliff tilesets of the map: {}", ids.join(" "));
+    }
     if let Some(out) = dump_atlas {
         let size = terrain.atlas.size;
         offscreen::write_png(&out, size, size, &terrain.atlas.rgba)?;
@@ -215,6 +225,20 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         None => viewer::run_terrain(terrain)?,
     }
     Ok(())
+}
+
+/// Cliff ids listed in a map's `war3map.w3e`, for the summary line (`None` if unreadable).
+#[cfg(not(target_arch = "wasm32"))]
+fn cliff_tileset_ids(map: &[u8]) -> Option<Vec<String>> {
+    let archive = mpq::Archive::open(map).ok()?;
+    let terrain = w3map::Terrain::parse(&archive.read("war3map.w3e").ok()?).ok()?;
+    Some(
+        terrain
+            .cliff_tilesets
+            .iter()
+            .map(|id| String::from_utf8_lossy(id).into_owned())
+            .collect(),
+    )
 }
 
 /// `viewer --ui FDF_NAME [--mpq archive]... [--race human|orc|nightelf|undead] [--offscreen out.png] [--size WxH]`.
