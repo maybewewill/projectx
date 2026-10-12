@@ -236,7 +236,46 @@ fn emit_frame(
     if let Some(run) = text_run(node, i, rect, lib)? {
         out.items.push(DrawItem::Text(run));
     }
+    if let Some(run) = button_label(node, i, rect, lib)? {
+        out.items.push(DrawItem::Text(run));
+    }
     Ok(())
+}
+
+/// The label of a button: `NormalText "<String template>" "<StringList key>"`. The template gives the
+/// font and colour, the key is looked up in the StringList entries (its own text when there is none),
+/// and the label is centred in the button.
+fn button_label(
+    node: &crate::scene::Node,
+    i: usize,
+    rect: Rect,
+    lib: &Library,
+) -> Result<Option<TextRun>, DrawError> {
+    let Some(prop) = props::last(&node.props, "NormalText") else {
+        return Ok(None);
+    };
+    let (Some(template), Some(key)) = (
+        prop.values.first().and_then(|v| v.as_text()),
+        prop.values.get(1).and_then(|v| v.as_text()),
+    ) else {
+        return Ok(None);
+    };
+    let Ok(block) = lib.block(template) else {
+        return Ok(None);
+    };
+    let font = props::font(&block.props, "Font").map_err(|e| derr(&node.name, e))?;
+    let color = props::color(&block.props, "FontColor")
+        .map_err(|e| derr(&node.name, e))?
+        .unwrap_or([1.0; 4]);
+    Ok(Some(TextRun {
+        node: i,
+        rect,
+        text: lib.decorate(true, key),
+        font,
+        color,
+        justify_h: JustifyH::Center,
+        justify_v: JustifyV::Middle,
+    }))
 }
 
 /// A text run for a node with a `Text` property. Frame text uses

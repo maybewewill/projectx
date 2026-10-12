@@ -45,10 +45,13 @@ pub const RESOURCE_BAR_HEIGHT: f32 = 0.0218;
 pub const UPPER_BAR_WIDTH: f32 = 0.34;
 pub const UPPER_BAR_HEIGHT: f32 = 0.022;
 
-/// The host placements of the top frames: the top bar (ResourceBarFrame) at the safe area's
-/// TOPRIGHT corner, and the upper menu bar (UpperButtonBarFrame) at its TOPLEFT corner.
-pub fn top_placements(safe: fdf::layout::Rect) -> fdf::layout::ExternalFrames {
+/// The host placements of the root frames: the console (ConsoleUI) fills the 4:3 safe area, so its
+/// art pieces, anchored to its left and right edges, tile without a gap whatever the window's aspect.
+/// The top bar (ResourceBarFrame) sits at the safe area's TOPRIGHT corner and the upper menu bar
+/// (UpperButtonBarFrame) at its TOPLEFT corner.
+pub fn host_placements(safe: fdf::layout::Rect) -> fdf::layout::ExternalFrames {
     let mut placed = fdf::layout::ExternalFrames::new();
+    placed.insert("consoleui".to_string(), safe);
     placed.insert(
         "resourcebarframe".to_string(),
         fdf::layout::Rect::new(safe.right - RESOURCE_BAR_WIDTH, safe.top - RESOURCE_BAR_HEIGHT, safe.right, safe.top),
@@ -58,6 +61,86 @@ pub fn top_placements(safe: fdf::layout::Rect) -> fdf::layout::ExternalFrames {
         fdf::layout::Rect::new(safe.left, safe.top - UPPER_BAR_HEIGHT, safe.left + UPPER_BAR_WIDTH, safe.top),
     );
     placed
+}
+
+/// The gap in the top console art, as offsets from the safe area's left edge: ConsoleTexture02 is
+/// drawn at the strip's two ends only (left piece 0.256 + 0.087 wide, right piece ends 0.288 from the
+/// right edge and is 0.053 wide), so the strip is open from 0.343 to 0.459.
+pub const TOP_GAP: (f32, f32) = (0.256 + 0.087, 0.8 - 0.288 - 0.053);
+
+/// Fills the top console gap with the middle of ConsoleTexture02 (TexCoord 0.33984375 .. 0.79296875,
+/// the part ConsoleUI.fdf never draws; the texture is 0.256 wide at the strip's scale). Drawn first, so
+/// the upper menu bar and the resource bar paint over it. Returns `false` when the texture is missing.
+pub fn install_top_fill(scene: &mut UiScene) -> bool {
+    let safe = scene.screen.safe;
+    if !scene.textures.contains_key("ConsoleTexture02") {
+        return false;
+    }
+    let (left, right) = TOP_GAP;
+    let rect = Rect::new(safe.left + left, safe.top - 0.032, safe.left + right, safe.top);
+    scene.draw_list.items.insert(
+        0,
+        DrawItem::Quad(Quad {
+            node: 0,
+            kind: QuadKind::Texture,
+            rect,
+            texture: "ConsoleTexture02".to_string(),
+            uv: [0.33984375, 0.79296875, 0.0, 0.125],
+            alpha: fdf::props::AlphaMode::AlphaKey,
+            tile: false,
+        }),
+    );
+    true
+}
+
+/// Key of the 1x1 black texture the empty command slots are drawn with.
+pub const EMPTY_SLOT_KEY: &str = "hud-empty-slot";
+
+/// Side of an empty command button, in UI units (the game's command button is 0.039 wide).
+pub const COMMAND_SLOT_SIZE: f32 = 0.039;
+
+/// Centres of the command card's 4 columns and 3 rows, in UI units. Measured on the console art at
+/// 4:3 (1600 px per UI unit): the wooden bars of the card's wire grid are at x 1052, 1122 and 1192
+/// px, the card spans x 985 .. 1260 px, and its rows are split at y 812 and 882 px (top beam to
+/// bottom beam, 745 .. 950 px).
+pub const COMMAND_COLUMNS: [f32; 4] = [0.63672, 0.67969, 0.72344, 0.76641];
+pub const COMMAND_ROWS: [f32; 3] = [0.11325, 0.07031, 0.02731];
+
+/// The empty slot picture: a 64 x 64 square, near black inside with a 3-texel brown bevel (about 3 px
+/// on screen), generated here so no game file is needed. The card's interior is already black in the
+/// art, so the bevel is what makes the slot visible.
+pub fn empty_slot_texture() -> Result<TextureData, String> {
+    const SIZE: usize = 64;
+    const BEVEL: usize = 3;
+    let mut rgba = Vec::with_capacity(SIZE * SIZE * 4);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let edge = x < BEVEL || y < BEVEL || x >= SIZE - BEVEL || y >= SIZE - BEVEL;
+            let px: [u8; 4] = if edge { [92, 70, 44, 255] } else { [14, 12, 10, 255] };
+            rgba.extend_from_slice(&px);
+        }
+    }
+    TextureData::from_rgba(SIZE as u32, SIZE as u32, rgba).map_err(|e| e.to_string())
+}
+
+/// Draws the twelve empty command slots (4 x 3, row-major from the top left) on the card's wire grid.
+pub fn install_command_slots(scene: &mut UiScene) -> Result<(), String> {
+    scene.textures.insert(EMPTY_SLOT_KEY.to_string(), empty_slot_texture()?);
+    let half = COMMAND_SLOT_SIZE / 2.0;
+    for &row in &COMMAND_ROWS {
+        for &col in &COMMAND_COLUMNS {
+            scene.draw_list.items.push(DrawItem::Quad(Quad {
+                node: 0,
+                kind: QuadKind::Texture,
+                rect: Rect::new(col - half, row - half, col + half, row + half),
+                texture: EMPTY_SLOT_KEY.to_string(),
+                uv: [0.0, 1.0, 0.0, 1.0],
+                alpha: fdf::props::AlphaMode::Opaque,
+                tile: false,
+            }));
+        }
+    }
+    Ok(())
 }
 
 /// Finds the minimap and draws its quad under the console art (first in the draw list), so the
@@ -140,12 +223,12 @@ pub fn minimap_window(art: fdf::layout::Rect) -> fdf::layout::Rect {
 /// The texture quad whose corner sits at the bottom-left corner of the window: the console's
 /// bottom-left art block. Returns its scene node and rectangle.
 fn bottom_left_art(scene: &UiScene) -> Option<(usize, Rect)> {
-    let window = scene.screen.window;
+    let safe = scene.screen.safe;
     scene.draw_list.items.iter().find_map(|item| match item {
         DrawItem::Quad(q)
             if q.kind == QuadKind::Texture
-                && (q.rect.left - window.left).abs() < 1e-4
-                && (q.rect.bottom - window.bottom).abs() < 1e-4 =>
+                && (q.rect.left - safe.left).abs() < 1e-4
+                && (q.rect.bottom - safe.bottom).abs() < 1e-4 =>
         {
             Some((q.node, q.rect))
         }
@@ -286,7 +369,7 @@ mod tests {
     #[test]
     fn resource_bar_sits_at_the_safe_area_top_right() {
         let safe = fdf::layout::Rect::new(0.0, 0.0, 0.8, 0.6);
-        let placed = top_placements(safe);
+        let placed = host_placements(safe);
         let r = placed["resourcebarframe"];
         assert!((r.right - 0.8).abs() < 1e-6 && (r.top - 0.6).abs() < 1e-6);
         assert!((r.width() - RESOURCE_BAR_WIDTH).abs() < 1e-6);
@@ -325,6 +408,39 @@ mod tests {
         assert_eq!(scissor_px(window, window, 800, 600), (0, 0, 800, 600));
         // The top half of the window, in y-down pixels.
         assert_eq!(scissor_px(Rect::new(0.0, 0.3, 0.8, 0.6), window, 800, 600), (0, 0, 800, 300));
+    }
+
+    #[test]
+    fn console_is_placed_on_the_safe_area_so_its_pieces_meet() {
+        let safe = fdf::layout::Rect::new(0.0, 0.0, 0.8, 0.6);
+        let placed = host_placements(safe);
+        assert_eq!(placed["consoleui"], safe);
+    }
+
+    #[test]
+    fn command_card_has_twelve_slots_inside_the_wire_grid() {
+        let mut scene = empty_scene(&["ConsoleUI"]);
+        install_command_slots(&mut scene).unwrap();
+        let slots: Vec<Rect> = scene
+            .draw_list
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                DrawItem::Quad(q) if q.texture == EMPTY_SLOT_KEY => Some(q.rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(slots.len(), 12);
+        // Every slot lies inside the card (x 0.615 .. 0.79, y 0.0 .. 0.15) and no two overlap.
+        for r in &slots {
+            assert!(r.left > 0.615 && r.right < 0.79 && r.bottom > 0.0 && r.top < 0.15, "{r:?}");
+        }
+        for (i, a) in slots.iter().enumerate() {
+            for b in &slots[i + 1..] {
+                let overlap = a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
+                assert!(!overlap, "{a:?} overlaps {b:?}");
+            }
+        }
     }
 
     #[test]

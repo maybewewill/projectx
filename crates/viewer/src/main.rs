@@ -444,7 +444,7 @@ fn run_sim(run: SimRun) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut hud = match run.args.hud.as_deref() {
         None => None,
-        Some(race) => Some(load_hud(race, &run.args.computers, &map_bytes, &sources)?),
+        Some(race) => Some(load_hud(race, &run.args.computers, &map_bytes, &sources, run.size)?),
     };
 
     let frames = run.args.frames.unwrap_or(1).max(1);
@@ -505,14 +505,17 @@ fn load_hud(
     computers: &[(u32, Option<u32>)],
     map: &[u8],
     sources: &[&[u8]],
+    size: (u32, u32),
 ) -> Result<HudState, Box<dyn std::error::Error>> {
     use viewer::{hud, minimap::MinimapBase, ui::UiScene};
 
     // The library keys frame names in lower case. ResourceBarFrame is its own FDF in the game (the top
     // bar texts are its children), so it is laid out with the console.
-    let placed = hud::top_placements(fdf::layout::Rect::new(0.0, 0.0, 0.8, 0.6));
-    let mut scene = UiScene::from_mpq_frames_placed(&["consoleui", "resourcebarframe", "upperbuttonbarframe"], sources, race, &placed)?;
+    let placed = hud::host_placements(fdf::layout::Rect::new(0.0, 0.0, 0.8, 0.6));
+    let mut scene = UiScene::from_mpq_frames_sized(&["consoleui", "resourcebarframe", "upperbuttonbarframe"], sources, race, &placed, size)?;
     let slot = hud::install_minimap(&mut scene);
+    hud::install_top_fill(&mut scene);
+    hud::install_command_slots(&mut scene)?;
     let base = match hud::map_picture(map) {
         Some(picture) => {
             eprintln!("viewer: hud: minimap picture war3mapMap.blp {}x{}", picture.width, picture.height);
