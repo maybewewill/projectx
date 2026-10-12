@@ -737,7 +737,12 @@ impl TerrainScene {
         let (instances, mut placements) = crate::scene_objects::placements(map, &catalog);
         placements.notes.extend(catalog.notes.iter().cloned());
         let objects = crate::scene_objects::place_on_terrain(&instances, &terrain, &mut props);
-        let (prop_scene, flat_props) = props.finish();
+        let (mut prop_scene, flat_props) = props.finish();
+        // Blended props are drawn back to front for the default camera direction (the yaw and
+        // angle the window and offscreen cameras start with).
+        let (sin_v, cos_v) = crate::terrain_camera::DEFAULT_FROM_VERTICAL_DEG.to_radians().sin_cos();
+        let (sin_yaw, cos_yaw) = crate::terrain_camera::DEFAULT_YAW_DEG.to_radians().sin_cos();
+        prop_scene.sort_back_to_front([sin_v * cos_yaw, sin_v * sin_yaw, cos_v]);
         let mut scene = TerrainScene::from_terrain_modeled(&terrain, &textures, &plan.modeled)?;
         scene.mesh.cliffs.append(&flat_props);
         scene.props = prop_scene;

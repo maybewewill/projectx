@@ -56,7 +56,18 @@ fn fs_flat(input: VertexOut) -> @location(0) vec4<f32> {
 }
 
 // Model texture (props, see props.rs): the bound texture at the model UV, which may wrap.
-// Texels below alpha 0.5 are cut out; the vertex colour (the lit tint) multiplies the texel.
+// The vertex colour (the lit tint) multiplies the texel. Four variants, one per filter mode
+// group of the layer (see `props::PropBlend`):
+//   fs_model_opaque: filter mode none, the texel alpha is ignored.
+//   fs_model:        filter mode transparent (cut-out): texels below alpha 0.5 are discarded.
+//   fs_model_alpha:  filter mode blend: the texel alpha blends over the background.
+//   fs_model_add:    filter mode additive: the texel adds to the background, weighted by alpha.
+@fragment
+fn fs_model_opaque(input: VertexOut) -> @location(0) vec4<f32> {
+    let texel = textureSampleLevel(atlas, atlas_sampler, input.uv, 0.0);
+    return vec4<f32>(texel.rgb * input.color.rgb, 1.0);
+}
+
 @fragment
 fn fs_model(input: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSampleLevel(atlas, atlas_sampler, input.uv, 0.0);
@@ -64,4 +75,16 @@ fn fs_model(input: VertexOut) -> @location(0) vec4<f32> {
         discard;
     }
     return vec4<f32>(texel.rgb * input.color.rgb, 1.0);
+}
+
+@fragment
+fn fs_model_alpha(input: VertexOut) -> @location(0) vec4<f32> {
+    let texel = textureSampleLevel(atlas, atlas_sampler, input.uv, 0.0);
+    return vec4<f32>(texel.rgb * input.color.rgb, texel.a);
+}
+
+@fragment
+fn fs_model_add(input: VertexOut) -> @location(0) vec4<f32> {
+    let texel = textureSampleLevel(atlas, atlas_sampler, input.uv, 0.0);
+    return vec4<f32>(texel.rgb * input.color.rgb * texel.a, 1.0);
 }
