@@ -134,17 +134,15 @@ pub struct AiControl {
     pub settings: BTreeMap<&'static str, AiArg>,
     /// The alliance target handle (`SetAllianceTarget`), 0 when none.
     pub alliance_target: u32,
-    /// The attack captain's group size (captain record `+0xBC`, read by `CaptainIsEmpty` and `CaptainGroupSize`).
-    /// Nothing in the sim forms captain groups yet, so it stays 0 unless a host sets it (UNSURE: the writer of the
-    /// field was not found).
-    pub captain_group_size: i32,
-    /// Whether the captain has an enemy reference (`0x6F2D0A00`: either of the two refs at `+0x114`, `+0x120`
-    /// resolves), by captain: index 1 is the attack captain (`CaptainInCombat(true)`), index 0 the defense captain.
-    /// No combat tracking sets it (UNSURE).
-    pub captain_in_combat: [bool; 2],
-    /// Whether the player's threat reference (player record `+0x164`) resolves (`TownThreatened`). No threat scan sets
-    /// it (UNSURE).
+    /// The two captains: index 0 the attack captain, index 1 the defense captain (`crate::captains`). The group
+    /// size (record `+0xBC`), the combat state (enemy references `+0x114`/`+0x120`) and the full bit that the captain
+    /// natives read live in them.
+    pub captains: [crate::captains::Captain; 2],
+    /// Whether the player's threat reference (player record `+0x164`) resolves (`TownThreatened`). Set by the captain
+    /// update from a scan of enemy units near the AI's halls (UNSURE: the original's scan is not decoded).
     pub town_threatened: bool,
+    /// The handle found by the last `StartGetEnemyBase` (0 when none), read by `GetEnemyBase` (`+0x2EC`).
+    pub enemy_base: u32,
 }
 
 /// The state shared by the main VM's AI natives, the AI VMs and the host.
@@ -162,6 +160,14 @@ pub struct AiShared {
     pub events: Vec<AiEvent>,
     /// The town sites and town slots (`ai_towns.rs`).
     pub towns: crate::ai_towns::Towns,
+    /// The creep camps of the map, built at the first camp query (`crate::captains::Camps`).
+    pub camps: crate::captains::Camps,
+    /// Game seconds elapsed (`300 * row + clock`), kept by [`AiHost::step`] from the clock it is given (a report time
+    /// base; the agile clock restarts every 300 s).
+    pub elapsed: f32,
+    /// The last clock value [`AiHost::step`] saw, and the restarts counted from it.
+    pub last_clock: f32,
+    pub clock_rows: u32,
 }
 
 /// The shared AI state, as the natives and the host hold it.
@@ -345,6 +351,15 @@ impl AiHost {
     /// Runs one AI step at game time `now`: builds the VMs of the pending start requests, then runs each AI VM once
     /// in ascending player index. Returns the number of AI VMs that ran.
     pub fn step(&mut self, now: F32) -> usize {
+        {
+            let mut sh = self.shared.borrow_mut();
+            let t = now.to_f32();
+            if t < sh.last_clock {
+                sh.clock_rows += 1;
+            }
+            sh.last_clock = t;
+            sh.elapsed = sh.clock_rows as f32 * 300.0 + t;
+        }
         let requests = std::mem::take(&mut self.shared.borrow_mut().requests);
         for request in requests {
             self.start(request, now);
@@ -360,6 +375,8 @@ impl AiHost {
             if paused {
                 continue;
             }
+            // The captains move before the script runs: prune, combat state, follow-up orders, threat scan.
+            self.update_captains(player, now);
             if let Some(vm) = self.vms.get_mut(&player) {
                 vm.step(now);
                 ran += 1;
@@ -369,6 +386,23 @@ impl AiHost {
             }
         }
         ran
+    }
+
+    /// One step of the player's captains (`captains::update`) and the town threat scan.
+    fn update_captains(&mut self, player: u32, _now: F32) {
+        let mut caps = std::mem::take(&mut self.shared.borrow_mut().control_mut(player).captains);
+        let threatened;
+        {
+            let mut gm = self.game.borrow_mut();
+            for c in caps.iter_mut() {
+                crate::captains::update(&mut gm, c, player);
+            }
+            threatened = crate::captains::town_threatened(&gm, player);
+        }
+        let mut sh = self.shared.borrow_mut();
+        let ctl = sh.control_mut(player);
+        ctl.captains = caps;
+        ctl.town_threatened = threatened;
     }
 
     fn start(&mut self, request: StartRequest, now: F32) {

@@ -7,18 +7,21 @@ LIKELY (the mechanism is read, a detail is inferred), UNSURE (not fully decoded,
 
 Behaviour is written in plain words. The bodies were read in a Ghidra decompile kept outside the repo.
 
-## 1. Counts (2026-10-11, after lane G)
+## 1. Counts (2026-10-12, after S15; the older figures are in the parentheses)
 
 | | Count |
 |---|---|
 | AI natives in table `ai` | 124 |
-| Bound (`implemented: true`) | 100 (97 before lane H) |
-| Not bound (`implemented: false`, logged and return the default) | 24 (27 before lane H) |
-| Level UNSURE in total | 38 (27 unbound + 11 bound: the 7 older ones, 4 captain/threat idle values) |
-| Level CONFIRMED / LIKELY (all bound rows, 128 rows incl. the 4 main natives) | 43 / 47 |
-| Raised to CONFIRMED by a Unicorn run | 0 as a row label; the bodies of 5 town natives are Unicorn-checked (section 6) |
+| Bound (`implemented: true`) | 115 (100 after lane H, 97 before) |
+| Not bound (`implemented: false`, logged and return the default) | 9 (24, 27) |
+| Level of the bound rows: CONFIRMED / LIKELY / UNSURE | 44 / 54 / 21 (a grep of the table also counts the 4 main-VM rows) |
+| Raised to CONFIRMED by a Unicorn run | the bodies of 5 town natives (section 6), the assault request flow and the creep-camp chooser (section 9) |
 
-The 27 unbound natives are pinned by a test (`unbound_ai_natives_are_pinned`). A change in the list has to change
+The 9 unbound: `GetHeroId`, `GetHeroLevelAI`, `GetTownUnitCount`, `GetNextExpansion`, `GetExpansionPeon`, `SetExpansion`,
+`GetBuilding`, `GetMegaTarget`, `IgnoredUnits`. A 900 s run of orc vs human calls three of them (`GetExpansionPeon`
+x188, `GetMegaTarget` x9, `GetNextExpansion` x342) and gets the defaults.
+
+The unbound natives are pinned by a test (`unbound_ai_natives_are_pinned`). A change in the list has to change
 that test on purpose. Lane G bound 9: the five town natives (section 6) and four captain/threat reads (6.4).
 
 ## 2. The unbound natives and what they need (written for the 36 of the first pass; 9 are bound now, see section 6)
@@ -450,3 +453,106 @@ all within 300 of the hall.
   (they do not: the callback reads a unit type record).
 * The builder loop of `0x6F2D2880` that retries other town sites after a failure; the two other callers of the search.
 * Pathing texture pixel flags beyond the whole-texture rectangle (the placement model treats every texel as blocking).
+
+## 9. Captains, assault requests, creep camps and targets (2026-10-12, S15)
+
+Code: `crates/sim/src/captains.rs` (the model), `crates/sim/src/natives/ai.rs` (the bindings), the Unicorn harnesses
+`tools/emu/captain_assault_emu.py` and `tools/emu/creep_camp_emu.py`, their vectors in `crates/sim/tests/vectors/` and
+the replay `crates/sim/tests/captain_vectors.rs`. Behaviour tests: `crates/sim/tests/ai_natives.rs` (three new). The
+bodies were read in IDA (the user's `game.dll.i64`); nothing of the pseudo-C is in the repo.
+
+### 9.1 What the original has
+* The AI state holds an attack captain (reached by `0x6F2CFEB0` from the reference at `+0x2AC`) and a defense captain
+  (`0x6F2CFED0`). A captain is a mover of its own: position getter (vtable slot `0xB8`), home, goal point and goal
+  radius, mode word `+0x64`, flag word `+0x6C`, enemy references `+0x114`/`+0x120`. The members follow it through the
+  group routines `0x6F2AB2D0/0x6F2AB3E0/0x6F26EF10`. CONFIRMED structure; the mover itself is not modelled.
+* `InitAssault` (`0x6F2D4DF0`) sets bit 1 of the attack captain's flag word (CONFIRMED). `CaptainIsFull` reads it.
+* `AddAssault(qty, type)` (`0x6F2DD9C0` -> `0x6F2D96F0` -> request `0x6F2D6EA0`) returns the request's value: true when
+  the quantity was met, otherwise bit 1 is cleared and the result is false (CONFIRMED; the older reading "no return
+  value" in section 3 was wrong, the body tail-calls the request). `AddDefenders` is the same request on the defense
+  captain (`0x6F2D96D0`).
+* **Request control flow, CONFIRMED by Unicorn (`captain_assault_emu.py`, 600 cases, 0 mismatches):** the type has an
+  optional morphed partner (head hunter -> berserker `ohun`/`otbk`, druid of the claw -> bear form `edoc`/`edcm`, druid
+  of the talon -> crow form `edot`/`edtm`, spirit walker -> ethereal form `ospw`/`ospm`, gargoyle -> stone form
+  `ugar`/`ugrm`). The passes run in this order, each for the type and then for the partner: group pass (`0x6F2D4F20`),
+  recruit pass flag 1 (`0x6F2D50A0`), recruit pass flag 0. After every pass the quantity is tested for zero (true).
+  A pass lowers the quantity by one per unit and returns at once when it was 1 (`(*q)-- == 1`); a quantity that starts
+  at 0 or below goes negative and never matches (quirk, kept).
+* **Group pass** (LIKELY from the decompile): units of the type that are in this captain's group count toward the
+  quantity; while the captain is attack-moving (mode 2) a member with life below 50 % (constant `0x6FAAE4D4` = 0.5) is
+  released instead. **Recruit pass** (LIKELY): units of the type of the AI player, not already in this group, skipping
+  units that are in transports, hidden or under construction (flags `0x42000000`), workers whose AI mode is not 0 or 5,
+  units in an attack order (`0xD000F`, `0xD000E`) and units of another captain whose mode word is not lower than this
+  captain's; flag 1 takes healthy units, flag 0 the rest. A recruited unit joins and gets a move order (the original
+  issues the order built by `0x6F294A40` / `0x6F294D40`).
+* **`RemoveInjuries`** (`0x6F2DDDA0` -> `0x6F2EEE50`, CONFIRMED structure): non-hero units of the attack group with life at
+  most 50 % (constant `0x6FAAE4D0`) leave it, join the defense captain and are sent to its home.
+* **Readiness** (`0x6F2E91A0`, flags (1,1) / (1,0) / (0,1) for `CaptainReadiness` / `...HP` / `...Ma`): soft-float life
+  and mana percentages of the group, heroes and other units read separately. UNSURE how the two are combined; the model
+  takes the totals and the smaller of the two for the combined native.
+* **Attack-move** (`0x6F2EC7D0` XY, `0x6F2EC700` unit): mode word `+0x64` = 2, retreat bit (bit 2) cleared, the captain
+  mover is sent (`0x6F474D40`). `AttackMoveKill` does nothing when the captain's current target is the same unit
+  (`0x6F2E7530`, CONFIRMED), which is why the scripts can call it every 3 s.
+* **Home and goal tests** (`CaptainIsHome` `0x6F2DD870` -> `0x6F2E77C0`, `CaptainAtGoal` `0x6F2DD930` -> `0x6F2E77F0`, both
+  `0x6F2E76E0`): the captain's position against a point, with a radius of 500.0 (`0x6FAB4F08`) for home and the goal
+  radius for the goal (200.0 = `0x6FAB4F2C` is stored by the attack-move). The compare scale is UNSURE (the body
+  squares the radius and mixes the constants 20000.0 and 5000.0).
+* **Creep camps.** A unit is registered as a camp creep when it is created (`0x6F2E52F0`): not removed (`+0x5C & 0x100`),
+  not a structure, owned by player 12 (the neutral hostile player), and `+0x248 & 4` clear. `0x6F2E51D0` puts it into the
+  nearest camp with fewer than 12 members (`0x6F2E38A0`) if the squared pathing-cell distance to that camp's first living
+  member is below `CreepCampPathingCellDistance`^2 (**26** in the patch's `Units\MiscData.txt`; a missing key reads 0),
+  else a new camp. The camp level (`0x6F2E1C50`) is the sum of the members' levels (`0x6F2A0210`: hero level + 1, else the
+  type level), doubled for members with flag `+0x5C & 0x20000000` and `+0x200 <= 0` (the model reads that as flying).
+* **`GetCreepCamp(min, max, flyers_ok)`** (`0x6F2E3D50` -> chooser `0x6F2E3980`, CONFIRMED by Unicorn,
+  `creep_camp_emu.py`, 600 cases, 0 mismatches): walks the camps in list order; skips camps with no members or that the
+  usability test `0x6F2E1D50` rejects; takes the path cost to the camp's first living member (`0x6F4758D0`; search limit 5000,
+  lowered to the world bound + 100); a camp beyond the horizon (start 999999) is ignored; a camp whose level is above `max`,
+  or that has flyers when flyers are not allowed, pulls the horizon down to its cost + 200 (when that is lower) and drops the
+  candidates beyond it; a camp in `min..=max` competes for the lowest cost (strict, first wins), a camp below `min` is the
+  fallback. The in-range pick wins over the fallback. The native returns the first living member of the chosen camp.
+* `UnitInvis` (`0x6F2E07C0`) is the negation of a vision query; a unit without the invisibility flag `0x1000000` passes
+  the gate (CONFIRMED), so the sim, which has no invisibility, returns false.
+
+### 9.2 What the model does (and where it is UNSURE)
+* `captains.rs`: `Captain` (members, home, stage point, mode, goal, flags, combat state, departure log), the six-pass
+  `assault_flow`/`request`, `remove_injuries`, `readiness`, `is_home`/`at_goal`, `attack_move_xy`/`attack_move_kill`,
+  `go_home`, `update`. The group is driven with ordinary orders: members get `attack-move` (order `0xD0014`) to the target's
+  position; idle members are re-ordered every second, and within 900 units of a unit target they get a direct attack
+  order. The original's leader mover and formation are not modelled (UNSURE).
+* `update` runs once per AI step before the AI VMs: prunes dead members, sets the combat flag (a member has a living attack
+  target; the original: an enemy reference of the captain resolves), ends the move when the goal unit is dead, and sets
+  `TownThreatened` from a scan (an enemy fighting unit of a real player within 1500 units of one of the AI's halls; the
+  original's scan is not decoded, UNSURE).
+* Camps are built lazily at the first `GetCreepCamp`/`GetExpansionFoe` from the neutral hostile units that exist then (the
+  original registers at creation; the same result when no creep is created later). Cost = straight distance in cells * 24
+  (UNSURE: the unit of `0x6F4758D0`); levels come from the unit type level (the pick record), flyers from the movement type.
+* Targets (all UNSURE, straight-line stand-ins for the path cost): `GetEnemyBase` = the nearest enemy town hall, else the
+  nearest enemy structure (`StartGetEnemyBase` computes it at once, `WaitGetEnemyBase` is false); `GetEnemyExpansion` = the
+  latest town hall of an enemy that has two or more; `IsTowered` = more than one enemy structure with an attack within 900
+  units of the hall; `CreepsOnMap` = any living neutral hostile non-structure unit; `GetExpansionX/Y/Foe` use the nearest
+  gold mine not within 900 units of a hall, and the camp nearest to it within 1100 units. `SuicidePlayer(Units)` attack-moves
+  the group to the nearest structure (unit) of the player when its gate passes.
+* Not bound: `GetMegaTarget` (masked read of an AI state field written by a threat scan that is not decoded),
+  `IgnoredUnits`, `GetBuilding`, `GetNextExpansion`, `GetExpansionPeon`, `SetExpansion`, `GetTownUnitCount`, `GetHeroId`,
+  `GetHeroLevelAI`.
+
+### 9.3 Run: `w3boot --computer 0:orc --computer 1:human`, (2)Circumvention, 9000 steps (900 s)
+`crates/engine/src/bin/w3boot.rs` now prints, per computer, the captain state each game minute, every departure of the
+attack captain with its unit types, the first player-versus-player kill and the kills table. 0 aborted AI threads.
+* First attack wave: **orc at 330.1 s**, 4 units (blademaster, 2 grunts, a head hunter) against a creep camp; **human at
+  358.5 s**, 6 footmen against a creep camp. Later waves: orc 6 units at 455.1 s and 7 at 558.3 s; human 7 at 475.7 s.
+* Both AIs go for creep camps first, as the melee scripts do (no allies, no siege, no enemy expansion, so
+  `SingleMeleeAttack` ends in `CreepAttackEx`). The second waves of both aim at the same camp in the middle of the map; the
+  groups meet there: **first player-versus-player kill at 597.7 s**. Totals at 900 s: p0 killed 6 units of p1 and 6 creeps,
+  p1 killed 5 units of p0 and 7 creeps, creeps killed 1 unit of p0 and 2 of p1. Deaths per player: p0 6, p1 8, creeps 13.
+  The player-versus-player fight is a meeting at a camp, not an attack on a base: nothing in this run targets the enemy hall.
+* Observations: the sim has no life regeneration, so survivors stay injured (lowest member life 3-4 % late in the run);
+  after about 700 s both groups shrink to a few injured units and the waves stop (no regeneration, no reinforcement beyond
+  the production script). The AI counts that depend on the fixed 100 ms cadence of the model are UNSURE (lockstep.md 10).
+
+### 9.4 Open items
+* The captain mover, formation, the retreat rule (bit 2 is never set), the threat scan, the readiness combination, the real
+  path-cost unit, camp registration order at creation, the usability test `0x6F2E1D50`, the mega target and the remaining
+  unbound natives of section 1.
+* Unicorn-isolable next: the camp creep assignment `0x6F2E38A0` (needs the Misc reader stubbed), the readiness `0x6F2E91A0`
+  (needs a unit list), the at-goal compare `0x6F2E76E0`.

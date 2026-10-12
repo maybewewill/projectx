@@ -19,6 +19,7 @@ pub mod ai_manager;
 pub mod ai_site;
 pub mod ai_towns;
 pub mod agile;
+pub mod captains;
 pub mod cast;
 pub mod auras;
 pub mod combat;

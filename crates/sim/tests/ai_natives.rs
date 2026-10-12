@@ -511,23 +511,12 @@ function main takes nothing returns nothing
     endif
 endfunction
 "#;
-    for set in [false, true] {
-        let mut lib = library();
-        lib.add_script("idle.ai", idle);
-        let mut r = rig(main, lib);
-        if set {
-            // Host-set values are read back (the sim has no writer for them yet).
-            let mut sh = r.shared.borrow_mut();
-            let c = sh.control_mut(0);
-            c.captain_group_size = 3;
-            c.captain_in_combat = [false, true];
-            c.town_threatened = true;
-        }
-        tick(&mut r);
-        let want = if set { [0, 3, 1, 0, 1] } else { [1, 0, 0, 0, 0] };
-        let got = ["empty", "size", "atk", "def", "thr"].map(|n| ai_int(&r, 0, n));
-        assert_eq!(got, want, "host-set: {set}");
-    }
+    let mut lib = library();
+    lib.add_script("idle.ai", idle);
+    let mut r = rig(main, lib);
+    tick(&mut r);
+    let got = ["empty", "size", "atk", "def", "thr"].map(|n| ai_int(&r, 0, n));
+    assert_eq!(got, [1, 0, 0, 0, 0]);
 }
 
 /// The boolean natives whose bodies fix their value: `SetUpgrade` and `ConvertUnits` return false, `SetProduce` with
@@ -999,3 +988,181 @@ fn not_implemented_rows_say_why() {
         assert!(row.note.starts_with("NOT IMPLEMENTED: "), "{}", row.name);
     }
 }
+
+// ---- captains (docs/spec/ai-natives.md section 8) ----
+
+fn hfoo_type() -> UnitType {
+    UnitType {
+        name: "hfoo".to_string(),
+        max_life: F32::from_bits(0x42C8_0000),
+        ..Default::default()
+    }
+}
+
+fn captain_rig(main: &str, script: &str) -> Rig {
+    let mut lib = library();
+    lib.add_script("cap.ai", script);
+    rig_with(main, lib, |game| {
+        game.borrow_mut().unit_types_mut().insert(HFOO, hfoo_type());
+    })
+}
+
+/// `AddAssault` supplies units: members already in the group count first, idle units are recruited for the rest, the
+/// request returns true when the quantity is met and the full bit stays; a shortage clears the bit and returns false.
+#[test]
+fn assault_requests_fill_the_attack_group() {
+    let main = r#"
+function main takes nothing returns nothing
+    call CreateUnit(Player(0), 'hfoo', 0.0, 0.0, 0.0)
+    call CreateUnit(Player(0), 'hfoo', 64.0, 0.0, 0.0)
+    call CreateUnit(Player(0), 'hfoo', 128.0, 0.0, 0.0)
+    call StartMeleeAI(Player(0), "cap.ai")
+endfunction
+"#;
+    let ai_src = r#"
+native CreateCaptains takes nothing returns nothing
+native InitAssault takes nothing returns nothing
+native AddAssault takes integer qty, integer id returns boolean
+native CaptainGroupSize takes nothing returns integer
+native CaptainIsEmpty takes nothing returns boolean
+native CaptainReadinessHP takes nothing returns integer
+globals
+    integer ok1 = -9
+    integer size1 = -9
+    integer full1 = -9
+    integer ok2 = -9
+    integer size2 = -9
+    integer full2 = -9
+    integer hp = -9
+    integer empty0 = -9
+endglobals
+function b2i takes boolean b returns integer
+    if b then
+        return 1
+    endif
+    return 0
+endfunction
+function main takes nothing returns nothing
+    call CreateCaptains()
+    set empty0 = b2i(CaptainIsEmpty())
+    call InitAssault()
+    set ok1 = b2i(AddAssault(2, 'hfoo'))
+    set size1 = CaptainGroupSize()
+    set full1 = b2i(CaptainIsFull())
+    call InitAssault()
+    set ok2 = b2i(AddAssault(5, 'hfoo'))
+    set size2 = CaptainGroupSize()
+    set full2 = b2i(CaptainIsFull())
+    set hp = CaptainReadinessHP()
+endfunction
+"#;
+    let mut r = captain_rig(main, ai_src);
+    tick(&mut r);
+    let got = ["empty0", "ok1", "size1", "full1", "ok2", "size2", "full2", "hp"].map(|n| ai_int(&r, 0, n));
+    // 2 requested, 2 recruited, full; then 5 requested: the 2 count, 1 more is recruited, 2 are missing: not full.
+    assert_eq!(got, [1, 1, 2, 1, 0, 3, 0, 100]);
+}
+
+/// An attack-move records a departure with the group, and `CaptainAtGoal` / `CaptainIsHome` follow the group centre.
+#[test]
+fn attack_move_gives_the_group_a_goal() {
+    let main = r#"
+function main takes nothing returns nothing
+    call CreateUnit(Player(0), 'hfoo', 0.0, 0.0, 0.0)
+    call CreateUnit(Player(0), 'hfoo', 64.0, 0.0, 0.0)
+    call StartMeleeAI(Player(0), "cap.ai")
+endfunction
+"#;
+    let ai_src = r#"
+native CreateCaptains takes nothing returns nothing
+native InitAssault takes nothing returns nothing
+native AddAssault takes integer qty, integer id returns boolean
+native AttackMoveXY takes integer x, integer y returns nothing
+native CaptainAtGoal takes nothing returns boolean
+native CaptainIsHome takes nothing returns boolean
+globals
+    integer home = -9
+    integer atgoal0 = -9
+    integer atgoal1 = -9
+endglobals
+function b2i takes boolean b returns integer
+    if b then
+        return 1
+    endif
+    return 0
+endfunction
+function main takes nothing returns nothing
+    call CreateCaptains()
+    call InitAssault()
+    call AddAssault(2, 'hfoo')
+    set atgoal0 = b2i(CaptainAtGoal())
+    set home = b2i(CaptainIsHome())
+    call AttackMoveXY(30, 0)
+    set atgoal1 = b2i(CaptainAtGoal())
+endfunction
+"#;
+    let mut r = captain_rig(main, ai_src);
+    tick(&mut r);
+    // No goal yet: not at goal. The group stands at home. Goal (30, 0) is within the goal radius of the centre.
+    assert_eq!([ai_int(&r, 0, "atgoal0"), ai_int(&r, 0, "home"), ai_int(&r, 0, "atgoal1")], [0, 1, 1]);
+    let sh = r.shared.borrow();
+    let cap = &sh.control(0).expect("control").captains[0];
+    assert_eq!(cap.departures.len(), 1);
+    assert_eq!(cap.departures[0].size, 2);
+    assert_eq!(cap.mode, sim::captains::Mode::AttackMove);
+}
+
+/// Creeps group into camps and `GetCreepCamp` returns the first living member of the nearest camp whose level fits.
+#[test]
+fn creep_camps_are_found_by_distance_and_level() {
+    let main = r#"
+function main takes nothing returns nothing
+    call CreateUnit(Player(0), 'hfoo', 4000.0, 0.0, 0.0)
+    call CreateUnit(Player(12), 'hfoo', 5000.0, 0.0, 0.0)
+    call CreateUnit(Player(12), 'hfoo', 5050.0, 0.0, 0.0)
+    call CreateUnit(Player(12), 'hfoo', 9000.0, 0.0, 0.0)
+    call StartMeleeAI(Player(0), "cap.ai")
+endfunction
+"#;
+    let ai_src = r#"
+native CreateCaptains takes nothing returns nothing
+native GetCreepCamp takes integer lo, integer hi, boolean fly returns unit
+native CreepsOnMap takes nothing returns boolean
+native KillUnit takes unit u returns nothing
+globals
+    integer near = -9
+    integer none = -9
+    integer far = -9
+    integer anyc = -9
+endglobals
+function b2i takes boolean b returns integer
+    if b then
+        return 1
+    endif
+    return 0
+endfunction
+function main takes nothing returns nothing
+    local unit u
+    call CreateCaptains()
+    set anyc = b2i(CreepsOnMap())
+    set u = GetCreepCamp(0, 100, true)
+    set near = b2i(u != null)
+    call KillUnit(u)
+    set u = GetCreepCamp(0, 100, true)
+    set far = b2i(u != null)
+    set none = b2i(GetCreepCamp(5, 100, true) == null)
+endfunction
+"#;
+    let mut r = captain_rig(main, ai_src);
+    tick(&mut r);
+    let got = ["anyc", "near", "far", "none"].map(|n| ai_int(&r, 0, n));
+    assert_eq!(got[0], 1);
+    assert_eq!(got[1], 1);
+    assert_eq!(got[2], 1);
+    // Both camps are below the minimum level 5: the nearest one is returned as the fallback.
+    assert_eq!(got[3], 0);
+    let sh = r.shared.borrow();
+    assert_eq!(sh.camps.camps.len(), 2);
+    assert_eq!(sh.camps.camps[0].len(), 2);
+}
+
