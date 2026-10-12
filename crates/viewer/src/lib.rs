@@ -14,6 +14,7 @@ pub mod cliff_render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offscreen;
 pub mod model;
+pub mod props;
 pub mod renderer;
 pub mod scene;
 pub mod scene_objects;

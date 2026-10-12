@@ -54,3 +54,14 @@ fn fs_blend(input: VertexOut) -> @location(0) vec4<f32> {
 fn fs_flat(input: VertexOut) -> @location(0) vec4<f32> {
     return input.color;
 }
+
+// Model texture (props, see props.rs): the bound texture at the model UV, which may wrap.
+// Texels below alpha 0.5 are cut out; the vertex colour (the lit tint) multiplies the texel.
+@fragment
+fn fs_model(input: VertexOut) -> @location(0) vec4<f32> {
+    let texel = textureSampleLevel(atlas, atlas_sampler, input.uv, 0.0);
+    if (texel.a < 0.5) {
+        discard;
+    }
+    return vec4<f32>(texel.rgb * input.color.rgb, 1.0);
+}

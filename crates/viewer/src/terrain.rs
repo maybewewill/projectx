@@ -648,6 +648,8 @@ pub struct TerrainScene {
     pub textures_loaded: usize,
     /// Cliff scan counts (all zero when the terrain was meshed without archives).
     pub cliffs: crate::cliff_render::CliffStatistics,
+    /// Triangles that sample a model texture (cliff walls with their texture, placed objects).
+    pub props: crate::props::PropScene,
 }
 
 /// Archive path of the cliff type table: each cliff id of the map maps to a model folder and a
@@ -691,6 +693,7 @@ impl TerrainScene {
             bounds,
             textures_loaded,
             cliffs: Default::default(),
+            props: Default::default(),
         })
     }
 
@@ -721,9 +724,12 @@ impl TerrainScene {
             .map(|slk| crate::terrain_objects::CliffTypes::from_slk(&slk))
             .unwrap_or_default();
         let objects_archives = crate::scene_objects::Archives::new(sources);
-        let plan = crate::cliff_render::plan_cliffs(&terrain, &cliff_types, &objects_archives);
+        let mut props = crate::props::PropBuilder::new(&objects_archives);
+        let plan = crate::cliff_render::plan_cliffs(&terrain, &cliff_types, &mut props);
+        let (prop_scene, flat_props) = props.finish();
         let mut scene = TerrainScene::from_terrain_modeled(&terrain, &textures, &plan.modeled)?;
-        scene.mesh.cliffs.append(&plan.mesh);
+        scene.mesh.cliffs.append(&flat_props);
+        scene.props = prop_scene;
         scene.bounds = scene.mesh.bounds().unwrap_or(scene.bounds);
         scene.cliffs = plan.stats;
         Ok(scene)

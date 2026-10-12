@@ -158,6 +158,7 @@ async fn render_terrain_async(
         &texture_layout,
         &terrain.mesh,
         &terrain.atlas,
+        &terrain.props,
     );
 
     let extent = wgpu::Extent3d {

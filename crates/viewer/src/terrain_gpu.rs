@@ -11,12 +11,69 @@
 use bytemuck::cast_slice;
 use wgpu::util::DeviceExt;
 
+use crate::props::PropScene;
+use crate::scene::TextureData;
 use crate::terrain::{Atlas, Mesh, TerrainMesh, TerrainVertex};
 
 const SHADER: &str = include_str!("terrain.wgsl");
 
 /// Format of the atlas texture. Non-sRGB, like the model textures.
 const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Bind group (texture and sampler, the layout of group 1) for one RGBA8 texture.
+fn texture_bind_group(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    texture: &TextureData,
+) -> wgpu::BindGroup {
+    let size = wgpu::Extent3d {
+        width: texture.width.max(1),
+        height: texture.height.max(1),
+        depth_or_array_layers: 1,
+    };
+    let gpu = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("prop texture"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: ATLAS_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &gpu,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &texture.rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size.width * 4),
+            rows_per_image: Some(size.height),
+        },
+        size,
+    );
+    let view = gpu.create_view(&wgpu::TextureViewDescriptor::default());
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("prop texture"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
 
 struct GpuMesh {
     vertices: wgpu::Buffer,
@@ -58,15 +115,20 @@ impl GpuMesh {
 pub(crate) struct TerrainGpu {
     ground: wgpu::RenderPipeline,
     cliffs: wgpu::RenderPipeline,
+    props: wgpu::RenderPipeline,
     overlays: wgpu::RenderPipeline,
     water: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    /// Model textures wrap their UVs, unlike the atlas.
+    prop_sampler: wgpu::Sampler,
     content: Option<Content>,
 }
 
 struct Content {
     ground: Option<GpuMesh>,
     cliffs: Option<GpuMesh>,
+    /// One draw per prop batch: its texture's bind group and its mesh.
+    props: Vec<(wgpu::BindGroup, GpuMesh)>,
     overlays: Option<GpuMesh>,
     water: Option<GpuMesh>,
     atlas: wgpu::BindGroup,
@@ -157,6 +219,13 @@ impl TerrainGpu {
             true,
             wgpu::CompareFunction::Less,
         );
+        let props = make(
+            "terrain props",
+            "fs_model",
+            opaque,
+            true,
+            wgpu::CompareFunction::Less,
+        );
         let overlays = make(
             "terrain overlays",
             "fs_blend",
@@ -182,17 +251,29 @@ impl TerrainGpu {
             ..Default::default()
         });
 
+        let prop_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("terrain prop sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         TerrainGpu {
             ground,
             cliffs,
+            props,
             overlays,
             water,
             sampler,
+            prop_sampler,
             content: None,
         }
     }
 
-    /// Replaces the terrain meshes and the atlas.
+    /// Replaces the terrain meshes, the atlas and the prop textures.
     pub(crate) fn upload(
         &mut self,
         device: &wgpu::Device,
@@ -200,7 +281,17 @@ impl TerrainGpu {
         texture_layout: &wgpu::BindGroupLayout,
         mesh: &TerrainMesh,
         atlas: &Atlas,
+        props: &PropScene,
     ) {
+        let prop_draws = props
+            .batches
+            .iter()
+            .filter_map(|batch| {
+                let texture = props.textures.get(batch.texture)?;
+                let bind = texture_bind_group(device, queue, texture_layout, &self.prop_sampler, texture);
+                Some((bind, GpuMesh::new(device, "terrain prop", &batch.mesh)?))
+            })
+            .collect();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("terrain atlas"),
             size: wgpu::Extent3d {
@@ -253,6 +344,7 @@ impl TerrainGpu {
         self.content = Some(Content {
             ground: GpuMesh::new(device, "terrain ground", &mesh.ground),
             cliffs: GpuMesh::new(device, "terrain cliffs", &mesh.cliffs),
+            props: prop_draws,
             overlays: GpuMesh::new(device, "terrain overlays", &mesh.overlays),
             water: GpuMesh::new(device, "terrain water", &mesh.water),
             atlas: atlas_bind,
@@ -273,6 +365,15 @@ impl TerrainGpu {
         if let Some(mesh) = &content.cliffs {
             pass.set_pipeline(&self.cliffs);
             mesh.draw(pass);
+        }
+        if !content.props.is_empty() {
+            pass.set_pipeline(&self.props);
+            for (bind, mesh) in &content.props {
+                pass.set_bind_group(1, bind, &[]);
+                mesh.draw(pass);
+            }
+            // The overlays and water sample the atlas again.
+            pass.set_bind_group(1, &content.atlas, &[]);
         }
         if let Some(mesh) = &content.overlays {
             pass.set_pipeline(&self.overlays);

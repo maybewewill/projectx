@@ -186,9 +186,10 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let cliffs = terrain.cliffs.clone();
     eprintln!(
-        "viewer: cliffs: {} tiles found, {} drawn with a model; {} models loaded, {} missing; {} tiles with a cliff id not in CliffTypes.slk",
+        "viewer: cliffs: {} tiles found, {} drawn with a model ({} with the cliff texture); {} models loaded, {} missing; {} tiles with a cliff id not in CliffTypes.slk",
         cliffs.cliff_tiles_found,
         cliffs.tiles_modeled,
+        cliffs.tiles_textured,
         cliffs.models_loaded,
         cliffs.models_missing,
         cliffs.tiles_default_type
