@@ -28,6 +28,12 @@ use softfloat::{arith, conv, F32, Tables};
 
 use crate::pathing::grid::cell_coordinate;
 
+mod unit;
+pub use unit::{
+    capped_sight, clamp_sight, dying_sight, sight_ramp_rate, SightRecord, SightShape, UnitSightInput, MAX_SIGHT,
+    SIGHT_RAMP_SECONDS,
+};
+
 /// The fog states of the JASS constants (CONFIRMED: the values the grid lookup returns).
 pub const FOG_MASKED: i32 = 1;
 pub const FOG_FOGGED: i32 = 2;
@@ -223,6 +229,11 @@ pub struct VisionGrid {
     /// The visible and mask words, `pitch * height` entries each (index `(row << shift) + col`).
     vis: Vec<u16>,
     msk: Vec<u16>,
+    /// The elevation layer (`+0x38`): per fog cell the largest terrain cliff level of its pathing cells, times 128
+    /// (see [`VisionGrid::set_elevation_layer`]). Zero until a map's terrain sets it.
+    elev: Vec<i16>,
+    /// The sight shapes by radius (the cache at `+0x78`).
+    shapes: std::collections::BTreeMap<i32, std::sync::Arc<SightShape>>,
 }
 
 impl Default for VisionGrid {
@@ -250,6 +261,8 @@ impl VisionGrid {
             fog_enabled: true,
             vis: vec![0; n],
             msk: vec![UNEXPLORED; n],
+            elev: vec![0; n],
+            shapes: std::collections::BTreeMap::new(),
         }
     }
 
