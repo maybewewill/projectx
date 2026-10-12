@@ -359,6 +359,186 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()
     std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Renders a UI scene to RGBA8 pixels at the given resolution.
+pub fn render_ui(ui_scene: &crate::ui::UiScene, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let (width, height) = (width.max(1), height.max(1));
+    pollster::block_on(render_ui_async(ui_scene, width, height))
+}
+
+async fn render_ui_async(
+    ui_scene: &crate::ui::UiScene,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let (device, queue) = match request_device(&instance, false).await {
+        Ok(pair) => pair,
+        Err(first) => request_device(&instance, true)
+            .await
+            .map_err(|second| format!("{first}; {second}"))?,
+    };
+
+    let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("ui uniforms layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("ui texture layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+
+    // Create a dummy uniform buffer (UI doesn't use uniforms currently, but pipeline requires it)
+    #[repr(C)]
+    #[derive(Clone, Copy, Pod, Zeroable)]
+    struct Uniforms {
+        _unused: [u32; 4],
+    }
+    let uniforms = Uniforms { _unused: [0; 4] };
+    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("ui uniforms"),
+        contents: bytemuck::bytes_of(&uniforms),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("ui uniforms bind group"),
+        layout: &uniform_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniform_buffer.as_entire_binding(),
+        }],
+    });
+
+    let ui_gpu = crate::ui::gpu::UiGpu::new(
+        &device,
+        &queue,
+        FORMAT,
+        &uniform_layout,
+        &texture_layout,
+        ui_scene,
+    )?;
+
+    let extent = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let color = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("ui offscreen color"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let row_bytes = width * 4;
+    let padded = (row_bytes + 255) & !255;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("ui offscreen readback"),
+        size: (padded as u64) * (height as u64),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("ui offscreen encoder"),
+    });
+
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("ui offscreen pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(CLEAR),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_bind_group(0, &uniform_bind_group, &[]);
+        ui_gpu.render(&mut pass);
+    }
+
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &color,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(height),
+            },
+        },
+        extent,
+    );
+    queue.submit([encoder.finish()]);
+
+    let slice = readback.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| format!("device poll failed: {e}"))?;
+    receiver
+        .recv()
+        .map_err(|e| format!("readback channel closed: {e}"))?
+        .map_err(|e| format!("readback failed: {e}"))?;
+
+    let mapped = slice
+        .get_mapped_range()
+        .map_err(|e| format!("mapped range: {e}"))?;
+    let mut rgba = Vec::with_capacity((row_bytes as u64 * height as u64) as usize);
+    for row in 0..height as usize {
+        let start = row * padded as usize;
+        rgba.extend_from_slice(&mapped[start..start + row_bytes as usize]);
+    }
+    drop(mapped);
+    readback.unmap();
+    Ok(rgba)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

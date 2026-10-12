@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 blp = { path = "../blp" }
+fdf = { path = "../fdf" }
 mdx = { path = "../mdx" }
 mpq = { path = "../mpq" }
 w3map = { path = "../w3map" }

@@ -100,6 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--map") {
         return run_map(&args);
     }
+    if args.iter().any(|a| a == "--ui") {
+        return run_ui(&args);
+    }
     let opts = parse_args(&args)?;
     let Some(model_path) = opts.model.as_deref() else {
         viewer::run(Scene::builtin_cube())?;
@@ -218,6 +221,75 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("viewer: luma histogram (32-wide bins): {:?}", s.luma_histogram);
         }
         None => viewer::run_terrain(terrain)?,
+    }
+    Ok(())
+}
+
+/// `viewer --ui FDF_NAME [--mpq archive]... [--offscreen out.png] [--size WxH]`.
+///
+/// `--mpq` archives supply the FDF and texture files; give them in load order, the last one wins.
+/// With `--offscreen` the UI is drawn to a PNG file; without it the window opens.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::path::PathBuf;
+
+    use viewer::offscreen;
+    use viewer::ui::UiScene;
+
+    let mut ui_name: Option<String> = None;
+    let mut mpqs: Vec<PathBuf> = Vec::new();
+    let mut png: Option<PathBuf> = None;
+    let mut size = (1280u32, 960u32);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--ui" => ui_name = Some(it.next().ok_or("--ui needs a name")?.clone()),
+            "--mpq" => mpqs.push(it.next().ok_or("--mpq needs a file")?.into()),
+            "--offscreen" => png = Some(it.next().ok_or("--offscreen needs a file")?.into()),
+            "--size" => {
+                let text = it.next().ok_or("--size needs WxH")?;
+                let (w, h) = text.split_once('x').ok_or("--size needs WxH")?;
+                size = (w.parse()?, h.parse()?);
+            }
+            other => return Err(format!("unknown option {other}").into()),
+        }
+    }
+    let ui_name = ui_name.ok_or("usage: viewer --ui FDF_NAME [--mpq archive]... [--offscreen out.png] [--size WxH]")?;
+
+    let archive_bytes = mpqs
+        .iter()
+        .map(|path| std::fs::read(path).map_err(|e| format!("{}: {e}", path.display())))
+        .collect::<Result<Vec<Vec<u8>>, String>>()?;
+    let sources: Vec<&[u8]> = archive_bytes.iter().map(Vec::as_slice).collect();
+
+    let ui_scene = UiScene::from_mpq(&ui_name, &sources)?;
+    eprintln!(
+        "viewer: {}: {} items in draw list",
+        ui_name,
+        ui_scene.draw_list.items.len()
+    );
+
+    match png {
+        Some(out) => {
+            let (w, h) = size;
+            let rgba = offscreen::render_ui(&ui_scene, w, h)?;
+            offscreen::write_png(&out, w, h, &rgba)?;
+            let s = offscreen::summarize(w, h, &rgba);
+            eprintln!(
+                "viewer: wrote {} ({}x{}): {} distinct colours, mean RGB {:.1} {:.1} {:.1}",
+                out.display(),
+                w,
+                h,
+                s.distinct_colors,
+                s.mean_rgb[0],
+                s.mean_rgb[1],
+                s.mean_rgb[2]
+            );
+        }
+        None => {
+            eprintln!("viewer: window rendering not yet implemented for UI");
+            return Err("--offscreen is required for now".into());
+        }
     }
     Ok(())
 }
