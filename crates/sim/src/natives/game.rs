@@ -2020,8 +2020,26 @@ impl Game {
     pub fn set_playable(&mut self, playable: Option<Playable>) {
         self.playable = playable;
         self.refresh_unit_positions();
-        if let (Some(p), Some(t)) = (playable, self.vision_tables.as_ref()) {
+        self.rebuild_fog_grid();
+    }
+
+    /// Builds the fog grid from the rectangle the original's constructor reads: `0x6f00f560(edx = 0)`, the whole-map
+    /// rectangle (the terrain extent, what `GetWorldBounds` returns), not the playable area (`docs/spec/vision.md`
+    /// section 14.1). Until the whole-map rectangle is known the playable area stands in. Needs the softfloat tables.
+    /// The elevation layer is refilled from the terrain, when there is one.
+    fn rebuild_fog_grid(&mut self) {
+        let bounds = self.world_bounds.or(self.playable);
+        if let (Some(p), Some(t)) = (bounds, self.vision_tables.as_ref()) {
             self.fog.grid = crate::vision::VisionGrid::from_playable(p.min_x, p.min_y, p.max_x, p.max_y, t);
+            self.fog.sight_props.clear();
+            self.refresh_elevation_layer();
+        }
+    }
+
+    /// Refills the fog grid's elevation layer from the terrain (`0x6f406660`, run at map start in the original).
+    fn refresh_elevation_layer(&mut self) {
+        if let Some(t) = self.terrain.clone() {
+            self.fog.grid.set_elevation_layer(|x, y| t.cell_level(x, y));
         }
     }
 
@@ -2029,9 +2047,7 @@ impl Game {
     /// the grid is rebuilt from it.
     pub fn set_vision_tables(&mut self, tables: Option<softfloat::Tables>) {
         self.vision_tables = tables;
-        if let (Some(p), Some(t)) = (self.playable, self.vision_tables.as_ref()) {
-            self.fog.grid = crate::vision::VisionGrid::from_playable(p.min_x, p.min_y, p.max_x, p.max_y, t);
-        }
+        self.rebuild_fog_grid();
     }
 
     /// The unit objects of the game with their keys, in creation order (removed and dead units included; the callers
@@ -2051,6 +2067,7 @@ impl Game {
     /// Sets the whole-map rectangle returned by `GetWorldBounds` (`None` clears it).
     pub fn set_world_bounds(&mut self, bounds: Option<Playable>) {
         self.world_bounds = bounds;
+        self.rebuild_fog_grid();
     }
 
     /// The whole-map rectangle, if one is set.
@@ -2067,6 +2084,7 @@ impl Game {
                 .map(|t| Box::new(crate::terrain::SharedTerrain(t)) as Box<dyn crate::combat::CliffLevels>),
         );
         self.terrain = terrain;
+        self.refresh_elevation_layer();
     }
 
     /// The terrain corner grid, if one is set.

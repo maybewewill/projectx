@@ -235,6 +235,12 @@ impl TerrainGrid {
     /// the layer nibble of the nearest tile corner, `(c + 2) / 4` truncated (`0x6F73AFA0`), -1 outside the map
     /// (`0x6F742820`), raised to the ramp-object level when an entry of the list covers the cell.
     pub fn cell_level(&self, cx: i32, cy: i32) -> i32 {
+        self.cell_level_found(cx, cy).0
+    }
+
+    /// [`TerrainGrid::cell_level`] with the flag the original writes through its out pointer: whether a ramp object
+    /// covered the cell (`0x6F0118C0`). The unit sight writer reads it (`docs/spec/vision.md` section 14).
+    pub fn cell_level_found(&self, cx: i32, cy: i32) -> (i32, bool) {
         let base = if (cx as u32) >= 4 * self.w1() || (cy as u32) >= 4 * self.h1() {
             -1
         } else {
@@ -244,8 +250,9 @@ impl TerrainGrid {
             self.at(tx, ty).level()
         };
         match self.ramp_lookup(cx, cy) {
-            Some(r) if r > base => r,
-            _ => base,
+            Some(r) if r > base => (r, true),
+            Some(_) => (base, true),
+            None => (base, false),
         }
     }
 
