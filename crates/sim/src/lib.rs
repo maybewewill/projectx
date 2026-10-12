@@ -44,6 +44,7 @@ pub mod rng;
 pub mod script;
 pub mod shop;
 pub mod sync;
+pub mod terrain;
 pub mod timer;
 pub mod unit_counts;
 pub mod unitclass;

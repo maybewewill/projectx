@@ -63,6 +63,7 @@ pub mod replay;
 pub mod replay_setup;
 pub mod scripts;
 pub mod sync_check;
+pub mod terrain;
 
 pub use map::{apply_players, controller_of, playable_area};
 pub use pathing::PathingSummary;
@@ -303,11 +304,14 @@ impl Engine {
         }
         let ai = AiHost::new(game, ai_shared, library, tables.clone());
         let mut tileset = 0u8;
+        let mut w3e_terrain: Option<w3map::Terrain> = None;
         let w3e_center = match archive.read("war3map.w3e") {
             Ok(data) => match w3map::Terrain::parse(&data) {
                 Ok(t) => {
                     tileset = t.main_tileset;
-                    Some(t.center)
+                    let center = t.center;
+                    w3e_terrain = Some(t);
+                    Some(center)
                 }
                 Err(e) => {
                     notes.push(format!("war3map.w3e not used: {e}"));
@@ -334,6 +338,11 @@ impl Engine {
             }));
         }
         host.game_mut().set_map_tileset(tileset);
+        if let Some(t) = &w3e_terrain {
+            // Cliff levels (missile uphill miss) and ground height (GetLocationZ): docs/spec/terrain.md.
+            let archives: Vec<&[u8]> = inputs.game_archives.iter().map(Vec::as_slice).collect();
+            notes.push(terrain::install(&mut host.game_mut(), t, &archives));
+        }
         apply_players(&mut host.game_mut(), &info, &mut notes);
         let pathing = match &wpm {
             // The wpm grid covers the whole map, so its origin is the map corner.

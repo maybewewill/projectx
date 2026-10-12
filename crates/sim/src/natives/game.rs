@@ -1307,6 +1307,8 @@ pub struct Game {
     /// The whole-map rectangle `GetWorldBounds` returns (the terrain getter `0x6F73F500`), or `None` until a host
     /// sets it. See `natives/melee_start.rs`.
     world_bounds: Option<Playable>,
+    /// The terrain corner grid (cliff levels, ground height, water), or `None` until a host sets it.
+    terrain: Option<std::sync::Arc<crate::terrain::TerrainGrid>>,
     /// The map's tileset character (the byte at `+0x1D0` of the map object, read by `0x6F00F520`); 0 skips the
     /// tileset test of the random creep and neutral building picks.
     map_tileset: u8,
@@ -1470,6 +1472,7 @@ impl Game {
             caches: BTreeMap::new(),
             playable: None,
             world_bounds: None,
+            terrain: None,
             map_tileset: 0,
             local_player: 0,
             enum_players: Vec::new(),
@@ -2049,6 +2052,22 @@ impl Game {
     /// The whole-map rectangle, if one is set.
     pub fn world_bounds(&self) -> Option<Playable> {
         self.world_bounds
+    }
+
+    /// Sets the terrain corner grid. It answers `GetLocationZ` and, installed as the cliff-level provider, the
+    /// uphill rule of the missile miss gate (`docs/spec/terrain.md`). `None` clears both.
+    pub fn set_terrain(&mut self, terrain: Option<std::sync::Arc<crate::terrain::TerrainGrid>>) {
+        self.set_cliff_levels(
+            terrain
+                .clone()
+                .map(|t| Box::new(crate::terrain::SharedTerrain(t)) as Box<dyn crate::combat::CliffLevels>),
+        );
+        self.terrain = terrain;
+    }
+
+    /// The terrain corner grid, if one is set.
+    pub fn terrain(&self) -> Option<&crate::terrain::TerrainGrid> {
+        self.terrain.as_deref()
     }
 
     /// Sets the map tileset character (0 = none) used by the random creep and neutral building picks.

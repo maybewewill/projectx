@@ -151,7 +151,7 @@ pub struct CombatMisc {
 /// cliff levels (and ramps). Without a provider every cell is level 0 and the uphill rule never fires; the draw
 /// of the gate is taken either way.
 pub trait CliffLevels: std::fmt::Debug {
-    /// The level of the cell `(cell_x, cell_y)` (32-unit cells, origin at the playable minimum).
+    /// The level of the cell `(cell_x, cell_y)` (32-unit cells, origin at the whole-map minimum corner).
     fn level(&self, cell_x: i32, cell_y: i32) -> i32;
 }
 
@@ -778,7 +778,9 @@ impl Game {
         // flying attacker; the two other conditions are taken as met.
         let movement = self.unit_types().get(a.type_id).map_or(0, |ty| ty.movement);
         let exempt = movement & missiles::MOVE_FLY != 0;
-        let origin = match self.playable() {
+        // The cell origin is the whole-map minimum corner (`world+0x6C/+0x70` is filled from the world-bounds rect
+        // by the wpm reader `0x6F46B850`, terrain.md section 1); the playable minimum is only the fallback.
+        let origin = match self.world_bounds().or_else(|| self.playable()) {
             Some(p) => (p.min_x, p.min_y),
             None => (F32::ZERO, F32::ZERO),
         };
@@ -956,15 +958,15 @@ impl Game {
         }
     }
 
-    /// The flight time of a missile: the distance over the speed (see [`crate::missiles::flight_seconds`], LIKELY in
-    /// form, UNSURE in value). Zero without the tables (the square root and the division need them).
+    /// The flight time of a missile: the path request of the move issue (see [`crate::missiles::flight_time`], CONFIRMED
+    /// against `0x6F496D10` in Unicorn: horizontal distance over speed, refused below 0.1 s, capped at 60 s). Zero
+    /// without the tables (the square root and the division need them).
     fn impact_delay(&self, attacker: ObjKey, target: ObjKey, speed: F32) -> F32 {
         let Some(tables) = self.order_tables() else {
             return F32::ZERO;
         };
         let (a, b) = (self.unit(attacker), self.unit(target));
-        let distance = missiles::distance(arith::sub(a.x, b.x), arith::sub(a.y, b.y), tables);
-        missiles::flight_seconds(distance, speed, tables)
+        missiles::flight_time(arith::sub(a.x, b.x), arith::sub(a.y, b.y), speed, tables)
     }
 
     /// The arrival of a missile (slot 47, [`crate::missiles::arrival`]): the rolled damage goes through when the target

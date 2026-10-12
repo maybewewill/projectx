@@ -11,8 +11,9 @@
 //! * `MoveLocation` (0x6F3C0DF0): stores x and y raw. CONFIRMED.
 //! * `GetLocationX` / `GetLocationY` (0x6F3C0E10 / 0x6F3C0E30): the stored reals. A null or freed
 //!   location gives 0.0. CONFIRMED.
-//! * `GetLocationZ` (0x6F3C0E50): the original reads the terrain height at (x, y). The terrain is not
-//!   loaded, so it returns 0.0 (UNSURE: the value is wrong for any map with a height).
+//! * `GetLocationZ` (0x6F3C0E50): the larger of the ground height and the water surface at (x, y), from the
+//!   terrain grid (`terrain::TerrainGrid::location_z`, Unicorn-checked, docs/spec/terrain.md). 0.0 when no
+//!   terrain grid is set.
 //! * `RemoveLocation` (0x6F3C0DD0): the object's death call (virtual slot 0x5C), so the handle is
 //!   released. CONFIRMED for the call, LIKELY for the release.
 //! * Rects store four edges: min y at +0x24, min x at +0x28, max y at +0x2C and max x at +0x30
@@ -106,9 +107,16 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         NativeResult::Return(Value::Real(v))
     });
 
-    // UNSURE: the original reads the terrain height here; there is no terrain yet.
-    reg.register("GetLocationZ", |_, _| {
-        NativeResult::Return(Value::Real(F32::ZERO))
+    // The terrain height at the location (docs/spec/terrain.md): the larger of the ground and the water surface.
+    // Without a terrain grid (no map loaded) it is 0.0 (the original reads its terrain object).
+    let g = Rc::clone(game);
+    reg.register("GetLocationZ", move |_, a| {
+        let gm = g.borrow();
+        let z = match (loc_of(&gm, a), gm.terrain()) {
+            (Some(l), Some(t)) => F32::from_bits(t.location_z(l.x.to_f32(), l.y.to_f32()).to_bits()),
+            _ => F32::ZERO,
+        };
+        NativeResult::Return(Value::Real(z))
     });
 
     let g = Rc::clone(game);

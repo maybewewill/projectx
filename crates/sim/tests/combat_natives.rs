@@ -680,3 +680,33 @@ fn uphill_missiles_miss_with_the_misc_chance() {
     assert!(landed(0.0, true, false), "chance 0.0 never misses");
     assert!(landed(1.0, true, true), "a flying attacker is exempt");
 }
+
+/// The uphill rule fed by a real terrain grid (`Game::set_terrain`, cliff layer of the nearest corner): the attacker at
+/// cell 0 stands on layer 4, the target at cell 3 (corner column 1) on layer 5, so a ChanceToMiss of 1.0 misses;
+/// with the target on a lower layer it lands (needs `GAME_DLL`).
+#[test]
+fn uphill_miss_from_a_terrain_grid() {
+    use sim::terrain::{Corner, TerrainGrid};
+    if tables().is_none() || rng_table().is_none() {
+        return;
+    }
+    let landed = |target_layer: u8| -> bool {
+        let (mut host, _) = missile_host(1.0).expect("host");
+        let corners: Vec<Corner> = (0..12)
+            .map(|i| {
+                let col = i % 4;
+                Corner::from_file(0x2000, 0x2000, 0, if col == 0 { 4 } else { target_layer })
+            })
+            .collect();
+        let grid = TerrainGrid::new(4, 3, [0.0, 0.0], corners).expect("grid");
+        host.game_mut().set_terrain(Some(std::sync::Arc::new(grid)));
+        let ub = unit_key(&host, "ub");
+        host.start("attack_one", &[]).expect("order");
+        for _ in 0..25 {
+            host.step();
+        }
+        life(&host, ub) < 100.0
+    };
+    assert!(!landed(5), "the target one layer higher: the missile misses");
+    assert!(landed(3), "the target lower: the missile lands");
+}
