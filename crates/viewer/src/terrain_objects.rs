@@ -18,6 +18,8 @@ use gamedata::Slk;
 use glam::{Mat4, Quat, Vec3};
 use w3map::TilePoint;
 
+use crate::terrain::{ground_height, TILE_SIZE};
+
 /// Cliff configuration: tileset name and directory for model lookup.
 #[derive(Debug, Clone)]
 pub struct CliffTileset {
@@ -188,9 +190,62 @@ pub fn tile_cliff(corners: [&TilePoint; 4], cliff_tilesets: &[[u8; 4]], types: &
     }
 }
 
+/// World height of the ground at `(x, y)`: bilinear over the four tile points around it, each
+/// with its cliff layer (the same height as the mesh). Positions outside the map clamp to the
+/// nearest edge point.
+pub fn ground_at(terrain: &w3map::Terrain, x: f32, y: f32) -> f32 {
+    let (w, h) = (terrain.width as usize, terrain.height as usize);
+    if w == 0 || h == 0 {
+        return 0.0;
+    }
+    let fx = ((x - terrain.center[0]) / TILE_SIZE).clamp(0.0, (w - 1) as f32);
+    let fy = ((y - terrain.center[1]) / TILE_SIZE).clamp(0.0, (h - 1) as f32);
+    let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let height = |px: usize, py: usize| ground_height(&terrain.points[py * w + px]);
+    let low = height(x0, y0) * (1.0 - tx) + height(x1, y0) * tx;
+    let high = height(x0, y1) * (1.0 - tx) + height(x1, y1) * tx;
+    low * (1.0 - ty) + high * ty
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flat_terrain(width: u32, height: u32, layers: impl Fn(u32, u32) -> u8) -> w3map::Terrain {
+        let points = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .map(|(x, y)| TilePoint {
+                layer_height: layers(x, y),
+                ..point(0, 0, 0)
+            })
+            .collect();
+        w3map::Terrain {
+            main_tileset: 0,
+            custom_tileset: false,
+            ground_tilesets: vec![],
+            cliff_tilesets: vec![],
+            width,
+            height,
+            center: [-128.0, -128.0],
+            points,
+        }
+    }
+
+    #[test]
+    fn ground_height_interpolates_and_clamps() {
+        // Points at columns 0..2 have layers 0, 1, 2 (128 world units per layer).
+        let terrain = flat_terrain(3, 2, |x, _| x as u8);
+        // Column 0 is at x = -128, one tile (128 units) per column.
+        assert_eq!(ground_at(&terrain, -128.0, -128.0), 0.0);
+        assert_eq!(ground_at(&terrain, -64.0, -128.0), 64.0, "halfway between layers 0 and 1");
+        assert_eq!(ground_at(&terrain, 0.0, -128.0), 128.0);
+        assert_eq!(ground_at(&terrain, 128.0, -128.0), 256.0);
+        // Outside the map clamps to the edge.
+        assert_eq!(ground_at(&terrain, 1000.0, -128.0), 256.0);
+        assert_eq!(ground_at(&terrain, -1000.0, 1000.0), 0.0);
+    }
 
     fn point(layer: u8, texture: u8, variation: u8) -> TilePoint {
         TilePoint {

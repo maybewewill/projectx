@@ -650,6 +650,10 @@ pub struct TerrainScene {
     pub cliffs: crate::cliff_render::CliffStatistics,
     /// Triangles that sample a model texture (cliff walls with their texture, placed objects).
     pub props: crate::props::PropScene,
+    /// Doodad and unit placements read from the map, and how many were placed on the terrain.
+    pub objects: crate::scene_objects::PlaceStats,
+    /// The placement counts of the map (parsed entries, entries without a model type).
+    pub object_placements: crate::scene_objects::Stats,
 }
 
 /// Archive path of the cliff type table: each cliff id of the map maps to a model folder and a
@@ -694,6 +698,8 @@ impl TerrainScene {
             textures_loaded,
             cliffs: Default::default(),
             props: Default::default(),
+            objects: Default::default(),
+            object_placements: Default::default(),
         })
     }
 
@@ -726,10 +732,17 @@ impl TerrainScene {
         let objects_archives = crate::scene_objects::Archives::new(sources);
         let mut props = crate::props::PropBuilder::new(&objects_archives);
         let plan = crate::cliff_render::plan_cliffs(&terrain, &cliff_types, &mut props);
+        // Doodads and pre-placed units, lifted onto the ground and added to the same props.
+        let catalog = crate::scene_objects::Catalog::load(&objects_archives);
+        let (instances, mut placements) = crate::scene_objects::placements(map, &catalog);
+        placements.notes.extend(catalog.notes.iter().cloned());
+        let objects = crate::scene_objects::place_on_terrain(&instances, &terrain, &mut props);
         let (prop_scene, flat_props) = props.finish();
         let mut scene = TerrainScene::from_terrain_modeled(&terrain, &textures, &plan.modeled)?;
         scene.mesh.cliffs.append(&flat_props);
         scene.props = prop_scene;
+        scene.objects = objects;
+        scene.object_placements = placements;
         scene.bounds = scene.mesh.bounds().unwrap_or(scene.bounds);
         scene.cliffs = plan.stats;
         Ok(scene)
