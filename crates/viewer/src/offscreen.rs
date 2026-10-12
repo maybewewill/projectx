@@ -37,20 +37,30 @@ struct Uniforms {
 /// Renders `terrain` from the default camera at `width x height` and returns tightly packed
 /// RGBA8 rows, top row first.
 pub fn render_terrain(terrain: &TerrainScene, width: u32, height: u32) -> Result<Vec<u8>, String> {
-    render_terrain_at(terrain, width, height, None)
+    render_terrain_at(terrain, width, height, None, 1.0)
 }
 
 /// Renders `terrain` from a camera position (optional) at `width x height` and returns tightly
-/// packed RGBA8 rows, top row first. If `camera_at` is Some, the camera is positioned at that
-/// world XY with a fixed height and angle; otherwise the default camera is used.
+/// packed RGBA8 rows, top row first. If `camera_target` is Some, the camera looks at that
+/// world point with the default angles; otherwise the default camera is used. `zoom` divides
+/// the camera distance (1 is the default framing, 4 is four times closer).
 pub fn render_terrain_at(
     terrain: &TerrainScene,
     width: u32,
     height: u32,
-    camera_at: Option<(f32, f32)>,
+    camera_target: Option<[f32; 3]>,
+    zoom: f32,
 ) -> Result<Vec<u8>, String> {
     let (width, height) = (width.max(1), height.max(1));
-    pollster::block_on(render_terrain_async(terrain, width, height, camera_at))
+    pollster::block_on(render_terrain_async(terrain, width, height, camera_target, zoom))
+}
+
+/// Brings the camera `zoom` times closer to its target (the clip planes follow the distance).
+pub fn zoomed(mut camera: TerrainCamera, zoom: f32) -> TerrainCamera {
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    camera.distance /= zoom;
+    camera.near = camera.distance * 0.02;
+    camera
 }
 
 async fn request_device(
@@ -80,7 +90,8 @@ async fn render_terrain_async(
     terrain: &TerrainScene,
     width: u32,
     height: u32,
-    camera_at: Option<(f32, f32)>,
+    camera_target: Option<[f32; 3]>,
+    zoom: f32,
 ) -> Result<Vec<u8>, String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     // A hardware adapter if there is one, otherwise the software fallback (WARP on Windows).
@@ -126,13 +137,13 @@ async fn render_terrain_async(
         ],
     });
 
-    let camera = if let Some((x, y)) = camera_at {
+    let camera = if let Some([x, y, z]) = camera_target {
         // Position camera at world XY with fixed height and angle
         let mut cam = TerrainCamera::fit(&terrain.bounds, width as f32 / height as f32);
-        cam.target = glam::Vec3::new(x, y, cam.target.z);
-        cam
+        cam.target = glam::Vec3::new(x, y, z);
+        zoomed(cam, zoom)
     } else {
-        TerrainCamera::fit(&terrain.bounds, width as f32 / height as f32)
+        zoomed(TerrainCamera::fit(&terrain.bounds, width as f32 / height as f32), zoom)
     };
     let uniforms = Uniforms {
         view_proj: camera.view_projection().to_cols_array_2d(),
@@ -158,6 +169,7 @@ async fn render_terrain_async(
         &texture_layout,
         &terrain.mesh,
         &terrain.atlas,
+        &terrain.props,
     );
 
     let extent = wgpu::Extent3d {

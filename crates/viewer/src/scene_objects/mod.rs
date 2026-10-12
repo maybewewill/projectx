@@ -13,42 +13,49 @@
 pub mod png;
 pub mod raster;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
 use std::path::PathBuf;
 
 use gamedata::Slk;
 use mdx::Model;
+
+use crate::cliff_render::{lambert, PlacedTriangle};
+use crate::props::PropBuilder;
+use crate::terrain_objects::ground_at;
 use raster::{Canvas, View, CLASS_DOODAD, CLASS_UNIT};
 
 /// Archives in priority order: a later archive overrides an earlier one. Names are matched
 /// exactly first, then case-insensitively through each archive's `(listfile)` (the game
 /// matches names case-insensitively, and SLK paths differ in case from the archive names).
-pub struct Archives {
-    files: Vec<Vec<u8>>,
-    /// Lower-cased name to the archive's own spelling, per archive, in priority order.
-    names: Vec<HashMap<String, String>>,
+/// The archives are opened once and borrow the bytes they were read from.
+pub struct Archives<'a> {
+    /// Each opened archive with its lower-cased name to the archive's own spelling.
+    archives: Vec<(mpq::Archive<'a>, HashMap<String, String>)>,
 }
 
-impl Archives {
-    pub fn new(files: Vec<Vec<u8>>) -> Self {
-        let names = files
+impl<'a> Archives<'a> {
+    /// `files` are the archive bytes in priority order (later ones win). Archives that do not
+    /// open are skipped.
+    pub fn new(files: &[&'a [u8]]) -> Self {
+        let archives = files
             .iter()
-            .map(|bytes| {
-                mpq::Archive::open(bytes)
-                    .and_then(|a| a.listfile())
+            .filter_map(|bytes| mpq::Archive::open(bytes).ok())
+            .map(|archive| {
+                let names = archive
+                    .listfile()
                     .map(|list| list.into_iter().map(|n| (n.to_ascii_lowercase(), n)).collect())
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                (archive, names)
             })
             .collect();
-        Self { files, names }
+        Self { archives }
     }
 
     /// Reads a file from the last archive that has it.
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
         let lower = name.to_ascii_lowercase();
-        self.files.iter().zip(&self.names).rev().find_map(|(bytes, names)| {
-            let archive = mpq::Archive::open(bytes).ok()?;
+        self.archives.iter().rev().find_map(|(archive, names)| {
             archive.read(name).ok().or_else(|| {
                 let spelled = names.get(&lower)?;
                 archive.read(spelled).ok()
@@ -75,7 +82,7 @@ fn clean_path(text: &str) -> String {
 }
 
 /// Reads the `file` column of one SLK table into a type-id map; missing files are notes.
-fn load_table(archives: &Archives, name: &str, out: &mut HashMap<[u8; 4], String>, notes: &mut Vec<String>) {
+fn load_table(archives: &Archives<'_>, name: &str, out: &mut HashMap<[u8; 4], String>, notes: &mut Vec<String>) {
     let Some(bytes) = archives.read(name) else {
         notes.push(format!("{name} not found in the archives"));
         return;
@@ -96,7 +103,7 @@ fn load_table(archives: &Archives, name: &str, out: &mut HashMap<[u8; 4], String
 }
 
 impl Catalog {
-    pub fn load(archives: &Archives) -> Self {
+    pub fn load(archives: &Archives<'_>) -> Self {
         let mut c = Catalog::default();
         let mut notes = Vec::new();
         load_table(archives, "Doodads\\Doodads.slk", &mut c.doodads, &mut notes);
@@ -256,7 +263,7 @@ fn mesh_of(model: &Model, tint_base: Option<[u8; 3]>) -> Mesh {
 /// SLK model paths have no extension or a `.mdl` one; the archives store `.mdx` files.
 /// Loads and parses a model; the error names the first candidate that failed to parse, or
 /// says that no candidate exists in the archives.
-fn load_model(archives: &Archives, path: &str) -> Result<Model, String> {
+fn load_model(archives: &Archives<'_>, path: &str) -> Result<Model, String> {
     let stem = [".mdl", ".mdx", ".MDL", ".MDX"]
         .iter()
         .find_map(|ext| path.strip_suffix(ext))
@@ -319,8 +326,147 @@ fn grow(bounds: &mut Option<([f32; 3], [f32; 3])>, w: [f32; 3]) {
     }
 }
 
+/// Counts of [`place_on_terrain`].
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PlaceStats {
+    /// Instances placed on the terrain (their model was read).
+    pub placed: usize,
+    /// Instances whose model could not be read (missing from the archives or not parsed).
+    pub unplaced: usize,
+    /// Distinct model paths of the placed instances.
+    pub models_loaded: usize,
+    /// Distinct model paths of the unplaced instances, sorted.
+    pub missing_paths: Vec<String>,
+    /// Flat footprint squares drawn for unplaced instances (see `push_marker`).
+    pub markers: usize,
+    /// Triangles added to the props (markers included).
+    pub triangles: usize,
+    /// Of those, triangles that sample a texture (the rest are flat tinted).
+    pub textured_triangles: usize,
+}
+
+/// Texture path of a geoset: the bitmap of its material's first layer. Replaceable textures
+/// (team colour, tree shadow, ...) have no file here and give `None`.
+fn geoset_texture(model: &Model, geoset: &mdx::Geoset) -> Option<String> {
+    let layer = model.materials.get(geoset.material_id as usize)?.layers.first()?;
+    let texture = model.textures.get(layer.texture_id as usize)?;
+    (texture.replaceable_id == 0 && !texture.path.is_empty()).then(|| texture.path.clone())
+}
+
+/// Places every instance on the terrain: its triangles go to `props`, lifted onto the ground
+/// height at its position (the `z` of the placement is an offset above that ground). Textured
+/// geosets sample their first layer's texture; the others are flat in the doodad tints (units:
+/// the player colour). Presentation only: no animation, team colour or transparency sorting.
+pub fn place_on_terrain(
+    instances: &[Instance],
+    terrain: &w3map::Terrain,
+    props: &mut PropBuilder<'_, '_>,
+) -> PlaceStats {
+    let mut stats = PlaceStats::default();
+    let mut used = BTreeSet::new();
+    let mut missing = BTreeSet::new();
+    for inst in instances {
+        // The placement lifted onto the ground under it; its z is then the height of the model.
+        let mut lifted = inst.clone();
+        lifted.position[2] += ground_at(terrain, inst.position[0], inst.position[1]);
+        // The triangles of every geoset as (texture path, world-space triangles, tint).
+        let geosets: Option<Vec<PlacedGeoset>> = props.model(&inst.model).map(|model| {
+            model
+                .geosets
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+                    let tris = g
+                        .triangles()
+                        .iter()
+                        .filter_map(|t| {
+                            let [a, b, c] = t.map(usize::from);
+                            let v = |i: usize| g.vertices.get(i).map(|p| to_world(&lifted, *p));
+                            let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+                            Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
+                        })
+                        .collect();
+                    let tint = match inst.kind {
+                        Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
+                        Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+                    };
+                    let tint = tint.map(|c| f32::from(c) / 255.0);
+                    (geoset_texture(model, g), tris, tint)
+                })
+                .collect()
+        });
+        let Some(geosets) = geosets else {
+            stats.unplaced += 1;
+            missing.insert(inst.model.clone());
+            push_marker(props, &lifted, inst.kind, inst.player, &mut stats);
+            continue;
+        };
+        used.insert(inst.model.clone());
+        stats.placed += 1;
+        for (path, tris, tint) in geosets {
+            let texture = path.as_deref().and_then(|p| props.texture(p));
+            for (positions, uvs) in tris {
+                let k = lambert(&positions);
+                let colour = if texture.is_some() {
+                    [k, k, k, 1.0]
+                } else {
+                    [tint[0] * k, tint[1] * k, tint[2] * k, 1.0]
+                };
+                let vertex = |i: usize| crate::terrain::TerrainVertex {
+                    position: positions[i],
+                    uv: uvs[i],
+                    cell: [0.0, 0.0, 1.0, 1.0],
+                    color: colour,
+                };
+                props.push(texture, [vertex(0), vertex(1), vertex(2)]);
+                stats.triangles += 1;
+                if texture.is_some() {
+                    stats.textured_triangles += 1;
+                }
+            }
+        }
+    }
+    stats.models_loaded = used.len();
+    stats.missing_paths = missing.into_iter().collect();
+    stats
+}
+
+/// A flat square on the ground marking an instance whose model is missing: half a unit-size
+/// footprint (48 units, as the software renderer uses), in the flat doodad or player tint.
+fn push_marker(
+    props: &mut PropBuilder<'_, '_>,
+    lifted: &Instance,
+    kind: Kind,
+    player: Option<u32>,
+    stats: &mut PlaceStats,
+) {
+    let half = 48.0 * lifted.scale[0].max(0.25);
+    let [x, y, z] = lifted.position;
+    let corners = [[x - half, y - half, z], [x + half, y - half, z], [x + half, y + half, z], [x - half, y + half, z]];
+    let tint = match kind {
+        Kind::Doodad => [200u8, 170, 60],
+        Kind::Unit => player.map_or([255, 255, 255], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+    };
+    let colour = tint.map(|c| f32::from(c) / 255.0);
+    let vertex = |p: [f32; 3]| crate::terrain::TerrainVertex {
+        position: p,
+        uv: [0.0, 0.0],
+        cell: [0.0; 4],
+        color: [colour[0], colour[1], colour[2], 1.0],
+    };
+    for tri in [[0usize, 1, 2], [0, 2, 3]] {
+        props.push(None, tri.map(|i| vertex(corners[i])));
+        stats.triangles += 1;
+    }
+    stats.markers += 1;
+}
+
+/// One geoset of a placed instance: texture path, world-space triangles and flat tint.
+type PlacedGeoset = (Option<String>, Vec<PlacedTriangle>, [f32; 3]);
+
 /// Renders the instances into an RGB canvas. Returns the canvas and a report.
-pub fn render(instances: &[Instance], archives: &Archives, width: usize, height: usize) -> (Canvas, RenderReport) {
+pub fn render(instances: &[Instance], archives: &Archives<'_>, width: usize, height: usize) -> (Canvas, RenderReport) {
     let mut cache: HashMap<String, Option<Mesh>> = HashMap::new();
     let mut missing = Vec::new();
     let mut models_loaded = 0;
@@ -441,6 +587,73 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
     if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { [0.0, 0.0, 1.0] }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn instance(model: &str, position: [f32; 3], angle: f32, scale: [f32; 3]) -> Instance {
+        Instance {
+            kind: Kind::Doodad,
+            model: model.to_string(),
+            position,
+            angle,
+            scale,
+            player: None,
+        }
+    }
+
+    #[test]
+    fn object_transform_scales_then_turns_then_moves() {
+        // A quarter turn maps the scaled x axis onto y.
+        let inst = instance("m", [10.0, 20.0, 5.0], std::f32::consts::FRAC_PI_2, [2.0, 1.0, 1.0]);
+        let p = to_world(&inst, [1.0, 0.0, 0.0]);
+        assert!((p[0] - 10.0).abs() < 1e-5, "x {p:?}");
+        assert!((p[1] - 22.0).abs() < 1e-5, "y {p:?}");
+        assert!((p[2] - 5.0).abs() < 1e-5, "z {p:?}");
+        let identity = instance("m", [0.0; 3], 0.0, [1.0; 3]);
+        assert_eq!(to_world(&identity, [3.0, 4.0, 5.0]), [3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn instances_without_a_readable_model_become_markers() {
+        let archives = Archives::new(&[]);
+        let mut props = PropBuilder::new(&archives);
+        let flat_point = w3map::TilePoint {
+            ground_height: 8192,
+            water_level: 0,
+            map_edge: false,
+            ground_texture: 0,
+            ramp: false,
+            blight: false,
+            water: false,
+            boundary: false,
+            ground_variation: 0,
+            cliff_variation: 0,
+            cliff_texture: 0,
+            layer_height: 0,
+        };
+        let terrain = w3map::Terrain {
+            main_tileset: 0,
+            custom_tileset: false,
+            ground_tilesets: vec![],
+            cliff_tilesets: vec![],
+            width: 2,
+            height: 2,
+            center: [0.0, 0.0],
+            points: vec![flat_point; 4],
+        };
+        let instances = [
+            instance("Doodads\\Missing\\A", [10.0, 10.0, 0.0], 0.0, [1.0; 3]),
+            instance("Doodads\\Missing\\A", [20.0, 10.0, 0.0], 0.0, [1.0; 3]),
+        ];
+        let stats = place_on_terrain(&instances, &terrain, &mut props);
+        assert_eq!((stats.placed, stats.unplaced, stats.markers), (0, 2, 2));
+        assert_eq!(stats.missing_paths, vec!["Doodads\\Missing\\A".to_string()]);
+        assert_eq!(stats.triangles, 4, "two squares of two triangles");
+        assert_eq!(stats.textured_triangles, 0);
+    }
+}
+
 /// `viewer --map MAP --mpq ARCHIVE [--mpq ARCHIVE ...] --objects-png OUT.png`
 pub fn cli(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut map = None::<PathBuf>;
@@ -458,7 +671,9 @@ pub fn cli(args: &[String]) -> Result<(), Box<dyn Error>> {
     let (Some(map), Some(out)) = (map, out) else {
         return Err("usage: viewer --map MAP --mpq ARCHIVE [--mpq ...] --objects-png OUT.png".into());
     };
-    let archives = Archives::new(mpqs.iter().map(std::fs::read).collect::<Result<_, _>>()?);
+    let archive_bytes: Vec<Vec<u8>> = mpqs.iter().map(std::fs::read).collect::<Result<_, _>>()?;
+    let sources: Vec<&[u8]> = archive_bytes.iter().map(Vec::as_slice).collect();
+    let archives = Archives::new(&sources);
     let map_bytes = std::fs::read(&map)?;
 
     let catalog = Catalog::load(&archives);

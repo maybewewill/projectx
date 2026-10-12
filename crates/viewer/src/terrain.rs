@@ -648,11 +648,17 @@ pub struct TerrainScene {
     pub textures_loaded: usize,
     /// Cliff scan counts (all zero when the terrain was meshed without archives).
     pub cliffs: crate::cliff_render::CliffStatistics,
+    /// Triangles that sample a model texture (cliff walls with their texture, placed objects).
+    pub props: crate::props::PropScene,
+    /// Doodad and unit placements read from the map, and how many were placed on the terrain.
+    pub objects: crate::scene_objects::PlaceStats,
+    /// The placement counts of the map (parsed entries, entries without a model type).
+    pub object_placements: crate::scene_objects::Stats,
 }
 
-/// Cliff tileset whose models are placed on cliff tiles. Real maps may use another tileset
-/// (CityCliffs, ...); choosing it from the map is not done yet.
-const CLIFF_TILESET: &str = "Cliffs";
+/// Archive path of the cliff type table: each cliff id of the map maps to a model folder and a
+/// cliff texture (see [`crate::terrain_objects::CliffTypes`]).
+const CLIFF_TYPES_SLK: &str = "TerrainArt\\CliffTypes.slk";
 
 /// Archive path of the terrain table that names the ground textures.
 const TERRAIN_SLK: &str = "TerrainArt\\Terrain.slk";
@@ -691,6 +697,9 @@ impl TerrainScene {
             bounds,
             textures_loaded,
             cliffs: Default::default(),
+            props: Default::default(),
+            objects: Default::default(),
+            object_placements: Default::default(),
         })
     }
 
@@ -716,10 +725,24 @@ impl TerrainScene {
             .filter_map(|bytes| mpq::Archive::open(bytes).ok())
             .collect();
         let textures = load_ground_textures(&archives, &terrain);
-        // Cliff tiles get their model; the flat walls of those tiles are left out.
-        let plan = crate::cliff_render::plan_cliffs(&terrain, CLIFF_TILESET, sources);
+        // Cliff tiles get the model of their cliff type; the flat walls of those tiles are left out.
+        let cliff_types = merged_slk(&archives, CLIFF_TYPES_SLK)
+            .map(|slk| crate::terrain_objects::CliffTypes::from_slk(&slk))
+            .unwrap_or_default();
+        let objects_archives = crate::scene_objects::Archives::new(sources);
+        let mut props = crate::props::PropBuilder::new(&objects_archives);
+        let plan = crate::cliff_render::plan_cliffs(&terrain, &cliff_types, &mut props);
+        // Doodads and pre-placed units, lifted onto the ground and added to the same props.
+        let catalog = crate::scene_objects::Catalog::load(&objects_archives);
+        let (instances, mut placements) = crate::scene_objects::placements(map, &catalog);
+        placements.notes.extend(catalog.notes.iter().cloned());
+        let objects = crate::scene_objects::place_on_terrain(&instances, &terrain, &mut props);
+        let (prop_scene, flat_props) = props.finish();
         let mut scene = TerrainScene::from_terrain_modeled(&terrain, &textures, &plan.modeled)?;
-        scene.mesh.cliffs.append(&plan.mesh);
+        scene.mesh.cliffs.append(&flat_props);
+        scene.props = prop_scene;
+        scene.objects = objects;
+        scene.object_placements = placements;
         scene.bounds = scene.mesh.bounds().unwrap_or(scene.bounds);
         scene.cliffs = plan.stats;
         Ok(scene)
@@ -737,10 +760,10 @@ fn read_from_archives(archives: &[mpq::Archive<'_>], name: &str) -> Option<Vec<u
 /// `TerrainArt\Terrain.slk` merged over every archive, in load order. Later archives replace
 /// the cells they define; the expansion and patch files carry the Ruins and Fall tilesets with
 /// their own column layout, which the column names account for.
-fn merged_terrain_slk(archives: &[mpq::Archive<'_>]) -> Option<gamedata::Slk> {
+fn merged_slk(archives: &[mpq::Archive<'_>], name: &str) -> Option<gamedata::Slk> {
     let mut merged: Option<gamedata::Slk> = None;
     for archive in archives {
-        let Ok(bytes) = archive.read(TERRAIN_SLK) else {
+        let Ok(bytes) = archive.read(name) else {
             continue;
         };
         let Ok(slk) = gamedata::Slk::parse_bytes(&bytes) else {
@@ -760,7 +783,7 @@ fn load_ground_textures(
     archives: &[mpq::Archive<'_>],
     terrain: &W3eTerrain,
 ) -> Vec<Option<TextureData>> {
-    let slk = merged_terrain_slk(archives);
+    let slk = merged_slk(archives, TERRAIN_SLK);
     (0..GROUND_SLOTS)
         .map(|slot| {
             let id = terrain.ground_tilesets.get(slot)?;

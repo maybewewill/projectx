@@ -242,7 +242,7 @@ impl App {
         match self.terrain.as_mut() {
             Some(terrain) => {
                 if !terrain.uploaded {
-                    renderer.upload_terrain(&terrain.scene.mesh, &terrain.scene.atlas);
+                    renderer.upload_terrain(&terrain.scene.mesh, &terrain.scene.atlas, &terrain.scene.props);
                     terrain.uploaded = true;
                 }
                 renderer.render(terrain.camera.view_projection(), false);

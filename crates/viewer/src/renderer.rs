@@ -352,9 +352,9 @@ impl Renderer {
     }
 
     /// Replaces the terrain meshes and the ground atlas.
-    pub fn upload_terrain(&mut self, mesh: &TerrainMesh, atlas: &Atlas) {
+    pub fn upload_terrain(&mut self, mesh: &TerrainMesh, atlas: &Atlas, props: &crate::props::PropScene) {
         self.terrain
-            .upload(&self.device, &self.queue, &self.texture_layout, mesh, atlas);
+            .upload(&self.device, &self.queue, &self.texture_layout, mesh, atlas, props);
     }
 
     fn upload_texture(&self, texture: &TextureData) -> wgpu::TextureView {
