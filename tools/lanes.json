@@ -1,6 +1,6 @@
 {
  "wave": "3",
- "updated": "2026-10-13 01:30 (UTC+5)",
+ "updated": "2026-10-13 02:10 (UTC+5)",
  "lanes": [
   {
    "id": "S17",
@@ -27,10 +27,16 @@
    "status": "running"
   },
   {
+   "id": "H22",
+   "model": "Haiku",
+   "task": "HUD layout: position the resource bar like the game, console centre art, minimap inset, portrait/command card frames",
+   "status": "running"
+  },
+  {
    "id": "H21",
    "model": "Haiku",
-   "task": "Minimap: render terrain + units into the ConsoleUI minimap frame of the live render",
-   "status": "running"
+   "task": "Minimap: render terrain + units into the ConsoleUI minimap frame of the live render (merged)",
+   "status": "done"
   },
   {
    "id": "S14",
