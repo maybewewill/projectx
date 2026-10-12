@@ -812,6 +812,39 @@ fn is_flyer(gm: &Game, k: ObjKey) -> bool {
     t.is_some_and(|t| t.movement & MOVE_FLY != 0)
 }
 
+/// One camp as the assignment `0x6F2E38A0` sees it.
+#[derive(Debug, Clone, Copy)]
+pub struct CampSlot {
+    /// The record's member count (`+0x24`); a camp with 12 is full and skipped.
+    pub count: i32,
+    /// The squared distance from the new creep to the camp's first living member (`0x6F477070`), None without one.
+    pub dist: Option<F32>,
+}
+
+/// The creep-camp assignment `0x6F2E38A0` (CONFIRMED by Unicorn, 600 cases, 0 mismatches,
+/// `tools/emu/camp_assign_emu.py`): the squared limit is `cache` when it is nonzero, else `I2R(d * d)` for the Misc
+/// value `d` (`CreepCampPathingCellDistance`), cached by the original (the caller passes the cache). Camps are walked
+/// in list order; a full camp (12) or one without a living member is skipped; a camp whose distance is strictly below
+/// the best so far becomes the best (the first of equal distances wins). Returns the camp index or -1 (new camp).
+pub fn assign_camp(d: i32, cache: Option<F32>, camps: &[CampSlot]) -> i32 {
+    let mut best = match cache {
+        Some(c) if c.to_f32() != 0.0 => c,
+        _ => softfloat::conv::i2r(d.wrapping_mul(d)),
+    };
+    let mut at = -1;
+    for (i, c) in camps.iter().enumerate() {
+        if c.count == 12 {
+            continue;
+        }
+        let Some(dist) = c.dist else { continue };
+        if best.to_f32() > dist.to_f32() {
+            best = dist;
+            at = i as i32;
+        }
+    }
+    at
+}
+
 impl Camps {
     /// Registers every living neutral hostile non-structure unit, in creation order: it joins the nearest camp (with
     /// fewer than 12 members) whose first living member is within [`CAMP_CELL_DISTANCE`] cells (strict, squared
@@ -821,27 +854,25 @@ impl Camps {
             return;
         }
         self.built = true;
-        let threshold = CAMP_CELL_DISTANCE * CAMP_CELL_DISTANCE;
         for (k, u) in gm.unit_objects() {
             if u.owner != NEUTRAL_HOSTILE || u.dead || u.removed || u.hidden || is_structure(gm, k) {
                 continue;
             }
             let p = pos(gm, k);
-            let mut best = threshold;
-            let mut at = None;
-            for (i, camp) in self.camps.iter().enumerate() {
-                if camp.len() >= CAMP_CAPACITY {
-                    continue;
-                }
-                let Some(&first) = camp.iter().find(|&&m| alive(gm, m)) else { continue };
-                let q = pos(gm, first);
-                let (dx, dy) = ((p.0 - q.0) / CELL, (p.1 - q.1) / CELL);
-                let d2 = dx * dx + dy * dy;
-                if best > d2 {
-                    best = d2;
-                    at = Some(i);
-                }
-            }
+            let slots: Vec<CampSlot> = self
+                .camps
+                .iter()
+                .map(|camp| CampSlot {
+                    count: camp.len() as i32,
+                    dist: camp.iter().find(|&&m| alive(gm, m)).map(|&first| {
+                        let q = pos(gm, first);
+                        let (dx, dy) = ((p.0 - q.0) / CELL, (p.1 - q.1) / CELL);
+                        F32::from_bits((dx * dx + dy * dy).to_bits())
+                    }),
+                })
+                .collect();
+            let at = assign_camp(CAMP_CELL_DISTANCE as i32, None, &slots);
+            let at = (at >= 0).then_some(at as usize);
             match at {
                 Some(i) => self.camps[i].push(k),
                 None => self.camps.push(vec![k]),

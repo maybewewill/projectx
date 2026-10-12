@@ -98,6 +98,35 @@ fn captain_readiness_matches_the_original() {
 }
 
 #[test]
+fn camp_assignment_matches_the_original() {
+    // `0x6F2E38A0` (tools/emu/camp_assign_emu.py): 600 synthetic camp lists.
+    let text = include_str!("vectors/camp_assign_seed1.tsv");
+    let mut n = 0;
+    for line in text.lines().filter(|l| !l.is_empty()) {
+        let f: Vec<&str> = line.split('\t').collect();
+        let d: i32 = f[0].parse().unwrap();
+        let cache = softfloat::F32::from_bits(u32::from_str_radix(f[1], 16).unwrap());
+        let camps: Vec<sim::captains::CampSlot> = if f[2] == "-" {
+            Vec::new()
+        } else {
+            f[2].split(';')
+                .map(|c| {
+                    let p: Vec<&str> = c.split('/').collect();
+                    sim::captains::CampSlot {
+                        count: p[0].parse().unwrap(),
+                        dist: (p[1] == "1").then(|| softfloat::F32::from_bits(u32::from_str_radix(p[2], 16).unwrap())),
+                    }
+                })
+                .collect()
+        };
+        let got = sim::captains::assign_camp(d, Some(cache), &camps);
+        assert_eq!(got, f[3].parse::<i32>().unwrap(), "line: {line}");
+        n += 1;
+    }
+    assert_eq!(n, 600);
+}
+
+#[test]
 fn captain_position_test_matches_the_original() {
     // `0x6F2E76E0` (tools/emu/captain_goal_emu.py): 600 cases, radius / captain / point bits and the original's answer.
     let text = include_str!("vectors/captain_goal_seed1.tsv");
