@@ -102,6 +102,8 @@ struct Listener {
     message: u32,
     timer: Option<usize>,
     alive: bool,
+    /// A destruction timer is pending (`0x6F4A6970`).
+    destroying: bool,
     /// A stand-in for "the listener has a timer" in raw tests ([`Agile::listener_raw`]).
     raw_dummy: Option<usize>,
 }
@@ -111,6 +113,8 @@ enum Owner {
     Modifier(ModId),
     /// The delayed destruction of a modifier (`0x6F4A6970`): when it runs the rate leaves the slope.
     ModifierDestroy(ModId),
+    /// The delayed destruction of a listener (`0x6F4A6970`).
+    ListenerDestroy(LisId),
     Listener(LisId),
 }
 
@@ -466,7 +470,7 @@ impl Agile {
     /// [`Agile::take_events`]).
     pub fn add_listener(&mut self, p: PropId, mode: u32, threshold: F32, message: u32, t: &Tables) -> LisId {
         let id = LisId(self.lis.len());
-        self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true, raw_dummy: None });
+        self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true, destroying: false, raw_dummy: None });
         // Creation arms the 0.1 s timer; linking arms (and cancels) the cleanup entry and subscribes at the head.
         let slot = self.arm(Owner::Listener(id), F32(FIRST_LISTENER_TIMER_BITS), true, None);
         self.lis[id.0].timer = Some(slot);
@@ -475,6 +479,22 @@ impl Agile {
         let v = self.eval(&self.props[p.0]);
         self.listener_value(id, v, t);
         id
+    }
+
+    /// `(mode, threshold bits)` of a listener.
+    pub fn listener_threshold(&self, l: LisId) -> (u32, u32) {
+        (self.lis[l.0].mode, self.lis[l.0].threshold.0)
+    }
+
+    /// The destruction of a listener through its wrapper (`0x6F4A6970`, the same base-class path as a modifier): the wrapper is
+    /// invalid at once, but the listener stays subscribed and may still fire until a timer of the shortest length (`1e-4` s,
+    /// sequence number taken now) runs in a later pump and removes it. CONFIRMED (Unicorn, day / night vectors).
+    pub fn destroy_listener(&mut self, l: LisId) {
+        if !self.lis[l.0].alive || self.lis[l.0].destroying {
+            return;
+        }
+        self.lis[l.0].destroying = true;
+        self.arm(Owner::ListenerDestroy(l), ZERO, false, None);
     }
 
     /// Removes a listener (what the owner does when it has completed). UNSURE: the original's destroy path was not
@@ -601,7 +621,7 @@ impl Agile {
     /// "has a timer" test of the crossing detector is true); the stand-in is cancelled by an evaluation.
     pub fn listener_raw(&mut self, p: PropId, mode: u32, threshold: F32, message: u32, with_timer: bool) -> LisId {
         let id = LisId(self.lis.len());
-        self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true, raw_dummy: None });
+        self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true, destroying: false, raw_dummy: None });
         if with_timer {
             let slot = self.put(Entry {
                 expiry: F32(FOREVER_BITS),
@@ -756,7 +776,7 @@ impl Agile {
     fn finish_entry(&mut self, i: usize, e: Entry) {
         let still_ours = match e.owner {
             Some(Owner::Modifier(m)) => self.mods[m.0].timer == Some(i),
-            Some(Owner::ModifierDestroy(_)) => false,
+            Some(Owner::ModifierDestroy(_)) | Some(Owner::ListenerDestroy(_)) => false,
             Some(Owner::Listener(l)) => self.lis[l.0].timer == Some(i),
             None => false,
         };
@@ -805,6 +825,11 @@ impl Agile {
                     let timer = self.mods[m.0].timer.take();
                     self.cancel_timer(timer);
                     self.end_modifier(m, t);
+                }
+            }
+            Some(Owner::ListenerDestroy(l)) => {
+                if self.lis[l.0].alive {
+                    self.remove_listener(l);
                 }
             }
             Some(Owner::Listener(l)) if self.lis[l.0].alive && self.lis[l.0].timer == Some(slot) => {

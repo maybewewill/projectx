@@ -65,6 +65,93 @@ impl DayCycle {
 
 /// The message of the time-of-day listener (`0x80262`, `0x6F429770`): the cycle is complete.
 pub const WRAP_MESSAGE: u32 = 0x80262;
+/// The message of the day / night watch listeners (`0x80263`): the world re-evaluates the day flag (`0x6F429460`).
+pub const CHECK_MESSAGE: u32 = 0x80263;
+/// Sent to the world and to every unit when the day flag turns on (`0x80264`, handled by `0x6F2A0330` for units).
+pub const DAY_BEGINS: u32 = 0x80264;
+/// Sent when the day flag turns off (`0x80265`, `0x6F2A0420` for units).
+pub const NIGHT_BEGINS: u32 = 0x80265;
+/// `0.01` (`0x6FAAE480`, runtime `0x3C23D70A`): the offset of the watch thresholds from Dawn and Dusk, in hours.
+pub const WATCH_OFFSET_BITS: u32 = 0x3C23_D70A;
+
+/// The day / night watch of the world (`0x6F429460`, docs/spec/agile.md section 9.6; CONFIRMED by Unicorn,
+/// `tools/emu/daynight_emu.py`). It holds the day flag (the integer at world `+0x80`) and up to two threshold listeners on the
+/// time of day (world `+0x78`, `+0x7C`) that wake it with message `0x80263` at the next switch:
+///
+/// * before Dawn (`Dawn > t`): one rising listener (mode 1) at `Dawn + 0.01`, flag off;
+/// * from Dusk on (`Dusk <= t`): one falling listener (mode 0) at `Dusk - 0.01`, flag off (the wrap of the cycle to 0.0 jumps
+///   across it and wakes the watch);
+/// * otherwise (day): a falling listener at `Dawn - 0.01` and a rising one at `Dusk + 0.01`, flag on.
+///
+/// Every run first destroys both old listeners (the delayed destruction of the agile engine). When the flag changed it is
+/// stored and `0x80264` (day) or `0x80265` (night) goes to the world and to every unit.
+#[derive(Debug, Clone, Default)]
+pub struct DayWatch {
+    a: Option<crate::agile::LisId>,
+    b: Option<crate::agile::LisId>,
+    /// Every listener this watch created (a destroyed one can still fire before its destruction timer runs).
+    created: Vec<crate::agile::LisId>,
+    /// The day flag (world `+0x80`).
+    pub day: bool,
+}
+
+impl DayWatch {
+    /// Whether listener `l` belongs to the watch.
+    pub fn owns(&self, l: crate::agile::LisId) -> bool {
+        self.created.contains(&l)
+    }
+
+    /// The thresholds of the live listeners: `(mode, threshold bits)` for `+0x78` and `+0x7C`.
+    pub fn listeners(&self, ag: &crate::agile::Agile) -> [Option<(u32, u32)>; 2] {
+        let f = |l: Option<crate::agile::LisId>| l.map(|l| ag.listener_threshold(l));
+        [f(self.a), f(self.b)]
+    }
+
+    /// `0x6F429460` on the time-of-day property `tod`. Returns `Some(day)` when the flag changed (the caller sends
+    /// [`DAY_BEGINS`] / [`NIGHT_BEGINS`]).
+    pub fn recompute(
+        &mut self,
+        ag: &mut crate::agile::Agile,
+        t: &Tables,
+        tod: crate::agile::PropId,
+        cycle: &DayCycle,
+    ) -> Option<bool> {
+        if let Some(l) = self.a.take() {
+            ag.destroy_listener(l);
+        }
+        if let Some(l) = self.b.take() {
+            ag.destroy_listener(l);
+        }
+        let v = ag.value(tod);
+        let c = F32(WATCH_OFFSET_BITS);
+        let day;
+        if cycle.dawn.to_f32() > v.to_f32() {
+            let l = ag.add_listener(tod, 1, arith::add(cycle.dawn, c), CHECK_MESSAGE, t);
+            self.created.push(l);
+            self.a = Some(l);
+            day = false;
+        } else if cycle.dusk.to_f32() <= v.to_f32() {
+            let l = ag.add_listener(tod, 0, arith::sub(cycle.dusk, c), CHECK_MESSAGE, t);
+            self.created.push(l);
+            self.b = Some(l);
+            day = false;
+        } else {
+            let la = ag.add_listener(tod, 0, arith::sub(cycle.dawn, c), CHECK_MESSAGE, t);
+            self.created.push(la);
+            self.a = Some(la);
+            let lb = ag.add_listener(tod, 1, arith::add(cycle.dusk, c), CHECK_MESSAGE, t);
+            self.created.push(lb);
+            self.b = Some(lb);
+            day = true;
+        }
+        if day != self.day {
+            self.day = day;
+            Some(day)
+        } else {
+            None
+        }
+    }
+}
 
 /// The time of day on the agile engine (`0x6F429770`, docs/spec/agile.md section 6): float game state 2 is a property
 /// with a forever modifier of rate `scale * DayHours / DayLength` and a rising listener at `DayHours`; the listener's
