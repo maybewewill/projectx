@@ -511,23 +511,12 @@ function main takes nothing returns nothing
     endif
 endfunction
 "#;
-    for set in [false, true] {
-        let mut lib = library();
-        lib.add_script("idle.ai", idle);
-        let mut r = rig(main, lib);
-        if set {
-            // Host-set values are read back (the sim has no writer for them yet).
-            let mut sh = r.shared.borrow_mut();
-            let c = sh.control_mut(0);
-            c.captain_group_size = 3;
-            c.captain_in_combat = [false, true];
-            c.town_threatened = true;
-        }
-        tick(&mut r);
-        let want = if set { [0, 3, 1, 0, 1] } else { [1, 0, 0, 0, 0] };
-        let got = ["empty", "size", "atk", "def", "thr"].map(|n| ai_int(&r, 0, n));
-        assert_eq!(got, want, "host-set: {set}");
-    }
+    let mut lib = library();
+    lib.add_script("idle.ai", idle);
+    let mut r = rig(main, lib);
+    tick(&mut r);
+    let got = ["empty", "size", "atk", "def", "thr"].map(|n| ai_int(&r, 0, n));
+    assert_eq!(got, [1, 0, 0, 0, 0]);
 }
 
 /// The boolean natives whose bodies fix their value: `SetUpgrade` and `ConvertUnits` return false, `SetProduce` with

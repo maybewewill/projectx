@@ -1334,6 +1334,9 @@ pub struct Game {
     pub strings: Vec<String>,
     /// The response slots of every event fired through `event::fire_event`, by index (see `Ctx::Trigger`).
     pub(crate) firings: Vec<super::event::Firing>,
+    /// Every unit death with its killer: (killer owner or `u32::MAX`, victim owner, victim type). Report-only; the
+    /// sim never reads it (the AI run summary of `w3boot` does).
+    pub kill_log: Vec<(u32, u32, u32)>,
     /// Waygate state of the units that have the waygate ability (see `natives/economy.rs`).
     pub(crate) waygates: BTreeMap<ObjKey, super::economy::WaygateState>,
     /// The gold mine of each resource node (a unit with the gold mine flag). A unit has an entry only when it is a
@@ -1430,6 +1433,7 @@ impl Game {
             aura_emitters: BTreeMap::new(),
             strings: Vec::new(),
             firings: Vec::new(),
+            kill_log: Vec::new(),
             waygates: BTreeMap::new(),
             mines: BTreeMap::new(),
             ability_resource: BTreeMap::new(),

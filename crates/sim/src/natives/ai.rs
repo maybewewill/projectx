@@ -29,6 +29,7 @@ use jass::vm::{NativeCtx, NativeRegistry, NativeResult, Value};
 use softfloat::F32;
 
 use super::game::{Game, ObjKey, Object, PLAYER_SLOTS};
+use crate::captains::{self, Captain};
 use crate::ai::{
     AiArg, AiCommand, AiEvent, AiShared, SharedAi, StartKind, StartRequest, COMMAND_QUEUE_LIMIT,
 };
@@ -144,7 +145,7 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "TownHasHall", sig: "(I)B", addr: 0x6F2D_E0A0, level: Level::Likely, implemented: true, note: "the slot's hall reference is live; slot above 3 or empty gives false (FUN_6f2d1310); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
     AiNative { name: "GetNextExpansion", sig: "()I", addr: 0x6F2E_2BC0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
     AiNative { name: "GetExpansionPeon", sig: "()Hunit;", addr: 0x6F2D_D530, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "GetEnemyExpansion", sig: "()Hunit;", addr: 0x6F2D_D4F0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
+    AiNative { name: "GetEnemyExpansion", sig: "()Hunit;", addr: 0x6F2D_D4F0, level: Level::Unsure, implemented: true, note: "the latest town hall of an enemy player that has two or more halls, else null" },
     AiNative { name: "SetExpansion", sig: "(Hunit;I)B", addr: 0x6F2E_0570, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the result is the engine's expansion placement (FUN_6f2d8130); the town model is not in the sim" },
     AiNative { name: "GetBuilding", sig: "(Hplayer;)Hunit;", addr: 0x6F2E_2E80, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: searches the player's buildings through a callback (FUN_6f2a3270; the callback is not decoded)" },
     AiNative { name: "SetAllianceTarget", sig: "(Hunit;)V", addr: 0x6F2E_0630, level: Level::Likely, implemented: true, note: "stores the unit handle as the AI's alliance target (the body keeps a unit reference in the AI state)" },
@@ -161,8 +162,8 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "AddGuardPost", sig: "(IRR)V", addr: 0x6F2D_CE30, level: Level::Likely, implemented: true, note: "guard post request (FUN_6f2daa40) recorded; no game effect" },
     AiNative { name: "FillGuardPosts", sig: "()V", addr: 0x6F2D_CF80, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
     AiNative { name: "ReturnGuardPosts", sig: "()V", addr: 0x6F2D_CFB0, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
-    AiNative { name: "CreateCaptains", sig: "()V", addr: 0x6F2D_D960, level: Level::Likely, implemented: true, note: "captain creation (FUN_6f2da810) recorded; no game effect" },
-    AiNative { name: "SetCaptainHome", sig: "(IRR)V", addr: 0x6F2D_D7B0, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
+    AiNative { name: "CreateCaptains", sig: "()V", addr: 0x6F2D_D960, level: Level::Likely, implemented: true, note: "creates both captains at the AI's first town hall (FUN_6f2da810)" },
+    AiNative { name: "SetCaptainHome", sig: "(IRR)V", addr: 0x6F2D_D7B0, level: Level::Likely, implemented: true, note: "which = 1 attack, 2 defense, 3 both: sets the captain's home point" },
     AiNative { name: "ResetCaptainLocs", sig: "()V", addr: 0x6F2D_D780, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
     AiNative { name: "ShiftTownSpot", sig: "(RR)V", addr: 0x6F2D_D740, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
     AiNative { name: "SetCaptainChanges", sig: "(B)V", addr: 0x6F2E_2D20, level: Level::Confirmed, implemented: true, note: "sets or clears flag bit 0x80 of the AI flag word (+0x2D0)" },
@@ -172,43 +173,43 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "CaptainVsPlayer", sig: "(Hplayer;)V", addr: 0x6F2E_2C80, level: Level::Likely, implemented: true, note: "as CaptainVsUnits, the other engine mode: recorded; the attack is not modelled" },
     AiNative { name: "CaptainAttack", sig: "(RR)V", addr: 0x6F2D_D700, level: Level::Likely, implemented: true, note: "captain state checked, then the engine attack order (FUN_6f2ed520): recorded" },
     AiNative { name: "GroupTimedLife", sig: "(B)V", addr: 0x6F2E_2D60, level: Level::Confirmed, implemented: true, note: "sets or clears flag bit 0x100 of the AI flag word (+0x2D0)" },
-    AiNative { name: "CaptainGoHome", sig: "()V", addr: 0x6F2D_D800, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
-    AiNative { name: "CaptainIsHome", sig: "()B", addr: 0x6F2D_D870, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the captain group's home state (FUN_6f2d1080) is not modelled" },
-    AiNative { name: "CaptainRetreating", sig: "()B", addr: 0x6F2D_D830, level: Level::Likely, implemented: true, note: "captain record bit 0x2 (CONFIRMED mask); no engine writer is modelled, so false" },
-    AiNative { name: "CaptainIsFull", sig: "()B", addr: 0x6F2D_DB10, level: Level::Likely, implemented: true, note: "captain record bit 0x1 (CONFIRMED mask); no engine writer is modelled, so false" },
-    AiNative { name: "CaptainIsEmpty", sig: "()B", addr: 0x6F2D_DB50, level: Level::Unsure, implemented: true, note: "true when the captain record's group size (+0xBC) is 0 (CONFIRMED body, FUN_6f2ddb50); the size is a field of AiControl that nothing in the sim writes, so it is 0 (UNSURE: no writer found)" },
-    AiNative { name: "CaptainGroupSize", sig: "()I", addr: 0x6F2D_DB90, level: Level::Unsure, implemented: true, note: "the captain record's group size (+0xBC) (CONFIRMED body, FUN_6f2ddb90); AiControl::captain_group_size, 0 unless a host sets it (UNSURE: no writer found)" },
-    AiNative { name: "CaptainReadiness", sig: "()I", addr: 0x6F2D_DA40, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: readiness is computed by the captain group (FUN_6f2e91a0) from its units; not modelled" },
-    AiNative { name: "CaptainReadinessHP", sig: "()I", addr: 0x6F2D_DA90, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: captain group readiness (FUN_6f2e91a0), not modelled" },
-    AiNative { name: "CaptainReadinessMa", sig: "()I", addr: 0x6F2D_DAD0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: captain group readiness (FUN_6f2e91a0), not modelled" },
-    AiNative { name: "CaptainInCombat", sig: "(B)B", addr: 0x6F2D_D8A0, level: Level::Unsure, implemented: true, note: "true when either enemy reference of the captain (+0x114, +0x120) resolves (CONFIRMED body, FUN_6f2d0a00); the flag picks the attack (true) or defense captain; AiControl::captain_in_combat, false unless a host sets it (UNSURE: no combat tracking)" },
+    AiNative { name: "CaptainGoHome", sig: "()V", addr: 0x6F2D_D800, level: Level::Likely, implemented: true, note: "the attack group's members walk to the captain's home" },
+    AiNative { name: "CaptainIsHome", sig: "()B", addr: 0x6F2D_D870, level: Level::Unsure, implemented: true, note: "the attack group's centre is within 500 units of home (the body tests the captain's position against home, FUN_6f2e76e0; the scale of the compare is UNSURE)" },
+    AiNative { name: "CaptainRetreating", sig: "()B", addr: 0x6F2D_D830, level: Level::Likely, implemented: true, note: "bit 2 of the attack captain's flag word; nothing in the model sets it (the retreat rule is not decoded)" },
+    AiNative { name: "CaptainIsFull", sig: "()B", addr: 0x6F2D_DB10, level: Level::Confirmed, implemented: true, note: "bit 1 of the attack captain's flag word: set by InitAssault, cleared by an unsatisfied AddAssault" },
+    AiNative { name: "CaptainIsEmpty", sig: "()B", addr: 0x6F2D_DB50, level: Level::Likely, implemented: true, note: "no living member in the attack group (CONFIRMED body: the group size at +0xBC is 0; the size is the count of living members)" },
+    AiNative { name: "CaptainGroupSize", sig: "()I", addr: 0x6F2D_DB90, level: Level::Likely, implemented: true, note: "number of living members of the attack group (+0xBC)" },
+    AiNative { name: "CaptainReadiness", sig: "()I", addr: 0x6F2D_DA40, level: Level::Unsure, implemented: true, note: "min(life %, mana %) of the attack group (FUN_6f2e91a0 flags 1,1; the original splits heroes from other units, the model takes the totals); 100 for an empty group" },
+    AiNative { name: "CaptainReadinessHP", sig: "()I", addr: 0x6F2D_DA90, level: Level::Unsure, implemented: true, note: "life % of the attack group (flags 1,0)" },
+    AiNative { name: "CaptainReadinessMa", sig: "()I", addr: 0x6F2D_DAD0, level: Level::Unsure, implemented: true, note: "mana % of the attack group (flags 0,1)" },
+    AiNative { name: "CaptainInCombat", sig: "(B)B", addr: 0x6F2D_D8A0, level: Level::Unsure, implemented: true, note: "true when a member of the chosen captain has a living attack target (the original: either enemy reference of the captain, +0x114/+0x120, resolves)" },
     AiNative { name: "TownThreatened", sig: "()B", addr: 0x6F2D_D8E0, level: Level::Unsure, implemented: true, note: "true when the player record's threat reference (+0x164) resolves (CONFIRMED body, FUN_6f2dd8e0); AiControl::town_threatened, false unless a host sets it (UNSURE: no threat scan)" },
-    AiNative { name: "CaptainAtGoal", sig: "()B", addr: 0x6F2D_D930, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the captain's goal point (FUN_6f2d1090) is not modelled" },
-    AiNative { name: "CreepsOnMap", sig: "()B", addr: 0x6F2D_C0F0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: scans the units through a callback (not decoded), which needs the creep and ignore rules" },
+    AiNative { name: "CaptainAtGoal", sig: "()B", addr: 0x6F2D_D930, level: Level::Unsure, implemented: true, note: "the group's centre is within the goal radius of the goal; true when the goal unit is dead; false without a goal (FUN_6f2e76e0 on the goal point; scale UNSURE)" },
+    AiNative { name: "CreepsOnMap", sig: "()B", addr: 0x6F2D_C0F0, level: Level::Unsure, implemented: true, note: "any living neutral hostile non-structure unit (the callback 0x6F2DC0E0 flags the first unit the builder gives it; the builder's mode 0x1B/8/0x1F filter is not decoded)" },
     AiNative { name: "RemoveInjuries", sig: "()V", addr: 0x6F2D_DDA0, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
     AiNative { name: "RemoveSiege", sig: "()V", addr: 0x6F2D_DE00, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
-    AiNative { name: "IsTowered", sig: "(Hunit;)B", addr: 0x6F2E_0950, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: counts the towers near the unit through the unit's vtable query; the body is true for more than one tower" },
+    AiNative { name: "IsTowered", sig: "(Hunit;)B", addr: 0x6F2E_0950, level: Level::Unsure, implemented: true, note: "more than one enemy structure that can attack within 900 units of the unit (the body counts units near it with an attack and a predicate, radius from vtable slot 0xEC; the model's radius and predicate are UNSURE)" },
     AiNative { name: "DisablePathing", sig: "()V", addr: 0x6F2E_06E0, level: Level::Confirmed, implemented: true, note: "sets bit 0x4000 of the captain record (+0x6C); recorded" },
     AiNative { name: "SetAmphibious", sig: "()V", addr: 0x6F2E_0720, level: Level::Confirmed, implemented: true, note: "sets bit 0x8000 of the captain record (+0x6C); recorded" },
-    AiNative { name: "InitAssault", sig: "()V", addr: 0x6F2D_D990, level: Level::Likely, implemented: true, note: "assault start (FUN_6f2d4df0) recorded; no game effect" },
-    AiNative { name: "AddAssault", sig: "(II)B", addr: 0x6F2D_D9C0, level: Level::Unsure, implemented: true, note: "the body returns no value (CONFIRMED); the model returns false. The request (FUN_6f2d96f0) is recorded" },
-    AiNative { name: "AddDefenders", sig: "(II)B", addr: 0x6F2D_DA00, level: Level::Unsure, implemented: true, note: "the body returns no value (CONFIRMED); the model returns false. The request (FUN_6f2d96d0) is recorded" },
-    AiNative { name: "GetCreepCamp", sig: "(IIB)Hunit;", addr: 0x6F2E_3D50, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the creep camp search (FUN_6f2e3980) is not modelled" },
-    AiNative { name: "StartGetEnemyBase", sig: "()V", addr: 0x6F2D_DCC0, level: Level::Likely, implemented: true, note: "enemy base search (FUN_6f2db410) recorded; the result is WaitGetEnemyBase's, not modelled" },
-    AiNative { name: "WaitGetEnemyBase", sig: "()B", addr: 0x6F2D_DCF0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: reads the enemy-base result of the AI state (+0x2EC), not modelled" },
+    AiNative { name: "InitAssault", sig: "()V", addr: 0x6F2D_D990, level: Level::Confirmed, implemented: true, note: "sets bit 1 (full) of the attack captain's flag word (0x6F2D4DF0)" },
+    AiNative { name: "AddAssault", sig: "(II)B", addr: 0x6F2D_D9C0, level: Level::Confirmed, implemented: true, note: "the request 0x6F2D6EA0 (control flow CONFIRMED, Unicorn 600/600): six passes over the group and the idle units, true when the quantity is met, else the full bit is cleared and false; the pass bodies are LIKELY (see captains.rs)" },
+    AiNative { name: "AddDefenders", sig: "(II)B", addr: 0x6F2D_DA00, level: Level::Likely, implemented: true, note: "the same request on the defense captain (0x6F2D96D0)" },
+    AiNative { name: "GetCreepCamp", sig: "(IIB)Hunit;", addr: 0x6F2E_3D50, level: Level::Likely, implemented: true, note: "camp choice 0x6F2E3980 CONFIRMED (Unicorn 600/600); camps are formed from the neutral hostile units (CreepCampPathingCellDistance 26 cells), levels and path costs are the model's (UNSURE); returns the first living creep of the chosen camp" },
+    AiNative { name: "StartGetEnemyBase", sig: "()V", addr: 0x6F2D_DCC0, level: Level::Unsure, implemented: true, note: "the search (FUN_6f2db410) is run at once: the result is the nearest enemy town hall (else structure) by straight distance, read back by GetEnemyBase" },
+    AiNative { name: "WaitGetEnemyBase", sig: "()B", addr: 0x6F2D_DCF0, level: Level::Unsure, implemented: true, note: "always false (the search finished); the original's search takes time (timing UNSURE)" },
     AiNative { name: "GetMegaTarget", sig: "()Hunit;", addr: 0x6F2D_DD60, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "GetEnemyBase", sig: "()Hunit;", addr: 0x6F2D_DD20, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "GetExpansionFoe", sig: "()Hunit;", addr: 0x6F2E_2E40, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "GetExpansionX", sig: "()I", addr: 0x6F2E_2DA0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "GetExpansionY", sig: "()I", addr: 0x6F2E_2DF0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "SetStagePoint", sig: "(RR)V", addr: 0x6F2D_DBD0, level: Level::Likely, implemented: true, note: "captain state checked, then the stage point (FUN_6f2e6d80): recorded" },
-    AiNative { name: "AttackMoveKill", sig: "(Hunit;)V", addr: 0x6F2E_0A40, level: Level::Likely, implemented: true, note: "captain state checked, then the attack-move (FUN_6f2ec700): recorded" },
-    AiNative { name: "AttackMoveXY", sig: "(II)V", addr: 0x6F2D_DC10, level: Level::Likely, implemented: true, note: "captain state checked, then the attack-move (FUN_6f2ec7d0): recorded" },
+    AiNative { name: "GetEnemyBase", sig: "()Hunit;", addr: 0x6F2D_DD20, level: Level::Unsure, implemented: true, note: "the result of StartGetEnemyBase (the original reads +0x2EC of the AI state); the target choice is the model's" },
+    AiNative { name: "GetExpansionFoe", sig: "()Hunit;", addr: 0x6F2E_2E40, level: Level::Unsure, implemented: true, note: "the first living creep of the camp nearest to the expansion site within 1100 units, else null" },
+    AiNative { name: "GetExpansionX", sig: "()I", addr: 0x6F2E_2DA0, level: Level::Unsure, implemented: true, note: "x of the nearest gold mine with gold that is not within 900 units of a town hall, -1 when none (the original ranks sites by path cost)" },
+    AiNative { name: "GetExpansionY", sig: "()I", addr: 0x6F2E_2DF0, level: Level::Unsure, implemented: true, note: "y of the same site, -1 when none" },
+    AiNative { name: "SetStagePoint", sig: "(RR)V", addr: 0x6F2D_DBD0, level: Level::Likely, implemented: true, note: "stores the point where recruited units gather" },
+    AiNative { name: "AttackMoveKill", sig: "(Hunit;)V", addr: 0x6F2E_0A40, level: Level::Likely, implemented: true, note: "no-op when the captain already has that target (CONFIRMED, 0x6F2E7530); else mode 2, retreat bit cleared, the members attack-move to the target and attack it when near (the captain mover is replaced by plain orders, UNSURE)" },
+    AiNative { name: "AttackMoveXY", sig: "(II)V", addr: 0x6F2D_DC10, level: Level::Likely, implemented: true, note: "mode 2, retreat bit cleared, goal radius 200; the members attack-move to the point" },
     AiNative { name: "LoadZepWave", sig: "(II)V", addr: 0x6F2D_DC50, level: Level::Likely, implemented: true, note: "captain state checked, then the zeppelin wave (FUN_6f2e7cd0): recorded" },
-    AiNative { name: "SuicidePlayer", sig: "(Hplayer;B)B", addr: 0x6F2E_2F00, level: Level::Likely, implemented: true, note: "player gate; the boolean is a gate on the captain full bit (true needs CAPTAIN_FULL, which no engine writer sets here, so false); the engine suicide (FUN_6f2ef160) is recorded" },
-    AiNative { name: "SuicidePlayerUnits", sig: "(Hplayer;B)B", addr: 0x6F2E_2F90, level: Level::Likely, implemented: true, note: "as SuicidePlayer, for the units only (the engine call takes the other mode): the same gate; recorded" },
+    AiNative { name: "SuicidePlayer", sig: "(Hplayer;B)B", addr: 0x6F2E_2F00, level: Level::Unsure, implemented: true, note: "gate as before (valid player; with check_full the full bit); when it passes, the attack group attack-moves to the nearest structure of that player. The original's engine suicide (FUN_6f2ef160) is not decoded" },
+    AiNative { name: "SuicidePlayerUnits", sig: "(Hplayer;B)B", addr: 0x6F2E_2F90, level: Level::Unsure, implemented: true, note: "as SuicidePlayer, the target is the nearest unit of the player" },
     AiNative { name: "UnitAlive", sig: "(Hunit;)B", addr: 0x6F2E_0760, level: Level::Likely, implemented: true, note: "true for a unit that is not dead and not removed; the body tests the unit flag 0x100 at +0x5C (the mapping to dead or removed is UNSURE); null gives false (CONFIRMED)" },
-    AiNative { name: "UnitInvis", sig: "(Hunit;)B", addr: 0x6F2E_07C0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body is 'not visible to the AI player' (FUN_6f3a38f0, a vision query); the sim has no vision model" },
+    AiNative { name: "UnitInvis", sig: "(Hunit;)B", addr: 0x6F2E_07C0, level: Level::Unsure, implemented: true, note: "false: the sim has no invisibility; the body is 'not visible to the AI player' and a unit without the invisibility flag 0x1000000 passes the gate (CONFIRMED gate)" },
     AiNative { name: "IgnoredUnits", sig: "(I)I", addr: 0x6F2D_CE80, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI's ignore list (FUN_6f2d33c0) is not modelled" },
     AiNative { name: "CommandsWaiting", sig: "()I", addr: 0x6F2D_CDD0, level: Level::Confirmed, implemented: true, note: "the count of the AI's command stack (+0x1DC)" },
     AiNative { name: "GetLastCommand", sig: "()I", addr: 0x6F2E_0450, level: Level::Confirmed, implemented: true, note: "the command on top of the stack (the newest pushed); -1 when the stack is empty" },
@@ -437,12 +438,28 @@ fn store(env: &Env, ctx: &NativeCtx<'_>, name: &'static str, a: &[Value]) -> Nat
     NativeResult::Return(Value::Null)
 }
 
-/// The captain record flags of this AI (0 when the AI has no control record yet).
-fn captain_flags(env: &Env) -> u32 {
-    env.shared
-        .borrow()
-        .control(env.player)
-        .map_or(0, |c| c.captain_flags)
+/// Runs `f` on the game, this AI's two captains and the AI flag word. The captains are moved out of the shared state
+/// for the call, so `f` may borrow the shared state again only for other things (it must not touch the captains).
+fn with_caps<R>(env: &Env, f: impl FnOnce(&mut Game, &mut [Captain; 2], u32) -> R) -> R {
+    let (mut caps, flags) = {
+        let mut sh = env.shared.borrow_mut();
+        let c = sh.control_mut(env.player);
+        (std::mem::take(&mut c.captains), c.flags)
+    };
+    let r = f(&mut env.game.borrow_mut(), &mut caps, flags);
+    env.shared.borrow_mut().control_mut(env.player).captains = caps;
+    r
+}
+
+/// A unit result: the handle of `unit`, or null.
+fn unit_value(env: &Env, unit: Option<ObjKey>) -> Value {
+    match unit {
+        Some(k) => match env.game.borrow().handle_of(k) {
+            0 => Value::Null,
+            h => Value::Handle(h),
+        },
+        None => Value::Null,
+    }
 }
 
 /// Dispatches a call to an AI-table native. `None` when the model does not implement the native.
@@ -477,20 +494,141 @@ fn ai_call(
         | "DisplayTextII" | "DisplayTextIII" => Some(log(env, ctx, name, a, Value::Null)),
 
         // Captain and threat records (AiControl fields; nothing in the sim writes them yet).
-        "CaptainIsEmpty" => {
-            let sh = env.shared.borrow();
-            ret(Value::Boolean(sh.control(env.player).map_or(0, |c| c.captain_group_size) == 0))
-        }
-        "CaptainGroupSize" => {
-            let sh = env.shared.borrow();
-            ret(Value::Integer(sh.control(env.player).map_or(0, |c| c.captain_group_size)))
-        }
+        "CaptainIsEmpty" => ret(Value::Boolean(with_caps(env, |gm, caps, _| captains::group_size(gm, &caps[0]) == 0))),
+        "CaptainGroupSize" => ret(Value::Integer(with_caps(env, |gm, caps, _| captains::group_size(gm, &caps[0])))),
         "CaptainInCombat" => {
-            let sh = env.shared.borrow();
-            let attack = bool_arg(a, 0);
-            let c = sh.control(env.player).is_some_and(|c| c.captain_in_combat[usize::from(attack)]);
-            ret(Value::Boolean(c))
+            // Argument true: the attack captain; false: the defense captain.
+            let which = if bool_arg(a, 0) { captains::ATTACK_CAPTAIN } else { captains::DEFENSE_CAPTAIN };
+            ret(Value::Boolean(with_caps(env, |_, caps, _| caps[which].in_combat)))
         }
+        "CaptainIsFull" => ret(Value::Boolean(with_caps(env, |_, caps, _| caps[0].flags & captains::FULL != 0))),
+        "CaptainRetreating" => {
+            ret(Value::Boolean(with_caps(env, |_, caps, _| caps[0].flags & captains::RETREATING != 0)))
+        }
+        "CaptainReadiness" | "CaptainReadinessHP" | "CaptainReadinessMa" => {
+            let (hp, ma) = (name != "CaptainReadinessMa", name != "CaptainReadinessHP");
+            ret(Value::Integer(with_caps(env, |gm, caps, _| captains::readiness(gm, &caps[0], hp, ma))))
+        }
+        "CaptainIsHome" => ret(Value::Boolean(with_caps(env, |gm, caps, _| captains::is_home(gm, &caps[0])))),
+        "CaptainAtGoal" => ret(Value::Boolean(with_caps(env, |gm, caps, _| captains::at_goal(gm, &caps[0])))),
+        "CreateCaptains" => {
+            with_caps(env, |gm, caps, _| {
+                let home = captains::anchor_of(gm, env.player);
+                for c in caps.iter_mut() {
+                    c.created = true;
+                    c.home = home;
+                }
+            });
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+        "SetCaptainHome" => {
+            let which = int_arg(a, 0);
+            let p = (real_arg(a, 1).to_f32(), real_arg(a, 2).to_f32());
+            with_caps(env, |_, caps, _| {
+                if which & 1 != 0 {
+                    caps[0].home = Some(p);
+                }
+                if which & 2 != 0 {
+                    caps[1].home = Some(p);
+                }
+            });
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+        "SetStagePoint" => {
+            let p = (real_arg(a, 0).to_f32(), real_arg(a, 1).to_f32());
+            with_caps(env, |_, caps, _| caps[0].stage = Some(p));
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+        "InitAssault" => {
+            with_caps(env, |_, caps, _| caps[0].flags |= captains::FULL);
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+        "AddAssault" | "AddDefenders" => {
+            let (qty, typ) = (int_arg(a, 0), int_arg(a, 1) as u32);
+            let which = usize::from(name == "AddDefenders");
+            let ok = with_caps(env, |gm, caps, ai_flags| {
+                let ctx = captains::RequestCtx { player: env.player, ai_flags };
+                let (first, second) = caps.split_at_mut(1);
+                if which == 0 {
+                    captains::request(gm, &mut first[0], &mut [&mut second[0]], ctx, qty, typ)
+                } else {
+                    captains::request(gm, &mut second[0], &mut [&mut first[0]], ctx, qty, typ)
+                }
+            });
+            Some(log(env, ctx, name, a, Value::Boolean(ok)))
+        }
+        "CaptainGoHome" => {
+            with_caps(env, |gm, caps, _| captains::go_home(gm, &mut caps[0]));
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+        "AttackMoveXY" => {
+            let p = (int_arg(a, 0) as f32, int_arg(a, 1) as f32);
+            let now = ctx.now().to_f32();
+            with_caps(env, |gm, caps, _| captains::attack_move_xy(gm, &mut caps[0], p, now));
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+        "AttackMoveKill" => {
+            let now = ctx.now().to_f32();
+            let target = env.game.borrow().unit_of_handle(handle_arg(a, 0));
+            if let Some(t) = target {
+                with_caps(env, |gm, caps, _| captains::attack_move_kill(gm, &mut caps[0], t, now));
+            }
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+
+        // Targets: creep camps, enemy bases, expansion sites (captains.rs).
+        "GetCreepCamp" => {
+            let (mn, mx, fly) = (int_arg(a, 0), int_arg(a, 1), bool_arg(a, 2));
+            let from = with_caps(env, |gm, caps, _| captains::center(gm, &caps[0]));
+            let found = {
+                let gm = env.game.borrow();
+                let from = from.or_else(|| captains::anchor_of(&gm, env.player)).unwrap_or((0.0, 0.0));
+                env.shared.borrow_mut().camps.creep_camp(&gm, from, mn, mx, fly)
+            };
+            ret(unit_value(env, found))
+        }
+        "CreepsOnMap" => ret(Value::Boolean(captains::Camps::creeps_on_map(&env.game.borrow()))),
+        "IsTowered" => {
+            let gm = env.game.borrow();
+            let towered = gm.unit_of_handle(handle_arg(a, 0)).is_some_and(|k| captains::is_towered(&gm, k));
+            ret(Value::Boolean(towered))
+        }
+        "StartGetEnemyBase" => {
+            let found = {
+                let gm = env.game.borrow();
+                let from = captains::anchor_of(&gm, env.player).unwrap_or((0.0, 0.0));
+                captains::enemy_base(&gm, env.player, from)
+            };
+            let handle = found.map_or(0, |k| env.game.borrow().handle_of(k));
+            env.shared.borrow_mut().control_mut(env.player).enemy_base = handle;
+            Some(log(env, ctx, name, a, Value::Null))
+        }
+        "WaitGetEnemyBase" => ret(Value::Boolean(false)),
+        "GetEnemyBase" => {
+            let h = env.shared.borrow().control(env.player).map_or(0, |c| c.enemy_base);
+            let alive = env.game.borrow().unit_of_handle(h).is_some();
+            ret(if h != 0 && alive { Value::Handle(h) } else { Value::Null })
+        }
+        "GetEnemyExpansion" => {
+            let found = captains::enemy_expansion(&env.game.borrow(), env.player);
+            ret(unit_value(env, found))
+        }
+        "GetExpansionX" | "GetExpansionY" => {
+            let site = captains::next_expansion(&env.game.borrow(), env.player);
+            let v = site.map_or(-1, |(_, p)| if name == "GetExpansionX" { p.0 as i32 } else { p.1 as i32 });
+            ret(Value::Integer(v))
+        }
+        "GetExpansionFoe" => {
+            let found = {
+                let gm = env.game.borrow();
+                match captains::next_expansion(&gm, env.player) {
+                    Some((_, p)) => env.shared.borrow_mut().camps.foe_near(&gm, p),
+                    None => None,
+                }
+            };
+            ret(unit_value(env, found))
+        }
+        "UnitInvis" => ret(Value::Boolean(false)),
         "TownThreatened" => {
             let sh = env.shared.borrow();
             ret(Value::Boolean(sh.control(env.player).is_some_and(|c| c.town_threatened)))
@@ -561,9 +699,6 @@ fn ai_call(
                 .is_some_and(|k| matches!(gm.object(k), Object::Unit(u) if !u.dead && !u.removed));
             ret(Value::Boolean(alive))
         }
-        "CaptainIsFull" => ret(Value::Boolean(captain_flags(env) & CAPTAIN_FULL != 0)),
-        "CaptainRetreating" => ret(Value::Boolean(captain_flags(env) & CAPTAIN_RETREATING != 0)),
-
         // The command stack that `CommandAI` fills: the newest pair is read first.
         "CommandsWaiting" => {
             let sh = env.shared.borrow();
@@ -631,7 +766,7 @@ fn ai_call(
         }
 
         // Requests that the body returns a fixed value for.
-        "ConvertUnits" | "AddAssault" | "AddDefenders" => {
+        "ConvertUnits" => {
             Some(log(env, ctx, name, a, Value::Boolean(false)))
         }
         "SetUpgrade" => {
@@ -719,7 +854,23 @@ fn ai_call(
             // The body's gate: a valid player, and for `true` the captain's full bit.
             let valid = player_of(&env.game, a).is_some();
             let flag = bool_arg(a, 1);
-            let gate = valid && (!flag || captain_flags(env) & CAPTAIN_FULL != 0);
+            let full = with_caps(env, |_, caps, _| caps[0].flags & captains::FULL != 0);
+            let gate = valid && (!flag || full);
+            if gate {
+                // The group attack-moves to the nearest structure (SuicidePlayer) or unit of the player (UNSURE: the
+                // original's suicide routine 0x6F2EF160 is not decoded).
+                let now = ctx.now().to_f32();
+                let victim = player_of(&env.game, a);
+                let units_only = name == "SuicidePlayerUnits";
+                let from = with_caps(env, |gm2, caps, _| captains::center(gm2, &caps[0])).unwrap_or((0.0, 0.0));
+                let target = {
+                    let gm = env.game.borrow();
+                    victim.and_then(|p| captains::nearest_of(&gm, p, from, units_only))
+                };
+                if let Some(t) = target {
+                    with_caps(env, |gm, caps, _| captains::attack_move_kill(gm, &mut caps[0], t, now));
+                }
+            }
             Some(log(env, ctx, name, a, Value::Boolean(gate)))
         }
         "CaptainVsUnits" | "CaptainVsPlayer" => {
@@ -736,24 +887,16 @@ fn ai_call(
         | "AddGuardPost"
         | "FillGuardPosts"
         | "ReturnGuardPosts"
-        | "CreateCaptains"
-        | "SetCaptainHome"
         | "ResetCaptainLocs"
         | "ShiftTownSpot"
         | "TeleportCaptain"
         | "ClearCaptainTargets"
         | "CaptainAttack"
-        | "CaptainGoHome"
         | "RemoveInjuries"
         | "RemoveSiege"
         | "Unsummon"
-        | "SetStagePoint"
-        | "AttackMoveKill"
-        | "AttackMoveXY"
         | "LoadZepWave"
-        | "PurchaseZeppelin"
-        | "InitAssault"
-        | "StartGetEnemyBase" => Some(log(env, ctx, name, a, Value::Null)),
+        | "PurchaseZeppelin" => Some(log(env, ctx, name, a, Value::Null)),
 
         _ => None,
     }
@@ -916,12 +1059,12 @@ mod tests {
         // The 36 rows not bound yet, each blocked by a subsystem the AI model does not hold (docs/spec/ai-natives.md
         // sections 2 and 5). A change here must come with a change of that document.
         let unbound: Vec<&str> = AI_NATIVES.iter().filter(|r| !r.implemented).map(|r| r.name).collect();
-        assert_eq!(unbound.len(), 24);
+        assert_eq!(unbound.len(), 9);
         for row in AI_NATIVES.iter().filter(|r| !r.implemented) {
             assert_eq!(row.level, Level::Unsure, "{} is unbound but not UNSURE", row.name);
             assert!(row.note.starts_with("NOT IMPLEMENTED"), "{} has no reason", row.name);
         }
-        for name in ["GetHeroId", "GetExpansionX", "CreepsOnMap", "UnitInvis", "GetHeroLevelAI", "SetExpansion"] {
+        for name in ["GetHeroId", "GetMegaTarget", "IgnoredUnits", "GetHeroLevelAI", "SetExpansion"] {
             assert!(unbound.contains(&name), "{name} should be unbound");
         }
     }

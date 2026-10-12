@@ -164,6 +164,12 @@ pub(crate) fn dispatch_unit_death_by(
     killer: Option<ObjKey>,
 ) {
     let owner = game.borrow().unit(unit).owner;
+    {
+        let mut gm = game.borrow_mut();
+        let killer_owner = killer.map_or(u32::MAX, |k| gm.unit(k).owner);
+        let ty = gm.unit(unit).type_id;
+        gm.kill_log.push((killer_owner, owner, ty));
+    }
     let firing = killer.map(|k| {
         let mut gm = game.borrow_mut();
         gm.firings.push(Firing {
