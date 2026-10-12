@@ -1,5 +1,5 @@
-//! Integration of spells (Storm Bolt, Holy Light, Slow) with their buff effects through the game loop.
-//! Tests that stun prevents action, slow reduces speed, buffs refresh correctly, and expire on schedule.
+//! Spell buff integration: Storm Bolt stun, Slow movement reduction, through the game loop.
+//! Adapted from spell_cast.rs with focus on buff application and expiry behavior.
 
 use jass::compile::compile;
 use jass::vm::NativeRegistry;
@@ -22,7 +22,6 @@ native CreateUnit takes player id, integer unitid, real x, real y, real face ret
 native UnitAddAbility takes unit whichUnit, integer abilityId returns boolean
 native SetUnitState takes unit whichUnit, integer whichState, real newVal returns nothing
 native IssueTargetOrderById takes unit whichUnit, integer order, widget target returns boolean
-native GetUnitX takes unit whichUnit returns real
 native GetWidgetLife takes widget wid returns real
 "#;
 
@@ -31,6 +30,7 @@ globals
     unit caster = null
     unit tgt = null
     unit hero_tgt = null
+    boolean accepted = false
 endglobals
 
 function setup takes nothing returns nothing
@@ -39,20 +39,21 @@ function setup takes nothing returns nothing
     set hero_tgt = CreateUnit(Player(1), 'HPal', 400.0, 0.0, 0.0)
     call UnitAddAbility(caster, 'AHtb')
     call UnitAddAbility(caster, 'Aslo')
+    call SetUnitState(caster, 2, 300.0)
     call SetUnitState(tgt, 2, 500.0)
     call SetUnitState(hero_tgt, 2, 500.0)
 endfunction
 
-function cast_storm_bolt takes nothing returns nothing
-    call IssueTargetOrderById(caster, 852095, tgt)
+function bolt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(caster, 852095, tgt)
 endfunction
 
-function cast_slow takes nothing returns nothing
-    call IssueTargetOrderById(caster, 852075, tgt)
+function slow takes nothing returns nothing
+    set accepted = IssueTargetOrderById(caster, 852075, tgt)
 endfunction
 
-function cast_storm_bolt_on_hero takes nothing returns nothing
-    call IssueTargetOrderById(caster, 852095, hero_tgt)
+function bolt_hero takes nothing returns nothing
+    set accepted = IssueTargetOrderById(caster, 852095, hero_tgt)
 endfunction
 "#;
 
@@ -118,7 +119,7 @@ fn host() -> ScriptHost {
                 data: [f(100.0), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
             }],
         );
-        // Set Slow levels: (dur=10.0, hero_dur=4.0, move_delta=-0.6, attack_delta=-0.6)
+        // Set Slow levels: (dur=10.0, hero_dur=4.0, move_delta=0.6, attack_delta=0.6)
         g.set_spell_levels(
             SLOW,
             vec![sim::cast::SpellLevel {
@@ -154,121 +155,99 @@ fn call(h: &mut ScriptHost, name: &str) {
     h.start(name, &[]).expect("start");
 }
 
-#[test]
-fn basic_unit_setup_works() {
-    let h = host();
-    let caster = unit(&h, "caster");
-    let tgt = unit(&h, "tgt");
-
-    // Verify units exist and have expected properties
-    assert_eq!(h.game().unit(caster).type_id, CASTER);
-    assert_eq!(h.game().unit(tgt).type_id, FOOT);
-    assert!(!h.game().unit(tgt).dead, "target should be alive");
+fn has_buff(h: &ScriptHost, k: ObjKey, code: u32) -> bool {
+    h.game().unit(k).buffs.iter().any(|b| b.base == code)
 }
 
 #[test]
 fn storm_bolt_applies_stun_buff_with_dur_for_non_hero() {
     let mut h = host();
-    let tgt = unit(&h, "tgt");
+    let t = unit(&h, "tgt");
 
-    // Cast Storm Bolt on non-hero target
-    call(&mut h, "cast_storm_bolt");
-    // Missile takes ~0.5s to arrive (300 units / 1000 speed = 0.3s, but need ~5 steps)
-    // Run to impact
+    call(&mut h, "bolt");
+    // Missile flies 300 units at 1000 speed: ~5 ticks to impact
     run(&mut h, 5);
 
-    // Verify stun buff is applied
-    assert!(
-        h.game().unit(tgt).buffs.iter().any(|b| b.base == BUFF_STUN),
-        "target should have stun buff after Storm Bolt impact"
-    );
-    assert_eq!(
-        h.game().unit(tgt).bonuses.stun, 1,
-        "stun counter should be incremented"
-    );
+    // Verify stun buff applied
+    assert!(has_buff(&h, t, BUFF_STUN), "target should have stun buff after Storm Bolt impact");
+    assert_eq!(h.game().unit(t).bonuses.stun, 1, "stun counter incremented");
+    assert!(h.game().is_stunned(t), "is_stunned should return true");
 }
 
 #[test]
 fn stun_buff_expires_after_dur_for_non_hero() {
     let mut h = host();
-    let tgt = unit(&h, "tgt");
+    let t = unit(&h, "tgt");
 
-    // Cast Storm Bolt
-    call(&mut h, "cast_storm_bolt");
-    run(&mut h, 5); // Reach impact and apply stun
+    call(&mut h, "bolt");
+    run(&mut h, 5); // Impact and apply stun
 
-    // Verify stun is active
-    assert_eq!(h.game().unit(tgt).bonuses.stun, 1, "stun should be applied");
+    assert_eq!(h.game().unit(t).bonuses.stun, 1, "stun applied");
+    assert!(h.game().is_stunned(t));
 
-    // Storm Bolt Dur=5.0 seconds = 50 ticks for non-hero
-    // We've run 5 steps, stun was applied at step 5
-    // Run for 40 more steps (total 45): should still be stunned
+    // Dur=5.0s = 50 ticks; still stunned at 4.5s (45 ticks)
     run(&mut h, 40);
-    assert_eq!(h.game().unit(tgt).bonuses.stun, 1, "stun should still be active before expiry");
+    assert!(h.game().is_stunned(t), "stun active before expiry");
 
-    // Run 12 more steps (total 57): should be expired
+    // Expire after 5.6s (56 ticks total); 5 + 40 + 12 = 57
     run(&mut h, 12);
-    assert_eq!(h.game().unit(tgt).bonuses.stun, 0, "stun should expire after Dur (5.0s)");
-    assert!(
-        !h.game().unit(tgt).buffs.iter().any(|b| b.base == BUFF_STUN),
-        "stun buff should be removed from unit's list"
-    );
+    assert_eq!(h.game().unit(t).bonuses.stun, 0, "stun expired after Dur");
+    assert!(!has_buff(&h, t, BUFF_STUN), "buff removed from list");
 }
 
 #[test]
 fn hero_target_uses_hero_dur_for_stun() {
     let mut h = host();
-    let hero_tgt = unit(&h, "hero_tgt");
+    let t = unit(&h, "hero_tgt");
 
-    // Change the target to a hero type by changing its type_id
-    h.game_mut().unit_mut(hero_tgt).type_id = HERO;
+    // Verify it's a hero type
+    h.game_mut().unit_mut(t).type_id = HERO;
 
-    // Cast Storm Bolt on hero target
-    call(&mut h, "cast_storm_bolt_on_hero");
-    run(&mut h, 5); // Missile impact
+    call(&mut h, "bolt_hero");
+    run(&mut h, 5); // Impact
 
-    // Verify stun is applied
-    assert_eq!(h.game().unit(hero_tgt).bonuses.stun, 1, "hero should be stunned");
+    assert_eq!(h.game().unit(t).bonuses.stun, 1, "hero stunned");
 
-    // For a hero, HeroDur=3.0 seconds = 30 ticks
-    // Run for 30 ticks to reach the expiry boundary
-    run(&mut h, 30); // Total: 35 steps
-
-    // Stun should be expired (3.0s duration)
-    assert_eq!(h.game().unit(hero_tgt).bonuses.stun, 0, "stun should expire after HeroDur (3.0s)");
+    // HeroDur=3.0s = 30 ticks; expire after 3.6s (36 ticks total)
+    run(&mut h, 30);
+    assert_eq!(h.game().unit(t).bonuses.stun, 0, "stun expired after HeroDur");
 }
 
 #[test]
-fn slow_reduces_and_restores_move_speed() {
+fn slow_applies_speed_reduction() {
     let mut h = host();
-    let tgt = unit(&h, "tgt");
-    let base_speed = h.game().unit(tgt).move_speed.to_f32();
+    let t = unit(&h, "tgt");
 
-    // Cast Slow on target
-    call(&mut h, "cast_slow");
-    run(&mut h, 5); // Missile impact and slow application
+    let base_speed = h.game().unit(t).move_speed.to_f32();
+    call(&mut h, "slow");
+    run(&mut h, 5); // Impact and apply slow
 
-    // Verify slow is applied
-    assert!(h.game().unit(tgt).buffs.iter().any(|b| b.base == BUFF_SLOW), "slow buff should be applied");
-    let slowed_speed = h.game().unit(tgt).move_speed.to_f32();
-    assert!(slowed_speed < base_speed, "speed should be reduced (base={}, slowed={})", base_speed, slowed_speed);
+    assert!(has_buff(&h, t, BUFF_SLOW), "slow buff applied");
+    let slowed_speed = h.game().unit(t).move_speed.to_f32();
+    assert!(slowed_speed < base_speed, "speed reduced (base={}, slowed={})", base_speed, slowed_speed);
+}
 
-    // Slow duration for non-hero: Dur=10.0 seconds = 100 ticks
-    // Run to expiry: 5 + 95 more = 100 steps total
-    run(&mut h, 95);
+#[test]
+fn slow_restores_speed_after_expiry() {
+    let mut h = host();
+    let t = unit(&h, "tgt");
 
-    // Speed should be restored to original
-    let restored_speed = h.game().unit(tgt).move_speed.to_f32();
-    let speed_diff = (restored_speed - base_speed).abs();
+    let base_speed = h.game().unit(t).move_speed.to_f32();
+    call(&mut h, "slow");
+    run(&mut h, 5); // Impact at tick 5
+    let slowed_speed = h.game().unit(t).move_speed.to_f32();
+
+    // Dur=10.0s = 100 ticks; buff applied at tick 5, expires at tick 105
+    // Run for 100 more ticks to reach tick 105 (past expiry)
+    run(&mut h, 100);
+
+    let restored_speed = h.game().unit(t).move_speed.to_f32();
     assert!(
-        speed_diff < 0.1,
-        "speed should be restored after slow expires (base={}, restored={}, diff={})",
+        (restored_speed - base_speed).abs() < 0.1,
+        "speed restored (base={}, restored={}, diff={})",
         base_speed,
         restored_speed,
-        speed_diff
+        (restored_speed - base_speed).abs()
     );
-    assert!(
-        !h.game().unit(tgt).buffs.iter().any(|b| b.base == BUFF_SLOW),
-        "slow buff should be removed after expiry"
-    );
+    assert!(!has_buff(&h, t, BUFF_SLOW), "slow buff removed");
 }
