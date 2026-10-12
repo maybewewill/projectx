@@ -7,6 +7,7 @@ use crate::scene::TextureData;
 use std::collections::{BTreeSet, HashMap};
 
 pub mod gpu;
+pub mod text;
 #[cfg(test)]
 mod tests;
 
@@ -15,6 +16,8 @@ pub struct UiScene {
     pub draw_list: fdf::DrawList,
     /// Loaded textures, keyed by their name as written in the FDF.
     pub textures: HashMap<String, TextureData>,
+    /// TTF bytes keyed by the font name as written in the FDF (for example `MasterFont`).
+    pub fonts: HashMap<String, Vec<u8>>,
     /// Screen dimensions in UI units.
     pub screen: fdf::Screen,
 }
@@ -112,7 +115,34 @@ impl UiScene {
             eprintln!("ui: textures missing: {}", missing.join("; "));
         }
 
-        Ok(UiScene { draw_list, textures, screen })
+        // Fonts: a font name is a skin key ([Default] MasterFont = Fonts\FRIZQT__.TTF), resolved
+        // like textures.
+        let font_names: BTreeSet<String> = draw_list
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                fdf::DrawItem::Text(run) => run.font.as_ref().map(|f| f.name.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut fonts = HashMap::new();
+        for name in &font_names {
+            let resolved = resolve_skin_name(&skins, race, name).unwrap_or_else(|| name.clone());
+            match load_from_mpq(&resolved, archive_sources) {
+                Ok(bytes) => {
+                    fonts.insert(name.clone(), bytes);
+                }
+                Err(_) => eprintln!("ui: font missing: {name} -> {resolved}"),
+            }
+        }
+        eprintln!("ui: fonts: {} referenced, {} loaded", font_names.len(), fonts.len());
+
+        Ok(UiScene {
+            draw_list,
+            textures,
+            fonts,
+            screen,
+        })
     }
 }
 

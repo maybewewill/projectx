@@ -21,6 +21,7 @@ mpq = { path = "../mpq" }
 w3map = { path = "../w3map" }
 gamedata = { path = "../gamedata" }
 glam = "0.34.1"
+fontdue = "0.9.4"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 thiserror = "2.0.21"
 winit = "0.30.13"

@@ -441,7 +441,13 @@ async fn render_ui_async(
         &uniform_layout,
         &texture_layout,
         ui_scene,
+        (width, height),
     )?;
+    let t = ui_gpu.text_stats;
+    eprintln!(
+        "ui: text: {} runs drawn, {} skipped, {} glyph quads, {} distinct glyphs, {} lines",
+        t.runs_drawn, t.runs_skipped, t.glyphs, t.distinct_glyphs, t.lines
+    );
 
     let extent = wgpu::Extent3d {
         width,

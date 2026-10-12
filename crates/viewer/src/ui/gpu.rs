@@ -1,10 +1,16 @@
-//! GPU rendering for FDF UI: converts draw list to vertex buffers and renders with wgpu.
+//! GPU rendering for FDF UI: converts the draw list to one vertex and index stream in paint order
+//! and draws it in batches, one per texture. Text runs become glyph quads from the atlas built by
+//! `ui::text`, so they are drawn by the same pipeline and tinted by their colour.
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
+use crate::ui::text::{self, TextQuad, TextStats};
 use crate::ui::UiScene;
+
+/// Texture key of the glyph atlas. It starts with a control character, so no FDF path can clash.
+const TEXT_ATLAS_KEY: &str = "\u{1}glyph atlas";
 
 /// A single vertex for UI rendering (position + UV + color).
 #[repr(C)]
@@ -17,26 +23,136 @@ pub struct UiVertex {
 
 /// Compiled GPU data for rendering a UI scene.
 pub struct UiGpu {
-    /// Vertex buffers for each texture used in the UI.
-    vertex_buffers: HashMap<String, wgpu::Buffer>,
-    /// Index buffers for each texture.
-    index_buffers: HashMap<String, wgpu::Buffer>,
-    /// Index counts for each texture.
-    index_counts: HashMap<String, u32>,
-    /// Textures kept alive during rendering.
+    vertex_buffer: Option<wgpu::Buffer>,
+    index_buffer: Option<wgpu::Buffer>,
+    /// (texture key, first index, index count), in paint order.
+    batches: Vec<(String, u32, u32)>,
+    /// Textures kept alive while the bind groups refer to them.
     _textures: HashMap<String, wgpu::Texture>,
-    /// Texture views for each texture.
-    texture_views: HashMap<String, wgpu::TextureView>,
-    /// Samplers for each texture.
-    _samplers: HashMap<String, wgpu::Sampler>,
-    /// Bind groups for each texture.
+    /// Bind group (texture + sampler) for each texture key, including the glyph atlas.
     bind_groups: HashMap<String, wgpu::BindGroup>,
     /// Pipeline for rendering UI quads.
     pipeline: wgpu::RenderPipeline,
+    /// Text counts for the report.
+    pub text_stats: TextStats,
+}
+
+/// Collects quads in paint order. Consecutive quads with the same texture share one batch.
+#[derive(Default)]
+struct Batcher {
+    verts: Vec<UiVertex>,
+    indices: Vec<u32>,
+    batches: Vec<(String, u32, u32)>,
+}
+
+impl Batcher {
+    /// Adds one quad. Corners are bottom-left, bottom-right, top-right, top-left in NDC, with
+    /// the matching UVs.
+    fn quad(&mut self, key: &str, corners: [[f32; 2]; 4], uvs: [[f32; 2]; 4], color: [f32; 4]) {
+        let base = self.verts.len() as u32;
+        for (pos, uv) in corners.into_iter().zip(uvs) {
+            self.verts.push(UiVertex { pos, uv, color });
+        }
+        self.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        match self.batches.last_mut() {
+            Some((last, _, count)) if last == key => *count += 6,
+            _ => {
+                let start = self.indices.len() as u32 - 6;
+                self.batches.push((key.to_string(), start, 6));
+            }
+        }
+    }
+
+    /// Adds a glyph quad given in window pixels (y down) for a viewport of `vw` x `vh` pixels.
+    fn text_quad(&mut self, q: &TextQuad, vw: f32, vh: f32) {
+        let [left, top, right, bottom] = q.rect_px;
+        let x = |px: f32| px / vw * 2.0 - 1.0;
+        let y = |py: f32| 1.0 - py / vh * 2.0;
+        let [u0, v0, u1, v1] = q.uv;
+        self.quad(
+            TEXT_ATLAS_KEY,
+            [[x(left), y(bottom)], [x(right), y(bottom)], [x(right), y(top)], [x(left), y(top)]],
+            [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+            q.color,
+        );
+    }
+}
+
+/// Uploads RGBA8 pixels as a texture and returns it with a bind group (texture + sampler).
+fn upload_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture_layout: &wgpu::BindGroupLayout,
+    name: &str,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> (wgpu::Texture, wgpu::BindGroup) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(&format!("ui texture {}", name)),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * width),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some(&format!("ui sampler {}", name)),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(&format!("ui bind group {}", name)),
+        layout: texture_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+    (texture, bind_group)
 }
 
 impl UiGpu {
-    /// Creates GPU data for rendering the UI scene.
+    /// Creates GPU data for rendering the UI scene into a `viewport` of the given pixel size.
+    /// Text is laid out for that size, so the glyphs are rasterised at the matching pixel size.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -44,180 +160,87 @@ impl UiGpu {
         uniform_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
         ui_scene: &UiScene,
+        viewport: (u32, u32),
     ) -> Result<Self, String> {
-        // Build vertex and index data from the draw list
-        let mut texture_verts: HashMap<String, Vec<UiVertex>> = HashMap::new();
-        let mut texture_indices: HashMap<String, Vec<u32>> = HashMap::new();
+        let window = ui_scene.screen.window;
+        let (vw, vh) = (viewport.0.max(1) as f32, viewport.1.max(1) as f32);
 
+        let text_runs: Vec<&fdf::TextRun> = ui_scene
+            .draw_list
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                fdf::DrawItem::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+        let atlas = text::build_atlas(&text_runs, &ui_scene.fonts, window, viewport);
+
+        // Quads and text in paint order (the draw list is already in paint order).
+        let mut batcher = Batcher::default();
+        let mut text_index = 0usize;
         for item in &ui_scene.draw_list.items {
             match item {
                 fdf::DrawItem::Quad(quad) => {
-                    // Convert UI space to normalized device coordinates
-                    // UI space: origin bottom-left, x: 0..0.6, y: 0..0.6 (in aspect-ratio aware coords)
-                    // NDC: origin center, x: -1..1, y: -1..1
-
+                    // UI space: origin bottom-left, window = 0..0.6 high; NDC is -1..1 on both axes.
                     let rect = &quad.rect;
-                    let screen = &ui_scene.screen;
-
-                    // Normalize to screen coordinates
-                    let left = (rect.left - screen.window.left) / screen.window.width();
-                    let right = (rect.right - screen.window.left) / screen.window.width();
-                    let bottom = (rect.bottom - screen.window.bottom) / screen.window.height();
-                    let top = (rect.top - screen.window.bottom) / screen.window.height();
-
-                    // Convert to NDC
-                    let ndc_left = left * 2.0 - 1.0;
-                    let ndc_right = right * 2.0 - 1.0;
-                    let ndc_bottom = bottom * 2.0 - 1.0;
-                    let ndc_top = top * 2.0 - 1.0;
-
-                    let uv = &quad.uv;
-                    let color = [1.0, 1.0, 1.0, 1.0]; // White; will blend with texture
-
-                    // Get or create vertex/index list for this texture
-                    let verts = texture_verts.entry(quad.texture.clone()).or_insert_with(Vec::new);
-                    let indices = texture_indices.entry(quad.texture.clone()).or_insert_with(Vec::new);
-
-                    let base_idx = verts.len() as u32;
-
-                    // Quad vertices (bottom-left, bottom-right, top-right, top-left)
-                    verts.push(UiVertex {
-                        pos: [ndc_left, ndc_bottom],
-                        uv: [uv[0], uv[2]],
-                        color,
-                    });
-                    verts.push(UiVertex {
-                        pos: [ndc_right, ndc_bottom],
-                        uv: [uv[1], uv[2]],
-                        color,
-                    });
-                    verts.push(UiVertex {
-                        pos: [ndc_right, ndc_top],
-                        uv: [uv[1], uv[3]],
-                        color,
-                    });
-                    verts.push(UiVertex {
-                        pos: [ndc_left, ndc_top],
-                        uv: [uv[0], uv[3]],
-                        color,
-                    });
-
-                    // Two triangles
-                    indices.push(base_idx);
-                    indices.push(base_idx + 1);
-                    indices.push(base_idx + 2);
-                    indices.push(base_idx);
-                    indices.push(base_idx + 2);
-                    indices.push(base_idx + 3);
+                    let left = (rect.left - window.left) / window.width();
+                    let right = (rect.right - window.left) / window.width();
+                    let bottom = (rect.bottom - window.bottom) / window.height();
+                    let top = (rect.top - window.bottom) / window.height();
+                    let (ndc_left, ndc_right) = (left * 2.0 - 1.0, right * 2.0 - 1.0);
+                    let (ndc_bottom, ndc_top) = (bottom * 2.0 - 1.0, top * 2.0 - 1.0);
+                    let uv = quad.uv;
+                    batcher.quad(
+                        &quad.texture,
+                        [
+                            [ndc_left, ndc_bottom],
+                            [ndc_right, ndc_bottom],
+                            [ndc_right, ndc_top],
+                            [ndc_left, ndc_top],
+                        ],
+                        [[uv[0], uv[2]], [uv[1], uv[2]], [uv[1], uv[3]], [uv[0], uv[3]]],
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
                 }
-                fdf::DrawItem::Text(_text_run) => {
-                    // Text rendering is a placeholder: draw a solid box
-                    // TODO: implement proper text rendering with a bitmap font
+                fdf::DrawItem::Text(_) => {
+                    for glyph in &atlas.runs[text_index] {
+                        batcher.text_quad(glyph, vw, vh);
+                    }
+                    text_index += 1;
                 }
             }
         }
 
-        // Create buffers for each texture
-        let mut vertex_buffers = HashMap::new();
-        let mut index_buffers = HashMap::new();
-        let mut index_counts = HashMap::new();
-
-        for (tex_name, verts) in texture_verts.iter() {
-            if verts.is_empty() {
-                continue;
-            }
+        let (vertex_buffer, index_buffer) = if batcher.indices.is_empty() {
+            (None, None)
+        } else {
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("ui vertex buffer {}", tex_name)),
-                contents: bytemuck::cast_slice(verts),
+                label: Some("ui vertex buffer"),
+                contents: bytemuck::cast_slice(&batcher.verts),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-            vertex_buffers.insert(tex_name.clone(), vertex_buffer);
+            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("ui index buffer"),
+                contents: bytemuck::cast_slice(&batcher.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+            (Some(vertex_buffer), Some(index_buffer))
+        };
 
-            if let Some(indices) = texture_indices.get(tex_name) {
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("ui index buffer {}", tex_name)),
-                    contents: bytemuck::cast_slice(indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-                index_counts.insert(tex_name.clone(), indices.len() as u32);
-                index_buffers.insert(tex_name.clone(), index_buffer);
-            }
-        }
-
-        // Create textures, views, samplers, and bind groups
+        // One texture per FDF texture, plus the glyph atlas.
+        let mut uploads: Vec<(&str, u32, u32, &[u8])> = ui_scene
+            .textures
+            .iter()
+            .map(|(name, t)| (name.as_str(), t.width, t.height, t.rgba.as_slice()))
+            .collect();
+        uploads.push((TEXT_ATLAS_KEY, atlas.width, atlas.height, atlas.rgba.as_slice()));
         let mut _textures = HashMap::new();
-        let mut texture_views = HashMap::new();
-        let mut _samplers = HashMap::new();
         let mut bind_groups = HashMap::new();
-
-        for (tex_name, texture_data) in &ui_scene.textures {
-            // Create wgpu texture
-            let wgpu_texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("ui texture {}", tex_name)),
-                size: wgpu::Extent3d {
-                    width: texture_data.width,
-                    height: texture_data.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &wgpu_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &texture_data.rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * texture_data.width),
-                    rows_per_image: Some(texture_data.height),
-                },
-                wgpu::Extent3d {
-                    width: texture_data.width,
-                    height: texture_data.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-
-            let view = wgpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some(&format!("ui sampler {}", tex_name)),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Linear,
-                ..Default::default()
-            });
-
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("ui bind group {}", tex_name)),
-                layout: texture_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            });
-
-            texture_views.insert(tex_name.clone(), view);
-            _samplers.insert(tex_name.clone(), sampler);
-            bind_groups.insert(tex_name.clone(), bind_group);
-            _textures.insert(tex_name.clone(), wgpu_texture);
+        for (name, width, height, rgba) in uploads {
+            let (texture, bind_group) = upload_texture(device, queue, texture_layout, name, width, height, rgba);
+            _textures.insert(name.to_string(), texture);
+            bind_groups.insert(name.to_string(), bind_group);
         }
 
         // Create render pipeline
@@ -279,31 +302,28 @@ impl UiGpu {
         });
 
         Ok(UiGpu {
-            vertex_buffers,
-            index_buffers,
-            index_counts,
+            vertex_buffer,
+            index_buffer,
+            batches: batcher.batches,
             _textures,
-            texture_views,
-            _samplers,
             bind_groups,
             pipeline,
+            text_stats: atlas.stats,
         })
     }
 
-    /// Renders the UI to the given render pass.
+    /// Renders the UI to the given render pass, one batch per texture in paint order.
     pub fn render(&self, render_pass: &mut wgpu::RenderPass) {
+        let (Some(vertex_buffer), Some(index_buffer)) = (&self.vertex_buffer, &self.index_buffer) else {
+            return;
+        };
         render_pass.set_pipeline(&self.pipeline);
-
-        for (tex_name, vertex_buffer) in &self.vertex_buffers {
-            if let (Some(index_buffer), Some(index_count), Some(bind_group)) = (
-                self.index_buffers.get(tex_name),
-                self.index_counts.get(tex_name),
-                self.bind_groups.get(tex_name),
-            ) {
-                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        for (key, start, count) in &self.batches {
+            if let Some(bind_group) = self.bind_groups.get(key) {
                 render_pass.set_bind_group(1, bind_group, &[]);
-                render_pass.draw_indexed(0..*index_count, 0, 0..1);
+                render_pass.draw_indexed(*start..*start + *count, 0, 0..1);
             }
         }
     }
