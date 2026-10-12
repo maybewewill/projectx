@@ -15,12 +15,13 @@
 //!   ground height.
 //! * Water level uses the same height formula as the ground (raw minus 8192, scaled).
 //! * A tile point's ground texture index selects a tile sheet. The atlas has 4x4 sheet slots
-//!   (16 ground textures). Each sheet has `cols x rows` variation cells (4x4 or 8x4). The
-//!   variation index wraps inside the sheet.
-//! * Ground texture blending: each tile is drawn with its dominant texture (most corners,
-//!   ties go to the earliest corner). Each other texture of the tile is drawn on top with a
-//!   per-corner alpha that is 1 at corners using it and 0 elsewhere, interpolated across the
-//!   tile. This approximates the original's edge blending.
+//!   (16 ground textures). A 512x256 sheet (8x4 cells) holds the 16 transition shapes in its
+//!   left 4 columns and 16 full-tile variations in its right 4 columns. A 256x256 sheet has
+//!   only the 4x4 transition shapes.
+//! * Ground texture blending, as the original stacks it: the tile's textures are ordered by
+//!   their ground id. The lowest is drawn opaque (a full-tile variation). Each higher texture
+//!   is drawn over it with the transition shape for its corner mask (see [`TRANSITION_CELL`]),
+//!   whose alpha gives the smooth border.
 //! * Cliffs: where two neighbouring points have different cliff layers (and neither is a ramp),
 //!   a vertical wall of flat colour is drawn on their shared edge. Cliff models are not drawn.
 //! * Water: a tile gets a water quad when all four of its corners have the water flag.
@@ -86,10 +87,35 @@ impl SheetLayout {
     }
 }
 
+/// Transition cell of each corner mask, in the 4x4 transition grid of a sheet (cell index
+/// `row * 4 + col`). Bit `k` of the mask is tile corner `k` (see [`CORNER_UV`]): a texture that
+/// is used at corner `k` sets bit `k`. Derived from the cell alpha of Lords_Dirt and
+/// Lords_Grass: the cell whose opaque corners are exactly the mask's corners.
+/// Mask 0 (no corner) has no shape and is never drawn; mask 15 is cell 15 (the full tile).
+pub const TRANSITION_CELL: [u8; 16] = [0, 8, 4, 12, 1, 9, 5, 13, 2, 10, 6, 14, 3, 11, 7, 15];
+
 impl SheetLayout {
+    /// Cell (column, row) of the transition shape for a corner mask (`mask & 15`).
+    pub fn transition(self, mask: u8) -> (u32, u32) {
+        let index = u32::from(TRANSITION_CELL[usize::from(mask & 15)]);
+        (index % 4, index / 4)
+    }
+
+    /// Cell (column, row) of a full-tile variation. Extended sheets (8 columns) keep 16
+    /// variations in their right half; square sheets have none, so they use the full shape.
+    pub fn variation(self, variation: u8) -> (u32, u32) {
+        if self.cols >= 8 {
+            let index = u32::from(variation) % 16;
+            (4 + index % 4, index / 4)
+        } else {
+            self.transition(15)
+        }
+    }
+
     /// Grid of a ground texture with the given pixel size. Ground textures have 4 rows of
-    /// square variation cells, and the column count follows the aspect ratio: 4 columns for a
-    /// square texture (256x256), 8 for 512x256 (the common WC3 size). Clamped to 1..=8.
+    /// square cells, and the column count follows the aspect ratio: 4 columns for a square
+    /// texture (256x256), 8 for 512x256 (the common WC3 size). The left 4 columns hold the
+    /// transition shapes, the right 4 the full-tile variations. Clamped to 1..=8.
     pub fn for_size(width: u32, height: u32) -> SheetLayout {
         let height = height.max(1);
         let cols = ((4.0 * width as f32 / height as f32).round() as u32).clamp(1, 8);
@@ -178,12 +204,23 @@ impl AtlasLayout {
         self.sheet_px * SHEET_GRID
     }
 
-    /// UV rectangle of one variation of one ground texture.
+    /// UV rectangle of one full-tile variation of one ground texture (the base layer).
     pub fn cell_uv(self, texture: u8, variation: u8) -> UvRect {
-        let slot = u32::from(texture) % (SHEET_GRID * SHEET_GRID);
+        let sheet = self.slots[slot_index(texture)].sheet;
+        self.rect(texture, sheet.variation(variation))
+    }
+
+    /// UV rectangle of the transition shape for a corner mask of one ground texture.
+    pub fn transition_uv(self, texture: u8, mask: u8) -> UvRect {
+        let sheet = self.slots[slot_index(texture)].sheet;
+        self.rect(texture, sheet.transition(mask))
+    }
+
+    /// The rectangle of cell `(cell_x, cell_y)` in the slot of `texture`.
+    fn rect(self, texture: u8, (cell_x, cell_y): (u32, u32)) -> UvRect {
+        let slot = slot_index(texture) as u32;
         let (slot_x, slot_y) = (slot % SHEET_GRID, slot / SHEET_GRID);
         let layout = self.slots[slot as usize];
-        let (cell_x, cell_y) = layout.sheet.cell(variation);
         let cell_w = layout.width as f32 / layout.sheet.cols as f32;
         let cell_h = layout.height as f32 / layout.sheet.rows as f32;
         let sheet_px = self.sheet_px as f32;
@@ -195,6 +232,11 @@ impl AtlasLayout {
             size: [(cell_w - 1.0) / atlas, (cell_h - 1.0) / atlas],
         }
     }
+}
+
+/// Atlas slot of a ground texture id (the ids are 4 bits in the file).
+fn slot_index(texture: u8) -> usize {
+    usize::from(texture) % (SHEET_GRID * SHEET_GRID) as usize
 }
 
 impl Default for AtlasLayout {
@@ -343,6 +385,28 @@ fn procedural_texel(slot: u32, sheet: SheetLayout, sheet_px: u32, px: u32, py: u
         let v = (value * cell_factor * noise * border).clamp(0.0, 1.0);
         out[channel] = (v * 255.0 + 0.5) as u8;
     }
+    // Transition cells (the 4x4 grid of square sheets) get the corner shape of their mask: the
+    // bilinear weight of the mask's corners, so the procedural borders fade like real ones.
+    out[3] = if sheet.cols == 4 && sheet.rows == 4 {
+        let mask = (0..16u8)
+            .find(|&m| u32::from(TRANSITION_CELL[usize::from(m)]) == variation)
+            .unwrap_or(15);
+        let u = ((px % cell_w) as f32 + 0.5) / cell_w as f32;
+        let v = ((py % cell_h) as f32 + 0.5) / cell_h as f32;
+        let weight: f32 = CORNER_UV
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| (mask >> k) & 1 == 1)
+            .map(|(_, c)| {
+                let wx = if c[0] > 0.5 { u } else { 1.0 - u };
+                let wy = if c[1] > 0.5 { v } else { 1.0 - v };
+                wx * wy
+            })
+            .sum();
+        (weight.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    } else {
+        255
+    };
     out
 }
 
@@ -414,7 +478,7 @@ impl Mesh {
 pub struct TerrainMesh {
     /// Opaque dominant texture of every tile.
     pub ground: Mesh,
-    /// Blended secondary textures (alpha per corner).
+    /// Blended secondary textures: each one a transition shape (its alpha is the border).
     pub overlays: Mesh,
     /// Vertical cliff walls, flat colour, opaque.
     pub cliffs: Mesh,
@@ -510,8 +574,13 @@ pub fn build_mesh_modeled(
             let textures = points.map(|p| p.ground_texture);
             let variations = points.map(|p| p.ground_variation);
 
-            // Dominant texture: drawn opaque across the whole tile.
-            let base = dominant_texture(textures);
+            // Layers, in the map's texture order (ground id ascending). The lowest one is the
+            // opaque base: its full-tile variation, chosen by its first corner's variation byte.
+            let mut sorted = textures;
+            sorted.sort_unstable();
+            let mut layers = sorted.to_vec();
+            layers.dedup();
+            let base = layers[0];
             let base_corner = textures.iter().position(|&t| t == base).unwrap_or(0);
             let base_cell = options
                 .atlas
@@ -520,21 +589,17 @@ pub fn build_mesh_modeled(
             mesh.ground
                 .quad(tile_vertices(positions, [base_cell; 4], [[1.0; 4]; 4]));
 
-            // Other textures: blended on top, weight 1 at the corners that use them.
-            let mut seen = vec![base];
-            for (corner, &texture) in textures.iter().enumerate() {
-                if seen.contains(&texture) {
-                    continue;
-                }
-                seen.push(texture);
-                let cell = options
-                    .atlas
-                    .cell_uv(texture, variations[corner])
-                    .to_array();
-                let weights = textures.map(|t| if t == texture { 1.0 } else { 0.0 });
-                let colors = weights.map(|w| [1.0, 1.0, 1.0, w]);
+            // Every higher texture is drawn over the layers below it with the transition shape
+            // of its corner mask (bit k = tile corner k). The shape's own alpha fades it out.
+            for &texture in &layers[1..] {
+                let mask = textures
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &t)| t == texture)
+                    .fold(0u8, |m, (k, _)| m | (1 << k));
+                let cell = options.atlas.transition_uv(texture, mask).to_array();
                 mesh.overlays
-                    .quad(tile_vertices(positions, [cell; 4], colors));
+                    .quad(tile_vertices(positions, [cell; 4], [[1.0; 4]; 4]));
             }
 
             if points.iter().all(|p| p.water) {
@@ -579,20 +644,6 @@ pub fn build_mesh_modeled(
     }
 
     Ok(mesh)
-}
-
-/// The texture with the most corners. Ties go to the one met first in corner order.
-fn dominant_texture(textures: [u8; 4]) -> u8 {
-    let mut best = textures[0];
-    let mut best_count = 0;
-    for &texture in &textures {
-        let count = textures.iter().filter(|&&t| t == texture).count();
-        if count > best_count {
-            best_count = count;
-            best = texture;
-        }
-    }
-    best
 }
 
 fn tile_vertices(
@@ -968,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn dominant_texture_and_overlay_weights() {
+    fn lowest_texture_is_the_base_and_higher_ones_use_their_corner_mask() {
         // Corners in order (0,0), (1,0), (1,1), (0,1): textures 3, 5, 5, 3.
         // Row-major indices: corner (1,1) is index 3 and corner (0,1) is index 2.
         let mut points = flat(2, 2);
@@ -981,15 +1032,63 @@ mod tests {
         let mesh = build_mesh(&t, options).unwrap();
         assert_eq!(mesh.ground.quad_count(), 1);
         assert_eq!(mesh.overlays.quad_count(), 1);
-        // Tie: texture 3 is met first, so it is the base.
+        // Texture 3 is the lower id, so it is the opaque base even with two corners.
         let base = options.atlas.cell_uv(3, 0).to_array();
         assert_eq!(mesh.ground.vertices[0].cell, base);
-        let overlay_cell = options.atlas.cell_uv(5, 0).to_array();
-        let weights: Vec<f32> = mesh.overlays.vertices.iter().map(|v| v.color[3]).collect();
-        assert_eq!(weights, vec![0.0, 1.0, 1.0, 0.0]);
-        assert!(mesh.overlays.vertices.iter().all(|v| v.cell == overlay_cell));
-        // Base is opaque everywhere.
         assert!(mesh.ground.vertices.iter().all(|v| v.color[3] == 1.0));
+        // Texture 5 uses corners 1 and 2: mask 0b0110, and its shape alpha does the blending.
+        let overlay_cell = options.atlas.transition_uv(5, 0b0110).to_array();
+        assert!(mesh.overlays.vertices.iter().all(|v| v.cell == overlay_cell));
+        assert!(mesh.overlays.vertices.iter().all(|v| v.color[3] == 1.0));
+    }
+
+    #[test]
+    fn base_is_the_lowest_id_even_with_fewer_corners() {
+        // Texture 7 at one corner, texture 2 at three: 2 is the base, 7 is drawn on top.
+        let mut points = flat(2, 2);
+        points[0].texture = 7;
+        points[1].texture = 2;
+        points[3].texture = 2;
+        points[2].texture = 2;
+        let options = MeshOptions::default();
+        let mesh = build_mesh(&terrain(2, 2, &points), options).unwrap();
+        assert_eq!(mesh.ground.vertices[0].cell, options.atlas.cell_uv(2, 0).to_array());
+        assert_eq!(mesh.overlays.quad_count(), 1);
+        assert_eq!(
+            mesh.overlays.vertices[0].cell,
+            options.atlas.transition_uv(7, 0b0001).to_array()
+        );
+    }
+
+    #[test]
+    fn corner_mask_maps_to_its_transition_cell() {
+        // Bit k = tile corner k. The image corners of the cells are TL, TR, BR, BL, which are
+        // tile corners 0..3 (CORNER_UV), so one corner alone is a single-corner shape.
+        assert_eq!(SheetLayout::GRID_4X4.transition(0b0001), (0, 2)); // TL only: cell 8
+        assert_eq!(SheetLayout::GRID_4X4.transition(0b0010), (0, 1)); // TR only: cell 4
+        assert_eq!(SheetLayout::GRID_4X4.transition(0b0100), (1, 0)); // BR only: cell 1
+        assert_eq!(SheetLayout::GRID_4X4.transition(0b1000), (2, 0)); // BL only: cell 2
+        assert_eq!(SheetLayout::GRID_4X4.transition(0b1111), (3, 3)); // all: cell 15
+        // Every non-empty mask has its own cell.
+        let mut seen = std::collections::HashSet::new();
+        for mask in 1..16u8 {
+            assert!(seen.insert(SheetLayout::GRID_4X4.transition(mask)), "mask {mask}");
+        }
+        assert_eq!(seen.len(), 15);
+    }
+
+    #[test]
+    fn extended_sheet_keeps_variations_in_its_right_half() {
+        let mut atlas = AtlasLayout::square(256);
+        atlas.slots[1].sheet = SheetLayout { cols: 8, rows: 4 };
+        atlas.slots[1].height = 128;
+        // Slot 1 starts at x = 256 in a 1024 atlas. Its left half (x < 384) holds the
+        // transitions, its right half the variations.
+        let half = 384.0 / atlas.size() as f32;
+        let transition = atlas.transition_uv(1, 0b0001);
+        let variation = atlas.cell_uv(1, 5);
+        assert!(transition.min[0] < half);
+        assert!(variation.min[0] > half);
     }
 
     #[test]
@@ -1083,8 +1182,8 @@ mod tests {
         let layout = AtlasLayout::square(64);
         let mut seen = Vec::new();
         for texture in 0..16u8 {
-            for variation in 0..16u8 {
-                let r = layout.cell_uv(texture, variation);
+            for mask in 1..16u8 {
+                let r = layout.transition_uv(texture, mask);
                 assert!(r.min[0] > 0.0 && r.min[1] > 0.0);
                 assert!(r.min[0] + r.size[0] < 1.0 && r.min[1] + r.size[1] < 1.0);
                 // Inside the sheet of this texture (4x4 sheets in the atlas).
@@ -1097,7 +1196,7 @@ mod tests {
         }
         seen.sort();
         seen.dedup();
-        assert_eq!(seen.len(), 256, "every (texture, variation) has its own cell");
+        assert_eq!(seen.len(), 240, "every (texture, mask) has its own cell");
     }
 
     #[test]
@@ -1106,7 +1205,18 @@ mod tests {
         let atlas = build_atlas(layout, &[]);
         assert_eq!(atlas.size, 128);
         assert_eq!(atlas.rgba.len(), 128 * 128 * 4);
-        assert!(atlas.rgba.chunks(4).all(|px| px[3] == 255));
+        // Full-tile cell 15 of every slot is opaque; the other cells carry transition alpha.
+        for slot in 0..16u32 {
+            let (sx, sy) = (slot % 4, slot / 4);
+            let x0 = sx * 32 + 24;
+            let y0 = sy * 32 + 24;
+            for py in y0..y0 + 8 {
+                for px in x0..x0 + 8 {
+                    let i = ((py * 128 + px) * 4 + 3) as usize;
+                    assert_eq!(atlas.rgba[i], 255, "slot {slot} cell 15 texel {px},{py}");
+                }
+            }
+        }
         // Different slots have different average colours.
         let average = |slot: u32| {
             let (sx, sy) = (slot % 4, slot / 4);
