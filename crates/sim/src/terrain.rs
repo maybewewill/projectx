@@ -462,7 +462,7 @@ impl TerrainGrid {
     /// deformation term (mode bit 4) is not modelled.
     fn corner_z(&self, tx: u32, ty: u32) -> f32 {
         let c = self.at(tx, ty);
-        let bits = ((u32::from(c.height) | 0x22C000) << 9) as u32;
+        let bits = (u32::from(c.height) | 0x22C000) << 9;
         let mut v9 = (f64::from(f32::from_bits(bits)) - 6144.0) as f32;
         // mode & 1: fild(layer) * 128 + (-256) + v9
         v9 = (f64::from(c.level()) * f64::from(LEVEL_HEIGHT) + f64::from(LEVEL_BASE) + f64::from(v9)) as f32;
@@ -480,8 +480,10 @@ impl TerrainGrid {
     fn interpolate(dx: f32, dy: f32, c: [f32; 4]) -> f32 {
         let vx = (f64::from(dx) * K) as f32;
         let vy = (K * f64::from(dy)) as f32;
-        // a NaN passes the range tests (the original's flag test lets unordered through)
-        if vx < LO || HI < vx || vy < LO || HI < vy {
+        // a NaN passes the range tests (the original's flag test lets unordered through), so no `contains`
+        #[allow(clippy::manual_range_contains)]
+        let outside = vx < LO || HI < vx || vy < LO || HI < vy;
+        if outside {
             return 0.0;
         }
         let mut m = c[0];

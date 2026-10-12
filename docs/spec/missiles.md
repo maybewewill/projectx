@@ -353,3 +353,34 @@ step, for `ChanceToMiss` 0.0 / 0.25 / 1.0; a melee attack takes none) and `uphil
 meaning of `rec+0x68` bit `0x400` (the sim assumes 0, as in the direct-path gate); `MissDamageReduction` for the splash
 types; whether the other launch callers (`0x6F07E8F8`, `0x6F0988D6`, ... 17 call sites of `0x6F2C3F70`, spells and the other
 missile classes) also reach the draw (they share the launch function, so the draw is LIKELY for them too).
+
+## 10. Terrain level, and the flight (S13, 2026-10-12; CONFIRMED by Unicorn unless marked)
+
+**Terrain level (corrects 9.5/9.6).** The level function `0x6F0128C0` is the layer nibble of the nearest `w3e` corner
+(raised by a ramp-object list that the model leaves empty); the cell origin is the **whole-map minimum corner**, not the
+playable minimum. Everything is in `docs/spec/terrain.md` and `crates/sim/src/terrain.rs`; `Game::set_terrain` installs the
+grid as the `CliffLevels` provider, and the engine does so at boot, so the uphill miss now fires in real games.
+
+**Flight (corrects 3.5, which had the speed and the arc swapped).** The launch record's `+0x4C` is the **Missilespeed**
+(slot `0x2C8` -> `0x6F32D1D0` -> table `rangeMissileSpeed`) and `+0x50` the **arc** (slot `0x2C4` -> `0x6F32D180` -> table
+`rangeMissileArc`); `+0x64` is the homing, `+0x54` the slot-`0x2D0` value (`ability+0xE8[weapon]`, not decoded). The missile
+copies `rec+0x4C` into the property object at `missile+0x50` (value at `missile+0x54`, `0x6F2C3C40`) and `rec+0x50` into the
+property at `missile+0x88` (value at `+0x8C`, `0x6F2C3F70`). So in the move issue `0x6F497080` the pointer `a3` is the
+**speed in cells per second** (`Missilespeed / 32`), `a6` the arc, and `a5` the float `60.0`.
+
+The path request `0x6F496D10(move vector in cells, &speed, &arc, M+0x38, M+0x50, &T)` (Unicorn,
+`tools/emu/missile_cap_emu.py`, 1,500 vectors, 0 mismatches; `missiles::path_request`):
+* `S = dx*dx + dy*dy` (horizontal only; the Z only enters the vertical terms), `T = sqrt(S) / speed` (soft float).
+* **Refused** (all outputs 0) when `S` is not positive, the speed is not positive, or `T < 0.1` s (soft compare with 0.1f).
+* Otherwise the velocity is `(dx, dy) * recip(T)` (cells per second, magnitude = speed) at `M+0x50`, and the vertical
+  parabola terms at `M+0x38` are `(-c / T, c)` with `c = 4 * arc * speed + dz / T` (arc as a fraction of the distance;
+  presentation only).
+* `0x6F497080` then takes `T' = min(T, 299.0, 60.0)` (299.0 = the clock horizon 300.0 minus 1.0; 60.0 = the fifth argument
+  `a5`) and passes it to `0x6F4AA6A0` as the move's duration (LIKELY: `0x6F4AA6A0` -> `0x6F4AA630` creates the completion
+  event), then `0x6F4969F0` sets the velocity and the unit-speed cap to FLT_MAX: **the missile is not clamped by the 522.67
+  unit speed bound** (`0x6F4AA560` only sets the mover flag word at `M+0x30`).
+
+The sim now uses `missiles::flight_time` (this path request in cell units, capped at 60 s): the old `distance / speed`
+gave the same bits above 0.1 s and a nonzero time below it; a flight shorter than 0.1 s now arrives at the next timer
+pump (T = 0). Still open: the dimension of `4AA6A0`'s duration argument beyond "seconds" (LIKELY), the launch/impact offsets
+in the distance (the sim uses the unit positions), `rec+0x54`, homing.

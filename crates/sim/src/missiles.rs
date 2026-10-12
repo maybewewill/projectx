@@ -226,6 +226,67 @@ pub fn flight_seconds(distance: F32, speed: F32, tables: &Tables) -> F32 {
     arith::div(distance, speed, tables)
 }
 
+/// The result of the path request `0x6F496D10` of a missile launch (cell units): the flight time and the velocity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathRequest {
+    /// The flight time `T = len / A` in seconds; zero when the request is refused.
+    pub time: F32,
+    /// The velocity in cells per second (the move vector times `1 / T`).
+    pub vx: F32,
+    pub vy: F32,
+}
+
+/// The shortest flight the path request accepts, `0.1` s (`T >= 0.1` after the soft division; a shorter flight gives
+/// the all-zero answer: no velocity and time 0).
+const MIN_FLIGHT: F32 = F32::from_bits(0x3DCC_CCCD);
+
+/// The path request of the move-target routine `0x6F497080` for a missile (CONFIRMED against the original in
+/// Unicorn, `tools/emu/missile_cap_emu.py`, 1,500 vectors): `(dx, dy)` is the horizontal move in **cells**, `speed` the
+/// horizontal speed in **cells per second** (the launch record's `+0x4C` Missilespeed divided by 32). The flight time is
+/// `sqrt(dx^2 + dy^2) / speed` in soft float; the velocity is `(dx, dy) * recip(T)`. A speed that is not positive, a
+/// zero move or a time below 0.1 s gives the all-zero answer. The Z of the launch and of the target only enters the
+/// vertical arc terms (not modelled). Because only the exponents differ, the same time bits come out of world units over
+/// world units per second.
+pub fn path_request(dx: F32, dy: F32, speed: F32, tables: &Tables) -> PathRequest {
+    let zero = PathRequest {
+        time: F32::ZERO,
+        vx: F32::ZERO,
+        vy: F32::ZERO,
+    };
+    let s = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
+    if !arith::gt(s, F32::ZERO) || !arith::gt(speed, F32::ZERO) {
+        return zero;
+    }
+    let time = arith::div(math::sqrt(s, tables), speed, tables);
+    if arith::lt(time, MIN_FLIGHT) {
+        return zero;
+    }
+    let r = arith::recip(time, tables);
+    PathRequest {
+        time,
+        vx: arith::mul(dx, r),
+        vy: arith::mul(dy, r),
+    }
+}
+
+/// The longest flight the move issue allows, `60.0` s (the float passed as the fifth argument of `0x6F497080`, taken as
+/// the move's maximum time: `min(T, 299.0, 60.0)` before the mover is told the duration; `299.0` is the clock horizon
+/// minus 1.0). CONFIRMED structure (disassembly of `0x6F497080`); the use of the value as a duration is LIKELY.
+pub const MAX_FLIGHT: F32 = F32::from_bits(0x4270_0000);
+
+/// The flight time in game seconds of a missile that moves `(dx, dy)` world units at `speed` world units per second:
+/// [`path_request`] in cell units (exact `1/32` scaling), capped at [`MAX_FLIGHT`]. A refused request (speed not
+/// positive, or a flight below 0.1 s) gives zero, so the arrival is at the next timer pump.
+pub fn flight_time(dx: F32, dy: F32, speed: F32, tables: &Tables) -> F32 {
+    use crate::pathing::scale_by_1_32 as cells;
+    let r = path_request(cells(dx), cells(dy), cells(speed), tables);
+    if arith::lt(MAX_FLIGHT, r.time) {
+        MAX_FLIGHT
+    } else {
+        r.time
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

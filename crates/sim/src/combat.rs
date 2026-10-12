@@ -954,15 +954,15 @@ impl Game {
         }
     }
 
-    /// The flight time of a missile: the distance over the speed (see [`crate::missiles::flight_seconds`], LIKELY in
-    /// form, UNSURE in value). Zero without the tables (the square root and the division need them).
+    /// The flight time of a missile: the path request of the move issue (see [`crate::missiles::flight_time`], CONFIRMED
+    /// against `0x6F496D10` in Unicorn: horizontal distance over speed, refused below 0.1 s, capped at 60 s). Zero
+    /// without the tables (the square root and the division need them).
     fn impact_delay(&self, attacker: ObjKey, target: ObjKey, speed: F32) -> F32 {
         let Some(tables) = self.order_tables() else {
             return F32::ZERO;
         };
         let (a, b) = (self.unit(attacker), self.unit(target));
-        let distance = missiles::distance(arith::sub(a.x, b.x), arith::sub(a.y, b.y), tables);
-        missiles::flight_seconds(distance, speed, tables)
+        missiles::flight_time(arith::sub(a.x, b.x), arith::sub(a.y, b.y), speed, tables)
     }
 
     /// The arrival of a missile (slot 47, [`crate::missiles::arrival`]): the rolled damage goes through when the target
