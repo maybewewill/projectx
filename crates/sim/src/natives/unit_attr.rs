@@ -797,12 +797,15 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         if let Some(k) = unit_at(&gm, a, 0) {
             let h = real_at(a, 1);
+            let rate = real_at(a, 2);
             let stored = if arith::gt(h, F32::ZERO) {
                 h
             } else {
                 FLY_HEIGHT_FLOOR
             };
-            gm.unit_mut(k).fly_height = stored;
+            // The target field answers GetUnitFlyHeight at once; the property that the unit's height reads climbs at
+            // `rate` (docs/spec/terrain.md section 6.3).
+            gm.set_fly_height(k, stored, rate);
         }
         NativeResult::Return(Value::Null)
     });

@@ -287,6 +287,259 @@ pub fn flight_time(dx: F32, dy: F32, speed: F32, tables: &Tables) -> F32 {
     }
 }
 
+/// The rotation about the z axis by `angle` radians as the original builds it (`0x6F4AFCD0` with the axis `(0, 0, 1)`
+/// and the "already unit" flag, sine and cosine from `0x6F6EF990`): the nine soft-float terms of the axis-angle form, in
+/// the original's order and with its zero terms (they can produce `-0.0`). CONFIRMED by Unicorn
+/// (`tools/emu/missile_launchpoint_emu.py`, 1,500 vectors through [`launch_point`]).
+pub fn rotation_z(angle: F32, tables: &Tables) -> [F32; 9] {
+    let s = math::sin(angle, tables);
+    let c = math::cos(angle, tables);
+    let (kx, ky, kz) = (F32::ZERO, F32::ZERO, F32::ONE);
+    let (kxx, kyy, kzz) = (arith::mul(kx, kx), arith::mul(ky, ky), arith::mul(kz, kz));
+    let (kxy, kyz, kzx) = (arith::mul(kx, ky), arith::mul(ky, kz), arith::mul(kz, kx));
+    let (kxs, kys, kzs) = (arith::mul(kx, s), arith::mul(ky, s), arith::mul(kz, s));
+    let oc = arith::sub(F32::ONE, c);
+    [
+        arith::add(arith::mul(oc, kxx), c),
+        arith::add(arith::mul(oc, kxy), kzs),
+        arith::sub(arith::mul(oc, kzx), kys),
+        arith::sub(arith::mul(oc, kxy), kzs),
+        arith::add(arith::mul(oc, kyy), c),
+        arith::add(arith::mul(oc, kyz), kxs),
+        arith::add(arith::mul(oc, kzx), kys),
+        arith::sub(arith::mul(oc, kyz), kxs),
+        arith::add(arith::mul(oc, kzz), c),
+    ]
+}
+
+/// The point a ranged attack's projectile starts at (`0x6F29E6A0`, CONFIRMED by Unicorn, 1,500 vectors,
+/// `tests/missile_launchpoint.rs`): the unit's 3-D position (`pos` the normalised x/y, `unit_z` the height of the unit's
+/// vtable slot `0xE4`) plus the launch offset `offset = (launchX, launchY, launchZ)` rotated about z by the facing
+/// (`angle`, radians). When the unit flag `+0x20 & 0x1000` is set the global vector at `0x6FAB44AC` (`global_add`)
+/// is added to the position first. `out = pos + R * offset` with the matrix-vector products summed in the original's
+/// order.
+pub fn launch_point(
+    pos: (F32, F32),
+    unit_z: F32,
+    angle: F32,
+    offset: [F32; 3],
+    global_add: Option<[F32; 3]>,
+    tables: &Tables,
+) -> [F32; 3] {
+    let m = rotation_z(angle, tables);
+    let o = offset;
+    let x = arith::add(
+        arith::add(arith::mul(o[0], m[0]), arith::mul(o[1], m[3])),
+        arith::mul(o[2], m[6]),
+    );
+    let y = arith::add(
+        arith::add(arith::mul(o[0], m[1]), arith::mul(o[1], m[4])),
+        arith::mul(o[2], m[7]),
+    );
+    let z = arith::add(
+        arith::add(arith::mul(o[1], m[5]), arith::mul(o[0], m[2])),
+        arith::mul(o[2], m[8]),
+    );
+    let mut p = [pos.0, pos.1, unit_z];
+    if let Some(g) = global_add {
+        for i in 0..3 {
+            p[i] = arith::add(p[i], g[i]);
+        }
+    }
+    [
+        arith::add(p[0], x),
+        arith::add(p[1], y),
+        arith::add(p[2], z),
+    ]
+}
+
+/// A mover's position in cells at the cell term `term` (`0x6F38B0B0`): `add(x0, mul(vx, term))`.
+pub fn cell_position(x0: F32, vx: F32, term: F32) -> F32 {
+    arith::add(x0, arith::mul(vx, term))
+}
+
+/// The shortest completion timer the mover event accepts, `1e-4` s (`0x6F4AA630` replaces a smaller duration, a refused
+/// flight included, by the constant at `0x6FAAE478`; NaN is kept).
+pub const MIN_TIMER: F32 = F32::from_bits(0x38D1_B717);
+
+/// The flight setup of a missile from its launch point to the completion event (CONFIRMED by Unicorn,
+/// `tools/emu/missile_flight_emu.py`, 1,500 vectors, `tests/missile_flight.rs`: the real chain `0x6F47A4A0`,
+/// `0x6F47A650`, `0x6F497080`, `0x6F4AA6A0`, `0x6F4AA630`, with the position object stubbed):
+///
+/// * every coordinate is converted to **cells** as the mover does: `scale(v - origin)` for x and y, `scale(v)` for z and
+///   the speed (exponent minus 5 with the underflow mask, [`crate::pathing::scale_by_1_32`]);
+/// * the move vector is `target - start` in cells (the start cell is the converted launch point, the step term is
+///   `+0` for a fresh missile), the duration the path request [`path_request`] (`sqrt(dx^2 + dy^2) / speed` in soft
+///   float, refused, i.e. 0, below 0.1 s);
+/// * `T' = min(T, horizon - 1.0, 60.0)` (strict compares), then `0x6F4AA630` replaces a duration below `1e-4` by
+///   [`MIN_TIMER`], and the completion event is due at `now + duration` (soft add).
+///
+/// `speed` is the launch record's Missilespeed in world units per second, `horizon` the agile clock's `300.0`.
+pub fn flight_duration(
+    launch: (F32, F32),
+    target: (F32, F32),
+    origin: (F32, F32),
+    speed: F32,
+    horizon: F32,
+    tables: &Tables,
+) -> F32 {
+    use crate::pathing::scale_by_1_32 as cells;
+    let tx = cells(arith::sub(target.0, origin.0));
+    let ty = cells(arith::sub(target.1, origin.1));
+    flight_duration_cells(
+        (
+            cells(arith::sub(launch.0, origin.0)),
+            cells(arith::sub(launch.1, origin.1)),
+        ),
+        (tx, ty),
+        speed,
+        horizon,
+        tables,
+    )
+}
+
+/// [`flight_duration`] from cell coordinates: `start` is the launch point already in cells, `target` the point to fly to
+/// in cells. A **homing** missile (launch record `+0x64`) flies to the followed target's *current* cell position
+/// (`0x6F497260`: the target mover's `0x6F38B0B0` position, [`cell_position`], no origin subtraction, no lead); the
+/// completion timer is the same expression (CONFIRMED by Unicorn through `0x6F47A650`, `tests/missile_flight.rs`).
+pub fn flight_duration_cells(
+    start: (F32, F32),
+    target: (F32, F32),
+    speed: F32,
+    horizon: F32,
+    tables: &Tables,
+) -> F32 {
+    use crate::pathing::scale_by_1_32 as cells;
+    // the stored start cell goes through the position object: x = add(x0, mul(step, term)) with a zero step
+    let sx = arith::add(start.0, F32::ZERO);
+    let sy = arith::add(start.1, F32::ZERO);
+    let dx = arith::sub(target.0, sx);
+    let dy = arith::sub(target.1, sy);
+    let mut t = path_request(dx, dy, cells(speed), tables).time;
+    let h = arith::sub(horizon, F32::ONE);
+    if h.to_f32() < t.to_f32() {
+        t = h;
+    }
+    if MAX_FLIGHT.to_f32() < t.to_f32() {
+        t = MAX_FLIGHT;
+    }
+    if MIN_TIMER.to_f32() > t.to_f32() {
+        t = MIN_TIMER;
+    }
+    t
+}
+
+const TWO: F32 = F32::from_bits(0x4000_0000);
+const FOUR: F32 = F32::from_bits(0x4080_0000);
+const NEG_HALF: F32 = F32::from_bits(0xBF00_0000);
+
+/// A target's step vector in world units per second (`0x6F476390`, CONFIRMED by Unicorn through the launch): the stored
+/// cells-per-second component with 5 added to the exponent (times 32) when the exponent field is not zero.
+pub fn step_to_world(cells_per_second: F32) -> F32 {
+    let b = cells_per_second.to_bits();
+    F32::from_bits(b.wrapping_add(if b & 0x7F80_0000 != 0 { 0x0280_0000 } else { 0 }))
+}
+
+/// The roots of `a t^2 + b t + c = 0` as the original's solver `0x6F4B3000` returns them (CONFIRMED, Unicorn through the
+/// launch): `None` when `4ac >= b^2`; otherwise `(smaller, larger)` from `q = -0.5 (b -/+ sqrt(disc))` (minus when
+/// `b <= 0`, plus otherwise), the roots `q*q * recip(a*q)` and `c*a * recip(a*q)` (products with a reciprocal, not
+/// divisions).
+pub fn solve_quadratic(a: F32, b: F32, c: F32, tables: &Tables) -> Option<(F32, F32)> {
+    let four_ac = arith::mul(arith::mul(FOUR, a), c);
+    let b2 = arith::mul(b, b);
+    if four_ac.to_f32() >= b2.to_f32() {
+        return None;
+    }
+    let root = math::sqrt(arith::sub(b2, four_ac), tables);
+    let sum = if F32::ZERO.to_f32() >= b.to_f32() {
+        arith::sub(b, root)
+    } else {
+        arith::add(b, root)
+    };
+    let q = arith::mul(sum, NEG_HALF);
+    let r = arith::recip(arith::mul(a, q), tables);
+    let t_a = arith::mul(arith::mul(q, q), r);
+    let t_b = arith::mul(arith::mul(c, a), r);
+    if t_b.to_f32() <= t_a.to_f32() {
+        Some((t_b, t_a))
+    } else {
+        Some((t_a, t_b))
+    }
+}
+
+/// The point a missile is aimed at (the launch `0x6F2C3F70`, the branch of a launch that does not miss; CONFIRMED by
+/// Unicorn, `tools/emu/missile_launch_emu.py`, 1,800 vectors, `tests/missile_lead.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchTarget {
+    pub x: F32,
+    pub y: F32,
+    /// The target's ground height plus the impact offset (target vtable slots `0xE4` and `0x118`).
+    pub z: F32,
+    /// The intercept equation had a solution (the point is led and clamped).
+    pub intercepted: bool,
+}
+
+/// The aimed point: the target's position `(px, py)` is **led** by its velocity (`step`, cells per second as stored)
+/// to where a missile of `speed` (world units per second) launched from `(lx, ly)` meets it (`t` = the larger root of
+/// `|d + v t| = speed t`; it is the larger root even when negative), clamped into the whole-map rectangle
+/// `rect = (y0, x0, y1, x1)` (`0x6F00F560`). With no solution the point is the target's position. `z` = `ground`
+/// plus `impact` (soft add) in both cases.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
+pub fn launch_target(
+    launch: (F32, F32),
+    pos: (F32, F32),
+    step: (F32, F32),
+    speed: F32,
+    ground: F32,
+    impact: F32,
+    rect: [F32; 4],
+    tables: &Tables,
+) -> LaunchTarget {
+    let z = arith::add(ground, impact);
+    let (vx, vy) = (step_to_world(step.0), step_to_world(step.1));
+    let dy = arith::sub(pos.1, launch.1);
+    let dx = arith::sub(pos.0, launch.0);
+    let c = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
+    let dv = arith::add(arith::mul(dx, vx), arith::mul(dy, vy));
+    let vv = arith::add(arith::mul(vx, vx), arith::mul(vy, vy));
+    let b = arith::mul(dv, TWO);
+    let a = arith::sub(vv, arith::mul(speed, speed));
+    match solve_quadratic(a, b, c, tables) {
+        None => LaunchTarget {
+            x: pos.0,
+            y: pos.1,
+            z,
+            intercepted: false,
+        },
+        Some((_, t)) => {
+            let ey = arith::mul(vy, t);
+            let ex = arith::mul(vx, t);
+            let mut x = arith::add(pos.0, ex);
+            let mut y = arith::add(pos.1, ey);
+            let z = arith::add(z, F32::ZERO);
+            // x: min with the upper bound (ties give the bound), then max with the lower bound (ties give the bound).
+            if !(rect[3].to_f32() > x.to_f32()) {
+                x = rect[3];
+            }
+            if !(rect[1].to_f32() < x.to_f32()) {
+                x = rect[1];
+            }
+            if !(rect[2].to_f32() > y.to_f32()) {
+                y = rect[2];
+            }
+            if !(rect[0].to_f32() < y.to_f32()) {
+                y = rect[0];
+            }
+            LaunchTarget {
+                x,
+                y,
+                z,
+                intercepted: true,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

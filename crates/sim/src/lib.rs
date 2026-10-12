@@ -53,6 +53,7 @@ pub mod unit_counts;
 pub mod unitclass;
 pub mod unit_position;
 mod unit_stats;
+pub mod unitz;
 pub mod vision;
 
 mod pe;

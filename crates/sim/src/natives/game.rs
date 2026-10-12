@@ -647,6 +647,14 @@ pub struct UnitObj {
     pub prop_window: F32,
     /// Fly height (object `+0x208`). Set by `SetUnitFlyHeight`, which keeps a non-positive value at 0.01.
     pub fly_height: F32,
+    /// The climbing fly-height property (`unit+0x214`, `crate::unitz`): its value at `fly_t0`, the game time of its last
+    /// change, its slope (units per second, signed), the lower and upper limits and the time the slope lasts.
+    pub fly_from: F32,
+    pub fly_t0: F32,
+    pub fly_slope: F32,
+    pub fly_lo: F32,
+    pub fly_hi: F32,
+    pub fly_for: F32,
     /// Acquire range (`SetUnitAcquireRange`, read through the acquisition sub-object).
     pub acquire_range: F32,
     /// Scale (`SetUnitScale`). Only the first scale value is stored (see `natives/unit_attr.rs`).

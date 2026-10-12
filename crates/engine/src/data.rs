@@ -174,6 +174,19 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         // The order data (the fixed move and attack ability slots) is set before any unit of the type can be
         // created: units take their abilities at creation (`natives/unit.rs`).
         game.set_type_orders(id, type_order_data(ty));
+        // The launch offset and the impact height of the weapon row (`docs/spec/missiles.md` section 11); the arc and the
+        // homing flag come from the profile text (`objdata`).
+        game.set_missile_data(
+            id,
+            sim::combat::MissileData {
+                launch: [soft(ty.launch[0]), soft(ty.launch[1]), soft(ty.launch[2])],
+                launch_swim_z: soft(ty.launch_swim_z),
+                impact_z: soft(ty.impact_z),
+                impact_swim_z: soft(ty.impact_swim_z),
+                arc: F32::ZERO,
+                homing: false,
+            },
+        );
         // Hero attributes (STR, AGI and their gains) of a hero type; a hero starts from them (`sim::heroes`).
         if is_hero_type(id) {
             game.set_hero_attributes(id, hero_attributes(ty));

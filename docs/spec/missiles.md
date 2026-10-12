@@ -382,5 +382,101 @@ The path request `0x6F496D10(move vector in cells, &speed, &arc, M+0x38, M+0x50,
 
 The sim now uses `missiles::flight_time` (this path request in cell units, capped at 60 s): the old `distance / speed`
 gave the same bits above 0.1 s and a nonzero time below it; a flight shorter than 0.1 s now arrives at the next timer
-pump (T = 0). Still open: the dimension of `4AA6A0`'s duration argument beyond "seconds" (LIKELY), the launch/impact offsets
-in the distance (the sim uses the unit positions), `rec+0x54`, homing.
+pump (T = 0). (Closed in section 11: the duration is seconds of the agile clock, the launch and impact offsets, the lead
+and homing are decoded and run in Unicorn; `rec+0x54` is copied to `missile+0x58` and not read by the flight.)
+
+## 11. The rest of the flight: aimed point, launch point, completion timer, homing (S18, 2026-10-12)
+
+Labels as before. Everything marked CONFIRMED was run in Unicorn against the real routines (harnesses in `tools/emu/`,
+vectors in `crates/sim/tests/`); the Rust is in `crates/sim/src/missiles.rs`.
+
+### 11.1 The aimed point (`0x6F2C3F70`, the branch of a launch that does not miss) - CONFIRMED, 1,800 vectors
+
+`tools/emu/missile_launch_emu.py` runs the real launch with the stubs listed in its header (target position, height and
+impact slots, normaliser, handle lookup, miss gate, world rectangle; the tail `0x6F2C3CF0` captures its argument; the
+target slot `0xE4` takes four stack arguments, a three-argument stub shifts the frame and gave a first, wrong layout).
+Result (`tests/missile_lead.rs`, 0 mismatches, 1,256 of the 1,800 rows have an intercept):
+
+* The target's z is `add(ground z, impact)`: the height of the target's vtable slot `0xE4` (`0x6F281F50`, see
+  `terrain.md` section 6: the unit's own height, ground plus fly height) plus slot `0x118` (`0x6F29E570`: the target
+  type's `impactZ`, `impactSwimZ` for a swimmer). This is the only place the impact height is used; it does not enter the
+  flight time.
+* The point is **led**: the target's step vector (`0x6F476390`: the stored cells-per-second components, exponent plus 5,
+  i.e. times 32, world units per second) is intercepted. With `d = target - launch` (launch = `rec.x, rec.y`),
+  `C = d.d`, `B = 2 (d.v)`, `A = v.v - speed^2` (all soft float, the products in the order of the trace), the solver
+  `0x6F4B3000` returns none when `4AC >= B^2`; else `q = -0.5 (B -/+ sqrt(B^2 - 4AC))` (minus when `0 >= B`, plus
+  otherwise), the roots `q*q * recip(A*q)` and `C*A * recip(A*q)` (reciprocal products, not divisions), ordered. The launch
+  uses the **larger root, even when it is negative** (a target running away faster than the missile yields a point behind
+  the target). Point = `target + v * t` (soft adds; `add(z, 0.0)` for z), then clamped into the whole-map rectangle
+  `0x6F00F560` = `(y0, x0, y1, x1)`: x to `[x0, x1]`, y to `[y0, y1]`, each bound taking the tie. With no intercept the
+  point is the target's position, unclamped.
+* A launch that **misses** (section 9) keeps the unled position and scales `rec+0x44/0x48` by `MissDamageReduction`.
+
+### 11.2 The launch point (`0x6F29E6A0`) - CONFIRMED, 1,500 vectors
+
+`rec.x/y/z` (`rec+0..8`, written by the record constructor `0x6F02E260`) is **not** the shooter's position:
+`0x6F29E6A0(unit)` returns `position + R * O`:
+
+* position = the normaliser (`0x6F4743A0`) for x and y and the unit height (vtable slot `0xE4`) for z; when the unit flag
+  `+0x20 & 0x1000` is set the global vector at `0x6FAB44AC` is added first (`0x6F2835A0`, `0x6F1D2B10`); the final sum is
+  `add(position_i, rotated_i)`.
+* `O` = `0x6F29E5F0`: the weapon's launch vector `(launchX, launchY, launchZ)` of the unit's record (type branch
+  `0x6F29C790`; the unit-side copy at `+0x230..` stores it in an order that was not read, the model uses the type branch,
+  LIKELY); under water (movement word 32 with the swim flag) z is `launchSwimZ`.
+* `R` = rotation about z by the facing (the position object's slot `0x1C`, radians): `0x6F4AFCD0` with the axis
+  `(0, 0, 1)` and the "unit axis" flag, sine and cosine from `0x6F6EF990` (the same bits as the separate softfloat sine and
+  cosine). The nine terms are formed with the axis-angle products, zero terms included (some come out as `-0.0`); `O` is
+  multiplied by `0x6F07B950`: `x' = O.x R0 + O.y R3 + O.z R6`, `y' = O.x R1 + O.y R4 + O.z R7`,
+  `z' = (O.y R5 + O.x R2) + O.z R8`. `missiles::{rotation_z, launch_point}`; `tests/missile_launchpoint.rs`.
+* The launch offset therefore enters the **horizontal distance** of the flight (the start cell is `rec.x/rec.y`); the launch
+  height does not (see 11.3).
+
+### 11.3 Flight setup and the completion timer - CONFIRMED, 1,500 vectors (500 homing)
+
+`tools/emu/missile_flight_emu.py` runs the real chain `0x6F47A4A0` (stores the start cell), `0x6F47A650`, `0x6F497080`,
+`0x6F4AA6A0`, `0x6F4AA630` with the position object stubbed (one fake object; the cell term `0x6F497460` is `+0.0`, the
+step vector zero, the store `0x6F4737D0` writes the converted point). Result (`tests/missile_flight.rs`):
+
+* The argument mapping of `0x6F47A650` (thiscall; `a2..a10`): `a2` = `&rec.z` (launch height), `a3..a5` = the aimed point,
+  `a6` = `&speed` (the missile's property value at `+0x54`, world units per second), `a7` = message `0xD019C`, `a8` = the
+  notified missile, `a9` = `&arc` (property value `+0x8C`), `a10` = the homing target (0 = point move). This corrects the
+  numbering of section 3.5. The launch copies (`0x6F2C3C40`) `rec+0x4C` to `missile+0x54` (speed), `rec+0x50` to `+0x8C` (arc),
+  `rec+0x54` to `missile+0x58` (nothing in the flight reads it), a non-zero `rec+0x5C` to missile flag `2` (bound to the
+  target), `rec+0x44/0x48` to `+0x40/+0x48`.
+* Cells: `cell(v) = scale(sub(v, origin))` for x and y (origin = world object `+0x6C/+0x70` = the whole-map minimum corner),
+  `scale(v)` for z and the speed (exponent minus 5 with the underflow mask): `unit_position::world_to_cell`. The aimed
+  point is first clamped into the playable area (`0x6F469490`, `clamp_unit_move`; identity in the harness).
+* Move vector = target cells minus start cells; `T` = the path request of section 10 (`sqrt(dx^2 + dy^2) / speed`, refused
+  below 0.1 s); `T' = min(T, horizon - 1.0, 60.0)` (strict compares, NaN keeps `T`), `horizon` = the agile clock's `300.0`
+  (`queue+0x48`).
+* `0x6F4AA6A0(&T', 0)` -> `0x6F483290` selects the clock object (`world+0xBC`, or `+0x110` when bit 31 of the mover's `+0x14`
+  is set) -> `0x6F4AA630`: a duration **below 1e-4 is replaced by 1e-4** (`0x6FAAE478`; NaN is kept), the sequence counter
+  at `clock+0x50` is incremented and the event is due at `add(clock.now, duration)` (clock float at `+0x40`): the duration is
+  **seconds of the agile clock**; the event (record flag `0x20000`, queue `0x6F46AFA0`) delivers message `0xD019C` to the
+  missile. `missiles::{flight_duration, flight_duration_cells, MIN_TIMER}`.
+* **Homing** (`rec+0x64`, `MissileHoming`): `0x6F47A650` takes the `0x6F497260` branch: the target cell is the followed
+  target mover's position at that moment (`0x6F497460` + `0x6F38B0B0`: `add(x0, mul(vx, term))`, the Kin position of the sim;
+  no origin subtraction, no lead; the aimed point of 11.1 is ignored), the same `0x6F497080` computes `T`, the completion
+  timer is the same, and the target handle is stored at `M+0x68/0x6C` (a follower for the mover walk). CONFIRMED for the
+  first duration. UNSURE: whether the walk re-issues the duration while following (the arrival does not depend on it: it
+  uses the target's live position, section 6).
+
+### 11.4 What the sim does now
+
+`combat.rs::impact_delay`: launch point (11.2), then the aimed point (11.1) or the target's current cell (homing), then the
+playable clamp, then `flight_duration` (11.3); the Impact timer fires after that many seconds. The engine fills the launch
+offsets and impact heights from `UnitWeapons.slk` (`sim::combat::MissileData`) and `Missilespeed`, `Missilearc`,
+`MissileHoming` from the unit profile text (comma list, one entry per weapon; `objdata::MissileSpec`). Only the plain
+`missile` weapon kind (`weapTp` 2, the launch path read here) gets a timed flight in the engine; the other flying kinds
+keep the instant hit because their launch routines (`0x6F0409F0`, `0x6F040900`, ...) are not decoded.
+Tests: `tests/missile_lead.rs`, `missile_launchpoint.rs`, `missile_flight.rs` (Unicorn vectors), and
+`combat_natives.rs::the_launch_offset_shortens_the_flight_and_homing_flies_to_the_target`.
+
+### 11.5 Still open
+
+1. The unit-side order of the launch vector (`unit+0x230..0x23C`); the swimming variants (`launchSwimZ`, `impactSwimZ`) need
+   the swim flag `+0x280 & 0x20`, which the sim does not model.
+2. Whether the walk of a homing missile re-issues the completion timer; the splash, bounce and line launches.
+3. `BulletDeathTime`, the arc, and `rec+0x54` to `missile+0x58`.
+4. The start cell assumes a fresh position object (zero stored cell and step vector before the store, `F = 0`); a position
+   object that already had a position would store `add(F, sub(P, F))` as for units (`unit-position.md`).

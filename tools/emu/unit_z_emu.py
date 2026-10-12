@@ -1,0 +1,147 @@
+"""Unicorn check of the unit height (CUnit vtable slot 0xE4 = 0x6F281F50, Game.dll 1.26a): what GetLocationZ-like
+queries and the missile launch call "the unit's z".
+
+For an ordinary unit (flag word `+0x280` bit 3 clear, not a corpse) the height is
+    f32( fly + ground' )      with fly = the unit's fly-height property (vtable slot 0xE8 = 0x6F29E850) and
+    ground' = max(ground, water) when the movement word `+0x1FC` has a bit of 0x38, a water surface exists at the point
+              (0x6F00F5D0) and the unit is not (movement == 0x20 without the swim flag `+0x280 & 0x20`); else the ground.
+ground = 0x6F0126F0(ecx = -1, edx = a4, x, y, 1). The sum is x87 (53-bit), stored as a float.
+
+Real code that runs: 0x6F281F50. Stubbed: 0x6F26DE50 (returns 0), 0x6F0126F0 (ground supplied), 0x6F00F5D0 (water supplied),
+the fly-height slot 0xE8 (value supplied).
+
+Usage: GAME_DLL=... py tools/emu/unit_z_emu.py [--rs out.rs]
+"""
+import os
+import random
+import struct
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import emu  # noqa: E402
+from unicorn import UC_HOOK_CODE  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EIP, UC_X86_REG_ESP  # noqa: E402
+
+mu = emu.mu
+EXTRA = 0x00400000
+mu.mem_map(EXTRA, 0x10000)
+VT, PT, GROUNDF, FLYF, WATERF = (EXTRA + 0x100 * k for k in range(1, 6))
+UNIT = EXTRA + 0x4000
+CODE = EXTRA + 0x2000
+UNITZ, TYPECHK, GROUND, WATER = 0x6F281F50, 0x6F26DE50, 0x6F0126F0, 0x6F00F5D0
+CASE = {"water": None}
+CALLS = []
+
+
+def w32(a, v):
+    mu.mem_write(a, struct.pack("<I", v & 0xFFFFFFFF))
+
+
+def r32(a):
+    return struct.unpack("<I", bytes(mu.mem_read(a, 4)))[0]
+
+
+def fb(x):
+    return struct.unpack("<I", struct.pack("<f", x))[0]
+
+
+def bf(b):
+    return struct.unpack("<f", struct.pack("<I", b))[0]
+
+
+def ret_to(pop):
+    esp = mu.reg_read(UC_X86_REG_ESP)
+    mu.reg_write(UC_X86_REG_EIP, r32(esp))
+    mu.reg_write(UC_X86_REG_ESP, esp + 4 + pop)
+
+
+def hook(uc, eip, size, user):
+    if eip == TYPECHK:
+        mu.reg_write(UC_X86_REG_EAX, 0)
+        ret_to(4)
+    elif eip == GROUND:
+        CALLS.append(("ground", mu.reg_read(UC_X86_REG_ECX)))
+        # x87 return: jump to a stub that loads the supplied float and returns (ret 0xC: three stack arguments)
+        mu.reg_write(UC_X86_REG_EIP, S_GROUND)
+    elif eip == WATER:
+        out = mu.reg_read(UC_X86_REG_EDX)
+        if CASE["water"] is None:
+            mu.reg_write(UC_X86_REG_EAX, 0)
+        else:
+            w32(out, fb(CASE["water"]))
+            mu.reg_write(UC_X86_REG_EAX, 1)
+        ret_to(0)
+
+
+mu.hook_add(UC_HOOK_CODE, hook)
+S_GROUND, S_FLY = CODE, CODE + 0x20
+mu.mem_write(S_GROUND, b"\xD9\x05" + struct.pack("<I", GROUNDF) + b"\xC2\x0C\x00")  # fld [ground] ; ret 12
+mu.mem_write(S_FLY, b"\xD9\x05" + struct.pack("<I", FLYF) + b"\xC3")                 # fld [fly] ; ret
+w32(VT + 0xE8, S_FLY)
+w32(UNIT, VT)
+
+
+def run_bits(c):
+    mu.mem_write(UNIT + 4, b"\0" * 0x300)
+    w32(UNIT + 0x1FC, c["move"])
+    w32(UNIT + 0x280, 0x20 if c["swim"] else 0)
+    w32(UNIT + 0x5C, 0)
+    w32(UNIT + 0x200, 0)
+    w32(GROUNDF, fb(c["ground"]))
+    w32(FLYF, fb(c["fly"]))
+    w32(PT, fb(c["x"]))
+    w32(PT + 4, fb(c["y"]))
+    CASE["water"] = c["water"]
+    # the result is returned in st0: a stub epilogue stores it. Call through a thunk that stores st0 into memory.
+    emu.call(THUNK, ecx=UNIT, stack_args=(PT, 0xFFFFFFFF, 0, 0))
+    return r32(OUT)
+
+
+# thunk: push the four arguments again and call UNITZ with the same ecx, then store st0
+THUNK, OUT = CODE + 0x100, EXTRA + 0xA00
+code = bytearray()
+for off in (0x10, 0x10, 0x10, 0x10):         # re-push the four arguments in the same order (esp moves 4 per push)
+    code += bytes([0xFF, 0x74, 0x24, off])   # push dword [esp+off]  (esp shifts by 4 per push, offsets stay the same)
+code += bytes([0xBA]) + struct.pack("<I", UNITZ) + bytes([0xFF, 0xD2])       # mov edx,UNITZ ; call edx
+code += bytes([0xD9, 0x1D]) + struct.pack("<I", OUT) + bytes([0xC2, 0x10, 0x00])  # fstp [OUT] ; ret 16
+mu.mem_write(THUNK, bytes(code))
+
+
+def gen_case(rng, i):
+    f32 = lambda v: bf(fb(v))
+    return dict(
+        ground=f32(rng.choice([0.0, 10.0, -35.5, 128.0, rng.uniform(-300, 800)])),
+        water=None if rng.random() < 0.4 else f32(rng.choice([-89.6, 0.0, 100.0, rng.uniform(-300, 800)])),
+        fly=f32(rng.choice([0.0, 0.01, 60.0, 250.0, rng.uniform(0, 600)])),
+        move=rng.choice([0, 1, 2, 4, 8, 0x10, 0x18, 0x20, 0x28, 0x38, 0x3A, 0x21]),
+        swim=rng.random() < 0.5,
+        x=f32(rng.uniform(-3000, 3000)), y=f32(rng.uniform(-3000, 3000)),
+    )
+
+
+def write_vectors(path, n=1500, seed=3):
+    rng = random.Random(seed)
+    rows = []
+    for i in range(n):
+        c = gen_case(rng, i)
+        out = run_bits(c)
+        rows.append((fb(c["ground"]), 0 if c["water"] is None else 1, 0 if c["water"] is None else fb(c["water"]),
+                     fb(c["fly"]), c["move"], 1 if c["swim"] else 0, out))
+    lines = ["// Generated by tools/emu/unit_z_emu.py from the original Game.dll (0x6F281F50); do not edit.",
+             "// (ground bits, water present, water bits, fly height bits, movement word, swim flag, result bits)",
+             "pub const ROWS: &[[u32; 7]] = &["]
+    lines += ["    [" + ", ".join("0x%08X" % v for v in r) + "]," for r in rows]
+    lines.append("];")
+    with open(path, "w", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print("rows", n)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "--rs":
+        write_vectors(sys.argv[2])
+        sys.exit(0)
+    base = dict(ground=10.0, water=None, fly=50.0, move=2, swim=False, x=0.0, y=0.0)
+    print(bf(run_bits(base)))
+    print(bf(run_bits(dict(base, water=30.0, move=0x8))))
