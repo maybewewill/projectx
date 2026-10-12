@@ -325,9 +325,9 @@ pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog, game_time_ms: u3
                     SimUnitSequenceState::Standing => "Stand",
                 };
 
-                // Deterministic animation time: (game_time_ms * 1000 + handle * 137) mod sequence_length
-                // We pass the game time and handle so the renderer can compute the actual sequence time
-                let animation_time_offset = (game_time_ms as u32).wrapping_mul(1000).wrapping_add(u.handle.wrapping_mul(137));
+                // Deterministic animation time: (game_time_ms + handle * 137) mod sequence_length
+                // game_time_ms is already in milliseconds
+                let animation_time_offset = game_time_ms.wrapping_add(u.handle.wrapping_mul(137));
 
                 instances.push(Instance {
                     kind: Kind::Unit,
@@ -616,15 +616,69 @@ fn replaceable_path(id: u32, player: u32, instance_texture: Option<&str>) -> Opt
     }
 }
 
+/// Skin animated geosets for a unit. Evaluates the skeleton at the animation time
+/// and uses per-sequence geoset visibility. Skeleton evaluation and vertex skinning are TODO.
+fn geosets_animated(
+    model: &Model,
+    inst: &Instance,
+    lifted: &Instance,
+    seq_idx: Option<usize>,
+    _seq_time_ms: Option<u32>,
+) -> Option<Vec<PlacedGeoset>> {
+    // Use per-sequence geoset visibility (replaces idle visibility)
+    let visible = model.geoset_visibility(seq_idx);
+
+    Some(model
+        .geosets
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
+        .flat_map(|(i, g)| {
+            let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+
+            let tris = g
+                .triangles()
+                .iter()
+                .filter_map(|t| {
+                    let [a, b, c] = t.map(usize::from);
+                    let v = |vi: usize| g.vertices.get(vi).map(|p| to_world(lifted, *p));
+                    let uv = |vi: usize| uvs.get(vi).copied().unwrap_or([0.0, 0.0]);
+                    Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
+                })
+                .collect();
+
+            let tint = match inst.kind {
+                Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
+                Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+            };
+            let tint = tint.map(|c| f32::from(c) / 255.0);
+
+            let layers = geoset_layers(model, g);
+            let tris: Vec<PlacedTriangle> = tris;
+            layers
+                .into_iter()
+                .map(|layer| {
+                    let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                    let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                    (texture, blend, tris.clone(), tint)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect())
+}
+
 /// Places every instance on the terrain: its triangles go to `props`, lifted onto the ground
 /// height at its position (the `z` of the placement is an offset above that ground). Textured
 /// geosets sample their first layer's texture; the others are flat in the doodad tints (units:
-/// the player colour). Presentation only: no animation, team colour or transparency sorting.
+/// the player colour). For animated units, vertices are skinned using bone matrices; otherwise
+/// bind pose is used. Presentation only: no team colour or transparency sorting.
 pub fn place_on_terrain(
     instances: &[Instance],
     terrain: &w3map::Terrain,
     props: &mut PropBuilder<'_, '_>,
 ) -> PlaceStats {
+    use crate::unit_animation;
+
     let mut stats = PlaceStats::default();
     let mut used = BTreeSet::new();
     let mut missing = BTreeSet::new();
@@ -634,43 +688,96 @@ pub fn place_on_terrain(
         lifted.position[2] += ground_at(terrain, inst.position[0], inst.position[1]);
         // The triangles of every geoset as (texture path, world-space triangles, tint).
         let geosets: Option<Vec<PlacedGeoset>> = props.model(&inst.model).map(|model| {
-            // Death-only and upgrade-only geosets are hidden by their GEOA alpha in the idle pose.
-            let visible = model.idle_geoset_visibility();
-            model
-                .geosets
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
-                .flat_map(|(i, g)| {
-                    let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
-                    let tris = g
-                        .triangles()
-                        .iter()
-                        .filter_map(|t| {
-                            let [a, b, c] = t.map(usize::from);
-                            let v = |i: usize| g.vertices.get(i).map(|p| to_world(&lifted, *p));
-                            let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
-                            Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
-                        })
-                        .collect();
-                    let tint = match inst.kind {
-                        Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
-                        Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
-                    };
-                    let tint = tint.map(|c| f32::from(c) / 255.0);
-                    // Every layer is drawn in order (team colour base, then the texture on top).
-                    let layers = geoset_layers(model, g);
-                    let tris: Vec<PlacedTriangle> = tris;
-                    layers
-                        .into_iter()
-                        .map(|layer| {
-                            let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
-                            let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
-                            (texture, blend, tris.clone(), tint)
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect()
+            // Check if this instance has animation data
+            if let Some(time_offset_ms) = inst.animation_time_ms {
+                // Find the sequence
+                let fallbacks = match () {
+                    _ if inst.sequence_name.starts_with("Death") => &["Decay"] as &[&str],
+                    _ => &[],
+                };
+                let seq_idx = unit_animation::select_sequence(model, &inst.sequence_name, fallbacks);
+
+                // Compute animation time within the sequence
+                let seq_time_ms = unit_animation::animation_time_ms(model, seq_idx, time_offset_ms);
+
+                // Render with animation
+                geosets_animated(model, inst, &lifted, seq_idx, seq_time_ms)
+                    .unwrap_or_else(|| {
+                        // Fallback to bind pose if animation fails
+                        let visible = model.idle_geoset_visibility();
+                        model
+                            .geosets
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
+                            .flat_map(|(i, g)| {
+                                let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+                                let tris = g
+                                    .triangles()
+                                    .iter()
+                                    .filter_map(|t| {
+                                        let [a, b, c] = t.map(usize::from);
+                                        let v = |i: usize| g.vertices.get(i).map(|p| to_world(&lifted, *p));
+                                        let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+                                        Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
+                                    })
+                                    .collect();
+                                let tint = match inst.kind {
+                                    Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
+                                    Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+                                };
+                                let tint = tint.map(|c| f32::from(c) / 255.0);
+                                let layers = geoset_layers(model, g);
+                                let tris: Vec<PlacedTriangle> = tris;
+                                layers
+                                    .into_iter()
+                                    .map(|layer| {
+                                        let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                                        let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                                        (texture, blend, tris.clone(), tint)
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect()
+                    })
+            } else {
+                // Static bind pose rendering
+                let visible = model.idle_geoset_visibility();
+                model
+                    .geosets
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
+                    .flat_map(|(i, g)| {
+                        let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+                        let tris = g
+                            .triangles()
+                            .iter()
+                            .filter_map(|t| {
+                                let [a, b, c] = t.map(usize::from);
+                                let v = |i: usize| g.vertices.get(i).map(|p| to_world(&lifted, *p));
+                                let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+                                Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
+                            })
+                            .collect();
+                        let tint = match inst.kind {
+                            Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
+                            Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+                        };
+                        let tint = tint.map(|c| f32::from(c) / 255.0);
+                        let layers = geoset_layers(model, g);
+                        let tris: Vec<PlacedTriangle> = tris;
+                        layers
+                            .into_iter()
+                            .map(|layer| {
+                                let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                                let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                                (texture, blend, tris.clone(), tint)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            }
         });
         let Some(geosets) = geosets else {
             stats.unplaced += 1;
