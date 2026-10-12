@@ -339,6 +339,8 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         // The balance values `sight` and `nsight` (record `+0x18C` / `+0x190`, `docs/spec/unit-types.md`).
         sight: soft(ty.sight),
         night_sight: soft(ty.night_sight),
+        collision: soft(ty.collision),
+        repulse: ty.repulse,
         point_value: ty.points,
         food_used: ty.food_used,
         food_made: ty.food_made,

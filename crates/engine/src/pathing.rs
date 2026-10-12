@@ -85,6 +85,8 @@ pub fn install(
         LIST_CAPACITY,
     );
     game.set_pathing(Some(PathingMap { search, origin }));
+    // unit push-apart needs the cell grid size (movement-7.md section 8)
+    game.enable_push_apart(map.width as i32, map.height as i32);
     Some(PathingSummary {
         width: map.width,
         height: map.height,

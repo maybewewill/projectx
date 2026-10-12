@@ -461,6 +461,12 @@ pub struct UnitType {
     pub weapon_kind: [u32; 2],
     /// Target flag word per weapon (record `+0xA0`).
     pub weapon_targs: [u32; 2],
+    /// UnitBalance `collision` (world units; record `+0x19C`). The push-apart footprint radius is this value in cells
+    /// (UNSURE: the conversion; `docs/spec/movement-7.md` section 8).
+    pub collision: F32,
+    /// UnitBalance `repulse`, `repulseParam`, `repulseGroup`, `repulsePrio` (records `+0x224..+0x230`): enable flag,
+    /// separation table row, group nibble, priority nibble of the push-apart record.
+    pub repulse: [i32; 4],
 }
 
 /// The unit type registry, keyed by the raw type id (the four-character code as an integer).
@@ -1247,6 +1253,8 @@ pub struct Game {
     pub(crate) game_row: i32,
     /// The movers of units that have walked (see `crate::movement`).
     pub(crate) movers: crate::movement::Movers,
+    /// Push-apart records and the pathing-cell occupant lists (`crate::push`).
+    pub(crate) push: crate::push::PushState,
     /// Whether the vision refresh timer (0x80269, [`Payload::Vision`]) has been armed. Armed once per game.
     pub vision_armed: bool,
     /// The softfloat tables that the playable-area grid needs (set by the host, see [`Game::set_vision_tables`]).
@@ -1375,6 +1383,7 @@ impl Game {
             game_time: F32::ZERO,
             game_row: 0,
             movers: crate::movement::Movers::new(),
+            push: crate::push::PushState::default(),
             vision_armed: false,
             vision_tables: None,
             contexts: Vec::new(),

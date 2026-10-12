@@ -125,7 +125,7 @@ request context (heap objects, the pyramid); only the reached test and the codes
 (`mover::follower_reach`, `mover::waypoint_reached`). The sim's route (`orders.rs`) still advances through waypoints that are
 inside the radius and has no follow-time smoothing, no 20-walk wait and no retry counter.
 
-## 5. Separation: the push-apart record `0x6F4961C0` (CONFIRMED except the gather; `PA` 3000 vectors)
+## 5. Separation: the push-apart record `0x6F4961C0` (CONFIRMED; `PA` 3000 vectors; the gather is section 5a)
 
 The walk `0x6F483300` calls it for the records of the list `world+0x51C` (`R` = 44-byte record, `R+0x14` = the mover `U`),
 **every second record, alternating**: the counter `world+0x53C` toggles 0/1 each walk, and `if (!result--) { call; result = 1 }`
@@ -147,13 +147,13 @@ Per call (`rec.flags`, `U+0xC0` = the speed the last walk set):
    `0: 5.0, 0.01, 0.5, 0.4, 0.7`; `1: 7.0 (0x40E00001), 0.01, 0.2, 0.4, 0.7`; `2: 8.0, ...`; `3: 9.0, ...`; `4: 10.0, ...`
    (rows 5..15 are all `0.0`, which divides by zero below: LIKELY never selected). `inv = div(1.0, T0)`.
 5. Gather: `0x6F495D60(U, row, (flags >> 20) & 0xFF, flags >> 28)` + `0x6F496170` fill the neighbour list from the pathing-cell
-   occupant lists of the rectangle `pos +- T0` (cells `floor` of the corners, end exclusive, walked column-major: outer loop over
+   occupant lists of the rectangle `pos +- T0` (cells `floor` of the corners, end exclusive, walked row-major, see 5a: outer loop over
    the first coordinate, `index = second + first * stride`; within a cell head to tail). A unit is taken once (stamp `unit+0x38`)
    if it passes `0x6F493B60`: node flags `(node+0x34 & 0xFF000000) == 0`, not the query's own unit, a class tag at `unit+0x10`,
-   `unit+0x14 >= 0`, `0.0 < unit+0x90`, an approximate-equality test of `0.0` (`0x6F009AE0`, operand not resolved) and the unit's
+   `unit+0x14 >= 0`, `0.0 < unit+0x90`, `unit+0xC0 == 0.0` by the ordered equality `0x6F009AE0` and the unit's
    record `rec = unit+0xAC`: `(rec+0x20 >> 20) & 0xFF == filter byte` and `(rec+0x20 >> 28) & 0xF >= filter nibble`.
-   The neighbour order matters (the sum below is not associative in softfloat). **Not ported**: the sim has no pathing-cell
-   occupant lists, the record-to-unit-type filter bytes and the occupant order are unknown; `mover::PushHost::gather` is the seam.
+   The neighbour order matters (the sum below is not associative in softfloat). **Ported in S5** (section 5a):
+   the occupant lists, the walk and the filter are CONFIRMED; `mover::PushHost::gather` is implemented by `push.rs`.
 6. For every neighbour `n` in order: `d = (pos.x - n.x, pos.y - n.y)`, `dist = sqrt(add(dx*dx, dy*dy))`;
    if `dist < 0.001` (`flt_6FAAE47C`) the direction is **random**: `0x6F4B7FE0` takes one step of the **global generator**
    (`rng::Rng::random_fraction`, the same `(low23 | 1.0) - 1.0` as `GetRandomReal`), `angle = mul(u, 2*pi)`,
@@ -167,6 +167,90 @@ So two standing units on the same spot draw from the **global** random generator
 reproduce (the draw is made in record order, every second walk); a unit that never overlaps does not draw.
 `crates/sim` has the kernel (`mover::push_apart`) and the table rows but **does not run it**: wiring it needs the occupant lists
 and the filter data of item 5 (a wrong gather would move units that the original leaves alone).
+
+## 5a. The neighbour gather and the occupant lists (CONFIRMED by Unicorn; S5, 2026-10-12)
+
+Real code run on synthetic grids, pools and movers (`tools/emu/push_gather_emu.py` kinds `W`, `S`; `tools/emu/push_occupancy_emu.py`
+kinds `O`, `F`), each compared with a Python model and then with `crates/sim/src/occupancy.rs` through committed vectors
+(`crates/sim/tests/data/push_*.txt`, `crates/sim/tests/push_gather_vectors.rs`). Counts: `W` 5000 cases (2,036 neighbours taken),
+`S` 300, `O` 3000 operation sequences (603 gathers, cleans, footprint moves, dead nodes), `F` 300; **0 mismatches** in all.
+
+**Grid object `G`** (the pathing system, reached as `[[unit-position-object+0x94]+0x2C]`): cell words at `+0x28` (pitch `+0x3C`,
+rows `+0x40`, cell count `+0x38`), bounds `+0x54/+0x58/+0x5C/+0x60` = `[row0, col0, row1, col1]` (set to `[0, 0, rows, pitch]`
+by the initialiser `0x6F49F5D0`), footprint scale `+0x64/+0x68` = 1.0, occupant pool at `+0x78` (count `+0x88`, grown by
+`0x6F49EE50`), dirty bitmap `+0x98` (word count `+0xA8`), free entry head `+0xAC`, live entries `+0xB0`, stamp counter `+0xB4`.
+A cell word is `(pathing bits << 24) | chain head`, `0xFFFFFF` = empty. A pool entry is 8 bytes: `next:24 | kind:8`, then the node
+pointer. A node (occupant record of a mover): `+0x1C` rect, `+0x2C` G, `+0x30` the mover, `+0x34` flags, `+0x38` stamp
+(`-1` = dead), `+0x3C` entry count. **Index = pitch * first_coordinate + second_coordinate**, and the box is stored as
+`[first0, second0, first1, second1]` with the first coordinate the **row (y)**: the loops are *outer = y (rows), inner = x*, not
+column-major as section 5 item 5 said.
+
+**Gather setup `0x6F495D60`** (CONFIRMED, `S`): the unit's position is `cell + V * t` (`0x6F497460` gives `t`, `0x6F38B0B0` the
+position); the box floats are `[y - r, x - r, y + r, x + r]` (softfloat sub/add, `r` = the table radius `T0`), each multiplied
+by `[G+0x68]` and floored (`0x6F6EF170`, `0x6F6EEC20`), the two upper bounds get `+1` (end exclusive). The query stores the box at
+`Q+0x24..+0x30`, the grid at `Q+0x34`, the unit at `Q+0x40`, the position at `Q+0x44/+0x48`, the radius at `Q+0x4C`, the filter word
+(record bits 20..27) at `Q+0x50` and the nibble (bits 28..31) at `Q+0x52`; the old list is cleared. `0x6F496170` then walks only if
+`box.row0 <= box.row1 && box.col0 <= box.col1` (signed).
+
+**Walker `0x6F495CA0` / chain `0x6F495B00`** (CONFIRMED, `W`): the box is clamped to the bounds (`min` of the upper, `max` of the
+lower); nothing happens unless `row0 < row1` and `col0 < col1` after the clamp. Then `stamp = ++G.stamp` (the walk stamp); for each
+cell row-major (outer rows ascending, inner columns ascending) with a non-empty chain: `cell_stamp = ++G.stamp`, then head to tail
+(newest inserted first): kind `2` entries are skipped without reading the node; otherwise a node whose stamp is the walk stamp,
+the cell stamp or `-1` is skipped; kind `1` (unit) entries run the filter and, if it passes, append the node (the neighbour list
+entry is `{node, 0}`), and in every case set the node stamp to the **walk** stamp; any other kind sets the node stamp to the **cell**
+stamp without the filter. A unit is therefore taken at most once per walk, in the order of its first cell.
+
+**Filter `0x6F493B60`** (CONFIRMED, `W`): a node is a neighbour iff all hold: node flags `+0x34` have no bit in the top byte; the
+mover `[node+0x30]` is not the query's own unit; its tag `+0x10` is the unit tag `0x60706375`; `+0x14` bit 31 clear; **`+0x90` > 0**
+(strict, NaN fails; `+0x90` is the mover's collision radius in cells, the same field `0x6F4766E0` adds to the attack reach, not life);
+**`+0xC0` == 0** by the ordered equality `0x6F009AE0` (+0 and -0 pass, anything else fails; **not** the |a-b| < 0.001 test: an
+"approximate" reading is wrong, checked on 14 values); it has a record `+0xAC` whose flags `+0x20` satisfy
+`((f >> 20) & 0xFF) == Q+0x50` (equal, 16-bit compare) and `((f >> 28) & 0xF) >= Q+0x52` (unsigned).
+
+**Insert `0x6F49FCD0`** (CONFIRMED, `O`): the new entry goes to the **head** of the cell chain (`next` = old head, kind in the top byte);
+a free entry (`G+0xAC`) is reused before the pool grows; kind `0` entries (tombstones) also set the cell's bit in the dirty
+bitmap; the node's entry count `+0x3C` and `G+0xB0` are incremented.
+
+**Footprint update `0x6F49FF90`** (CONFIRMED, `O`): nothing if the rect is unchanged. Otherwise the intersection `X` (max of the
+lows, min of the highs): if it is non-empty, the parts of the **old** rect outside `X` get kind-0 tombstones and the parts of the
+**new** rect outside `X` get kind-1 live entries, pieces in the order of the rect difference `0x6F4BC060` (low-row strip, high-row
+strip, low-column strip, high-column strip; mid rows only for the column strips) **taken last piece first**, each piece by
+`0x6F49FDA0` (clamped to the bounds, outer ascending, inner ascending); if `X` is empty the whole old rect is tombstoned and then the
+whole new rect inserted. The rect is stored at node `+0x1C`. A mover's footprint rect is the same box function as the gather box
+with the mover's own radius (`+0x90`) and scale 1.0 (`0x6F4A6D70`, `F` vectors).
+
+**Clean `0x6F49F1E0`** (CONFIRMED, `O`): the stamp counter resets to 0 if above `0x7FFFFFFF`; dirty bits are processed word by word,
+low bit first, and cleared; per cell (`0x6F49F030`): `stamp = ++G.stamp`, then head to tail: a live unit entry (kind 1, node stamp
+not `-1` and not this clean's stamp) is kept; **every other entry is unlinked onto the free list** (tombstones, dead nodes, duplicate
+unit entries whose node already got this clean's stamp), the node's entry count drops; a node that is still alive (stamp not `-1`) gets
+this clean's stamp; a dead node (`-1`) with no entries left is destroyed (vtable `+0x10`). Because a tombstone is always newer than
+the live entries it supersedes, it stamps the node first and so removes the older live entry in the same chain.
+
+`crates/sim/src/occupancy.rs` implements all of this; `crates/sim/src/push.rs` wires it (below).
+
+### Wiring in `crates/sim` (`Game::enable_push_apart`, called by the engine with the pathing grid size)
+
+Per movement walk (`tick_movement`, after the mover walks and the facing smoothers, as in `0x6F483300`): new units are looked at in key
+order; a unit whose type has `repulse` (UnitBalance, `UnitType::repulse`) gets a record at the **head** of the record list
+(`0x6F493830` links at the head, CONFIRMED) with flags composed by the setters `0x6F494FB0/FD0/FF0` from `repulseParam` (row),
+`(class_nibble << 4) | repulseGroup` (filter) and `repulsePrio` (nibble) (arguments of `0x6F2A0830` -> `0x6F474CF0` -> `0x6F495ED0`,
+CONFIRMED from the disassembly; `push::record_flags`); footprints of the registered units are moved to their evaluated positions;
+dirty cells are cleaned; the parity counter (`world+0x53C`) toggles 1, 0, 1, 0 and records with `(index + counter)` even run the kernel
+(CONFIRMED, `0x6F4833A8..`); the kernel's host is the game: position = `Kin::position`, gather = `Occupancy::gather` over
+`cell_box(position, T0, 1.0)` with `node_passes`, neighbour positions = their evaluated positions, the random direction = one step of
+the global generator, the move = a re-base to the target.
+
+UNSURE (stand-ins, each flagged in `push.rs`): (1) **when the original cleans** the dirty cells (a queue callback, `0x6F46E5F0`
+-> `0x6F49F1E0`, whose timing is not decoded; the sim cleans once per walk before the records run); (2) **when a footprint is
+registered** (the original updates it after each rebase of the position object, `0x6F4A70A0`/`0x6F4A7040`; the sim does it once per
+walk in unit key order, which changes the pool order of simultaneous movers); (3) the footprint radius (`+0x90`) = type `collision` / 32
+(the writer of `+0x90` is not located); (4) the high nibble of the filter word (`0x6F29E8F0`: result of the unit's virtual slot `0xEC`,
+or `0xF` when unit flag `+0x60` bit 0) is taken as 0; (5) the enable test `0x6F29E8A0` also reads unit flags (`+0x20 & 0x40000000`,
+`+0x198`, `+0x5C & 0x300000`, `+0x54`) that the sim does not have, so `repulse != 0` alone decides; (6) the placement test `0x6F494E10`
+(size class `0x6F38ADA0` and the pathing probe `0x6F4A3810`) is replaced by "the target cell is inside the grid"; (7) static
+blockers (kind 2 entries, `0x6F4A6E40`) are not registered, only movers; (8) the unit cell origin and the pathing grid origin are
+assumed equal (as the route code already does). Because (1) to (4) change which units a record sees and in which order, a replay
+comparison of push-apart is not expected to be exact yet.
 
 ## 6. Groups (CONFIRMED kernels, not wired)
 
@@ -198,6 +282,7 @@ The sim has no cluster concept: `Group*Order` natives issue orders unit by unit.
 * `mover.rs`: `Kin::notify_facing`, `Kin::set_speed_heading_notify`, `FacingClass`/`facing_class`/`smooth_facing`/`FacingStep`,
   `Follower`/`follower_reach`/`waypoint_reached`, `GroupMember`/`GroupLeader`/`group_limit`/`group_gate`,
   `PushRow`/`push_row`/`PushRecord`/`PushHost`/`push_apart`/`scale_to`/`direction_of`. Lane H's kernels are untouched.
+* S5: `occupancy.rs` (occupant lists, gather, footprint, clean) and `push.rs` (the records, the gather host, `Game::enable_push_apart`; `UnitType::collision`/`repulse`; the engine enables it with the pathing grid size); section 5a.
 * `movement.rs`: `MoverRt` gains the smoother state (`face_smooth`, `face_rate`, `listed`, `face_class`); `Game::set_unit_facing`,
   `Game::facing_smoother`, `tick_facing_smoothers`; `mover_issue`/`mover_halt` list the mover (the stop notification).
 * `orders.rs`: the walk is followed by `notify_facing` (the facing of a unit in motion is the heading of its velocity; the
@@ -212,8 +297,8 @@ The sim has no cluster concept: `Group*Order` natives issue orders unit by unit.
 1. The writer of `U+0xD8` bits 8..11 (facing class row), the clock `U+0xC8` initial value for units created by a map script.
 2. Follower: array growth, `0x6F49BD10`/`0x6F49B340`/`0x6F49DBE0`/`0x6F49C460`, the request budget `0x6F49ACA0`, flag meanings of
    `P+0x88`; wiring the 20-walk wait and the retry counter into the sim route.
-3. Separation: the occupant lists of the pathing cells (order within a cell), the filter bytes of the unit type record, the
-   placement test `0x6F494E10`, how records are created for units, the row selection (`R+0x22`).
+3. Separation: the UNSURE list of section 5a (clean timing, footprint registration timing, `+0x90`, the slot-`0xEC` nibble, the enable
+   flags, the placement test `0x6F494E10`, static blockers).
 4. Groups: cluster formation, leader choice, the leader slow-down thresholds `0x6FAB740C/0x6FAB7410`, the formation step.
 5. Dynamic confirmation on the running original is still not possible (no valid replay in the environment), as in `movement-6.md`.
 
@@ -229,3 +314,7 @@ MOVER7_VECTORS=<dir with sn.txt fs.txt pa.txt wn.txt wr.txt gl.txt> GAME_DLL=C:\
 cases); `SN`, `WN` and `PA` run only with `GAME_DLL`. `PA` runs the real `0x6F4961C0` with the gather (`0x6F495D60`, `0x6F496170`),
 the placement test (`0x6F494E10`) and the position setter (`0x6F4737D0`) answered by the harness; `WR` answers `0x6F49C380` and
 `0x6F49C2E0`; the real notification (`0x6F494620`) and finish routine (`0x6F4954F0`) run in `SN`, `WN` and `FS`.
+
+
+Gather vectors: `GAME_DLL=C:\path\Game.dll py tools/emu/push_gather_emu.py W|S OUT.txt N SEED` and `py tools/emu/push_occupancy_emu.py O|F OUT.txt N SEED`;
+`cargo test -p sim --test push_gather_vectors` (committed samples, no `GAME_DLL` needed) and `--test push_apart_wiring` (needs `GAME_DLL`).

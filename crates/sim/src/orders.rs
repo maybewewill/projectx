@@ -750,6 +750,8 @@ impl Game {
         }
         // 0x6F483300 runs the facing smoother over the listed movers after the walks
         self.tick_facing_smoothers(&tables);
+        // then the push-apart records (0x6F483300 calls the kernel for every second record)
+        self.push_walk(&tables);
         self.orders.tables = Some(tables);
     }
 
