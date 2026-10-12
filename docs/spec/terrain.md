@@ -125,5 +125,66 @@ missile launcher `0x6F0ABDD0` uses `0x6F24F3E0(x, y, 1)` (the same function as `
 2. Terrain deformation (`terrain+0x790`) in the height and the water row/offset of the tileset (section 3).
 3. The nearest-corner position bits wrap at 9 bits (maps with a corner index above 511, impossible for the shipped
    32768-unit coordinate range).
-4. Unit z (the unit mover / `GetUnitFlyHeight` + ground) is not wired: the sim has no unit z. The height function is
+4. (Closed in section 6: the unit z is wired.) The height function is
    there for it.
+
+## 6. Unit height and the fly height (S18, 2026-10-12)
+
+### 6.1 The unit's z (vtable slot `0xE4` = `0x6F281F50`) - CONFIRMED, 1,500 Unicorn vectors
+
+`CUnit` vtable base `0x6F931934` (slot 72 = `0x6F2A40D0`). Slot `0xE4` takes four stack arguments `(point*, level, out_flag*,
+unused)` and returns the height in st0 (the callers store it as a float). For an ordinary unit (flag word `+0x280` bit 3 clear,
+not a corpse) the height is
+
+    f32( fly + ground' )        (53-bit x87 add, stored as a float; not the soft float)
+
+* `ground` = `0x6F0126F0(ecx = level, edx = out_flag*, x, y, 1)` = the terrain height of section 3 (ramp objects: none in the
+  model); the launch asks with `level = -1`.
+* `fly` = the unit's vtable slot `0xE8` (`0x6F29E850`): the **fly-height property** (agile value at `unit+0x214`) when the
+  movement word `+0x1FC` is exactly 2 (fly) or the flag `+0x20 & 0x800` is set; the type field read by `0x6F29C710` (LIKELY the
+  type's `moveHeight`) when the movement word is exactly 8 (hover); 0 otherwise.
+* `ground'` = `water` when the movement word has a bit of `0x38` (hover, float, amph), a water surface exists at the point
+  (`0x6F00F5D0` = `terrain::water_at`), the unit is not (movement exactly `0x20` without the swim flag `+0x280 & 0x20`) and
+  `ground < water` (ordered); else `ground`.
+* `*out_flag = (+0x280 >> 1) & 1` when the pointer is given.
+* Not modelled (unreachable for a live shooter or target): the corpse branch (`+0x5C & 0x20000000` with `+0x200 <= 0`: a sinking
+  interpolation between the ground at level `-3` and the ground, scaled by `fly / unit+0x210`), and the carried-unit branch
+  (`+0x280 & 8`, cached point `+0x284..0x28C`).
+
+Unicorn: `tools/emu/unit_z_emu.py` runs the real routine with `0x6F26DE50` (returns 0), `0x6F0126F0`, `0x6F00F5D0` and the
+fly slot supplied; 1,500 random cases over ground, water present or absent, fly height, 12 movement words and the swim flag,
+0 mismatches against `unitz::unit_height` (`tests/unit_z.rs`). The terrain pieces were checked in section 3. `Game::unit_z`
+wires it (ground and water from `TerrainGrid`, fly height from `current_fly_height`); the missile launch reads it for the
+shooter (launch z) and the target (aimed z).
+
+### 6.2 Where z matters
+
+* **Range checks are 2-D** (CONFIRMED by the decompile of `0x6F4766E0`): the swing predicate uses the squared distance
+  `0x6F6EF3B0` of the two cell positions (x and y of `0x6F38B0B0`) and the collision radii (`+0x90`); no height enters.
+* The missile **flight time is 2-D** (`0x6F496D10` uses `dx^2 + dy^2` only); the launch height, the impact height and the
+  fly heights change only the z of the launch and aimed points (the arc terms, presentation).
+* `GetUnitFlyHeight` (`0x6F3C5DA0`) returns the target field `unit+0x208`, not the climbing property; `GetUnitDefaultFlyHeight`
+  the type's value.
+
+### 6.3 `SetUnitFlyHeight(unit, height, rate)` (`0x6F3C5C60` -> `0x6F2835E0` -> `0x6F2783F0`) - LIKELY (read, not run)
+
+* The height is `0.01` (`0x6FAAE480`) unless `0 < height` (strict). `0x6F2835E0(unit, &h, &rate, 1)`: the plain property object
+  at `unit+0x204` (value at `+0x208`) takes `h` (so `GetUnitFlyHeight` answers at once); the running maximum `unit+0x210`
+  rises to `h` if lower (consumer not found). Then, when `unit+0x200 == 0`, `0x6F2783F0` moves the climbing property:
+  the target is `unit+0x208`; the property's modifier handle (`unit+0x224`) is cancelled; if the target equals the value
+  now nothing else happens; otherwise (a type-dependent presentation offset update for a type with a positive
+  `0x6F32D090` is skipped) the property limits become the two values (lower first), the rate is negated when
+  descending (`value >= target`), and a zero rate sets the value at once (`0x6F477350`); any other rate is added as
+  a modifier (`0x6F4774E0`) of slope `rate` lasting `|target - value| / rate + 1.0` s. The property is the agile one
+  (section `agile.md` 2): `clamp(base + slope * w)`.
+* Model: `Game::set_fly_height` / `fly_property` (`crates/sim/src/unitz.rs`, the unit fields `fly_from`, `fly_t0`, `fly_slope`,
+  `fly_lo`, `fly_hi`, `fly_for`), evaluated against the game time (the agile clock); test `tests/unit_fly_height.rs`. UNSURE:
+  which of `0x6F477460` / `0x6F477400` is the lower limit (the model assumes the order of the descending and ascending
+  branches), and that the horizon is measured in the same clock.
+
+### 6.4 Open
+
+1. The corpse and carried-unit branches of the height; the flag `+0x20 & 0x800` (the Crow Form style flying state).
+2. `0x6F29C710` (hover height) and the unit-side launch fields (`missiles.md` 11.5).
+3. A run of `0x6F2783F0` with real agile objects (the harness `agile_engine_emu.py` has the property objects) to confirm the
+   limit order and the horizon.
