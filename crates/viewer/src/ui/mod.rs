@@ -1,4 +1,4 @@
-//! FDF UI rendering: loads a FrameDef file, builds a DrawList, and renders it to a texture.
+//! FDF UI rendering: loads frame definitions from the game archives, builds a DrawList, and renders it to a texture.
 //!
 //! The UI renderer converts FDF DrawItems (quads and text runs) to GPU vertices and renders
 //! them with wgpu. Textures are loaded from BLP files found in the provided MPQ archives.
@@ -19,46 +19,67 @@ pub struct UiScene {
     pub screen: fdf::Screen,
 }
 
+const FRAMEDEF_TOC: &str = "UI\\FrameDef\\FrameDef.toc";
+
 impl UiScene {
-    /// Loads a FDF file from the MPQ archives and builds the draw list.
+    /// Loads a frame from the game's FDF files and builds the draw list.
     ///
-    /// Returns an error if the file cannot be loaded or the FDF is invalid.
+    /// Loads all FDF files listed in UI\FrameDef\FrameDef.toc, finds the frame by name,
+    /// builds the scene, solves the layout, and loads textures.
+    ///
+    /// # Arguments
+    /// * `frame_name` - The root frame name (e.g., "ConsoleUI", "MainMenu")
+    /// * `archive_sources` - MPQ archive byte slices, searched last-to-first
+    ///
+    /// Returns an error if the TOC cannot be found, frame is not found, or layout fails.
     pub fn from_mpq(
-        file_name: &str,
+        frame_name: &str,
         archive_sources: &[&[u8]],
     ) -> Result<Self, String> {
-        // Load the FDF file from MPQ
-        let fdf_bytes = load_from_mpq(file_name, archive_sources)?;
-        let fdf_text = String::from_utf8(fdf_bytes).map_err(|e| e.to_string())?;
+        // Load the FrameDef.toc file from MPQ
+        let toc_bytes = load_from_mpq(FRAMEDEF_TOC, archive_sources)?;
+        let toc_text = String::from_utf8(toc_bytes).map_err(|e| e.to_string())?;
 
-        // Normalize backslashes to forward slashes in the FDF text
-        let fdf_text = fdf_text.replace('\\', "/");
+        // Parse TOC to get the list of FDF files to load
+        let fdf_files = fdf::parse_toc(&toc_text);
+        eprintln!("ui: TOC lists {} FDF files", fdf_files.len());
 
-        // Build library from the FDF text
+        // Build library by loading all FDF files
         let mut library = fdf::Library::new();
+        let mut load_errors = 0;
 
         // Create a loader that can load files from MPQ
         let mut loader = |path: &str| -> Option<String> {
             let bytes = load_from_mpq(path, archive_sources).ok()?;
-            let text = String::from_utf8(bytes).ok()?;
-            Some(text.replace('\\', "/"))
+            String::from_utf8(bytes).ok()
         };
 
-        library
-            .load_source("<mpq>", &fdf_text, &mut loader)
-            .map_err(|e| format!("Failed to build library: {e:?}"))?;
+        for fdf_file in &fdf_files {
+            match library.load(fdf_file, &mut loader) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("ui: load error {}: {}", fdf_file, e);
+                    load_errors += 1;
+                }
+            }
+        }
+        eprintln!("ui: loaded {} files, {} errors", fdf_files.len(), load_errors);
 
-        // Find the first root frame
-        let first_root = library
-            .frame_names()
-            .next()
-            .ok_or_else(|| "No root frames found in FDF".to_string())?
-            .to_string();
+        // Find the requested frame
+        if !library.frame_names().any(|name| name == frame_name) {
+            let available: Vec<_> = library.frame_names().collect();
+            return Err(format!(
+                "Frame '{}' not found. Available frames: {}",
+                frame_name,
+                available.join(", ")
+            ));
+        }
 
         // Build scene
-        let roots = vec![first_root.as_str()];
+        let roots = vec![frame_name];
         let scene = fdf::Scene::build(&library, &roots)
-            .map_err(|e| format!("Failed to build scene: {e:?}"))?;
+            .map_err(|e| format!("Failed to build scene for '{}': {e:?}", frame_name))?;
+        eprintln!("ui: scene has {} nodes", scene.nodes.len());
 
         // Solve layout with 16:9 aspect ratio
         let width_px = 1920u32;
@@ -71,18 +92,38 @@ impl UiScene {
         // Build draw list
         let draw_list = fdf::DrawList::build(&scene, &layout, &library)
             .map_err(|e| format!("Failed to build draw list: {e}"))?;
+        eprintln!("ui: draw list has {} items", draw_list.items.len());
 
-        // Load textures from MPQ
-        let mut textures = HashMap::new();
+        // Collect texture paths from draw list and load them
+        let mut texture_paths = std::collections::HashSet::new();
         for item in &draw_list.items {
             if let fdf::DrawItem::Quad(quad) = item {
-                if !textures.contains_key(&quad.texture) {
-                    if let Ok(texture) = load_texture(&quad.texture, archive_sources) {
-                        textures.insert(quad.texture.clone(), texture);
-                    }
+                texture_paths.insert(quad.texture.clone());
+            }
+        }
+        eprintln!("ui: {} textures referenced", texture_paths.len());
+
+        let mut textures = HashMap::new();
+        let mut missing_textures = Vec::new();
+        for path in texture_paths {
+            match load_texture(&path, archive_sources) {
+                Ok(texture) => {
+                    textures.insert(path, texture);
+                }
+                Err(e) => {
+                    eprintln!("ui: texture missing {}: {}", path, e);
+                    missing_textures.push(path);
                 }
             }
         }
+        if !missing_textures.is_empty() {
+            eprintln!(
+                "ui: {} textures missing: {}",
+                missing_textures.len(),
+                missing_textures.join(", ")
+            );
+        }
+        eprintln!("ui: loaded {} textures", textures.len());
 
         Ok(UiScene {
             draw_list,

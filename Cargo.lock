@@ -2053,6 +2053,7 @@ version = "0.1.0"
 dependencies = [
  "blp",
  "bytemuck",
+ "fdf",
  "flate2",
  "gamedata",
  "glam",
