@@ -20,6 +20,30 @@ pub struct UiScene {
     pub fonts: HashMap<String, Vec<u8>>,
     /// Screen dimensions in UI units.
     pub screen: fdf::Screen,
+    /// Frame name of each scene node (indexed like `DrawItem::Quad::node`).
+    pub node_names: Vec<String>,
+    /// Laid-out rectangle of each scene node in UI units (`None` when unpositioned).
+    pub node_rects: Vec<Option<fdf::Rect>>,
+}
+
+impl UiScene {
+    /// The first laid-out node whose frame name contains `needle` (case-insensitive): its index,
+    /// name and rectangle in UI units.
+    pub fn find_frame(&self, needle: &str) -> Option<(usize, &str, fdf::Rect)> {
+        let needle = needle.to_ascii_lowercase();
+        self.node_names.iter().enumerate().find_map(|(i, name)| {
+            if name.to_ascii_lowercase().contains(&needle) {
+                self.node_rects.get(i).copied().flatten().map(|rect| (i, name.as_str(), rect))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The node index of the first frame named exactly `name` (case-insensitive).
+    pub fn node_named(&self, name: &str) -> Option<usize> {
+        self.node_names.iter().position(|n| n.eq_ignore_ascii_case(name))
+    }
 }
 
 const FRAMEDEF_TOC: &str = "UI\\FrameDef\\FrameDef.toc";
@@ -34,6 +58,12 @@ impl UiScene {
     ///
     /// `race` is one of human, orc, nightelf, undead (other values fall back to [Default] only).
     pub fn from_mpq(frame_name: &str, archive_sources: &[&[u8]], race: &str) -> Result<Self, String> {
+        Self::from_mpq_frames(&[frame_name], archive_sources, race)
+    }
+
+    /// As [`UiScene::from_mpq`], with several root frames laid out together (for example ConsoleUI and
+    /// ResourceBarFrame, which is a separate FDF file in the game).
+    pub fn from_mpq_frames(frame_names: &[&str], archive_sources: &[&[u8]], race: &str) -> Result<Self, String> {
         let toc_bytes = load_from_mpq(FRAMEDEF_TOC, archive_sources)?;
         let toc_text = String::from_utf8(toc_bytes).map_err(|e| e.to_string())?;
         let fdf_files = fdf::parse_toc(&toc_text);
@@ -57,13 +87,15 @@ impl UiScene {
             library.frame_names().count()
         );
 
-        if !library.frame_names().any(|name| name == frame_name) {
-            let available: Vec<_> = library.frame_names().collect();
-            return Err(format!("Frame '{frame_name}' not found. Available frames: {}", available.join(", ")));
+        for frame_name in frame_names {
+            if !library.frame_names().any(|name| name == *frame_name) {
+                let available: Vec<_> = library.frame_names().collect();
+                return Err(format!("Frame '{frame_name}' not found. Available frames: {}", available.join(", ")));
+            }
         }
 
-        let scene = fdf::Scene::build(&library, &[frame_name])
-            .map_err(|e| format!("Failed to build scene for '{frame_name}': {e:?}"))?;
+        let scene = fdf::Scene::build(&library, frame_names)
+            .map_err(|e| format!("Failed to build scene for {frame_names:?}: {e:?}"))?;
 
         // A 16:9 window; the layout pillarboxes the 4:3 UI space inside it.
         let screen = fdf::layout::Screen::for_window(1920, 1080);
@@ -71,6 +103,8 @@ impl UiScene {
             .map_err(|e| format!("Failed to solve layout: {e:?}"))?;
         let draw_list = fdf::DrawList::build(&scene, &layout, &library)
             .map_err(|e| format!("Failed to build draw list: {e}"))?;
+        let node_names: Vec<String> = scene.nodes.iter().map(|n| n.name.clone()).collect();
+        let node_rects = layout.rects.clone();
 
         let quads = draw_list.items.iter().filter(|i| matches!(i, fdf::DrawItem::Quad(_))).count();
         eprintln!(
@@ -142,6 +176,8 @@ impl UiScene {
             textures,
             fonts,
             screen,
+            node_names,
+            node_rects,
         })
     }
 }

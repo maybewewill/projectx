@@ -395,6 +395,12 @@ struct Mesh {
 }
 
 const DOODAD_TINTS: [[u8; 3]; 4] = [[92, 128, 70], [120, 104, 74], [70, 110, 96], [140, 124, 96]];
+
+/// The standard colour of player slot `p` (the slots wrap every 12).
+pub fn player_colour(p: u32) -> [u8; 3] {
+    PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]
+}
+
 /// Standard player colours (slots 0..11).
 const PLAYER_COLOURS: [[u8; 3]; 12] = [
     [255, 3, 3],

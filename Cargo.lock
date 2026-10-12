@@ -2101,6 +2101,7 @@ dependencies = [
  "mdx",
  "mpq",
  "pollster",
+ "sim",
  "thiserror 2.0.21",
  "w3map",
  "wasm-bindgen",

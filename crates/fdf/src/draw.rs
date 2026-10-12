@@ -231,8 +231,12 @@ fn text_run(
     rect: Rect,
     lib: &Library,
 ) -> Result<Option<TextRun>, DrawError> {
-    let Some(raw) = props::text(&node.props, "Text") else {
-        return Ok(None);
+    // A String without `Text` is still emitted, with empty text: the game sets its text from code
+    // (for example the resource bar numbers), so the run must exist for the host to fill it.
+    let raw = match props::text(&node.props, "Text") {
+        Some(raw) => raw,
+        None if node.kind == NodeKind::String => String::new(),
+        None => return Ok(None),
     };
     let font_key = if node.kind == NodeKind::String {
         "Font"
