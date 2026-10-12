@@ -1,0 +1,221 @@
+"""Build the progress page from AGENTS.md and the git history.
+
+Reads the weighted progress table (section 6.0), the overall figure of every
+commit that touched AGENTS.md, the agent lanes in tools/lanes.json and a few
+repository counts, and writes <out>/index.html and <out>/progress.json.
+
+    py tools/progress.py --out site
+"""
+
+import argparse
+import html
+import json
+import re
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+AGENTS = ROOT / "AGENTS.md"
+LANES = ROOT / "tools" / "lanes.json"
+OVERALL = re.compile(r"\*\*Overall:\s*~?([\d.]+)%")
+ROW = re.compile(r"^\|\s*(.+?)\s*\|\s*(\d+)%\s*\|\s*~?([\d.]+)%\s*\|\s*(.*?)\s*\|\s*$")
+LOG_ENTRY = re.compile(r"^>?- \*\*(.+?)\*\*:?\s*(.*)$")
+
+
+def git(*args):
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+
+
+def section(text, start, end):
+    a = text.find(start)
+    if a < 0:
+        return ""
+    b = text.find(end, a + len(start))
+    return text[a:b if b >= 0 else len(text)]
+
+
+def parts(text):
+    rows = []
+    for line in section(text, "## 6.0", "\n## ").splitlines():
+        m = ROW.match(line)
+        if m:
+            rows.append({"name": m[1], "weight": int(m[2]), "done": float(m[3]), "comment": m[4]})
+    return rows
+
+
+def history():
+    points = []
+    for line in git("log", "--format=%H %cI", "--", "AGENTS.md").splitlines():
+        sha, when = line.split(" ", 1)
+        m = OVERALL.search(git("show", f"{sha}:AGENTS.md"))
+        if m:
+            points.append({"time": when, "overall": float(m[1]), "commit": sha[:7]})
+    points.reverse()
+    return points
+
+
+def log_entries(text, limit):
+    entries = []
+    for line in section(text, "## 7. Log", "\n## ").splitlines():
+        m = LOG_ENTRY.match(line.strip())
+        if m:
+            entries.append({"title": m[1], "text": m[2]})
+    entries.sort(key=lambda e: e["title"], reverse=True)
+    return entries[:limit]
+
+
+def counts():
+    rust = list((ROOT / "crates").rglob("*.rs"))
+    tests = sum(len(re.findall(r"#\[test\]", p.read_text(encoding="utf-8", errors="replace"))) for p in rust)
+    lines = sum(p.read_text(encoding="utf-8", errors="replace").count("\n") for p in rust)
+    return {
+        "rust_lines": lines,
+        "tests": tests,
+        "crates": len([p for p in (ROOT / "crates").iterdir() if (p / "Cargo.toml").exists()]),
+        "specs": len(list((ROOT / "docs" / "spec").glob("*.md"))),
+        "unicorn_harnesses": len(list((ROOT / "tools" / "emu").glob("*_emu.py"))),
+        "commits": int(git("rev-list", "--count", "HEAD").strip() or 0),
+    }
+
+
+def inline(text):
+    text = html.escape(text, quote=False)
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    return re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+
+
+def chart(points):
+    if len(points) < 2:
+        return "<p class=muted>Not enough history yet.</p>"
+    w, h, left, right, top, bottom = 760, 240, 40, 12, 12, 26
+    t = [datetime.fromisoformat(p["time"]).timestamp() for p in points]
+    t0, t1 = t[0], t[-1] if t[-1] > t[0] else t[0] + 1
+
+    def x(v):
+        return left + (v - t0) / (t1 - t0) * (w - left - right)
+
+    def y(v):
+        return top + (1 - v / 100) * (h - top - bottom)
+
+    grid = "".join(
+        f'<line x1="{left}" x2="{w - right}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="grid"/>'
+        f'<text x="{left - 6}" y="{y(v) + 4:.1f}" class="tick" text-anchor="end">{v}%</text>'
+        for v in (0, 25, 50, 75, 100))
+    path = "M" + " L".join(f"{x(a):.1f},{y(p['overall']):.1f}" for a, p in zip(t, points))
+    first = datetime.fromtimestamp(t0).strftime("%d %b")
+    last = datetime.fromtimestamp(t1).strftime("%d %b %H:%M")
+    data = json.dumps([[round(x(a), 1), round(y(p["overall"]), 1), p["overall"], p["time"][:16].replace("T", " "), p["commit"]]
+                       for a, p in zip(t, points)])
+    return f"""<div class="chart"><svg viewBox="0 0 {w} {h}" role="img" aria-label="Overall progress over time" id="hist">
+{grid}<path d="{path}" class="line"/>
+<circle r="5" class="dot" id="dot" cx="{x(t[-1]):.1f}" cy="{y(points[-1]['overall']):.1f}"/>
+<line id="cross" class="cross" y1="{top}" y2="{h - bottom}" x1="-10" x2="-10"/>
+<text x="{left}" y="{h - 6}" class="tick">{first}</text><text x="{w - right}" y="{h - 6}" class="tick" text-anchor="end">{last}</text>
+</svg><div id="tip" class="tip" hidden></div></div>
+<script>
+(() => {{
+  const pts = {data}, svg = document.getElementById('hist'), tip = document.getElementById('tip'),
+        dot = document.getElementById('dot'), cross = document.getElementById('cross');
+  svg.addEventListener('pointermove', e => {{
+    const r = svg.getBoundingClientRect(), sx = (e.clientX - r.left) * {w} / r.width;
+    let best = pts[0];
+    for (const p of pts) if (Math.abs(p[0] - sx) < Math.abs(best[0] - sx)) best = p;
+    dot.setAttribute('cx', best[0]); dot.setAttribute('cy', best[1]);
+    cross.setAttribute('x1', best[0]); cross.setAttribute('x2', best[0]);
+    tip.hidden = false;
+    tip.innerHTML = '<b>' + best[2] + '%</b><br>' + best[3] + '<br><code>' + best[4] + '</code>';
+    tip.style.left = Math.min(best[0] / {w} * r.width + 12, r.width - 150) + 'px';
+    tip.style.top = (best[1] / {h} * r.height - 10) + 'px';
+  }});
+  svg.addEventListener('pointerleave', () => {{ tip.hidden = true; cross.setAttribute('x1', -10); cross.setAttribute('x2', -10); }});
+}})();
+</script>"""
+
+
+STYLE = """
+:root{color-scheme:light;--bg:#fcfcfb;--card:#ffffff;--text:#0b0b0b;--muted:#52514e;--line:#e4e3df;--track:#e9e8e4;--fill:#2a78d6;--warn:#b35c00}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#1a1a19;--card:#222221;--text:#ffffff;--muted:#c3c2b7;--line:#3a3a38;--track:#33332f;--fill:#3987e5;--warn:#e0a050}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:32px 0 12px}
+.muted{color:var(--muted)}.hero{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin:16px 0 8px}
+.hero .num{font-size:64px;font-weight:700;letter-spacing:-1px;line-height:1}.bar{height:10px;background:var(--track);border-radius:5px;overflow:hidden}
+.bar>span{display:block;height:100%;background:var(--fill);border-radius:5px}
+.big .bar{height:16px;border-radius:8px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--muted);font-weight:600}td.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+td .bar{margin-top:6px;width:100%;min-width:120px}.cm{font-size:13px;color:var(--muted)}
+details summary{cursor:pointer;color:var(--muted);font-size:13px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}.tile b{display:block;font-size:22px}
+.tile span{font-size:13px;color:var(--muted)}
+.chart{position:relative;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
+svg{width:100%;height:auto;display:block}.grid{stroke:var(--line);stroke-width:1}.tick{fill:var(--muted);font-size:11px}
+.line{fill:none;stroke:var(--fill);stroke-width:2;stroke-linejoin:round}.dot{fill:var(--fill);stroke:var(--card);stroke-width:2}
+.cross{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
+.tip{position:absolute;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.lane{display:inline-block;font-size:12px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);color:var(--muted)}
+.lane.running{color:var(--fill);border-color:var(--fill)}.lane.failed{color:var(--warn);border-color:var(--warn)}
+code{font:12px ui-monospace,Consolas,monospace;background:var(--track);padding:0 4px;border-radius:4px}
+.log li{margin-bottom:8px;font-size:14px}.log b{white-space:nowrap}
+"""
+
+
+def page(data):
+    rows = "".join(
+        f"<tr><td>{inline(p['name'])}<div class=bar><span style='width:{p['done']:.1f}%'></span></div>"
+        f"<details><summary>details</summary><div class=cm>{inline(p['comment'])}</div></details></td>"
+        f"<td class=n>{p['weight']}%</td><td class=n><b>{p['done']:g}%</b></td>"
+        f"<td class=n>{p['weight'] * p['done'] / 100:.1f}</td></tr>"
+        for p in data["parts"])
+    c = data["counts"]
+    tiles = "".join(f"<div class=tile><b>{v:,}</b><span>{k}</span></div>" for k, v in [
+        ("Rust lines", c["rust_lines"]), ("tests", c["tests"]), ("crates", c["crates"]),
+        ("specs", c["specs"]), ("Unicorn harnesses", c["unicorn_harnesses"]), ("commits", c["commits"])])
+    lanes = data["lanes"]
+    lane_rows = "".join(
+        f"<tr><td><b>{html.escape(l.get('id', ''))}</b></td><td>{html.escape(l.get('model', ''))}</td>"
+        f"<td>{inline(l.get('task', ''))}</td><td><span class='lane {html.escape(l.get('status', ''))}'>{html.escape(l.get('status', ''))}</span></td></tr>"
+        for l in lanes.get("lanes", []))
+    lanes_html = (f"<p class=muted>Wave: {html.escape(lanes.get('wave', ''))} · updated {html.escape(lanes.get('updated', ''))}</p>"
+                  f"<table><tr><th>Lane</th><th>Model</th><th>Task</th><th>Status</th></tr>{lane_rows}</table>") if lane_rows else "<p class=muted>No lanes running.</p>"
+    log = "".join(f"<li><b>{inline(e['title'])}</b> — {inline(e['text'][:420])}{'…' if len(e['text']) > 420 else ''}</li>" for e in data["log"])
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>projectx progress</title><meta http-equiv="refresh" content="300"><style>{STYLE}</style></head><body><main>
+<h1>projectx — Warcraft III 1.26a engine in Rust</h1>
+<p class=muted>Bit-exact rewrite of Game.dll. Rebuilt on every push · {html.escape(data['generated'])} · commit <code>{html.escape(data['commit'])}</code> · <a href="progress.json">progress.json</a></p>
+<div class="hero"><span class="num">{data['overall']:.1f}%</span><span class=muted>overall (weighted sum of the parts below)</span></div>
+<div class="big"><div class=bar><span style="width:{data['overall']:.1f}%"></span></div></div>
+<h2>Overall over time</h2>{chart(data['history'])}
+<h2>Parts</h2><table><tr><th>Part</th><th class=n>Weight</th><th class=n>Done</th><th class=n>Points</th></tr>{rows}</table>
+<h2>Agents now</h2>{lanes_html}
+<h2>Repository</h2><div class=tiles>{tiles}</div>
+<h2>Latest log</h2><ul class=log>{log}</ul>
+</main></body></html>"""
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="site")
+    out = Path(ap.parse_args().out)
+    text = AGENTS.read_text(encoding="utf-8")
+    p = parts(text)
+    data = {
+        "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "commit": git("rev-parse", "--short", "HEAD").strip(),
+        "overall": round(sum(r["weight"] * r["done"] / 100 for r in p), 1),
+        "parts": p,
+        "history": history(),
+        "lanes": json.loads(LANES.read_text(encoding="utf-8")) if LANES.exists() else {},
+        "counts": counts(),
+        "log": log_entries(text, 12),
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "progress.json").write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+    (out / "index.html").write_text(page(data), encoding="utf-8")
+    print(f"overall {data['overall']}%, {len(p)} parts, {len(data['history'])} history points -> {out}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+{
+  "wave": "3",
+  "updated": "2026-10-12 19:40 (UTC+5)",
+  "lanes": [
+    {"id": "S5", "model": "Sonnet", "task": "Push-apart neighbour gather (`0x6F495D60` chain), Unicorn proof, wire into the mover", "status": "running"},
+    {"id": "S6", "model": "Sonnet", "task": "What drives construction/training progress (33 slot-191 call sites)", "status": "running"},
+    {"id": "S7", "model": "Sonnet", "task": "Evasion: whose entries the miss gate walks, wire the chance", "status": "running"},
+    {"id": "S9", "model": "Sonnet", "task": "Sync birth tag Y: which gameplay events create pathing objects", "status": "running"},
+    {"id": "H16", "model": "Haiku", "task": "Cliff tilesets + textures, doodads and pre-placed units in the map render", "status": "running"}
+  ]
+}
