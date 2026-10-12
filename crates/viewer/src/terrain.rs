@@ -386,6 +386,20 @@ impl Mesh {
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
+    /// Add a single triangle to the mesh.
+    pub fn triangle(&mut self, vertices: [TerrainVertex; 3]) {
+        let base = self.vertices.len() as u32;
+        self.vertices.extend_from_slice(&vertices);
+        self.indices.extend_from_slice(&[base, base + 1, base + 2]);
+    }
+
+    /// Appends all of `other`, with its indices moved past this mesh's vertices.
+    pub fn append(&mut self, other: &Mesh) {
+        let base = self.vertices.len() as u32;
+        self.vertices.extend_from_slice(&other.vertices);
+        self.indices.extend(other.indices.iter().map(|i| i + base));
+    }
+
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
@@ -442,7 +456,22 @@ pub enum MeshError {
 
 /// Builds the terrain mesh from parsed `war3map.w3e` data.
 pub fn build_mesh(terrain: &W3eTerrain, options: MeshOptions) -> Result<TerrainMesh, MeshError> {
+    build_mesh_modeled(terrain, options, &[])
+}
+
+/// Like [`build_mesh`], but no flat cliff wall is drawn on an edge that touches a tile with a
+/// cliff model. `modeled` is one flag per tile, row by row (`(W-1) * (H-1)` entries); an empty
+/// slice means no tile has a model.
+pub fn build_mesh_modeled(
+    terrain: &W3eTerrain,
+    options: MeshOptions,
+    modeled: &[bool],
+) -> Result<TerrainMesh, MeshError> {
     let (width, height) = (terrain.width as usize, terrain.height as usize);
+    let tiles_x = width.saturating_sub(1);
+    let tile_modeled = |tx: usize, ty: usize| -> bool {
+        tx < tiles_x && ty + 1 < height && modeled.get(ty * tiles_x + tx).copied().unwrap_or(false)
+    };
     if width < 2 || height < 2 {
         return Err(MeshError::TooSmall {
             width: terrain.width,
@@ -517,8 +546,13 @@ pub fn build_mesh(terrain: &W3eTerrain, options: MeshOptions) -> Result<TerrainM
         }
     }
 
+    // An edge is shared by the tiles on either side of it; a wall is skipped if either is modeled.
     for y in 0..height {
         for x in 0..width - 1 {
+            let below = y.checked_sub(1).is_some_and(|ty| tile_modeled(x, ty));
+            if below || tile_modeled(x, y) {
+                continue;
+            }
             add_cliff_wall(
                 &mut mesh.cliffs,
                 point(x, y),
@@ -530,6 +564,10 @@ pub fn build_mesh(terrain: &W3eTerrain, options: MeshOptions) -> Result<TerrainM
     }
     for x in 0..width {
         for y in 0..height - 1 {
+            let left = x.checked_sub(1).is_some_and(|tx| tile_modeled(tx, y));
+            if left || tile_modeled(x, y) {
+                continue;
+            }
             add_cliff_wall(
                 &mut mesh.cliffs,
                 point(x, y),
@@ -608,7 +646,13 @@ pub struct TerrainScene {
     pub bounds: Aabb,
     /// Ground textures that were read from the map's archive (0 means procedural only).
     pub textures_loaded: usize,
+    /// Cliff scan counts (all zero when the terrain was meshed without archives).
+    pub cliffs: crate::cliff_render::CliffStatistics,
 }
+
+/// Cliff tileset whose models are placed on cliff tiles. Real maps may use another tileset
+/// (CityCliffs, ...); choosing it from the map is not done yet.
+const CLIFF_TILESET: &str = "Cliffs";
 
 /// Archive path of the terrain table that names the ground textures.
 const TERRAIN_SLK: &str = "TerrainArt\\Terrain.slk";
@@ -620,11 +664,21 @@ impl TerrainScene {
         terrain: &W3eTerrain,
         textures: &[Option<TextureData>],
     ) -> Result<TerrainScene, MeshError> {
+        TerrainScene::from_terrain_modeled(terrain, textures, &[])
+    }
+
+    /// Like [`TerrainScene::from_terrain`], with the flat cliff walls of `modeled` tiles left out
+    /// (see [`build_mesh_modeled`]).
+    pub fn from_terrain_modeled(
+        terrain: &W3eTerrain,
+        textures: &[Option<TextureData>],
+        modeled: &[bool],
+    ) -> Result<TerrainScene, MeshError> {
         let refs: Vec<Option<&TextureData>> = textures.iter().map(Option::as_ref).collect();
         let options = MeshOptions {
             atlas: AtlasLayout::for_textures(DEFAULT_SHEET_PX, &refs),
         };
-        let mesh = build_mesh(terrain, options)?;
+        let mesh = build_mesh_modeled(terrain, options, modeled)?;
         let atlas = build_atlas(options.atlas, &refs);
         let bounds = mesh.bounds().ok_or(MeshError::TooSmall {
             width: terrain.width,
@@ -636,6 +690,7 @@ impl TerrainScene {
             atlas,
             bounds,
             textures_loaded,
+            cliffs: Default::default(),
         })
     }
 
@@ -661,7 +716,13 @@ impl TerrainScene {
             .filter_map(|bytes| mpq::Archive::open(bytes).ok())
             .collect();
         let textures = load_ground_textures(&archives, &terrain);
-        Ok(TerrainScene::from_terrain(&terrain, &textures)?)
+        // Cliff tiles get their model; the flat walls of those tiles are left out.
+        let plan = crate::cliff_render::plan_cliffs(&terrain, CLIFF_TILESET, sources);
+        let mut scene = TerrainScene::from_terrain_modeled(&terrain, &textures, &plan.modeled)?;
+        scene.mesh.cliffs.append(&plan.mesh);
+        scene.bounds = scene.mesh.bounds().unwrap_or(scene.bounds);
+        scene.cliffs = plan.stats;
+        Ok(scene)
     }
 }
 

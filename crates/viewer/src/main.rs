@@ -184,19 +184,11 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         terrain.mesh.ground.quad_count() + terrain.mesh.overlays.quad_count()
     );
 
-    // Scan for cliff tiles and try to load cliff models
-    {
-        use viewer::cliff_render;
-        let archive = mpq::Archive::open(&map_bytes)?;
-        let w3e_bytes = archive.read("war3map.w3e")?;
-        let w3e = w3map::Terrain::parse(&w3e_bytes)?;
-        let cliff_stats = cliff_render::scan_cliff_tiles(&w3e, "Cliffs", &sources);
-        eprintln!(
-            "viewer: cliffs: {} tiles found, {} models loaded, {} missing",
-            cliff_stats.cliff_tiles_found, cliff_stats.models_loaded, cliff_stats.models_missing
-        );
-    }
-
+    let cliffs = terrain.cliffs;
+    eprintln!(
+        "viewer: cliffs: {} tiles found, {} drawn with a model; {} models loaded, {} missing",
+        cliffs.cliff_tiles_found, cliffs.tiles_modeled, cliffs.models_loaded, cliffs.models_missing
+    );
     if let Some(out) = dump_atlas {
         let size = terrain.atlas.size;
         offscreen::write_png(&out, size, size, &terrain.atlas.rgba)?;
