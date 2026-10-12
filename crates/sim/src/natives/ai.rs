@@ -99,6 +99,24 @@ pub const CAPTAIN_NO_PATHING: u32 = 0x4000;
 /// See [`CAPTAIN_FULL`].
 pub const CAPTAIN_AMPHIBIOUS: u32 = 0x8000;
 
+/// Natives whose calls are counted per player for the run report (`AiShared::counts`).
+const COUNTED: &[&str] = &[
+    "GetNextExpansion",
+    "GetExpansionPeon",
+    "SetExpansion",
+    "GetExpansionFoe",
+    "GetMegaTarget",
+    "GetEnemyBase",
+    "GetCreepCamp",
+    "GetBuilding",
+    "IgnoredUnits",
+    "GetTownUnitCount",
+    "GetHeroId",
+    "GetHeroLevelAI",
+    "CaptainRetreating",
+    "TownThreatened",
+];
+
 /// The main-VM natives that concern the AI, with their levels.
 pub const MAIN_NATIVES: &[AiNative] = &[
     AiNative { name: "StartMeleeAI", sig: "(Hplayer;S)V", addr: 0x6F3C_B740, level: Level::Confirmed, implemented: true, note: "gate and helper calls read (decompile, earlier pass); the start is a request served by AiHost::step" },
@@ -470,6 +488,10 @@ fn ai_call(
     a: &[Value],
 ) -> Option<NativeResult> {
     let ret = |v: Value| Some(NativeResult::Return(v));
+
+    if COUNTED.contains(&name) {
+        *env.shared.borrow_mut().counts.entry((env.player, name)).or_default() += 1;
+    }
 
     // Boolean setters of the AI flag word: the value is the argument's truth.
     if let Some(bit) = flag_bit(name) {

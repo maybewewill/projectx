@@ -158,6 +158,8 @@ pub struct AiShared {
     pub commands: Vec<AiCommand>,
     /// Calls to natives that are listed as not implemented, by name, with the number of calls.
     pub unimplemented: BTreeMap<&'static str, u32>,
+    /// Calls of the expansion, target and hero natives (S19 set), by (player, name): shown in the run report.
+    pub counts: BTreeMap<(u32, &'static str), u32>,
     /// Start and build events, in order.
     pub events: Vec<AiEvent>,
     /// The town sites and town slots (`ai_towns.rs`).

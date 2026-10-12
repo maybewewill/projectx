@@ -180,6 +180,8 @@ pub struct AiReport {
     pub unimplemented: Vec<(String, u32)>,
     /// Entries in the AI command log (calls the AI VMs made that the model records).
     pub logged_calls: usize,
+    /// Calls of the expansion / target / hero natives: `(player, name, calls)`.
+    pub native_counts: Vec<(u32, String, u32)>,
     /// AI threads that aborted, with the player that ran them.
     pub failures: Vec<(u32, RunStatus)>,
 }
@@ -670,6 +672,7 @@ impl Engine {
                 .map(|(name, calls)| ((*name).to_string(), *calls))
                 .collect(),
             logged_calls: shared.commands.len(),
+            native_counts: shared.counts.iter().map(|((p, n), c)| (*p, (*n).to_string(), *c)).collect(),
             failures: self
                 .ai
                 .failures()
@@ -811,6 +814,9 @@ impl fmt::Display for Report {
         )?;
         for (name, calls) in &self.ai.unimplemented {
             writeln!(f, "  {name} x{calls}")?;
+        }
+        for (player, name, calls) in &self.ai.native_counts {
+            writeln!(f, "AI p{player} {name} x{calls}")?;
         }
         writeln!(
             f,
