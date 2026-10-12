@@ -1,13 +1,7 @@
 {
  "wave": "3",
- "updated": "2026-10-12 23:40 (UTC+5)",
+ "updated": "2026-10-13 00:30 (UTC+5)",
  "lanes": [
-  {
-   "id": "S13",
-   "model": "Sonnet",
-   "task": "Terrain level/height functions for the sim (uphill miss, ramps `0x6F0118C0`), missile mover cap",
-   "status": "running"
-  },
   {
    "id": "S14",
    "model": "Sonnet",
@@ -31,6 +25,18 @@
    "model": "Haiku",
    "task": "Terrain ground textures: smooth tile transitions (corner blend/quarter-tile variations), shadows off",
    "status": "running"
+  },
+  {
+   "id": "S18",
+   "model": "Sonnet",
+   "task": "Missile homing/arc and impact; unit z (fly height + ground) for attacks and vision",
+   "status": "running"
+  },
+  {
+   "id": "S13",
+   "model": "Sonnet",
+   "task": "Terrain level/height functions for the sim (uphill miss, ramps `0x6F0118C0`), missile mover cap (merged)",
+   "status": "done"
   },
   {
    "id": "S16",
