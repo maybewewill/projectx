@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use w3map::Terrain as W3eTerrain;
 
 use crate::props::PropBuilder;
-use crate::terrain::{ground_height, Mesh, TerrainVertex, CLIFF_COLOR, TILE_SIZE};
+use crate::terrain::{ground_height, TerrainVertex, CLIFF_COLOR, TILE_SIZE};
 use crate::terrain_objects::{cliff_model_path, tile_cliff, CliffTypes};
 
 /// Counts from one cliff scan.

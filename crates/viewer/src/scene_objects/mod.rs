@@ -165,6 +165,10 @@ pub struct Instance {
     pub player: Option<u32>,
     /// Texture of replaceable texture ids 31 and up (destructables: their `texFile`).
     pub texture: Option<String>,
+    /// Animation sequence name (live sim units only); empty for static bind pose.
+    pub sequence_name: String,
+    /// Animation time in milliseconds (live sim units only).
+    pub animation_time_ms: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -203,6 +207,8 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
                                 scale: d.scale,
                                 player: None,
                                 texture: ty.tex_file.clone(),
+                                sequence_name: String::new(),
+                                animation_time_ms: None,
                             });
                         }
                         None => *unmodelled.entry(code_text(&d.id)).or_insert(0) += 1,
@@ -228,6 +234,8 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
                                 scale: u.scale,
                                 player: Some(u.player),
                                 texture: None,
+                                sequence_name: String::new(),
+                                animation_time_ms: None,
                             });
                         }
                         None => *unmodelled.entry(code_text(&u.id)).or_insert(0) += 1,
@@ -242,6 +250,21 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
     top.truncate(12);
     stats.unmodelled.extend(top);
     (instances, stats)
+}
+
+/// Unit animation state for sequence selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimUnitSequenceState {
+    /// Unit is moving: play "Walk" sequence or Stand if unavailable.
+    Moving,
+    /// Unit is attacking or under attack: play "Attack" sequence.
+    Attacking,
+    /// Unit is under construction: play "Birth" sequence.
+    Building,
+    /// Unit is dead (life reaches zero): try "Death" then "Decay".
+    Dead,
+    /// Unit idle (default): play "Stand" sequence.
+    Standing,
 }
 
 /// A unit of the live simulation, as the viewer draws it (copied out of `sim::Game` by
@@ -259,6 +282,10 @@ pub struct SimUnit {
     pub hidden: bool,
     pub dead: bool,
     pub removed: bool,
+    /// Unit handle id for deterministic phase offset (sequence time = (game_time * 1000 + handle * 137) % length).
+    pub handle: u32,
+    /// Sequence name base: "Walk", "Attack", "Birth", "Death", "Decay", "Stand", or empty string.
+    pub sequence_state: SimUnitSequenceState,
 }
 
 /// What [`sim_unit_instances`] did with the live units.
@@ -275,7 +302,7 @@ pub struct SimUnitStats {
 /// Draw instances for the live simulation's units, in the same form as the map's unit placements:
 /// the model comes from the unit table by type code (the variation is 0: the simulation has none),
 /// the position and facing are the unit's, and the tint is the owner's player colour.
-pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog) -> (Vec<Instance>, SimUnitStats) {
+pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog, game_time_ms: u32) -> (Vec<Instance>, SimUnitStats) {
     let mut instances = Vec::new();
     let mut stats = SimUnitStats::default();
     let mut unmodelled: HashMap<String, usize> = HashMap::new();
@@ -288,6 +315,20 @@ pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog) -> (Vec<Instance
         match catalog.units.get(&code) {
             Some(ty) => {
                 let scale = if u.scale > 0.0 { u.scale } else { 1.0 };
+
+                // Choose sequence name based on unit state
+                let sequence_name = match u.sequence_state {
+                    SimUnitSequenceState::Moving => "Walk",
+                    SimUnitSequenceState::Attacking => "Attack",
+                    SimUnitSequenceState::Building => "Birth",
+                    SimUnitSequenceState::Dead => "Death", // fallback to "Decay" is in the renderer
+                    SimUnitSequenceState::Standing => "Stand",
+                };
+
+                // Deterministic animation time: (game_time_ms * 1000 + handle * 137) mod sequence_length
+                // We pass the game time and handle so the renderer can compute the actual sequence time
+                let animation_time_offset = (game_time_ms as u32).wrapping_mul(1000).wrapping_add(u.handle.wrapping_mul(137));
+
                 instances.push(Instance {
                     kind: Kind::Unit,
                     model: ty.path_for(0),
@@ -296,6 +337,8 @@ pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog) -> (Vec<Instance
                     scale: [scale; 3],
                     player: Some(u.owner),
                     texture: None,
+                    sequence_name: sequence_name.to_string(),
+                    animation_time_ms: Some(animation_time_offset),
                 });
                 stats.drawn += 1;
             }
@@ -333,6 +376,8 @@ mod sim_unit_tests {
             hidden: false,
             dead: false,
             removed: false,
+            handle: 0x100000,
+            sequence_state: SimUnitSequenceState::Standing,
         }
     }
 
@@ -340,7 +385,7 @@ mod sim_unit_tests {
     fn sim_unit_maps_to_a_draw_instance() {
         let hpea = u32::from_be_bytes(*b"hpea");
         let catalog = catalog_with(b"hpea", "units\\human\\Peasant\\Peasant");
-        let (inst, stats) = sim_unit_instances(&[unit(hpea)], &catalog);
+        let (inst, stats) = sim_unit_instances(&[unit(hpea)], &catalog, 1000);
         assert_eq!(stats.drawn, 1);
         assert!(stats.unmodelled.is_empty());
         assert_eq!(inst.len(), 1);
@@ -351,6 +396,7 @@ mod sim_unit_tests {
         assert_eq!(i.angle, 1.5);
         assert_eq!(i.scale, [1.25, 1.25, 1.25]);
         assert_eq!(i.player, Some(2));
+        assert_eq!(i.sequence_name, "Stand");
     }
 
     #[test]
@@ -363,7 +409,7 @@ mod sim_unit_tests {
         dead.dead = true;
         let mut removed = unit(hpea);
         removed.removed = true;
-        let (inst, stats) = sim_unit_instances(&[hidden, dead, removed], &catalog);
+        let (inst, stats) = sim_unit_instances(&[hidden, dead, removed], &catalog, 1000);
         assert!(inst.is_empty());
         assert_eq!(stats.not_visible, 3);
         assert_eq!(stats.drawn, 0);
@@ -375,7 +421,7 @@ mod sim_unit_tests {
         let mut zero_scale = unit(u32::from_be_bytes(*b"hpea"));
         zero_scale.scale = 0.0;
         let other = unit(u32::from_be_bytes(*b"ngol"));
-        let (inst, stats) = sim_unit_instances(&[zero_scale, other, other], &catalog);
+        let (inst, stats) = sim_unit_instances(&[zero_scale, other, other], &catalog, 1000);
         assert_eq!(inst.len(), 1);
         assert_eq!(inst[0].scale, [1.0, 1.0, 1.0]);
         assert_eq!(stats.unmodelled, vec![("ngol".to_string(), 2)]);
@@ -830,6 +876,8 @@ mod tests {
             scale,
             player: None,
             texture: None,
+            sequence_name: String::new(),
+            animation_time_ms: None,
         }
     }
 

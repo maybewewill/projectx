@@ -230,6 +230,7 @@ mod tests {
     }
 
     fn unit(type_id: u32, owner: u32, x: f32, y: f32) -> SimUnit {
+        use crate::scene_objects::SimUnitSequenceState;
         SimUnit {
             type_id,
             owner,
@@ -240,6 +241,8 @@ mod tests {
             hidden: false,
             dead: false,
             removed: false,
+            handle: 0x100000,
+            sequence_state: SimUnitSequenceState::Standing,
         }
     }
 

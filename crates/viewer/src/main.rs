@@ -455,7 +455,8 @@ fn run_sim(run: SimRun) -> Result<(), Box<dyn std::error::Error>> {
         }
         let now = engine.report().game_time;
         let units = sim_view::units(&engine);
-        let terrain = TerrainScene::from_map_with_sim_units(&map_bytes, &sources, Some(&units))?;
+        let game_time_ms = (now * 1000.0) as u32;
+        let terrain = TerrainScene::from_map_with_sim_units(&map_bytes, &sources, Some(&units), game_time_ms)?;
         let alive = sim_view::alive_per_owner(&units);
         let alive_text: Vec<String> = alive.iter().map(|(p, n)| format!("p{p}={n}")).collect();
         eprintln!(
