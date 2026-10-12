@@ -293,18 +293,18 @@ Full analysis of a 12 MB DLL takes ~30–60 minutes on 4 cores. The cloud contai
 
 ## 6.0 Progress (update after every agent/step)
 
-**Overall: ~53.7%** of the 1:1 rewrite (= exact weighted sum of the table below). Correction 2026-10-11: the headline had drifted to ~50.5% while the table summed to ~41%; the headline is now always the computed sum.
+**Overall: ~53.8%** of the 1:1 rewrite (= exact weighted sum of the table below). Correction 2026-10-11: the headline had drifted to ~50.5% while the table summed to ~41%; the headline is now always the computed sum.
 
 | Part | Weight | Done | Comment |
 |---|---|---|---|
 | File formats (MPQ, BLP, MDX, SLK, maps, replays, JASS parser) | 5% | ~87% | all 3,342 real MDX and 6,481 real BLP parse (H2; BLP JPEG alpha = 4th component); 170 of 171 shipped maps boot (RoC w3i v18 added);  MPQ reader: every listfile entry of war3/War3x/War3xLocal reads (17,678 files, 0 failures); real common.j + Blizzard.j + a melee war3map.j parse and type-check clean; w3i/w3e/wpm geometry checked on a real map |
-| Game.dll analysis (names, classes, specs) | 10% | ~62% | full decompile export; specs: JASS front end, JASS VM, math, handles |
+| Game.dll analysis (names, classes, specs) | 10% | ~63% | full decompile export; specs: JASS front end, JASS VM, math, handles |
 | Simulation (units, abilities, damage, pathfinding, AI, orders, RNG) | 40% | ~56.5% | missile ChanceToMiss stream-2 draw (S10, Unicorn 2,400); push-apart gather + occupant lists wired (S5, Unicorn 8,600); evasion wired (S7, Unicorn 700/700); construction/training = agile countdown (S6, Unicorn 1,200); Storm Bolt stun + Slow buffs wired (H7); spell cast core with cooldown/mana (S1); buff/aura lifecycle, timed-life death (S2); moving facing, waypoint test, push-apart kernel (S3); movement = decoded velocity model (lane H); computer AI harvests/trains/builds (lane K, stand-ins);  RNG, softfloat, text, handles, pathing A* (pyramid, search core) bit-exact; timers/clock |
 | JASS VM + ~1000 natives | 12% | ~97% | parser/declarations/bytecode = original, VM on softfloat; natives: shipped melee maps reference **0 unbound natives** (was 55 before the 2026-10-11 lanes A–F); AI 97 of 124 bound; 49 NotImplemented rows with reasons remain in the support tables, AI 88 of 124 (36 unbound, each blocked by a named subsystem: docs/spec/ai-natives.md; 43 UNSURE, 0 raised by Unicorn; math/strings/text bit-exact, timers/triggers per spec) |
 | Rendering (MDX, terrain, effects) | 12% | ~37% | viewer draws the running simulation (H18, `--sim-seconds`); all 1,725 Circumvention objects drawn, team colours, alpha passes (H17); textured cliffs per tileset, doodads/units drawn in bind pose (H16); cliff models drawn on real maps, 1,174 tiles on Circumvention (H13); real map terrain renders offscreen with real textures (H1); placed doodads/units resolved (H6), MDX BONE blocks models; viewer skeleton, static model |
 | UI (FDF, menus, HUD) | 8% | ~14% | real ConsoleUI/MainMenu render with skin textures and game-font text (H14, H15); all 73 real FrameDef.toc files load, MainMenu/ConsoleUI lay out (H3); FDF parser, inheritance, layout, draw list (`crates/fdf`, synthetic tests only); no menus/HUD/renderer yet |
 | Network/lockstep, wasm, sound | 8% | ~18% | sim stack builds for wasm32 + headless crates/web (H5); crates/sound decodes all 6,195 WAV/MP3 (H4); turn scheduler (time slots → steps), lockstep spec; 25 ms units confirmed, step listener open |
-| Replay test harness against the original | 5% | ~38% | pathing-object registry behind sync X/Y (S8, Unicorn 24,598 ops); 0x22 sync value decoded (5 inputs) + net checksum reproduced exactly, `w3boot --check-sync` (S4); w3g parser + Unicorn harness for functions |
+| Replay test harness against the original | 5% | ~39% | birth-tag creators decoded, sim hooks (S9); pathing-object registry behind sync X/Y (S8, Unicorn 24,598 ops); 0x22 sync value decoded (5 inputs) + net checksum reproduced exactly, `w3boot --check-sync` (S4); w3g parser + Unicorn harness for functions |
 
 ## 6. Status / next steps
 
