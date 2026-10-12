@@ -279,6 +279,61 @@ fn skill_cap(gm: &Game, k: ObjKey) -> Option<i32> {
     Some(heroes::skill_point_cap(&h.slots, &|code| u.abilities.get(code).map(|ab| ab.level_index)))
 }
 
+/// The state change of the hero learn (`0x6F277A00` -> `0x6F2095D0`, see [`select_hero_skill`]) without the events:
+/// returns the owner and the `(ability, level)` pairs that were set, or `None` when the unit method refuses. The AI
+/// host calls this directly for the hero-level callback (`docs/spec/heroes.md` section 14).
+pub fn apply_learn(gm: &mut Game, k: ObjKey, code: u32) -> Option<(u32, Vec<(u32, i32)>)> {
+    use heroes::LearnEffect;
+    let u = gm.unit(k);
+    u.hero.as_ref()?;
+    let owner = u.owner;
+    // `0x6F277A00`: an ability the unit holds is learned only below its max minus one.
+    if let Some(ab) = u.abilities.get(code) {
+        if ab.level_index >= ab.max_level() - 1 {
+            return None;
+        }
+    }
+    let available = !gm.misc.players[(owner as usize).min(15)].unavailable_abilities.contains(&code_of_slot(u, code));
+    let misc_skip = gm.kill_xp_config().hero_ability_level_skip;
+    let u = gm.unit(k);
+    let h = u.hero.as_ref()?;
+    let learned = |c: u32| u.abilities.get(c).map(|ab| ab.level_index);
+    let skip = |c: u32| gm.hero_ability_def(c).map_or(0, |d| d.level_skip);
+    let env = heroes::LearnEnv {
+        learned: &learned,
+        level_skip: &skip,
+        misc_skip,
+        available,
+        deps: (true, true),
+        level_counter: h.level - 1,
+        cheat: false,
+    };
+    let mut points = h.skill_points;
+    let slots = h.slots;
+    let effects = heroes::learn(&mut points, &slots, code, false, &env);
+    let mut set_levels = Vec::new();
+    let ability_types = gm.ability_types().clone();
+    let unit = gm.unit_mut(k);
+    for e in &effects {
+        match e {
+            LearnEffect::LevelUp(c) => {
+                if let Some(ab) = unit.abilities.get_mut(*c) {
+                    ab.inc_level();
+                }
+            }
+            LearnEffect::Add(c) => {
+                unit.abilities.attach(crate::abilities::Ability::new(*c, ability_types.get(*c).copied()));
+            }
+            LearnEffect::SetLevel(c, l) => set_levels.push((*c, *l)),
+            _ => {}
+        }
+    }
+    if !effects.is_empty() && !matches!(effects[0], LearnEffect::Error(_)) {
+        unit.hero.as_mut().expect("hero").skill_points = points;
+    }
+    Some((owner, set_levels))
+}
+
 /// `SelectHeroSkill(whichHero, abilCode)` (`0x6F3C7050` -> unit method `0x6F277A00` -> hero learn `0x6F2095D0`,
 /// CONFIRMED structure and Unicorn-checked arithmetic, `docs/spec/heroes.md` section 12). The unit method learns when the
 /// unit has no such ability, or its level index is below its max minus one; the learn is [`heroes::learn`]. The
@@ -287,7 +342,6 @@ fn skill_cap(gm: &Game, k: ObjKey) -> Option<i32> {
 fn select_hero_skill(g: &Rc<RefCell<Game>>, ctx: &mut dyn super::ScriptRuntime, a: &[Value]) {
     use super::event::{Datum, Field, Firing};
     use super::unit_event::{fire_observers_in, KEY_BASE};
-    use heroes::LearnEffect;
 
     let code = int_arg(a, 1) as u32;
     let (k, owner, levels) = {
@@ -295,54 +349,10 @@ fn select_hero_skill(g: &Rc<RefCell<Game>>, ctx: &mut dyn super::ScriptRuntime, 
         let Some(k) = hero_key(&gm, a) else {
             return;
         };
-        let u = gm.unit(k);
-        let owner = u.owner;
-        // `0x6F277A00`: an ability the unit holds is learned only below its max minus one.
-        if let Some(ab) = u.abilities.get(code) {
-            if ab.level_index >= ab.max_level() - 1 {
-                return;
-            }
-        }
-        let available = !gm.misc.players[(owner as usize).min(15)].unavailable_abilities.contains(&code_of_slot(u, code));
-        let misc_skip = gm.kill_xp_config().hero_ability_level_skip;
-        let u = gm.unit(k);
-        let h = u.hero.as_ref().expect("hero gate");
-        let learned = |c: u32| u.abilities.get(c).map(|ab| ab.level_index);
-        let skip = |c: u32| gm.hero_ability_def(c).map_or(0, |d| d.level_skip);
-        let env = heroes::LearnEnv {
-            learned: &learned,
-            level_skip: &skip,
-            misc_skip,
-            available,
-            deps: (true, true),
-            level_counter: h.level - 1,
-            cheat: false,
+        let Some((owner, levels)) = apply_learn(&mut gm, k, code) else {
+            return;
         };
-        let mut points = h.skill_points;
-        let slots = h.slots;
-        let effects = heroes::learn(&mut points, &slots, code, false, &env);
-        // Apply.
-        let mut set_levels = Vec::new();
-        let ability_types = gm.ability_types().clone();
-        let unit = gm.unit_mut(k);
-        for e in &effects {
-            match e {
-                LearnEffect::LevelUp(c) => {
-                    if let Some(ab) = unit.abilities.get_mut(*c) {
-                        ab.inc_level();
-                    }
-                }
-                LearnEffect::Add(c) => {
-                    unit.abilities.attach(crate::abilities::Ability::new(*c, ability_types.get(*c).copied()));
-                }
-                LearnEffect::SetLevel(c, l) => set_levels.push((*c, *l)),
-                _ => {}
-            }
-        }
-        if !effects.is_empty() && !matches!(effects[0], LearnEffect::Error(_)) {
-            unit.hero.as_mut().expect("hero").skill_points = points;
-        }
-        (k, owner, set_levels)
+        (k, owner, levels)
     };
     for (c, l) in levels {
         let firing = {
