@@ -75,6 +75,19 @@ impl UiScene {
         race: &str,
         placed: &fdf::layout::ExternalFrames,
     ) -> Result<Self, String> {
+        Self::from_mpq_frames_sized(frame_names, archive_sources, race, placed, (1920, 1080))
+    }
+
+    /// As [`UiScene::from_mpq_frames_placed`], for a window of `window_px` pixels. The layout window
+    /// follows the image's aspect (a 4:3 image is exactly the 4:3 safe area), so the UI is not squeezed
+    /// when the image is not 16:9.
+    pub fn from_mpq_frames_sized(
+        frame_names: &[&str],
+        archive_sources: &[&[u8]],
+        race: &str,
+        placed: &fdf::layout::ExternalFrames,
+        window_px: (u32, u32),
+    ) -> Result<Self, String> {
         let toc_bytes = load_from_mpq(FRAMEDEF_TOC, archive_sources)?;
         let toc_text = String::from_utf8(toc_bytes).map_err(|e| e.to_string())?;
         let fdf_files = fdf::parse_toc(&toc_text);
@@ -108,8 +121,8 @@ impl UiScene {
         let scene = fdf::Scene::build(&library, frame_names)
             .map_err(|e| format!("Failed to build scene for {frame_names:?}: {e:?}"))?;
 
-        // A 16:9 window; the layout pillarboxes the 4:3 UI space inside it.
-        let screen = fdf::layout::Screen::for_window(1920, 1080);
+        // The window of the image; the layout pillarboxes the 4:3 UI space inside a wider one.
+        let screen = fdf::layout::Screen::for_window(window_px.0, window_px.1);
         let layout = fdf::layout::solve_placed(&scene, &screen, &std::collections::BTreeMap::new(), placed)
             .map_err(|e| format!("Failed to solve layout: {e:?}"))?;
         let draw_list = fdf::DrawList::build(&scene, &layout, &library)
