@@ -1,19 +1,7 @@
 {
  "wave": "3",
- "updated": "2026-10-13 00:30 (UTC+5)",
+ "updated": "2026-10-13 01:30 (UTC+5)",
  "lanes": [
-  {
-   "id": "S14",
-   "model": "Sonnet",
-   "task": "AI building placement: where the AI puts a new building (replace the stand-in spot finder)",
-   "status": "running"
-  },
-  {
-   "id": "S15",
-   "model": "Sonnet",
-   "task": "AI captains and attack waves: bind the remaining AI natives (attack groups, targets, threat)",
-   "status": "running"
-  },
   {
    "id": "S17",
    "model": "Sonnet",
@@ -21,16 +9,46 @@
    "status": "running"
   },
   {
-   "id": "H20",
-   "model": "Haiku",
-   "task": "Terrain ground textures: smooth tile transitions (corner blend/quarter-tile variations), shadows off",
-   "status": "running"
-  },
-  {
    "id": "S18",
    "model": "Sonnet",
    "task": "Missile homing/arc and impact; unit z (fly height + ground) for attacks and vision",
    "status": "running"
+  },
+  {
+   "id": "S19",
+   "model": "Sonnet",
+   "task": "AI: retreat/threat/readiness, expansions, last 9 AI natives; cliff level in the build-spot search",
+   "status": "running"
+  },
+  {
+   "id": "S20",
+   "model": "Sonnet",
+   "task": "Unit sight writer for radius ≥ 3 (span producer, cliffs block sight) — replace the circle stand-in",
+   "status": "running"
+  },
+  {
+   "id": "H21",
+   "model": "Haiku",
+   "task": "Minimap: render terrain + units into the ConsoleUI minimap frame of the live render",
+   "status": "running"
+  },
+  {
+   "id": "S14",
+   "model": "Sonnet",
+   "task": "AI building placement: where the AI puts a new building (replace the stand-in spot finder) (merged)",
+   "status": "done"
+  },
+  {
+   "id": "S15",
+   "model": "Sonnet",
+   "task": "AI captains and attack waves: bind the remaining AI natives (attack groups, targets, threat) (merged)",
+   "status": "done"
+  },
+  {
+   "id": "H20",
+   "model": "Haiku",
+   "task": "Terrain ground textures: smooth tile transitions (corner blend/quarter-tile variations), shadows off (merged)",
+   "status": "done"
   },
   {
    "id": "S13",
