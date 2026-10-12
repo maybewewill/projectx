@@ -14,7 +14,7 @@
 
 use softfloat::{arith, conv, math, Tables, F32};
 
-use crate::natives::game::HeroObj;
+use crate::natives::game::{HeroObj, HeroSlot};
 
 /// `100.0` (start-up constant `0x6FAAE574`): the divisor of the factor column.
 const FACTOR_DIVISOR: F32 = F32(0x42C8_0000);
@@ -244,6 +244,12 @@ fn grant_tail(t: &XpTables, h: &mut HeroObj, slack: Option<i32>) {
             }
         }
     }
+}
+
+/// Whether a hero is at the maximum level (`0x6F26EB10`, the test of the candidate routine): `MaxHeroLevel` is at
+/// most its level.
+pub fn hero_at_max(t: &XpTables, h: &HeroObj) -> bool {
+    at_max(t, h.level - 1)
 }
 
 /// `1.0` (start-up constant `0x6FAAE4F4`).
@@ -995,6 +1001,157 @@ pub fn kill_distance2(rec: (F32, F32), cand: (F32, F32)) -> F32 {
     let dx = arith::sub(cand.0, rec.0);
     let dy = arith::sub(cand.1, rec.1);
     arith::add(arith::mul(dx, dx), arith::mul(dy, dy))
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Skill learning (docs/spec/heroes.md, section 12). The learn `0x6F2095D0`, its gate `0x6F208A00`, the required level
+// `0x6F207B60` and the cap helpers `0x6F207C80` / `0x6F207CC0` are checked in Unicorn by `tools/emu/hero_learn_emu.py`
+// (the real routines run; the callees below the hero object are stand-ins), compared by `tests/hero_learn_vectors.rs`.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// The ability a learn of `'Aroa'` also matches a slot holding `'Arou'` for (`0x6F209646`:
+/// `a2 == 0x41726F61 && slot == 0x41726F75`).
+pub const ALIAS_ABILITY: u32 = 0x4172_6F61;
+/// The slot code the alias matches.
+pub const ALIAS_SLOT: u32 = 0x4172_6F75;
+
+/// What the learn gate and the learn read from outside the hero object (the stand-ins of the Unicorn harness).
+pub struct LearnEnv<'a> {
+    /// The unit's ability with this code: its zero-based level index (`ability+0x50`), `None` when the unit has none
+    /// (`0x6F0787D0`).
+    pub learned: &'a dyn Fn(u32) -> Option<i32>,
+    /// `levelSkip` of the ability definition (`+0x44`), 0 when the definition is missing (`0x6F265ED0`).
+    pub level_skip: &'a dyn Fn(u32) -> i32,
+    /// Misc `HeroAbilityLevelSkip` (integer reader `0x6F009F90`, element 0): the skip used when the definition's is 0.
+    pub misc_skip: i32,
+    /// The owner can use the ability (`0x6F40B490`: the player's availability record, `SetPlayerAbilityAvailable`).
+    pub available: bool,
+    /// The dependency check answer and its out flag (`0x6F40FB70`): `(ok, flag)`.
+    pub deps: (bool, bool),
+    /// The hero level counter (`0x6F473170` on `hero+0x6C`): the level minus one.
+    pub level_counter: i32,
+    /// Bit `0x100` of the debug object `0x6F4C34D0(13)`: lets a skill through whose dependency flag is set. Off in a
+    /// normal game (LIKELY).
+    pub cheat: bool,
+}
+
+/// The required hero level of the next level of a slot (`0x6F207B60`): `base + next * skip`, where `next` is the level
+/// the ability would be learned at (0 when the unit does not have it, else its index plus one) and `skip` the
+/// definition's `levelSkip` or, when that is 0, Misc `HeroAbilityLevelSkip`. Wrapping int arithmetic.
+pub fn required_level(base: i32, def_skip: i32, misc_skip: i32, next: i32) -> i32 {
+    let skip = if def_skip != 0 { def_skip } else { misc_skip };
+    base.wrapping_add(skip.wrapping_mul(next))
+}
+
+/// The learned level count of an ability on the unit as `0x6F207C80` returns it: the index plus one, 0 when absent.
+pub fn learned_count(index: Option<i32>) -> i32 {
+    index.map_or(0, |i| i.wrapping_add(1))
+}
+
+/// The slot max of a code (`0x6F207CC0`): the first slot holding the code, else -1.
+pub fn slot_max(slots: &[HeroSlot; 5], code: u32) -> i32 {
+    slots.iter().position(|s| s.code == code).map_or(-1, |i| slots[i].max_level)
+}
+
+/// The skill point cap of the kill branch (`0x6F20B080` tail): the sum over the five slots of `max - learned` for the
+/// slots with room (`0x6F207C80` against `0x6F207CC0` of the slot's code). A slot with no code looks up code 0: no
+/// ability, and the max of the first empty slot.
+pub fn skill_point_cap(slots: &[HeroSlot; 5], learned: &dyn Fn(u32) -> Option<i32>) -> i32 {
+    let mut sum = 0i32;
+    for s in slots.iter() {
+        let min = learned_count(learned(s.code));
+        let max = slot_max(slots, s.code);
+        if min < max {
+            sum = sum.wrapping_add(max - min);
+        }
+    }
+    sum
+}
+
+/// The gate `0x6F208A00` for slot `slot`: `(learnable, flag)`. `learnable` needs room (`index + 1 < max`, an unsigned
+/// compare, and the ability available to the owner) and then either (the dependencies pass and the hero level reaches
+/// the required level) or (the dependency flag is set and the debug bit is on). `flag` is the out value: room and the
+/// dependency flag.
+pub fn can_learn(slots: &[HeroSlot; 5], slot: usize, env: &LearnEnv) -> (bool, bool) {
+    let s = &slots[slot];
+    let next = (env.learned)(s.code).map_or(0, |i| i.wrapping_add(1));
+    let req = required_level(s.req_level, (env.level_skip)(s.code), env.misc_skip, next);
+    let room = (next as u32) < (s.max_level as u32) && env.available;
+    let level_ok = env.deps.0 && env.level_counter.wrapping_add(1) >= req;
+    let flag = room && env.deps.1;
+    let ok = room && (level_ok || (env.deps.1 && env.cheat));
+    (ok, flag)
+}
+
+/// One effect of a learn, in the order the original performs them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LearnEffect {
+    /// `0x6F2077A0(kind, ...)`: the map designer error text (0 no points, 1 unknown ability, 2 no ability given).
+    Error(u32),
+    /// The unit's ability goes up one level (vtable slot 185).
+    LevelUp(u32),
+    /// The ability is created and attached (`0x6F2076F0`).
+    Add(u32),
+    /// `0x6F296F70(code, level)`: the level set with the 1-based level, and the hero skill event.
+    SetLevel(u32, i32),
+    /// The last skill point was spent (`0x6F3329F0`).
+    NoPointsLeft,
+    /// `0x6F021270` (the hero UI refresh).
+    Refresh,
+    /// `0x6F26FE50(0)` (the selection refresh).
+    Notify,
+}
+
+/// The learn `0x6F2095D0` on a hero (`skill_points`, `slots`) with ability code `code` and the force flag `force`
+/// (`a3`; the natives pass 0): returns the effects in the original's order and spends the skill point. The caller
+/// applies the ability effects (`LevelUp`, `Add`, `SetLevel`) to the unit. The level `SetLevel` carries after a
+/// `LevelUp` is the ability's index after the level up plus one.
+pub fn learn(
+    skill_points: &mut i32,
+    slots: &[HeroSlot; 5],
+    code: u32,
+    force: bool,
+    env: &LearnEnv,
+) -> Vec<LearnEffect> {
+    let mut out = Vec::new();
+    if *skill_points == 0 && !force {
+        out.push(LearnEffect::Error(0));
+        return out;
+    }
+    if code == 0 {
+        out.push(LearnEffect::Error(2));
+        return out;
+    }
+    let Some(slot) = slots
+        .iter()
+        .position(|s| (code == ALIAS_ABILITY && s.code == ALIAS_SLOT) || s.code == code)
+    else {
+        out.push(LearnEffect::Error(1));
+        return out;
+    };
+    if !can_learn(slots, slot, env).0 {
+        return out;
+    }
+    let slot_code = slots[slot].code;
+    match (env.learned)(slot_code) {
+        Some(index) => {
+            out.push(LearnEffect::LevelUp(slot_code));
+            out.push(LearnEffect::SetLevel(slot_code, index.wrapping_add(2)));
+        }
+        None => {
+            out.push(LearnEffect::Add(slot_code));
+            out.push(LearnEffect::SetLevel(slot_code, 1));
+        }
+    }
+    if !force {
+        *skill_points = skill_points.wrapping_sub(1);
+        if *skill_points == 0 {
+            out.push(LearnEffect::NoPointsLeft);
+        }
+    }
+    out.push(LearnEffect::Refresh);
+    out.push(LearnEffect::Notify);
+    out
 }
 
 #[cfg(test)]

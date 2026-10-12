@@ -441,6 +441,12 @@ pub struct UnitType {
     /// The abilities a new unit gets, in list order, at level 1 (LIKELY). TODO(gamedata): from the type's ability
     /// list.
     pub abilities: Vec<u32>,
+    /// The hero ability list (`heroAbilList`, type record `+0x8F0`), up to five codes in file order. A hero fills its five
+    /// skill slots from it (`0x6F20AA10`, docs/spec/heroes.md section 12).
+    pub hero_abilities: Vec<u32>,
+    /// The unit level (`level`, `0x6F29DCA0` reads it through `0x6F29BB80`). The kill experience of a non-hero victim
+    /// is indexed by it.
+    pub level: i32,
     /// Gold cost, read by `GetUnitGoldCost` (CONFIRMED: the cost native returns the type record's gold field, `+0x20`
     /// of the type object, through `FUN_6f29b800`). A registry input: the host fills it from the unit data.
     pub gold_cost: i32,
@@ -695,6 +701,64 @@ pub struct UnitObj {
     pub bonuses: crate::auras::StatBonuses,
     /// Hero state, present for a hero type (see `natives/hero.rs`).
     pub hero: Option<HeroObj>,
+    /// Bit 2 of unit `+0x248` (summoned): the kill experience of the unit is scaled by `SummonedKillFactor`. Set by the
+    /// host or a summon (no summon spell is modelled yet).
+    pub summoned: bool,
+}
+
+/// One of the five skill slots of a hero (`'AHer'` object `+0xF4`, `+0x10C`, `+0x124`, filled by `0x6F20AA10` from the
+/// type's `heroAbilList` and the ability definitions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeroSlot {
+    /// The ability code (`+0xF4 + 4*i`); 0 for an empty slot.
+    pub code: u32,
+    /// The ability's level count (`+0x10C + 4*i`, definition `+0x3C` `levels`).
+    pub max_level: i32,
+    /// The hero level the first level needs (`+0x124 + 4*i`, definition `+0x40` `reqLevel`).
+    pub req_level: i32,
+}
+
+/// The ability data a hero skill needs from the definition: `levels`, `reqLevel`, `levelSkip` (definition `+0x3C`,
+/// `+0x40`, `+0x44`, builder `0x6F2657A0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeroAbilityDef {
+    pub levels: i32,
+    pub req_level: i32,
+    pub level_skip: i32,
+}
+
+/// The Misc values of the kill experience (`docs/spec/heroes.md` section 8) and the level skip default.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KillXpConfig {
+    /// `HeroExpRange` (a real, world units).
+    pub hero_exp_range: F32,
+    /// `SummonedKillFactor`.
+    pub summon_factor: F32,
+    /// `MaxUnitLevel`.
+    pub max_unit_level: i32,
+    /// `GlobalExperience`: candidates out of range also go to the global list.
+    pub global_experience: bool,
+    /// `MaxLevelHeroesDrainExp`: heroes at the maximum level still take part.
+    pub max_level_drain: bool,
+    /// `BuildingKillsGiveExp`: a structure's kills give experience.
+    pub building_kills: bool,
+    /// `HeroAbilityLevelSkip`: the level skip used when an ability definition has none.
+    pub hero_ability_level_skip: i32,
+}
+
+impl Default for KillXpConfig {
+    fn default() -> Self {
+        // Zero reals and false flags: the Misc readers answer 0 for a missing key (CONFIRMED reader rule).
+        KillXpConfig {
+            hero_exp_range: F32::ZERO,
+            summon_factor: F32::ZERO,
+            max_unit_level: 0,
+            global_experience: false,
+            max_level_drain: false,
+            building_kills: false,
+            hero_ability_level_skip: 0,
+        }
+    }
 }
 
 /// The hero state of a unit (the hero sub-object of the original, reached through `+0x1F0`).
@@ -721,6 +785,8 @@ pub struct HeroObj {
     /// The primary attribute (`+0xCC`): `1` strength, `2` intelligence, otherwise agility. Read by the attack bonus
     /// (`crate::heroes::primary_total`). The source in the unit record is UNSURE; the default is agility.
     pub primary: i32,
+    /// The five skill slots (`+0xF4`, `+0x10C`, `+0x124`); empty when the type has no `heroAbilList`.
+    pub slots: [HeroSlot; 5],
 }
 
 impl Default for HeroObj {
@@ -737,6 +803,7 @@ impl Default for HeroObj {
             int_base: 0,
             int_plus: softfloat::F32::ZERO,
             primary: 0,
+            slots: [HeroSlot::default(); 5],
         }
     }
 }
@@ -1361,6 +1428,10 @@ pub struct Game {
     pub(crate) hero_rates: crate::heroes::BonusRates,
     /// Hero attributes of each hero type (base and per-level gain), copied into a new hero (see `heroes`).
     pub(crate) hero_attributes: BTreeMap<u32, crate::heroes::HeroAttributes>,
+    /// The kill experience Misc values and the level skip default (see [`KillXpConfig`]).
+    pub(crate) kill_xp: KillXpConfig,
+    /// The skill data of the hero abilities, keyed by the raw ability code (see [`HeroAbilityDef`]).
+    pub(crate) hero_ability_defs: BTreeMap<u32, HeroAbilityDef>,
     /// The day cycle (`[Misc]` DayLength, DayHours, Dawn, Dusk; `crate::daynight`). The default is the usual cycle until
     /// the engine installs the map's Misc values.
     pub(crate) day_cycle: crate::daynight::DayCycle,
@@ -1443,6 +1514,8 @@ impl Game {
             hero_xp: crate::heroes::XpTables::default(),
             hero_rates: crate::heroes::BonusRates::default(),
             hero_attributes: BTreeMap::new(),
+            kill_xp: KillXpConfig::default(),
+            hero_ability_defs: BTreeMap::new(),
             day_cycle: crate::daynight::DayCycle::default(),
             production: crate::production::Production::default(),
         }
@@ -1653,7 +1726,39 @@ impl Game {
             h.int_base = a.int_base;
             h.int_plus = a.int_plus;
         }
+        // The skill slots (`0x6F20AA10`): the tokens of `heroAbilList` in order, at most five. A code without a definition
+        // keeps its slot index and stays empty. A new hero has one skill point, capped at the sum of the slot levels.
+        let mut total = 0i32;
+        if let Some(ty) = self.unit_types.get(type_id) {
+            for (i, &code) in ty.hero_abilities.iter().take(5).enumerate() {
+                if let Some(def) = self.hero_ability_defs.get(&code) {
+                    h.slots[i] = HeroSlot { code, max_level: def.levels, req_level: def.req_level };
+                    total = total.wrapping_add(def.levels);
+                }
+            }
+        }
+        h.skill_points = if 1 > total { total } else { 1 };
         h
+    }
+
+    /// Installs the Misc values of the kill experience and the level skip default.
+    pub fn set_kill_xp_config(&mut self, c: KillXpConfig) {
+        self.kill_xp = c;
+    }
+
+    /// The kill experience Misc values in force.
+    pub fn kill_xp_config(&self) -> &KillXpConfig {
+        &self.kill_xp
+    }
+
+    /// Installs the skill data of a hero ability (`levels`, `reqLevel`, `levelSkip` of its definition).
+    pub fn set_hero_ability_def(&mut self, code: u32, def: HeroAbilityDef) {
+        self.hero_ability_defs.insert(code, def);
+    }
+
+    /// The skill data of a hero ability.
+    pub fn hero_ability_def(&self, code: u32) -> Option<&HeroAbilityDef> {
+        self.hero_ability_defs.get(&code)
     }
 
     /// The hero experience tables in force.
