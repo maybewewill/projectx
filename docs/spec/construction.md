@@ -249,3 +249,52 @@ Rust: `sim::construction::percent_life(factor, p, tables)`; vectors `crates/sim/
 - `tools/emu/construction_progress_emu.py`: setter vectors (1,515: 9 + 6 factors × 101 values), gate probes
   (completion at p = 100, tick at p = 37): 0 mismatches against `construction::percent_life`.
 - `crates/sim/tests/construction_progress.rs`: passes with `GAME_DLL` (1,515 vectors).
+
+## 13. Pass 3 (2026-10-12): what drives the progress (the countdown is an agile property, not a timer tick)
+
+Result: **nobody calls the percent setter over time.** The remaining time is an agile float property
+(`this+0x7C`) that counts down by itself; completion is a listener on that property. The percent setters
+(`0x6F054690`, `0x6F0239B0`) are only reached from JASS `UnitSetConstructionProgress`/`UnitSetUpgradeProgress`
+(`0x6F3C86F0` clamps p to 100, then `0x6F078D50`/`0x6F078E00` build a message-object of class 'ABnP'/'AUnP' by id
+and call its slot 191). Of the 33 `[+0x2FC]` call sites, the ones read are other classes (attack `0xD000F` orders,
+buff/aura code) or the native helpers above.
+
+### 13.1 Timed start `0x6F030920(this, &D)` (CONFIRMED in Unicorn, 500 vectors, 0 mismatches)
+- Callers (all follow `0x6F023A30(total)`): train start (`0x6F16556B` onward: total = `I2R(bldtm)`, `bldtm` = unit
+  type record `+0x18` read by `0x6F29B7A0`), research `0x6F059957`, revive/queue `0x6F06211F`, the base class
+  `0x6F0326ED`, `0x6F03594A`, resume `0x6F04480B` (D = `this+0x70`), `0x6F04ABA9`, `0x6F173490`.
+- `D` is the object's **speed factor** (`0x6F281530`: 1.0, times the constant at `0x6FAAE540` when a game-setting
+  flag is set), not a duration. `0x6F023A30(total)` stores the total at `+0x7C` (and the listener `+0x74`).
+- Nothing starts when `this+0x48 > 0` (signed) or `2.0e-7 > |D|`. Otherwise: a modifier on `this+0x7C` with slope
+  `-D` and horizon `R/D + 1.0` (soft DIV then ADD, `R` = current value of the property), and a `FloatListener`
+  with threshold `0.0` that posts message **`0xD01C4`** to the object when the property reaches 0.
+- `CAbilityInProgress` dispatch `0x6F025C60`: `0xD01A2` -> slot 204 (`0x330`), `0xD01C4` (= `0xD01A2 + 0x22`) ->
+  **slot 205 (`0x334`) = the completion** (`0x6F060020` for a building: event `0x80241`). So the build and train
+  completion is the countdown reaching zero: duration in agile seconds = `R / D` = `I2R(bldtm)` for D = 1.0.
+- Rust: `sim::construction::{timed_start, COMPLETION_MESSAGE}`; vectors `tests/vectors/timed_start.tsv`
+  (gate, D, R, started, slope, horizon, threshold, message); test `tests/timed_progress.rs`.
+
+### 13.2 Life ramp of the construction tick `0x6F045600` (CONFIRMED in Unicorn, 700 vectors, 0 mismatches)
+- The tick reads `R` (property `+0x7C`), `total` (`+0x78`), `k` (`+0x70`), and the owner's slot-0x130 float `A`
+  (agent `+0x84`, the life/max life). It skips when `total == 0` (x87 equality) or `0.001 > |k|`.
+- It creates a modifier on the **unit's life property** (`0x6F02DC60`, owner `+0x98`): rate per agile second
+  `((A * (1.0 - 0.1)) / total) * k`, horizon `R / k + 1.0` (soft ops; `1.0 - 0.1` truncates to the soft value).
+- Start: `0x6F05FF50` (vf212) sets life `A * 0.1` (slot `0x124`, soft MUL) and the owner's flag `0x2000000`, then runs
+  the tick. So life reaches `A` exactly when the countdown reaches 0: `p = 100 * (total - R) / total`. The percent
+  setter formulas of 12.2 and 12.7 are the same law evaluated at an explicit `p` (JASS native only).
+- Rust: `sim::construction::life_ramp`; vectors `tests/vectors/construction_tick.tsv`.
+- Probes: `tools/emu/timed_start_emu.py`, `tools/emu/construction_tick_emu.py` (the agile engine calls
+  `0x6F4773A0`, `0x6F4774E0`, `0x6F477550`, `0x6F02DC60` are recorders).
+
+### 13.3 Wired in the sim
+`production.rs`: building and training durations are `div(I2R(bldtm), 1.0)` through the soft float when the tables
+are loaded (`countdown_seconds`), construction life follows `start + rate * elapsed` (soft MUL/ADD) from the 10%
+start. Order of the ADD/MUL in the modifier evaluation (`0x6F477180`: `clamp(add(life, mul(rate, w)))`) is
+LIKELY, not run.
+
+### 13.4 Open
+- Evaluation of a modifier by the agile engine (`0x6F4A6B70/0x6F4A6BC0`, `0x6F478CA0` constructor semantics of its
+  two float arguments) is not decoded: the exact tick at which the listener fires (R/D rounding, the world step
+  that evaluates properties) is UNSURE; the sim fires at `R/D` seconds.
+- Value of the factor constant `0x6FAAE540` and the game-setting flag that selects it (`0x6F4C34D0(0xD)`).
+- `this+0x70` (k) writer for build/train objects other than the default 1.0; research/upgrade use the same start.

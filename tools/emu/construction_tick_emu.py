@@ -91,6 +91,10 @@ def h_mod(uc, ecx, edx, args):
 
 
 def setup():
+    try:
+        mu.mem_map(0, 0x1000)
+    except Exception:
+        pass
     stub(0x6F4773A0, "getprop", 4, h_getprop)
     stub(0x6F4773E0, "agilecopy", 4)
     stub(0x6F02DC60, "mkmod", 12, h_mod)
@@ -135,18 +139,46 @@ def run(total, R, A, k, tag=1, extra=None):
     return list(LOG), STATE.get("mod")
 
 
+def cases(n, seed):
+    rnd = random.Random(seed)
+    out = []
+    for total in (60.0, 0.0, 1.0, 100.0, 250.5):
+        for r in (60.0, 0.0, 30.0, 1.0):
+            for a in (1000.0, 0.0, 550.0):
+                for k in (1.0, 2.0, 0.5, 0.0, 4.0):
+                    out.append((f2b(total), f2b(r), f2b(a), f2b(k)))
+    while len(out) < n:
+        if rnd.random() < 0.6:
+            out.append((f2b(rnd.uniform(1, 400)), f2b(rnd.uniform(0, 400)), f2b(rnd.uniform(1, 5000)),
+                        f2b(rnd.choice([0.25, 0.5, 1.0, 2.0, 3.0, 10.0]))))
+        else:
+            out.append(tuple(rnd.getrandbits(32) for _ in range(4)))
+    return out
+
+
 def main():
     setup()
-    n = 20
-    seed = 1
+    n = 400
+    vec = None
     for i, a in enumerate(sys.argv):
         if a == "--n":
             n = int(sys.argv[i + 1])
-    rnd = random.Random(seed)
-    cases = [(60.0, 60.0, 1000.0, 1.0), (60.0, 30.0, 1000.0, 1.0), (60.0, 60.0, 1000.0, 2.0), (100.0, 50.0, 500.0, 1.0)]
-    for total, R, A, k in cases:
-        lg, mod = run(f2b(total), f2b(R), f2b(A), f2b(k))
-        print(total, R, A, k, "->", [(x[0]) for x in lg], None if mod is None else (hex(mod[0]), b2f(mod[0]), hex(mod[1]), b2f(mod[1])))
+        if a == "--vectors":
+            vec = sys.argv[i + 1]
+    lines = []
+    started = 0
+    for t, r, a, k in cases(n, 5):
+        lg, mod = run(t, r, a, k)
+        started += int(mod is not None)
+        lines.append("%08x\t%08x\t%08x\t%08x\t%s\t%s" % (t, r, a, k,
+                     "%08x" % mod[0] if mod else "-", "%08x" % mod[1] if mod else "-"))
+    print("cases", len(lines), "started", started)
+    if vec:
+        with open(vec, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    else:
+        for l in lines[:6]:
+            print(l)
 
 
 if __name__ == "__main__":
