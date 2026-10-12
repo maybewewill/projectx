@@ -8,7 +8,7 @@ The real code runs on a synthetic pathing grid G, a synthetic occupant pool and 
   0x6F495CA0  cell walker: box clamped to G+0x54..+0x60, outer loop over box[0..2], inner over box[1..3],
               cell index = G+0x3C * outer + inner
   0x6F495B00  occupant chain of one cell (24-bit next, kind byte, node pointer; stamps at node+0x38)
-  0x6F493B60  per-node filter (mover tag, life, last speed ~ 0, record filter byte / nibble)
+  0x6F493B60  per-node filter (mover tag, life, last speed == 0 (ordered equality 0x6F009AE0), record filter byte / nibble)
 
 Only the position-time call 0x6F497460 (stubbed: writes the elapsed value t), the list append 0x6F47D810 and the list
 clear 0x6F46AC70 are answered by the harness (the append records the node pointer).
@@ -191,7 +191,7 @@ def approx_zero(bits):
     v = b2f(bits)
     if v != v:
         return False
-    return abs(v) < b2f(0x3A83126F)
+    return v == 0.0
 
 
 def passes(nd, movers, c):
@@ -234,26 +234,23 @@ def build_w(rng):
     nn = rng.choice([1, 2, 4, 6, 10])
     nm = nn + 1
     movers = []
+    base_f = rng.choice([1, 2, 3, 7])
+    base_n = rng.choice([0, 0, 1, 5])
     for i in range(nm):
+        good = rng.random() < 0.8
         movers.append(dict(
-            tag=TAG if rng.random() < 0.93 else 0x1234,
-            o14=rng.getrandbits(31) | (0x80000000 if rng.random() < 0.1 else 0),
-            life=f2b(rand_float(rng, ["pos", "pos", "pos", "zero", "neg", "nan", "negzero"])),
-            speed=f2b(rand_float(rng, ["zero", "zero", "zero", "tiny", "small", "neg", "nan", "negzero"])),
-            rec=None if rng.random() < 0.05 else (
-                (rng.choice([1, 2, 3, 7]) << 20 if rng.random() < 0.8 else rng.getrandbits(8) << 20)
-                | (rng.getrandbits(4) << 28) | rng.getrandbits(20)),
+            tag=TAG if rng.random() < 0.95 else 0x1234,
+            o14=rng.getrandbits(31) | (0x80000000 if rng.random() < 0.08 else 0),
+            life=f2b(rand_float(rng, ["pos"] * 6 + ["zero", "neg", "nan", "negzero"])) if rng.random() < 0.9 else f2b(rand_float(rng, ["zero", "nan"])),
+            speed=f2b(rand_float(rng, ["zero"] * 6 + ["tiny", "small", "neg", "nan", "negzero"])),
+            rec=None if rng.random() < 0.04 else (
+                ((base_f << 20) | (rng.randrange(base_n, 16) << 28) | rng.getrandbits(20)) if good else
+                (rng.getrandbits(8) << 20) | (rng.getrandbits(4) << 28) | rng.getrandbits(20)),
         ))
     c["movers"] = movers
     c["self_mover"] = rng.randrange(nm)
-    # a filter byte / nibble that some records match
-    pick = movers[rng.randrange(nm)]["rec"]
-    if pick is None or rng.random() < 0.2:
-        c["filt"] = rng.choice([1, 2, 3, 7, 0xFF])
-        c["nib"] = rng.choice([0, 0, 1, 5, 15])
-    else:
-        c["filt"] = (pick >> 20) & 0xFF
-        c["nib"] = rng.choice([0, ((pick >> 28) & 0xF), 15, 1])
+    c["filt"] = base_f if rng.random() < 0.9 else rng.choice([1, 2, 3, 7, 0xFF])
+    c["nib"] = base_n if rng.random() < 0.9 else rng.choice([0, 1, 5, 15])
     nodes = []
     walk = c["stamp0"] + 1
     for i in range(nn):
@@ -364,6 +361,9 @@ def w_line(rng):
     gstamps = [rd32(NODES + 0x100 * i + 0x38) for i in range(len(c["nodes"]))]
     mstamps = [n["stamp"] for n in nodes_m]
     ok = (got == out and st == stamp_end and gstamps == mstamps)
+    if not ok and os.environ.get('PGDEBUG'):
+        print('DBG got', got, 'want', out, 'stamp', st, stamp_end, 'rect', c['rect'], 'b', c['b'], 'pitch', c['pitch'])
+        print('   gstamps', gstamps, 'mstamps', mstamps)
     f = ["W", hx(c["pitch"]), hx(c["b"]["b54"]), hx(c["b"]["b58"]), hx(c["b"]["b5c"]), hx(c["b"]["b60"]),
          hx(c["stamp0"])]
     f += [hx(v) for v in c["rect"]]
@@ -447,7 +447,7 @@ def main():
             if not ok:
                 bad += 1
                 if bad <= 5:
-                    print("MISMATCH case", i)
+                    print("MISMATCH case", i, line[:200])
             fh.write(line + "\n")
     print("kind", kind, "cases", n, "mismatches vs python model", bad, "neighbours gathered", found)
     return 0
