@@ -155,9 +155,11 @@ fn sight_reveals_the_circle_and_the_refresh_clears_it() {
 fn the_refresh_timer_runs_every_point_four_seconds() {
     let mut host = host_with_footman();
     host.start("make", &[]).expect("make starts");
-    // 0.3 s of game time: the first refresh (0.4 s) has not run yet.
+    // 0.3 s of game time: the first refresh (0.4 s) has not run yet. The new unit has explored the radius around it
+    // (the creation routine calls the unit writer with the explore-only arguments), so its cell is fogged, not masked.
     host.step_ticks(60);
-    assert_eq!(host.game().fog_state_at(0, f(1000.0), f(1000.0)), FOG_MASKED);
+    assert_eq!(host.game().fog_state_at(0, f(1000.0), f(1000.0)), FOG_FOGGED);
+    assert_eq!(host.game().fog_state_at(0, f(3000.0), f(3000.0)), FOG_MASKED, "far from the unit nothing is explored");
     // 0.45 s: the refresh has run once.
     host.step_ticks(30);
     assert_eq!(host.game().fog_state_at(0, f(1000.0), f(1000.0)), FOG_VISIBLE);

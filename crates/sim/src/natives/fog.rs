@@ -214,6 +214,22 @@ impl Game {
         }
     }
 
+    /// The explore a new unit does for its owner (the end of the creation routine `0x6f29f990`: the unit writer is
+    /// called with arguments 3 and 4 set, which uses the radius 4 and clears the black mask without making the cells
+    /// visible). The player mask is the owner's vision mask (the word at player `+0x328`, LIKELY the same as
+    /// [`Game::owner_vision_mask`]); the gate `0x6f26de50(unit, 1)` is taken as true (UNSURE).
+    pub(crate) fn fog_explore_on_create(&mut self, key: ObjKey) {
+        let mask = self.owner_vision_mask(self.unit(key).owner);
+        if mask == 0 {
+            return;
+        }
+        let mut input = self.unit_sight_input(key, 0);
+        input.mask = u32::from(mask);
+        input.use_radius_four = true;
+        input.explore_only = true;
+        self.fog.grid.write_unit_sight_cells(&input);
+    }
+
     /// The current sight value of a unit (`0x6f29f040`): the sight property clamped to 1800. Without the softfloat
     /// tables there is no property engine, and the value is the day sight, or the night sight when it is set and it
     /// is night (the rule before the property was decoded; UNSURE for units whose night sight is 0).

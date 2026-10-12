@@ -563,6 +563,7 @@ pub(crate) fn build(
     gm.food_apply_creation(key);
     gm.combat_on_create(key);
     gm.sync_auras(key);
+    gm.fog_explore_on_create(key);
     Some((key, id))
 }
 
