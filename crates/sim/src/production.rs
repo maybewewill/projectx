@@ -712,7 +712,7 @@ impl Game {
     fn find_build_site_ai(&self, owner: u32, type_id: u32, anchor: (f32, f32)) -> Option<Option<(f32, f32)>> {
         use crate::ai_site::{self, MarkUnit, Params};
         let grid = self.production.grid.as_ref()?;
-        let playable = self.playable()?;
+        let playable = self.world_bounds().or(self.playable())?;
         let footprint = self.production.site_types.get(&type_id)?.footprint?;
         let rot = ai_site::rotation_class(self.production.building_angle);
         let center = (F32::from_bits(anchor.0.to_bits()), F32::from_bits(anchor.1.to_bits()));
@@ -1663,6 +1663,8 @@ struct SiteHostImpl<'a> {
     reach: BTreeSet<(i32, i32)>,
     footprint: crate::ai_site::Footprint,
     rot: u32,
+    /// The map's corner grid: the cliff level of a cell (`0x6F0128C0`); None keeps level 0 everywhere.
+    terrain: Option<&'a crate::terrain::TerrainGrid>,
 }
 
 impl<'a> SiteHostImpl<'a> {
@@ -1681,6 +1683,7 @@ impl<'a> SiteHostImpl<'a> {
             reach: BTreeSet::new(),
             footprint,
             rot,
+            terrain: gm.terrain(),
         };
         for t in gm.production.trees.iter().filter(|t| t.wood > 0) {
             let (cx, cy) = me.cell(t.x, t.y);
@@ -1743,8 +1746,9 @@ impl<'a> SiteHostImpl<'a> {
 }
 
 impl crate::ai_site::SiteHost for SiteHostImpl<'_> {
-    fn cell_level(&self, _cell_x: i32, _cell_y: i32) -> i32 {
-        0
+    fn cell_level(&self, cell_x: i32, cell_y: i32) -> i32 {
+        // `0x6F0128C0` (docs/spec/terrain.md section 2): the layer of the nearest corner, -1 outside the map.
+        self.terrain.map_or(0, |t| t.cell_level(cell_x, cell_y))
     }
 
     fn unwalkable(&self, x: F32, y: F32) -> bool {

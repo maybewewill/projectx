@@ -2027,6 +2027,11 @@ impl Game {
 
     /// Sets the softfloat tables the fog grid needs (from the user's `Game.dll`). If a playable area is already set,
     /// the grid is rebuilt from it.
+    /// The soft-float tables the host gave (None in tests without `GAME_DLL`).
+    pub fn softfloat_tables(&self) -> Option<&softfloat::Tables> {
+        self.vision_tables.as_ref()
+    }
+
     pub fn set_vision_tables(&mut self, tables: Option<softfloat::Tables>) {
         self.vision_tables = tables;
         if let (Some(p), Some(t)) = (self.playable, self.vision_tables.as_ref()) {

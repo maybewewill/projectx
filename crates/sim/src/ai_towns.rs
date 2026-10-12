@@ -127,6 +127,11 @@ impl Towns {
         }
     }
 
+    /// The nearest site within [`SITE_RADIUS`] of (x, y) (see `nearest`).
+    pub fn site_near(&self, x: f32, y: f32) -> Option<usize> {
+        self.nearest(x, y)
+    }
+
     /// The nearest site within [`SITE_RADIUS`] of (x, y); ties go to the lower index.
     fn nearest(&self, x: f32, y: f32) -> Option<usize> {
         let mut best: Option<(usize, f32)> = None;

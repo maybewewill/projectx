@@ -99,6 +99,24 @@ pub const CAPTAIN_NO_PATHING: u32 = 0x4000;
 /// See [`CAPTAIN_FULL`].
 pub const CAPTAIN_AMPHIBIOUS: u32 = 0x8000;
 
+/// Natives whose calls are counted per player for the run report (`AiShared::counts`).
+const COUNTED: &[&str] = &[
+    "GetNextExpansion",
+    "GetExpansionPeon",
+    "SetExpansion",
+    "GetExpansionFoe",
+    "GetMegaTarget",
+    "GetEnemyBase",
+    "GetCreepCamp",
+    "GetBuilding",
+    "IgnoredUnits",
+    "GetTownUnitCount",
+    "GetHeroId",
+    "GetHeroLevelAI",
+    "CaptainRetreating",
+    "TownThreatened",
+];
+
 /// The main-VM natives that concern the AI, with their levels.
 pub const MAIN_NATIVES: &[AiNative] = &[
     AiNative { name: "StartMeleeAI", sig: "(Hplayer;S)V", addr: 0x6F3C_B740, level: Level::Confirmed, implemented: true, note: "gate and helper calls read (decompile, earlier pass); the start is a request served by AiHost::step" },
@@ -123,13 +141,13 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "StartThread", sig: "(C)V", addr: 0x6F2D_E2A0, level: Level::Likely, implemented: true, note: "starts the code as a thread of this AI (FUN_6f2da590). The binary keeps 6 thread slots (+0x254, index 0 to 5) and drops a thread when none is free; the slot freeing rule is UNSURE, so no cap is enforced" },
     AiNative { name: "GetAiPlayer", sig: "()I", addr: 0x6F2D_CFE0, level: Level::Confirmed, implemented: true, note: "returns the AI state's player index (+0x24); -1 outside an AI context (not reachable from an AI VM)" },
     AiNative { name: "DoAiScriptDebug", sig: "()B", addr: 0x6F2D_C0D0, level: Level::Confirmed, implemented: true, note: "body is 'return 0': always false" },
-    AiNative { name: "GetHeroId", sig: "()I", addr: 0x6F2D_DF50, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: looks up the AI's hero through the hero selection (FUN_6f0787d0) and the AI state (+0x30); the hero record is not modelled" },
-    AiNative { name: "GetHeroLevelAI", sig: "()I", addr: 0x6F2D_E0E0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the body is (FUN_6f473170() - hero+0x90) + 2 on the AI's hero record; the hero record and FUN_6f473170 are not modelled" },
+    AiNative { name: "GetHeroId", sig: "()I", addr: 0x6F2D_DF50, level: Level::Unsure, implemented: true, note: "the type code of the AI's first living hero, 0 without one. The body reads the hero record of the AI state (+0x1F0, id at +0x30) and, inside a hero-level callback, the hero being levelled (ability lookup 0x6F0787D0, owner compared); the model has no callback (UNSURE)" },
+    AiNative { name: "GetHeroLevelAI", sig: "()I", addr: 0x6F2D_E0E0, level: Level::Unsure, implemented: true, note: "the level of the AI's first living hero, 0 without one. The body is (agile value of the hero record + 1 - record+0x90) + 1; read as the hero level (UNSURE)" },
     AiNative { name: "SetHeroLevels", sig: "(C)V", addr: 0x6F2E_0B00, level: Level::Confirmed, implemented: true, note: "stores the code value in the AI state (+0x40); no getter native" },
     AiNative { name: "SetNewHeroes", sig: "(B)V", addr: 0x6F2E_3020, level: Level::Confirmed, implemented: true, note: "sets or clears flag bit 0x4 of the AI flag word (+0x2D0)" },
     AiNative { name: "GetUnitCount", sig: "(I)I", addr: 0x6F2D_D050, level: Level::Likely, implemented: true, note: "typed count incl. in progress + queued trainees + pending builds (ai_manager::unit_count; mask 0x36 and FUN_6f2d1c10 CONFIRMED)" },
     AiNative { name: "GetPlayerUnitTypeCount", sig: "(Hplayer;I)I", addr: 0x6F2E_2B60, level: Level::Likely, implemented: true, note: "owned units of the type with mask 0x36 (CONFIRMED mask); 0 for a null or invalid player (CONFIRMED gate); the model counts owned live units" },
-    AiNative { name: "GetTownUnitCount", sig: "(IIB)I", addr: 0x6F2D_D0C0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: body = units under construction (FUN_6f2d1c10) + units of the type inside the given town (FUN_6f2d5430); the town membership is not modelled" },
+    AiNative { name: "GetTownUnitCount", sig: "(IIB)I", addr: 0x6F2D_D0C0, level: Level::Unsure, implemented: true, note: "workers on their way to build the type (0x6F2D1C10, CONFIRMED) plus the AI's units of the type that belong to the town (0x6F2D5430, CONFIRMED structure; units under construction left out when the flag is set); membership in the model is 'within 1024 of the town's anchor' (UNSURE)" },
     AiNative { name: "GetUnitCountDone", sig: "(I)I", addr: 0x6F2D_D010, level: Level::Likely, implemented: true, note: "typed count of completed units (mask 0x30 CONFIRMED)" },
     AiNative { name: "GetUpgradeLevel", sig: "(I)I", addr: 0x6F2D_D130, level: Level::Likely, implemented: true, note: "researched level of the tech; the body adds 1 when an entity with mask 2 of the tech exists (in-progress research: not modelled)" },
     AiNative { name: "GetUnitGoldCost", sig: "(I)I", addr: 0x6F2D_D1E0, level: Level::Confirmed, implemented: true, note: "the gold cost of the unit type (UnitType::gold_cost, the type record field +0x20); 0 for an unknown id. Research ids (uppercase first letter) give 0 here: their gate (FUN_6f473170) is not decoded" },
@@ -143,11 +161,11 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "TownWithMine", sig: "()I", addr: 0x6F2D_E030, level: Level::Likely, implemented: true, note: "first slot whose first mine is live and, for human/orc, whose hall is live; night elf needs an entangled mine; -1 when none (FUN_6f2d5380); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
     AiNative { name: "TownHasMine", sig: "(I)B", addr: 0x6F2D_E060, level: Level::Likely, implemented: true, note: "either mine reference of the slot's site is live; slot above 3 or empty gives false (FUN_6f2d12b0); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
     AiNative { name: "TownHasHall", sig: "(I)B", addr: 0x6F2D_E0A0, level: Level::Likely, implemented: true, note: "the slot's hall reference is live; slot above 3 or empty gives false (FUN_6f2d1310); body CONFIRMED (docs/spec/ai-natives.md section 6); the town sites and slots are the model of ai_towns.rs, whose registration of units (when, and which site) is UNSURE" },
-    AiNative { name: "GetNextExpansion", sig: "()I", addr: 0x6F2E_2BC0, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
-    AiNative { name: "GetExpansionPeon", sig: "()Hunit;", addr: 0x6F2D_D530, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
+    AiNative { name: "GetNextExpansion", sig: "()I", addr: 0x6F2E_2BC0, level: Level::Unsure, implemented: true, note: "index of the town site of the next expansion, -1 without one (0x6F2E10D0: mine above 600 gold, not an AI site of the side, ranked in three classes by path cost; the model ranks by straight distance, see captains::next_expansion)" },
+    AiNative { name: "GetExpansionPeon", sig: "()Hunit;", addr: 0x6F2D_D530, level: Level::Likely, implemented: true, note: "0x6F2D1F40 CONFIRMED structure: the nearest idle worker (mode 0/7) to the expansion's mine, else a gold harvester, else a lumber harvester; distance is straight, not path cost" },
     AiNative { name: "GetEnemyExpansion", sig: "()Hunit;", addr: 0x6F2D_D4F0, level: Level::Unsure, implemented: true, note: "the latest town hall of an enemy player that has two or more halls, else null" },
-    AiNative { name: "SetExpansion", sig: "(Hunit;I)B", addr: 0x6F2E_0570, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the result is the engine's expansion placement (FUN_6f2d8130); the town model is not in the sim" },
-    AiNative { name: "GetBuilding", sig: "(Hplayer;)Hunit;", addr: 0x6F2E_2E80, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: searches the player's buildings through a callback (FUN_6f2a3270; the callback is not decoded)" },
+    AiNative { name: "SetExpansion", sig: "(Hunit;I)B", addr: 0x6F2E_0570, level: Level::Unsure, implemented: true, note: "0x6F2D7F90 CONFIRMED structure: the peon leaves its captain, the build-spot search runs around the expansion site (0x6F2E50E0) and the peon gets the build order (the haunted-mine type builds on the mine); false when no spot is found or the order is refused. The site is the model's mine position" },
+    AiNative { name: "GetBuilding", sig: "(Hplayer;)Hunit;", addr: 0x6F2E_2E80, level: Level::Likely, implemented: true, note: "0x6F2E2E80 CONFIRMED: the first structure of the player (creation order here) without the marker that Unsummon sets; null for a null player" },
     AiNative { name: "SetAllianceTarget", sig: "(Hunit;)V", addr: 0x6F2E_0630, level: Level::Likely, implemented: true, note: "stores the unit handle as the AI's alliance target (the body keeps a unit reference in the AI state)" },
     AiNative { name: "GetAllianceTarget", sig: "()Hunit;", addr: 0x6F2D_D570, level: Level::Likely, implemented: true, note: "returns the stored alliance target; null when none" },
     AiNative { name: "SetProduce", sig: "(III)B", addr: 0x6F2D_D450, level: Level::Likely, implemented: true, note: "CONFIRMED loop (zero returns true, the first failed request returns false); each request is the train or build path of ai_manager.rs (spec ai-natives section 7); the order is issued at once" },
@@ -197,7 +215,7 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "GetCreepCamp", sig: "(IIB)Hunit;", addr: 0x6F2E_3D50, level: Level::Likely, implemented: true, note: "camp choice 0x6F2E3980 CONFIRMED (Unicorn 600/600); camps are formed from the neutral hostile units (CreepCampPathingCellDistance 26 cells), levels and path costs are the model's (UNSURE); returns the first living creep of the chosen camp" },
     AiNative { name: "StartGetEnemyBase", sig: "()V", addr: 0x6F2D_DCC0, level: Level::Unsure, implemented: true, note: "the search (FUN_6f2db410) is run at once: the result is the nearest enemy town hall (else structure) by straight distance, read back by GetEnemyBase" },
     AiNative { name: "WaitGetEnemyBase", sig: "()B", addr: 0x6F2D_DCF0, level: Level::Unsure, implemented: true, note: "always false (the search finished); the original's search takes time (timing UNSURE)" },
-    AiNative { name: "GetMegaTarget", sig: "()Hunit;", addr: 0x6F2D_DD60, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI town and expansion model (map AI data, expansion sites) is not in the sim" },
+    AiNative { name: "GetMegaTarget", sig: "()Hunit;", addr: 0x6F2D_DD60, level: Level::Unsure, implemented: true, note: "reference at AI state +0x2C4 written by 0x6F2D7EC0 (rule CONFIRMED, see captains::mega_target): needs SetWatchMegaTargets, allied strength above the enemy's, own strength at least 20, first enemy whose strength is below half of the own; the model re-evaluates at each call" },
     AiNative { name: "GetEnemyBase", sig: "()Hunit;", addr: 0x6F2D_DD20, level: Level::Unsure, implemented: true, note: "the result of StartGetEnemyBase (the original reads +0x2EC of the AI state); the target choice is the model's" },
     AiNative { name: "GetExpansionFoe", sig: "()Hunit;", addr: 0x6F2E_2E40, level: Level::Unsure, implemented: true, note: "the first living creep of the camp nearest to the expansion site within 1100 units, else null" },
     AiNative { name: "GetExpansionX", sig: "()I", addr: 0x6F2E_2DA0, level: Level::Unsure, implemented: true, note: "x of the nearest gold mine with gold that is not within 900 units of a town hall, -1 when none (the original ranks sites by path cost)" },
@@ -210,7 +228,7 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "SuicidePlayerUnits", sig: "(Hplayer;B)B", addr: 0x6F2E_2F90, level: Level::Unsure, implemented: true, note: "as SuicidePlayer, the target is the nearest unit of the player" },
     AiNative { name: "UnitAlive", sig: "(Hunit;)B", addr: 0x6F2E_0760, level: Level::Likely, implemented: true, note: "true for a unit that is not dead and not removed; the body tests the unit flag 0x100 at +0x5C (the mapping to dead or removed is UNSURE); null gives false (CONFIRMED)" },
     AiNative { name: "UnitInvis", sig: "(Hunit;)B", addr: 0x6F2E_07C0, level: Level::Unsure, implemented: true, note: "false: the sim has no invisibility; the body is 'not visible to the AI player' and a unit without the invisibility flag 0x1000000 passes the gate (CONFIRMED gate)" },
-    AiNative { name: "IgnoredUnits", sig: "(I)I", addr: 0x6F2D_CE80, level: Level::Unsure, implemented: false, note: "NOT IMPLEMENTED: the AI's ignore list (FUN_6f2d33c0) is not modelled" },
+    AiNative { name: "IgnoredUnits", sig: "(I)I", addr: 0x6F2D_CE80, level: Level::Unsure, implemented: true, note: "0x6F2DCE80 / callback 0x6F2D3360 CONFIRMED: the AI's units of the type whose AI record holds none of its three references; the model counts units in no captain that neither harvest nor build" },
     AiNative { name: "CommandsWaiting", sig: "()I", addr: 0x6F2D_CDD0, level: Level::Confirmed, implemented: true, note: "the count of the AI's command stack (+0x1DC)" },
     AiNative { name: "GetLastCommand", sig: "()I", addr: 0x6F2E_0450, level: Level::Confirmed, implemented: true, note: "the command on top of the stack (the newest pushed); -1 when the stack is empty" },
     AiNative { name: "GetLastData", sig: "()I", addr: 0x6F2E_0490, level: Level::Confirmed, implemented: true, note: "the data on top of the stack (the newest pushed); -1 when the stack is empty" },
@@ -471,6 +489,10 @@ fn ai_call(
 ) -> Option<NativeResult> {
     let ret = |v: Value| Some(NativeResult::Return(v));
 
+    if COUNTED.contains(&name) {
+        *env.shared.borrow_mut().counts.entry((env.player, name)).or_default() += 1;
+    }
+
     // Boolean setters of the AI flag word: the value is the argument's truth.
     if let Some(bit) = flag_bit(name) {
         set_flag(env, bit, bool_arg(a, 0));
@@ -506,8 +528,8 @@ fn ai_call(
             ret(Value::Boolean(with_caps(env, |_, caps, _| caps[0].flags & captains::RETREATING != 0)))
         }
         "CaptainReadiness" | "CaptainReadinessHP" | "CaptainReadinessMa" => {
-            let (hp, ma) = (name != "CaptainReadinessMa", name != "CaptainReadinessHP");
-            ret(Value::Integer(with_caps(env, |gm, caps, _| captains::readiness(gm, &caps[0], hp, ma))))
+            let life = name != "CaptainReadinessMa";
+            ret(Value::Integer(with_caps(env, |gm, caps, _| captains::readiness(gm, &caps[0], life))))
         }
         "CaptainIsHome" => ret(Value::Boolean(with_caps(env, |gm, caps, _| captains::is_home(gm, &caps[0])))),
         "CaptainAtGoal" => ret(Value::Boolean(with_caps(env, |gm, caps, _| captains::at_goal(gm, &caps[0])))),
@@ -634,6 +656,106 @@ fn ai_call(
                 }
             };
             ret(unit_value(env, found))
+        }
+        "GetNextExpansion" => {
+            sync_towns(env);
+            let site = captains::next_expansion(&env.game.borrow(), env.player);
+            let sh = env.shared.borrow();
+            let idx = site.and_then(|(mine, p)| {
+                sh.towns
+                    .sites
+                    .iter()
+                    .position(|s| s.mines.contains(&Some(mine)))
+                    .or_else(|| sh.towns.site_near(p.0, p.1))
+            });
+            ret(Value::Integer(idx.map_or(-1, |i| i as i32)))
+        }
+        "GetExpansionPeon" => {
+            let found = {
+                let gm = env.game.borrow();
+                captains::next_expansion(&gm, env.player).and_then(|(_, p)| captains::expansion_peon(&gm, env.player, p))
+            };
+            ret(unit_value(env, found))
+        }
+        "SetExpansion" => {
+            let peon = env.game.borrow().unit_of_handle(handle_arg(a, 0));
+            let type_id = int_arg(a, 1) as u32;
+            let ok = match peon {
+                Some(peon) => {
+                    let mut gm = env.game.borrow_mut();
+                    let site = captains::next_expansion(&gm, env.player);
+                    let spot = site.and_then(|(_, p)| {
+                        if type_id == crate::ai_towns::HAUNTED_MINE {
+                            Some(p)
+                        } else {
+                            gm.find_build_site(env.player, type_id, p)
+                        }
+                    });
+                    let started = match spot {
+                        Some((x, y)) if gm.unit(peon).owner == env.player => gm.start_build_job(peon, type_id, x, y).is_ok(),
+                        _ => false,
+                    };
+                    if started {
+                        // The peon leaves its captain (0x6F2EC850).
+                        drop(gm);
+                        let mut sh = env.shared.borrow_mut();
+                        for c in sh.control_mut(env.player).captains.iter_mut() {
+                            c.members.retain(|&m| m != peon);
+                        }
+                    }
+                    started
+                }
+                None => false,
+            };
+            ret(Value::Boolean(ok))
+        }
+        "GetTownUnitCount" => {
+            sync_towns(env);
+            let (type_id, town, only_done) = (int_arg(a, 0) as u32, int_arg(a, 1), bool_arg(a, 2));
+            let anchor = town_info(env, town).map(|t| (t.x, t.y));
+            let gm = env.game.borrow();
+            let n = match anchor {
+                // a town slot above 3 or empty: only the builders count (0x6F2D5430 returns 0)
+                None => captains::town_unit_count(&gm, env.player, type_id, (f32::MAX, f32::MAX), 0.0, only_done),
+                Some(p) => captains::town_unit_count(&gm, env.player, type_id, p, crate::ai_towns::SITE_RADIUS, only_done),
+            };
+            ret(Value::Integer(n))
+        }
+        "GetMegaTarget" => {
+            let flags = env.shared.borrow().control(env.player).map_or(0, |c| c.flags);
+            let found = captains::mega_target(&env.game.borrow(), env.player, flags);
+            ret(unit_value(env, found))
+        }
+        "IgnoredUnits" => {
+            let n = with_caps(env, |gm, caps, _| captains::ignored_units(gm, env.player, int_arg(a, 0) as u32, &*caps));
+            ret(Value::Integer(n))
+        }
+        "GetBuilding" => {
+            let owner = env.game.borrow().player_index_of_handle(handle_arg(a, 0));
+            let found = owner.and_then(|p| {
+                let sh = env.shared.borrow();
+                let marked = sh.control(env.player).map(|c| c.unsummoned.clone()).unwrap_or_default();
+                captains::first_building(&env.game.borrow(), p, &marked)
+            });
+            ret(unit_value(env, found))
+        }
+        "GetHeroId" | "GetHeroLevelAI" => {
+            let gm = env.game.borrow();
+            let hero = captains::ai_hero(&gm, env.player);
+            let v = hero.map_or(0, |k| {
+                if name == "GetHeroId" {
+                    gm.unit(k).type_id as i32
+                } else {
+                    gm.unit(k).hero.as_ref().map_or(0, |h| h.level)
+                }
+            });
+            ret(Value::Integer(v))
+        }
+        "Unsummon" => {
+            if let Some(k) = env.game.borrow().unit_of_handle(handle_arg(a, 0)) {
+                env.shared.borrow_mut().control_mut(env.player).unsummoned.push(k);
+            }
+            Some(log(env, ctx, name, a, Value::Null))
         }
         "UnitInvis" => ret(Value::Boolean(false)),
         "TownThreatened" => {
@@ -900,7 +1022,6 @@ fn ai_call(
         | "ClearCaptainTargets"
         | "CaptainAttack"
         | "RemoveSiege"
-        | "Unsummon"
         | "LoadZepWave"
         | "PurchaseZeppelin" => Some(log(env, ctx, name, a, Value::Null)),
 
@@ -1061,18 +1182,11 @@ mod tests {
     }
 
     #[test]
-    fn unbound_ai_natives_are_pinned() {
-        // The 36 rows not bound yet, each blocked by a subsystem the AI model does not hold (docs/spec/ai-natives.md
-        // sections 2 and 5). A change here must come with a change of that document.
+    fn no_ai_native_is_left_unbound() {
+        // Every row of table `ai` is bound since S19 (docs/spec/ai-natives.md section 10); a new unbound row has to come
+        // with a reason and a change here.
         let unbound: Vec<&str> = AI_NATIVES.iter().filter(|r| !r.implemented).map(|r| r.name).collect();
-        assert_eq!(unbound.len(), 9);
-        for row in AI_NATIVES.iter().filter(|r| !r.implemented) {
-            assert_eq!(row.level, Level::Unsure, "{} is unbound but not UNSURE", row.name);
-            assert!(row.note.starts_with("NOT IMPLEMENTED"), "{} has no reason", row.name);
-        }
-        for name in ["GetHeroId", "GetMegaTarget", "IgnoredUnits", "GetHeroLevelAI", "SetExpansion"] {
-            assert!(unbound.contains(&name), "{name} should be unbound");
-        }
+        assert!(unbound.is_empty(), "unbound: {unbound:?}");
     }
 
     #[test]

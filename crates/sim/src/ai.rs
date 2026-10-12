@@ -143,6 +143,8 @@ pub struct AiControl {
     pub town_threatened: bool,
     /// The handle found by the last `StartGetEnemyBase` (0 when none), read by `GetEnemyBase` (`+0x2EC`).
     pub enemy_base: u32,
+    /// Buildings `Unsummon` was called on (the original marks them with the ability `Buns`); `GetBuilding` skips them.
+    pub unsummoned: Vec<crate::natives::game::ObjKey>,
 }
 
 /// The state shared by the main VM's AI natives, the AI VMs and the host.
@@ -156,6 +158,8 @@ pub struct AiShared {
     pub commands: Vec<AiCommand>,
     /// Calls to natives that are listed as not implemented, by name, with the number of calls.
     pub unimplemented: BTreeMap<&'static str, u32>,
+    /// Calls of the expansion, target and hero natives (S19 set), by (player, name): shown in the run report.
+    pub counts: BTreeMap<(u32, &'static str), u32>,
     /// Start and build events, in order.
     pub events: Vec<AiEvent>,
     /// The town sites and town slots (`ai_towns.rs`).

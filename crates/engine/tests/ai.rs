@@ -205,14 +205,12 @@ fn check_command_reaches_the_ai(with_dll: bool) {
         .expect("AttackMoveXY logged");
     assert_eq!(attack.player, 1);
     assert_eq!(attack.args, vec![AiArg::Int(10), AiArg::Int(20)]);
-    assert_eq!(
-        report.ai.unimplemented,
-        vec![("GetMegaTarget".to_string(), 1)]
-    );
+    // GetMegaTarget is bound since S19; without SetWatchMegaTargets it answers null.
+    assert!(report.ai.unimplemented.is_empty());
     assert_eq!(
         ai_global_int(&engine, 1, "gBase"),
         1,
-        "the unimplemented call returns null"
+        "GetMegaTarget returns null without the watch flag"
     );
     assert!(report.ai.failures.is_empty(), "{:?}", report.ai.failures);
 
