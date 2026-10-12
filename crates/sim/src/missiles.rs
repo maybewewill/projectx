@@ -287,6 +287,121 @@ pub fn flight_time(dx: F32, dy: F32, speed: F32, tables: &Tables) -> F32 {
     }
 }
 
+/// The rotation about the z axis by `angle` radians as the original builds it (`0x6F4AFCD0` with the axis `(0, 0, 1)`
+/// and the "already unit" flag, sine and cosine from `0x6F6EF990`): the nine soft-float terms of the axis-angle form, in
+/// the original's order and with its zero terms (they can produce `-0.0`). CONFIRMED by Unicorn
+/// (`tools/emu/missile_launchpoint_emu.py`, 1,500 vectors through [`launch_point`]).
+pub fn rotation_z(angle: F32, tables: &Tables) -> [F32; 9] {
+    let s = math::sin(angle, tables);
+    let c = math::cos(angle, tables);
+    let (kx, ky, kz) = (F32::ZERO, F32::ZERO, F32::ONE);
+    let (kxx, kyy, kzz) = (arith::mul(kx, kx), arith::mul(ky, ky), arith::mul(kz, kz));
+    let (kxy, kyz, kzx) = (arith::mul(kx, ky), arith::mul(ky, kz), arith::mul(kz, kx));
+    let (kxs, kys, kzs) = (arith::mul(kx, s), arith::mul(ky, s), arith::mul(kz, s));
+    let oc = arith::sub(F32::ONE, c);
+    [
+        arith::add(arith::mul(oc, kxx), c),
+        arith::add(arith::mul(oc, kxy), kzs),
+        arith::sub(arith::mul(oc, kzx), kys),
+        arith::sub(arith::mul(oc, kxy), kzs),
+        arith::add(arith::mul(oc, kyy), c),
+        arith::add(arith::mul(oc, kyz), kxs),
+        arith::add(arith::mul(oc, kzx), kys),
+        arith::sub(arith::mul(oc, kyz), kxs),
+        arith::add(arith::mul(oc, kzz), c),
+    ]
+}
+
+/// The point a ranged attack's projectile starts at (`0x6F29E6A0`, CONFIRMED by Unicorn, 1,500 vectors,
+/// `tests/missile_launchpoint.rs`): the unit's 3-D position (`pos` the normalised x/y, `unit_z` the height of the unit's
+/// vtable slot `0xE4`) plus the launch offset `offset = (launchX, launchY, launchZ)` rotated about z by the facing
+/// (`angle`, radians). When the unit flag `+0x20 & 0x1000` is set the global vector at `0x6FAB44AC` (`global_add`)
+/// is added to the position first. `out = pos + R * offset` with the matrix-vector products summed in the original's
+/// order.
+pub fn launch_point(
+    pos: (F32, F32),
+    unit_z: F32,
+    angle: F32,
+    offset: [F32; 3],
+    global_add: Option<[F32; 3]>,
+    tables: &Tables,
+) -> [F32; 3] {
+    let m = rotation_z(angle, tables);
+    let o = offset;
+    let x = arith::add(
+        arith::add(arith::mul(o[0], m[0]), arith::mul(o[1], m[3])),
+        arith::mul(o[2], m[6]),
+    );
+    let y = arith::add(
+        arith::add(arith::mul(o[0], m[1]), arith::mul(o[1], m[4])),
+        arith::mul(o[2], m[7]),
+    );
+    let z = arith::add(
+        arith::add(arith::mul(o[1], m[5]), arith::mul(o[0], m[2])),
+        arith::mul(o[2], m[8]),
+    );
+    let mut p = [pos.0, pos.1, unit_z];
+    if let Some(g) = global_add {
+        for i in 0..3 {
+            p[i] = arith::add(p[i], g[i]);
+        }
+    }
+    [
+        arith::add(p[0], x),
+        arith::add(p[1], y),
+        arith::add(p[2], z),
+    ]
+}
+
+/// The shortest completion timer the mover event accepts, `1e-4` s (`0x6F4AA630` replaces a smaller duration, a refused
+/// flight included, by the constant at `0x6FAAE478`; NaN is kept).
+pub const MIN_TIMER: F32 = F32::from_bits(0x38D1_B717);
+
+/// The flight setup of a missile from its launch point to the completion event (CONFIRMED by Unicorn,
+/// `tools/emu/missile_flight_emu.py`, 1,500 vectors, `tests/missile_flight.rs`: the real chain `0x6F47A4A0`,
+/// `0x6F47A650`, `0x6F497080`, `0x6F4AA6A0`, `0x6F4AA630`, with the position object stubbed):
+///
+/// * every coordinate is converted to **cells** as the mover does: `scale(v - origin)` for x and y, `scale(v)` for z and
+///   the speed (exponent minus 5 with the underflow mask, [`crate::pathing::scale_by_1_32`]);
+/// * the move vector is `target - start` in cells (the start cell is the converted launch point, the step term is
+///   `+0` for a fresh missile), the duration the path request [`path_request`] (`sqrt(dx^2 + dy^2) / speed` in soft
+///   float, refused, i.e. 0, below 0.1 s);
+/// * `T' = min(T, horizon - 1.0, 60.0)` (strict compares), then `0x6F4AA630` replaces a duration below `1e-4` by
+///   [`MIN_TIMER`], and the completion event is due at `now + duration` (soft add).
+///
+/// `speed` is the launch record's Missilespeed in world units per second, `horizon` the agile clock's `300.0`.
+pub fn flight_duration(
+    launch: (F32, F32),
+    target: (F32, F32),
+    origin: (F32, F32),
+    speed: F32,
+    horizon: F32,
+    tables: &Tables,
+) -> F32 {
+    use crate::pathing::scale_by_1_32 as cells;
+    let sx = cells(arith::sub(launch.0, origin.0));
+    let sy = cells(arith::sub(launch.1, origin.1));
+    let tx = cells(arith::sub(target.0, origin.0));
+    let ty = cells(arith::sub(target.1, origin.1));
+    // the stored start cell goes through the position object: x = add(x0, mul(step, term)) with a zero step
+    let sx = arith::add(sx, F32::ZERO);
+    let sy = arith::add(sy, F32::ZERO);
+    let dx = arith::sub(tx, sx);
+    let dy = arith::sub(ty, sy);
+    let mut t = path_request(dx, dy, cells(speed), tables).time;
+    let h = arith::sub(horizon, F32::ONE);
+    if h.to_f32() < t.to_f32() {
+        t = h;
+    }
+    if MAX_FLIGHT.to_f32() < t.to_f32() {
+        t = MAX_FLIGHT;
+    }
+    if MIN_TIMER.to_f32() > t.to_f32() {
+        t = MIN_TIMER;
+    }
+    t
+}
+
 const TWO: F32 = F32::from_bits(0x4000_0000);
 const FOUR: F32 = F32::from_bits(0x4080_0000);
 const NEG_HALF: F32 = F32::from_bits(0xBF00_0000);
