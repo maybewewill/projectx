@@ -369,19 +369,55 @@ def o_line(rng):
     return " ".join(f), True, sum(len(o) for o in outs), None
 
 
+
+RECT_CAP = []
+
+
+def _cap_rect(uc, address, size, user):
+    esp = uc.reg_read(UC_X86_REG_ESP)
+    ptr = struct.unpack("<I", bytes(uc.mem_read(esp + 4, 4)))[0]
+    RECT_CAP[:] = [rd32(ptr + 4 * k) for k in range(4)]
+    _ret(uc, 4)
+
+
+def f_line(rng):
+    """0x6F4A6D70: footprint rect of a position and a radius (captured at the call of 0x6F49FF90)."""
+    posobj = BASE + 0xB0000
+    mu.mem_write(posobj, b"\0" * 0x100)
+    mu.mem_write(G, b"\0" * 0x100)
+    node = NODES
+    mu.mem_write(node, b"\0" * 0x100)
+    wr32(posobj + 0x94, node)
+    wr32(node + 0x2C, G)
+    scale = rng.choice([1.0, 1.0, 0.5, 2.0, 0.03125, 3.0])
+    wr32(G + 0x68, f2b(scale))
+    px = rng.uniform(-3.0, 40.0)
+    py = rng.uniform(-3.0, 40.0)
+    e = rng.choice([0.5, 0.75, 1.0, 0.4, 2.5, rng.uniform(0.01, 4.0), 0.0])
+    wr32(SCR, f2b(e))
+    wr32(SCR + 8, f2b(px))
+    wr32(SCR + 12, f2b(py))
+    RECT_CAP.clear()
+    emu.call(0x6F4A6D70, ecx=posobj, stack_args=(SCR, SCR + 8))
+    f = ["F", hx(f2b(px)), hx(f2b(py)), hx(f2b(e)), hx(f2b(scale))] + [hx(s32(v)) for v in RECT_CAP]
+    return " ".join(f), len(RECT_CAP) == 4, 0, None
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
-    out = sys.argv[1]
-    n = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
-    seed = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+    kind = sys.argv[1]
+    out = sys.argv[2]
+    n = int(sys.argv[3]) if len(sys.argv) > 3 else 1000
+    seed = int(sys.argv[4]) if len(sys.argv) > 4 else 1
     rng = random.Random(seed)
     setup_o()
+    mu.hook_add(UC_HOOK_CODE, _cap_rect, begin=0x6F49FF90, end=0x6F49FF90) if kind == 'F' else None
     bad = found = 0
     with open(out, "w") as fh:
         for i in range(n):
-            line, ok, cnt, dbg = o_line(rng)
+            line, ok, cnt, dbg = (f_line if kind == 'F' else o_line)(rng)
             found += cnt
             if not ok:
                 bad += 1

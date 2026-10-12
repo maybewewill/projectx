@@ -269,6 +269,17 @@ def build_w(rng):
     for nd in nodes:
         if rng.random() < 0.85:
             nd["flags"] &= 0x00FFFFFF
+    if rng.random() < 0.5:
+        # dense mode: mostly valid neighbours, so the walk order and the stamps are exercised
+        for m in movers:
+            if rng.random() < 0.9:
+                m.update(tag=TAG, o14=rng.getrandbits(31), life=f2b(rng.uniform(1.0, 100.0)),
+                         speed=rng.choice([0, 0x80000000]),
+                         rec=(c["filt"] << 20) | (rng.randrange(c["nib"], 16) << 28) | rng.getrandbits(20))
+        for nd in nodes:
+            nd["flags"] &= 0x00FFFFFF
+            if rng.random() < 0.7:
+                nd["stamp"] = rng.choice([0, 1, 2, 3, 50])
     c["nodes"] = nodes
     ncell = pitch * height
     cells = []
