@@ -166,10 +166,42 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         // `Awha` the wisp's lumber).
         game.production_mut().build_seconds.insert(id, ty.build_time);
         let has = |c: &str| ty.abil_list.iter().any(|a| a.eq_ignore_ascii_case(c));
-        if has("Ahar") || has("Aaha") || has("Awha") {
+        if has("Argl") || has("Arlm") {
+            game.production_mut().tech.entry(id).or_default().lumber_dropoff = true;
+        }
+        if has("Ahar") || has("Aaha") || has("Awha") || has("Ahrl") {
             let t = game.production_mut().tech.entry(id).or_default();
-            t.harvest_gold = has("Ahar") || has("Aaha");
-            t.harvest_wood = has("Ahar") || has("Awha");
+            t.harvest_gold = has("Ahar") || has("Aaha") || has("Awha");
+            t.harvest_wood = has("Ahar") || has("Ahrl") || has("Awha");
+            let rc = |s: &str| rawcode(s).unwrap_or(0);
+            // Peasant, peon: `Ahar` (walk, chop). Ghoul: `Ahrl` (chop only). Acolyte: `Aaha` (works a haunted mine).
+            // Wisp: `Awha` (goes into an entangled mine, renews lumber at a tree). `docs/spec/economy-5.md`.
+            if has("Ahar") {
+                t.harvest.gold_abil = rc("Ahar");
+                t.harvest.wood_abil = rc("Ahar");
+            } else if has("Ahrl") {
+                t.harvest.wood_abil = rc("Ahrl");
+            }
+            if has("Aaha") {
+                t.harvest.gold_mode = sim::production::GoldMode::Haunt;
+                t.harvest.gold_abil = rc("Aaha");
+            }
+            if has("Awha") {
+                t.harvest.gold_mode = sim::production::GoldMode::Entangle;
+                t.harvest.wood_mode = sim::production::WoodMode::Renew;
+                t.harvest.gold_abil = rc("Awha");
+                t.harvest.wood_abil = rc("Awha");
+            }
+            // The hit interval: the swing data of the first weapon (the harvest properties are copied from the
+            // attack ability, `0x6F0557D0`; which two fields is LIKELY).
+            let w = &ty.weapons[0];
+            if w.dmg_pt + w.back_swing > 0.0 {
+                t.harvest.hit_seconds = w.dmg_pt + w.back_swing;
+            }
+        }
+        if has("Aent") {
+            let t = game.production_mut().tech.entry(id).or_default();
+            t.entangle = Some(sim::production::EntangleSpec { rng: 500.0, cast: 3.0, unit: sim::ai_towns::ENTANGLED_MINE });
         }
         // The order data (the fixed move and attack ability slots) is set before any unit of the type can be
         // created: units take their abilities at creation (`natives/unit.rs`).

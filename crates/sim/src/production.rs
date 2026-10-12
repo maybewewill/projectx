@@ -68,6 +68,11 @@ pub const TREE_WOOD: i32 = 50;
 
 /// How near (world units) a worker must be to a mine to enter it.
 const MINE_REACH: f32 = 230.0;
+/// How near an acolyte or wisp must be to a haunted or entangled mine to attach to it (UNSURE: the ability range test
+/// `0x6F4766E0` with `Rng` 200 plus the mine's footprint).
+const ATTACH_REACH: f32 = 300.0;
+/// How far from a gold mine a new haunted mine (an acolyte's build on the mine) still takes that mine's gold.
+const CONVERT_RADIUS: f32 = 300.0;
 /// How near a worker must be to a hall to deposit.
 const HALL_REACH: f32 = 260.0;
 /// How near a worker must be to a tree to chop it.
@@ -78,9 +83,113 @@ const SITE_REACH: f32 = 200.0;
 /// a few retries, UNSURE).
 const RETRY_LIMIT: u8 = 4;
 
+/// How a worker type gets gold (`docs/spec/economy-5.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GoldMode {
+    /// Walks into a neutral mine and carries the gold to a hall (`Ahar`).
+    #[default]
+    Walk,
+    /// Works a haunted gold mine from beside it (`Aaha`, `CAbilityAcolyteHarvest`).
+    Haunt,
+    /// Goes inside an entangled gold mine (`Awha`, `CAbilityWispHarvest`).
+    Entangle,
+}
+
+/// How a worker type gets lumber.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WoodMode {
+    /// Cuts a tree, carries the lumber to a hall (`Ahar`, `Ahrl`).
+    #[default]
+    Chop,
+    /// Stays at a tree and is paid every `renew_seconds` (`Awha`).
+    Renew,
+}
+
+/// The harvest data of a worker type: the modes, and the numbers the ability tables give
+/// (`CAbilityHarvest`/`HarvestLumber` initialisers `0x6F055A20`/`0x6F0557D0`, `CAbilityWispHarvest` `0x6F171930`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HarvestSpec {
+    pub gold_mode: GoldMode,
+    pub wood_mode: WoodMode,
+    /// The raw codes of the gold and the lumber ability (0 none); the host fills the numbers from them.
+    pub gold_abil: u32,
+    pub wood_abil: u32,
+    /// Gold carried per trip (`Ahar` DataC, `+0x194`).
+    pub gold_cap: i32,
+    /// Lumber carried per trip (`Ahar` DataB / `Ahrl` DataB, `+0x198`).
+    pub wood_cap: i32,
+    /// Lumber per hit (DataA, `+0x1D8`).
+    pub per_hit: i32,
+    /// Seconds per hit: the unit's `dmgpt + backSw` (the properties `+0x1C8`/`+0x1D0` are copied from the attack
+    /// ability, `0x6F0557D0`; LIKELY which attack fields).
+    pub hit_seconds: f32,
+    /// Wisp: lumber per payment (DataA, `+0x1A4`) and seconds between payments (`Dur`, `+0x198`).
+    pub renew_amount: i32,
+    pub renew_seconds: f32,
+    /// How near a worker stands to its tree (0: the model default).
+    pub tree_reach: f32,
+}
+
+impl Default for HarvestSpec {
+    fn default() -> Self {
+        HarvestSpec {
+            gold_mode: GoldMode::Walk,
+            wood_mode: WoodMode::Chop,
+            gold_abil: 0,
+            wood_abil: 0,
+            gold_cap: GOLD_TRIP,
+            wood_cap: LUMBER_TRIP,
+            per_hit: 1,
+            hit_seconds: HIT_SECONDS,
+            renew_amount: 5,
+            renew_seconds: 8.0,
+            tree_reach: 0.0,
+        }
+    }
+}
+
+/// The entangle ability of a town hall (`Aent`, autocast): within `rng` of the hall a neutral gold mine becomes `unit`
+/// after the cast time.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EntangleSpec {
+    pub rng: f32,
+    pub cast: f32,
+    pub unit: u32,
+}
+
+/// A haunted or entangled gold mine (`Abgm`/`Aegm`, `docs/spec/economy-5.md`): `amount` gold every
+/// `interval * slots / workers` seconds while workers are attached.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MineSpec {
+    pub amount: i32,
+    pub interval: f32,
+    pub slots: i32,
+}
+
+impl Default for MineSpec {
+    fn default() -> Self {
+        MineSpec { amount: 10, interval: 1.0, slots: 5 }
+    }
+}
+
+/// The workers attached to a haunted or entangled mine and the progress of its current countdown (0 to 1).
+#[derive(Debug, Clone, Default)]
+struct MineWork {
+    workers: Vec<ObjKey>,
+    progress: f32,
+}
+
+/// An entangle cast in flight.
+#[derive(Debug, Clone, Copy)]
+struct PendingEntangle {
+    source: ObjKey,
+    mine: ObjKey,
+    at: f32,
+}
+
 /// What a unit type can train, build and research, and what it needs. Filled by the host from the object text
 /// (`Trains`, `Builds`, `Researches`, `Requires`, `Upgrade` of the `*UnitFunc.txt` profiles).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TypeTech {
     pub trains: Vec<u32>,
     pub builds: Vec<u32>,
@@ -96,6 +205,12 @@ pub struct TypeTech {
     pub harvest_gold: bool,
     /// The unit has the harvest ability for lumber.
     pub harvest_wood: bool,
+    /// How and how fast the unit harvests.
+    pub harvest: HarvestSpec,
+    /// The unit has the entangle ability (a Tree of Life).
+    pub entangle: Option<EntangleSpec>,
+    /// The unit takes lumber deliveries (`Argl` or `Arlm` in its ability list: halls, Necropolis, Graveyard).
+    pub lumber_dropoff: bool,
 }
 
 /// One row of `UpgradeData.slk` (the columns the AI needs).
@@ -235,6 +350,10 @@ enum Phase {
     Working { until: f32 },
     /// Walking to the hall.
     ToHall,
+    /// Attached to a haunted or entangled mine: the mine pays.
+    Attached,
+    /// Standing at a tree: paid at `next`, every `renew_seconds` (wisp).
+    Renewing { next: f32 },
 }
 
 /// A worker's harvest cycle.
@@ -250,6 +369,7 @@ pub struct Harvester {
     /// Where the cycle is anchored (the town's hall position): the nearest source is chosen from here.
     anchor: (f32, f32),
     retries: u8,
+    spec: HarvestSpec,
 }
 
 impl Harvester {
@@ -404,6 +524,15 @@ pub struct Production {
     unit_upgrades: BTreeMap<ObjKey, UnitUpgrade>,
     pub events: Vec<ProdEvent>,
     pub stats: ProdStats,
+    /// Gold and lumber credited per player by harvesting (deposits and mine payments).
+    pub gold_by_player: BTreeMap<u32, i64>,
+    pub lumber_by_player: BTreeMap<u32, i64>,
+    /// The haunted / entangled mine data by mine type; a type without a row uses [`MineSpec::default`].
+    pub mine_specs: BTreeMap<u32, MineSpec>,
+    mine_work: BTreeMap<ObjKey, MineWork>,
+    last_mine_time: f32,
+    entangles: Vec<PendingEntangle>,
+    last_entangle_scan: f32,
 }
 
 impl Production {
@@ -840,7 +969,7 @@ impl Game {
             return Err(ProdError::Resources);
         }
         // A worker taken for a job leaves its harvest cycle (the carried load goes with it, UNSURE).
-        self.production.harvesters.remove(&builder);
+        self.release_harvester(builder);
         self.production.jobs.insert(
             builder,
             BuildJob { type_id, x, y, phase: JobPhase::Moving, retries: 0 },
@@ -934,6 +1063,9 @@ impl Game {
             }
             _ => None,
         };
+        if type_id == crate::ai_towns::HAUNTED_MINE {
+            self.take_over_mine(k);
+        }
         self.production.constructions.insert(k, Construction { builder, start, seconds, consumed, ramp, cd, life });
         self.production.events.push(ProdEvent::BuildStarted { builder, building: k, type_id });
         Ok(k)
@@ -1131,11 +1263,15 @@ impl Game {
     /// Starts (or keeps) a harvest cycle of `resource` for `unit`, anchored at `anchor` (the town hall), with `mine` the
     /// gold mine of a gold cycle. A worker already on the same resource keeps its cycle (no new order, CONFIRMED:
     /// `ClearHarvestAI` re-marks the previous workers without ordering them again).
+    ///
+    /// An acolyte or a wisp that is to mine gold picks its own haunted / entangled mine near the anchor (the `mine`
+    /// argument names the town's first mine, which is the neutral one); with none that is complete and has a free slot
+    /// no cycle starts (the harvest order is refused in the original, LIKELY).
     pub fn assign_harvest(&mut self, unit: ObjKey, resource: Res, anchor: (f32, f32), mine: Option<ObjKey>) {
         if let Some(h) = self.production.harvesters.get_mut(&unit) {
             if h.resource == resource {
                 h.anchor = anchor;
-                if resource == Res::Gold && mine.is_some() {
+                if resource == Res::Gold && mine.is_some() && h.spec.gold_mode == GoldMode::Walk {
                     h.mine = mine;
                 }
                 return;
@@ -1143,8 +1279,17 @@ impl Game {
         }
         self.production.jobs.remove(&unit);
         let owner = self.unit(unit).owner;
-        let mut worker = Worker::new(owner as usize, GOLD_TRIP, LUMBER_TRIP, 1);
+        let spec = self.production.tech.get(&self.unit(unit).type_id).map(|t| t.harvest).unwrap_or_default();
+        let mut mine = mine;
+        if resource == Res::Gold && spec.gold_mode != GoldMode::Walk {
+            mine = self.pick_mine(owner, spec.gold_mode, anchor, unit);
+            if mine.is_none() {
+                return;
+            }
+        }
+        let mut worker = Worker::new(owner as usize, spec.gold_cap, spec.wood_cap, spec.per_hit);
         // A load of the other resource is deposited first (CONFIRMED `carry_add` rule, simplified to a deposit now).
+        self.detach_worker(unit);
         if let Some(old) = self.production.harvesters.remove(&unit) {
             let mut w = old.worker;
             self.deposit_worker(&mut w);
@@ -1152,7 +1297,7 @@ impl Game {
         worker.mining = false;
         self.production.harvesters.insert(
             unit,
-            Harvester { resource, phase: Phase::ToSource, worker, mine, tree: None, anchor, retries: 0 },
+            Harvester { resource, phase: Phase::ToSource, worker, mine, tree: None, anchor, retries: 0, spec },
         );
         self.unit_mut(unit).hidden = false;
         let target = self.source_point(unit);
@@ -1166,11 +1311,43 @@ impl Game {
         self.production.harvesters.contains_key(&unit)
     }
 
-    fn pick_mine(&self, from: (f32, f32)) -> Option<ObjKey> {
+    /// Whether a mine of type `type_id` is one that a worker of `mode` can use.
+    fn mine_kind_ok(mode: GoldMode, type_id: u32) -> bool {
+        let special = type_id == crate::ai_towns::HAUNTED_MINE || type_id == crate::ai_towns::ENTANGLED_MINE;
+        match mode {
+            GoldMode::Walk => !special,
+            GoldMode::Haunt => type_id == crate::ai_towns::HAUNTED_MINE,
+            GoldMode::Entangle => type_id == crate::ai_towns::ENTANGLED_MINE,
+        }
+    }
+
+    fn mine_spec(&self, type_id: u32) -> MineSpec {
+        self.production.mine_specs.get(&type_id).copied().unwrap_or_default()
+    }
+
+    /// Whether the haunted / entangled mine `mine` has a free slot for `worker` (or already holds it).
+    fn mine_has_room(&self, mine: ObjKey, worker: ObjKey) -> bool {
+        let slots = self.mine_spec(self.unit(mine).type_id).slots;
+        self.production
+            .mine_work
+            .get(&mine)
+            .is_none_or(|w| w.workers.contains(&worker) || (w.workers.len() as i32) < slots)
+    }
+
+    fn mine_usable(&self, mine: ObjKey, owner: u32, mode: GoldMode, worker: ObjKey) -> bool {
+        let Some(m) = self.mines.get(&mine) else { return false };
+        if m.remaining <= 0 || !self.unit_live(mine) || !Self::mine_kind_ok(mode, self.unit(mine).type_id) {
+            return false;
+        }
+        mode == GoldMode::Walk
+            || (self.unit(mine).owner == owner && self.unit_completed(mine) && self.mine_has_room(mine, worker))
+    }
+
+    fn pick_mine(&self, owner: u32, mode: GoldMode, from: (f32, f32), worker: ObjKey) -> Option<ObjKey> {
         self.mines
-            .iter()
-            .filter(|(&k, m)| m.remaining > 0 && self.unit_live(k))
-            .map(|(&k, _)| {
+            .keys()
+            .filter(|&&k| self.mine_usable(k, owner, mode, worker))
+            .map(|&k| {
                 let (x, y) = self.unit_xy(k);
                 (k, (x - from.0).powi(2) + (y - from.1).powi(2))
             })
@@ -1191,15 +1368,16 @@ impl Game {
 
     /// The point a harvesting worker walks to (choosing the mine or tree when it has none), None when no source is left.
     fn source_point(&mut self, unit: ObjKey) -> Option<(f32, f32)> {
-        let (resource, anchor, mine, tree) = {
+        let (resource, anchor, mine, tree, mode) = {
             let h = self.production.harvesters.get(&unit)?;
-            (h.resource, h.anchor, h.mine, h.tree)
+            (h.resource, h.anchor, h.mine, h.tree, h.spec.gold_mode)
         };
+        let owner = self.unit(unit).owner;
         match resource {
             Res::Gold => {
                 let m = mine
-                    .filter(|&m| self.mines.get(&m).is_some_and(|x| x.remaining > 0) && self.unit_live(m))
-                    .or_else(|| self.pick_mine(anchor))?;
+                    .filter(|&m| self.mine_usable(m, owner, mode, unit))
+                    .or_else(|| self.pick_mine(owner, mode, anchor, unit))?;
                 self.production.harvesters.get_mut(&unit)?.mine = Some(m);
                 Some(self.unit_xy(m))
             }
@@ -1214,22 +1392,67 @@ impl Game {
         }
     }
 
-    fn nearest_hall(&self, owner: u32, from: (f32, f32)) -> Option<(ObjKey, f32, f32)> {
+    fn nearest_hall(&self, owner: u32, from: (f32, f32), lumber: bool) -> Option<(ObjKey, f32, f32)> {
         self.unit_objects()
             .filter(|(k, u)| {
                 u.owner == owner
                     && !u.dead
                     && !u.removed
-                    && u.class_flags & CLASS_TOWNHALL != 0
+                    && (u.class_flags & CLASS_TOWNHALL != 0
+                        || (lumber && self.production.tech.get(&u.type_id).is_some_and(|t| t.lumber_dropoff)))
                     && u.count_state & REGISTERED_IN_PROGRESS == 0
                     && !self.mines.contains_key(k)
             })
-            .map(|(k, _)| {
-                let (x, y) = self.unit_xy(k);
+            .map(|(k, u)| {
+                let (x, y) = (u.x.to_f32(), u.y.to_f32());
                 (k, x, y, (x - from.0).powi(2) + (y - from.1).powi(2))
             })
             .min_by(|a, b| a.3.total_cmp(&b.3).then(a.0.cmp(&b.0)))
             .map(|(k, x, y, _)| (k, x, y))
+    }
+
+    /// Takes `unit` out of every mine's worker list.
+    fn detach_worker(&mut self, unit: ObjKey) {
+        for w in self.production.mine_work.values_mut() {
+            w.workers.retain(|&x| x != unit);
+        }
+    }
+
+    /// Ends the cycle of `unit` (it is idle for the AI from then on) and shows it again.
+    fn release_harvester(&mut self, unit: ObjKey) {
+        self.detach_worker(unit);
+        self.production.harvesters.remove(&unit);
+        if self.unit_live(unit) {
+            self.unit_mut(unit).hidden = false;
+        }
+    }
+
+    /// Attaches `unit` to the haunted / entangled mine `mine` when a slot is free.
+    fn attach_to_mine(&mut self, unit: ObjKey, mine: ObjKey) -> bool {
+        if !self.mine_has_room(mine, unit) {
+            return false;
+        }
+        let w = self.production.mine_work.entry(mine).or_default();
+        if !w.workers.contains(&unit) {
+            w.workers.push(unit);
+        }
+        true
+    }
+
+    /// Credits harvested income to `owner` through the income changer and counts it.
+    fn income(&mut self, owner: u32, res: Res, amount: i32) -> i32 {
+        let credited = self.credit_resource(owner, res, amount, Flags::INCOME).unwrap_or(0);
+        match res {
+            Res::Gold => {
+                self.production.stats.gold_deposited += i64::from(credited);
+                *self.production.gold_by_player.entry(owner).or_default() += i64::from(credited);
+            }
+            Res::Lumber => {
+                self.production.stats.lumber_deposited += i64::from(credited);
+                *self.production.lumber_by_player.entry(owner).or_default() += i64::from(credited);
+            }
+        }
+        credited
     }
 
     fn step_harvester(&mut self, unit: ObjKey) {
@@ -1237,15 +1460,24 @@ impl Game {
         let Some(h) = self.production.harvesters.get(&unit).cloned() else { return };
         let owner = self.unit(unit).owner;
         let pos = self.unit_xy(unit);
+        let spec = h.spec;
+        let gold_attach = h.resource == Res::Gold && spec.gold_mode != GoldMode::Walk;
         match h.phase {
             Phase::ToSource => {
                 let Some((sx, sy)) = self.source_point(unit) else {
+                    if gold_attach {
+                        // No mine with room is left: the cycle ends and the unit is idle for the AI.
+                        self.release_harvester(unit);
+                    }
                     return;
                 };
-                let (reach, d) = match h.resource {
-                    Res::Gold => (MINE_REACH, ((pos.0 - sx).powi(2) + (pos.1 - sy).powi(2)).sqrt()),
-                    Res::Lumber => (TREE_REACH, ((pos.0 - sx).powi(2) + (pos.1 - sy).powi(2)).sqrt()),
+                let tree_reach = if spec.tree_reach > 0.0 { spec.tree_reach } else { TREE_REACH };
+                let reach = match h.resource {
+                    Res::Gold if gold_attach => ATTACH_REACH,
+                    Res::Gold => MINE_REACH,
+                    Res::Lumber => tree_reach,
                 };
+                let d = ((pos.0 - sx).powi(2) + (pos.1 - sy).powi(2)).sqrt();
                 let arrived = d <= reach;
                 if !arrived && self.order_idle(unit) {
                     let hh = self.production.harvesters.get_mut(&unit).unwrap();
@@ -1260,16 +1492,55 @@ impl Game {
                 } else if !arrived {
                     return;
                 }
-                let hh = self.production.harvesters.get_mut(&unit).unwrap();
-                hh.retries = 0;
+                self.production.harvesters.get_mut(&unit).unwrap().retries = 0;
+                if gold_attach {
+                    let mine = self.production.harvesters.get(&unit).and_then(|x| x.mine);
+                    match mine {
+                        Some(m) if self.attach_to_mine(unit, m) => {
+                            self.production.harvesters.get_mut(&unit).unwrap().phase = Phase::Attached;
+                            if spec.gold_mode == GoldMode::Entangle {
+                                self.unit_mut(unit).hidden = true;
+                            }
+                        }
+                        _ => {
+                            self.production.harvesters.get_mut(&unit).unwrap().mine = None;
+                        }
+                    }
+                    return;
+                }
+                if h.resource == Res::Lumber && spec.wood_mode == WoodMode::Renew {
+                    self.production.harvesters.get_mut(&unit).unwrap().phase =
+                        Phase::Renewing { next: now + spec.renew_seconds };
+                    return;
+                }
+                let hits = ((spec.wood_cap + spec.per_hit - 1) / spec.per_hit.max(1)).max(1);
                 let secs = match h.resource {
                     Res::Gold => MINE_SECONDS,
-                    Res::Lumber => HIT_SECONDS * LUMBER_TRIP as f32,
+                    Res::Lumber => spec.hit_seconds * hits as f32,
                 };
-                hh.phase = Phase::Working { until: now + secs };
+                self.production.harvesters.get_mut(&unit).unwrap().phase = Phase::Working { until: now + secs };
                 if h.resource == Res::Gold {
                     self.unit_mut(unit).hidden = true;
                 }
+            }
+            Phase::Attached => {
+                let ok = h.mine.is_some_and(|m| {
+                    self.unit_live(m)
+                        && self.mines.get(&m).is_some_and(|x| x.remaining > 0)
+                        && self.production.mine_work.get(&m).is_some_and(|w| w.workers.contains(&unit))
+                });
+                if !ok {
+                    self.release_harvester(unit);
+                }
+            }
+            Phase::Renewing { next } => {
+                if now < next {
+                    return;
+                }
+                self.income(owner, Res::Lumber, spec.renew_amount);
+                self.production.stats.lumber_trips += 1;
+                let hh = self.production.harvesters.get_mut(&unit).unwrap();
+                hh.phase = Phase::Renewing { next: next + spec.renew_seconds };
             }
             Phase::Working { until } => {
                 if now < until {
@@ -1291,7 +1562,7 @@ impl Game {
                         let mut take = 0;
                         if let Some(i) = h.tree {
                             if let Some(t) = self.production.trees.get_mut(i) {
-                                take = t.wood.min(LUMBER_TRIP);
+                                take = t.wood.min(spec.wood_cap);
                                 t.wood -= take;
                             }
                         }
@@ -1303,12 +1574,12 @@ impl Game {
                 hh.worker = worker;
                 hh.phase = Phase::ToHall;
                 hh.retries = 0;
-                if let Some((_, hx, hy)) = self.nearest_hall(owner, pos) {
+                if let Some((_, hx, hy)) = self.nearest_hall(owner, pos, h.resource == Res::Lumber) {
                     self.order_move(unit, hx, hy);
                 }
             }
             Phase::ToHall => {
-                let Some((_, hx, hy)) = self.nearest_hall(owner, pos) else { return };
+                let Some((_, hx, hy)) = self.nearest_hall(owner, pos, h.resource == Res::Lumber) else { return };
                 let d = ((pos.0 - hx).powi(2) + (pos.1 - hy).powi(2)).sqrt();
                 let arrived = d <= HALL_REACH;
                 if !arrived && self.order_idle(unit) {
@@ -1326,8 +1597,14 @@ impl Game {
                 let credited = self.deposit_worker(&mut worker);
                 if credited != 0 {
                     match resource {
-                        Res::Gold => self.production.stats.gold_deposited += i64::from(credited),
-                        Res::Lumber => self.production.stats.lumber_deposited += i64::from(credited),
+                        Res::Gold => {
+                            self.production.stats.gold_deposited += i64::from(credited);
+                            *self.production.gold_by_player.entry(owner).or_default() += i64::from(credited);
+                        }
+                        Res::Lumber => {
+                            self.production.stats.lumber_deposited += i64::from(credited);
+                            *self.production.lumber_by_player.entry(owner).or_default() += i64::from(credited);
+                        }
                     }
                     self.production.events.push(ProdEvent::Deposit { worker: unit, resource, amount: credited });
                 }
@@ -1338,6 +1615,171 @@ impl Game {
                 if let Some((sx, sy)) = self.source_point(unit) {
                     self.order_move(unit, sx, sy);
                 }
+            }
+        }
+    }
+
+    /// The haunted / entangled mines pay (`CAbilityPossessedGoldMine` family, `docs/spec/economy-5.md`): while `n`
+    /// workers are attached, a countdown of `interval * slots / n` seconds (the scale `n / slots` on the tick rate,
+    /// `0x6F1AE6B0` and `0x6F0223C0`) ends in a payment of `amount` gold to the mine's owner (`0x6F1AE030`,
+    /// income changer with tax and share) taken from the mine, and starts again.
+    fn step_mines(&mut self) {
+        let now = self.production.now;
+        let mut dt = now - self.production.last_mine_time;
+        self.production.last_mine_time = now;
+        if !(0.0..=5.0).contains(&dt) {
+            dt = 0.1;
+        }
+        let mines: Vec<ObjKey> = self.production.mine_work.keys().copied().collect();
+        for m in mines {
+            let (type_id, owner) = {
+                let u = self.unit(m);
+                (u.type_id, u.owner)
+            };
+            let spec = self.mine_spec(type_id);
+            let live = self.unit_live(m) && self.unit_completed(m);
+            let workers: Vec<ObjKey> = self
+                .production
+                .mine_work
+                .get(&m)
+                .map(|w| w.workers.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|&w| {
+                    self.unit_live(w)
+                        && self
+                            .production
+                            .harvesters
+                            .get(&w)
+                            .is_some_and(|h| h.mine == Some(m) && matches!(h.phase, Phase::Attached))
+                })
+                .collect();
+            let remaining = self.mines.get(&m).map_or(0, |x| x.remaining);
+            if !live || remaining <= 0 {
+                for w in &workers {
+                    self.release_harvester(*w);
+                }
+                self.production.mine_work.remove(&m);
+                continue;
+            }
+            let Some(work) = self.production.mine_work.get_mut(&m) else { continue };
+            work.workers = workers.clone();
+            if workers.is_empty() {
+                work.progress = 0.0;
+                continue;
+            }
+            let period = spec.interval * spec.slots as f32 / workers.len() as f32;
+            work.progress += if period > 0.0 { dt / period } else { 1.0 };
+            if work.progress < 1.0 {
+                continue;
+            }
+            work.progress = 0.0;
+            let take = self.mines.get_mut(&m).map_or(0, |x| x.take(spec.amount));
+            if take > 0 {
+                self.income(owner, Res::Gold, take);
+                self.production.stats.gold_trips += 1;
+            }
+            if self.mines.get(&m).is_none_or(|x| x.remaining <= 0) {
+                for w in &workers {
+                    self.release_harvester(*w);
+                }
+                self.production.mine_work.remove(&m);
+            }
+        }
+    }
+
+    /// The nearest neutral gold mine within `radius` of `(x, y)` that still has gold.
+    fn neutral_mine_near(&self, x: f32, y: f32, radius: f32) -> Option<ObjKey> {
+        self.mines
+            .iter()
+            .filter(|(&k, m)| {
+                m.remaining > 0 && self.unit_live(k) && self.unit(k).type_id == crate::ai_towns::GOLD_MINE
+            })
+            .map(|(&k, _)| {
+                let (mx, my) = self.unit_xy(k);
+                (k, ((mx - x).powi(2) + (my - y).powi(2)).sqrt())
+            })
+            .filter(|&(_, d)| d <= radius)
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+            .map(|(k, _)| k)
+    }
+
+    /// The new mine `new` takes over the gold of the neutral mine under it, which is hidden and no longer a town
+    /// site (`CreateBlightedGoldmine` / `Abgm` link `0x6F1ADF30`: the new mine keeps a reference to the hidden one and
+    /// takes its amount, CONFIRMED order in `melee_start.rs`; hiding the old unit as removed is UNSURE).
+    fn take_over_mine(&mut self, new: ObjKey) {
+        let (x, y) = self.unit_xy(new);
+        let Some(old) = self.neutral_mine_near(x, y, CONVERT_RADIUS) else { return };
+        let remaining = self.mines.get(&old).map_or(0, |m| m.remaining);
+        self.mines.insert(new, crate::economy::Mine { remaining });
+        if let Some(m) = self.mines.get_mut(&old) {
+            m.remaining = 0;
+        }
+        let u = self.unit_mut(old);
+        u.hidden = true;
+        u.removed = true;
+    }
+
+    /// The autocast entangle of a completed Tree of Life (`Aent`, order `autoentangle`): once a second, a hall with the
+    /// ability that has a neutral mine in range starts the cast; at the end of the cast time the mine is replaced by the
+    /// entangled one. The scan interval is a stand-in (UNSURE).
+    fn step_entangles(&mut self) {
+        let now = self.production.now;
+        if now - self.production.last_entangle_scan >= 1.0 {
+            self.production.last_entangle_scan = now;
+            let casters: Vec<(ObjKey, EntangleSpec)> = self
+                .unit_objects()
+                .filter_map(|(k, u)| {
+                    if u.dead || u.removed || u.count_state & REGISTERED_IN_PROGRESS != 0 {
+                        return None;
+                    }
+                    self.production.tech.get(&u.type_id).and_then(|t| t.entangle).map(|e| (k, e))
+                })
+                .collect();
+            for (k, e) in casters {
+                if self.production.entangles.iter().any(|p| p.source == k) {
+                    continue;
+                }
+                let (x, y) = self.unit_xy(k);
+                let busy: Vec<ObjKey> = self.production.entangles.iter().map(|p| p.mine).collect();
+                let found = self
+                    .mines
+                    .iter()
+                    .filter(|(&mk, m)| {
+                        m.remaining > 0
+                            && self.unit_live(mk)
+                            && self.unit(mk).type_id == crate::ai_towns::GOLD_MINE
+                            && !busy.contains(&mk)
+                    })
+                    .map(|(&mk, _)| {
+                        let (mx, my) = self.unit_xy(mk);
+                        (mk, ((mx - x).powi(2) + (my - y).powi(2)).sqrt())
+                    })
+                    .filter(|&(_, d)| d <= e.rng)
+                    .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+                if let Some((mine, _)) = found {
+                    self.production.entangles.push(PendingEntangle { source: k, mine, at: now + e.cast });
+                }
+            }
+        }
+        let due: Vec<PendingEntangle> = self.production.entangles.iter().copied().filter(|p| now >= p.at).collect();
+        if due.is_empty() {
+            return;
+        }
+        self.production.entangles.retain(|p| now < p.at);
+        for p in due {
+            if !self.unit_live(p.source) || !self.unit_live(p.mine) {
+                continue;
+            }
+            let Some(e) = self.production.tech.get(&self.unit(p.source).type_id).and_then(|t| t.entangle) else {
+                continue;
+            };
+            let owner = self.unit(p.source).owner;
+            let (x, y) = self.unit_xy(p.mine);
+            if let Some((k, _)) =
+                crate::natives::unit::build(self, owner, e.unit, fl(x), fl(y), F32::ZERO, true)
+            {
+                self.take_over_mine(k);
             }
         }
     }
@@ -1542,7 +1984,13 @@ impl Game {
     /// The per-batch work (0.1 s): construction growth, build jobs and the harvest cycles.
     pub fn production_batch(&mut self) {
         let p = &self.production;
-        if p.constructions.is_empty() && p.jobs.is_empty() && p.harvesters.is_empty() && p.queues.is_empty() {
+        if p.constructions.is_empty()
+            && p.jobs.is_empty()
+            && p.harvesters.is_empty()
+            && p.queues.is_empty()
+            && p.entangles.is_empty()
+            && !p.tech.values().any(|t| t.entangle.is_some())
+        {
             return;
         }
         let now = self.production.now;
@@ -1570,11 +2018,14 @@ impl Game {
         let workers: Vec<ObjKey> = self.production.harvesters.keys().copied().collect();
         for w in workers {
             if !self.unit_live(w) {
+                self.detach_worker(w);
                 self.production.harvesters.remove(&w);
                 continue;
             }
             self.step_harvester(w);
         }
+        self.step_mines();
+        self.step_entangles();
         // A blocked head (no food) is retried each batch (the original waits for a food-change notice, LIKELY).
         let blocked: Vec<ObjKey> = self
             .production
@@ -1637,6 +2088,58 @@ impl Game {
 }
 
 impl Game {
+    /// The end-of-run report line of `owner`: harvested gold and lumber (credited through the income changer), workers
+    /// by type, combat units, and each hero with its level and learned skills.
+    pub fn player_report(&self, owner: u32) -> String {
+        let name_of = |t: u32| {
+            self.unit_types().get(t).map_or_else(|| format!("{:08x}", t), |x| x.name.clone())
+        };
+        let mut workers: BTreeMap<String, i32> = BTreeMap::new();
+        let mut army: BTreeMap<String, i32> = BTreeMap::new();
+        let mut heroes = Vec::new();
+        for (k, u) in self.unit_objects() {
+            if u.owner != owner || u.dead || u.removed || self.unit_types().is_building(u.type_id) {
+                continue;
+            }
+            if let Some(h) = u.hero.as_ref() {
+                let skills: Vec<String> = h
+                    .slots
+                    .iter()
+                    .filter(|s| s.code != 0)
+                    .filter_map(|s| {
+                        u.abilities.get(s.code).map(|a| {
+                            format!("{}{}", String::from_utf8_lossy(&s.code.to_be_bytes()), a.level_index + 1)
+                        })
+                    })
+                    .collect();
+                heroes.push(format!(
+                    "{} L{} xp {} points {} skills [{}]{}",
+                    name_of(u.type_id),
+                    h.level,
+                    h.xp,
+                    h.skill_points,
+                    skills.join(" "),
+                    if k.0 == u32::MAX { "" } else { "" }
+                ));
+                continue;
+            }
+            let is_worker = self
+                .production
+                .tech
+                .get(&u.type_id)
+                .is_some_and(|t| t.harvest_gold || t.harvest_wood);
+            *(if is_worker { &mut workers } else { &mut army }).entry(name_of(u.type_id)).or_default() += 1;
+        }
+        format!(
+            "gathered gold {} lumber {} | workers {:?} | army {:?} | heroes {:?}",
+            self.production.gold_by_player.get(&owner).copied().unwrap_or(0),
+            self.production.lumber_by_player.get(&owner).copied().unwrap_or(0),
+            workers,
+            army,
+            heroes
+        )
+    }
+
     /// The live structures of `owner` as `(type name, x, y, in progress)`, in creation order. For the boot report
     /// (`w3boot --buildings`), to check where the AI places its buildings.
     pub fn building_positions(&self, owner: u32) -> Vec<(String, f32, f32, bool)> {

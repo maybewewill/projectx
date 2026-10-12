@@ -131,6 +131,9 @@ pub struct ObjectText {
     pub item_stock: BTreeMap<u32, TypeStock>,
     /// The starting gold of `Agld` (level 1 `DataA`), when the ability table has the row.
     pub gold_mine_amount: Option<i32>,
+    /// The first level record of the harvest, mine and entangle abilities (`Ahar`, `Ahrl`, `Aaha`, `Awha`, `Abgm`,
+    /// `Aegm`, `Aenc`, `Aent`), by raw code (`docs/spec/economy-5.md`).
+    pub harvest_levels: BTreeMap<u32, gamedata::abilitytype::AbilityLevel>,
     /// The level records of the spells the cast core knows (`sim::cast`), by raw code.
     pub spell_levels: BTreeMap<u32, Vec<sim::cast::SpellLevel>>,
     /// The skill data `(levels, reqLevel, levelSkip)` of every ability row, by raw code (hero skill slots).
@@ -430,6 +433,13 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
             out.auras.insert(base, levels);
         }
     }
+    for name in HARVEST_ABILITIES {
+        if slk.row(name).is_some() {
+            if let Some(code) = raw_code(name) {
+                out.harvest_levels.insert(code, gamedata::abilitytype::read_level(&slk, name, 1));
+            }
+        }
+    }
     if slk.row(GOLD_MINE_ABILITY).is_some() {
         let level = gamedata::abilitytype::read_level(&slk, GOLD_MINE_ABILITY, 1);
         out.gold_mine_amount = Some(level.data[0] as i32);
@@ -437,6 +447,75 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
         out.notes.push(format!("{ABILITY_DATA_FILE}: no {GOLD_MINE_ABILITY} row"));
     }
     Ok(())
+}
+
+/// The ability rows the worker, mine and entangle model reads.
+const HARVEST_ABILITIES: [&str; 8] = ["Ahar", "Ahrl", "Aaha", "Awha", "Abgm", "Aegm", "Aenc", "Aent"];
+
+/// Fills the harvest numbers of the worker types (`data::install` set the modes and the ability codes), the mine specs
+/// and the entangle ability from the ability tables.
+fn install_harvest(game: &mut Game, text: &ObjectText) {
+    let level = |name: &str| raw_code(name).and_then(|c| text.harvest_levels.get(&c));
+    let codes: Vec<u32> = game.production().tech.keys().copied().collect();
+    for code in codes {
+        let t = game.production_mut().tech.get_mut(&code).expect("key");
+        let h = &mut t.harvest;
+        let abil_name = |c: u32| String::from_utf8_lossy(&c.to_be_bytes()).into_owned();
+        if h.gold_abil == raw_code("Ahar").unwrap_or(0) {
+            if let Some(l) = level("Ahar") {
+                h.gold_cap = l.data[2] as i32;
+            }
+        }
+        for c in [h.wood_abil, h.gold_abil] {
+            if c == 0 {
+                continue;
+            }
+            let name = abil_name(c);
+            let Some(l) = level(&name) else { continue };
+            match name.as_str() {
+                "Ahar" | "Ahrl" => {
+                    h.per_hit = (l.data[0] as i32).max(1);
+                    h.wood_cap = l.data[1] as i32;
+                    if name == "Ahar" {
+                        h.gold_cap = l.data[2] as i32;
+                    }
+                }
+                "Awha" => {
+                    h.renew_amount = l.data[0] as i32;
+                    h.renew_seconds = l.dur;
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = t.entangle.as_mut() {
+            if let Some(l) = level("Aent") {
+                e.rng = l.rng;
+                e.cast = l.cast;
+                if l.unit_id != 0 {
+                    e.unit = l.unit_id;
+                }
+            }
+        }
+    }
+    // The haunted and entangled mine: gold per payment `DataA`, countdown `DataB`, slots `DataC` (at most 8) of `Abgm`;
+    // the entangled mine's slots are the cargo of `Aenc` (`DataA`, UNSURE which ability gives them).
+    let mut specs = Vec::new();
+    if let Some(l) = level("Abgm") {
+        specs.push((
+            sim::ai_towns::HAUNTED_MINE,
+            sim::production::MineSpec { amount: l.data[0] as i32, interval: l.data[1], slots: (l.data[2] as i32).clamp(1, 8) },
+        ));
+    }
+    if let Some(l) = level("Aegm") {
+        let slots = level("Aenc").map_or(5, |c| c.data[0] as i32).clamp(1, 8);
+        specs.push((
+            sim::ai_towns::ENTANGLED_MINE,
+            sim::production::MineSpec { amount: l.data[0] as i32, interval: l.data[1], slots },
+        ));
+    }
+    for (code, spec) in specs {
+        game.production_mut().mine_specs.insert(code, spec);
+    }
 }
 
 /// Installs the tables into `game`. `unit_stock` is (raw code, stockMax, stockRegen) of the unit types.
@@ -484,6 +563,7 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
             game.set_attack_type(code, at);
         }
     }
+    install_harvest(game, text);
     for (&code, levels) in &text.spell_levels {
         game.set_spell_levels(code, levels.clone());
     }

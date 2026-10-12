@@ -682,3 +682,6 @@ expansions: p0 one; kills: p0 -> creeps 7, p1/p2/p3 -> creeps 2 each; again no b
    `TownThreatened` (record `+0x164`, writer not found), the path-cost unit of `0x6F4758D0`, the mega-target timer and its
    key-building branch, the `+0xB8` field of the captain record, the expansion cache timer.
 5. Wave composition after the first wave depends on the same readiness gate.
+
+## 11. S21: undead and night elf economy (2026-10-12)
+Haunted mine (acolytes gather beside it), entangled mine (wisps inside), ghoul and wisp lumber and the Graveyard drop-off are modelled; see docs/spec/economy-5.md (disassembly only, no Unicorn). Item 3 of 10.7 is closed: the four-race run on (4)TwistedMeadows now has every race gathering (0 aborted threads).

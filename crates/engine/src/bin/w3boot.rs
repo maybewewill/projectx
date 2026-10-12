@@ -206,6 +206,14 @@ fn run(argv: &[String]) -> Result<(), String> {
     {
         let shared = engine.ai().shared().borrow();
         for &(slot, _) in &args.boot.computers {
+            println!("final p{slot}: {}", engine.host().game().player_report(slot));
+            let learned: Vec<String> = shared
+                .skills_learned
+                .iter()
+                .filter(|&&(p, _, _)| p == slot)
+                .map(|&(_, _, c)| String::from_utf8_lossy(&c.to_be_bytes()).into_owned())
+                .collect();
+            println!("hero skills chosen by the callback p{slot}: {}", learned.join(" "));
             if let Some(c) = shared.control(slot) {
                 for d in &c.captains[0].departures {
                     let kinds: Vec<String> = d
