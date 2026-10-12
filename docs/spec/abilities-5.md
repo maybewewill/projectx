@@ -148,9 +148,36 @@ Stubs: the agile mana getter `0x6F4773A0` and setter `0x6F477350` (the agile obj
 helpers of the hero test. Everything else, including the soft add/sub, runs from the DLL. Tests pin the results in
 `crates/sim/tests/spell_vectors.rs` (derived values only, no game bytes).
 
-## 9. Open
+## 9. Wiring to buffs
+
+The spell system integrates with the unit buff lifecycle as follows:
+
+* **Stun buff (Storm Bolt impact)**: When a stun buff is applied via `add_spell_buff(unit, BUFF_STUN, BuffEffect::Stun, dur)`:
+  - The buff is added to the unit's buff list (via `add_buff`)
+  - The stun counter `bonuses.stun` is incremented (CONFIRMED implementation)
+  - The `BuffEffect::Stun` variant is stored in the spell system for tracking
+  - When the buff expires or is manually removed via `drop_spell_buff()`, the stun counter is decremented
+  - Unit movement and attacks are blocked while `is_stunned()` returns true (checked by `is_spell_stunned()`)
+
+* **Slow buff (Slow spell cast)**: When a slow buff is applied via `add_spell_buff(unit, BUFF_SLOW, BuffEffect::Slow{move_delta, attack_delta}, dur)`:
+  - The buff is added to the unit's buff list
+  - The speed modifier is applied via `refresh_slow()` which recomputes movement speed based on active slows
+  - The `BuffEffect::Slow` with both deltas is stored in the spell system
+  - `move_delta` (typically negative) is used to calculate the new speed: `base_speed * (1.0 + move_delta)`
+  - `attack_delta` (negative for slows) is stored but not yet used by the attack cycle (UNSURE per buffs.md)
+  - When the buff expires, `refresh_slow()` recalculates speed and removes the slow factor
+  - Multiple slow buffs use the strongest factor (lowest delta)
+
+* **Duration and refresh**: Both buff types use the spell system's timer management:
+  - Duration timers run on the agile clock (`Payload::Spell(SpellMsg::BuffEnd{unit, serial})`)
+  - Expiry removes the buff from the unit's list and triggers `drop_spell_buff()` cleanup
+  - The never-shorten duration rule is NOT yet implemented for spell buffs (UNSURE: whether needed)
+
+## 10. Open
 
 * The sources and writers of `+0x84`, `+0x8C`, `+0x94`, `+0x9C`, `+0x44`.
 * The cast/channel/effect delays against real castpt/Cast data (no real-map run was made).
 * The order id table (`+0xAC`) of the real ability rows, the buff creator and stacking, the missile flight.
 * The dispatcher of `0xD0148..0xD014E` / `0xD0160` notifications posted by `0x6F074080` (presentation: animation start).
+* Whether spell buff stacking on a second cast (replace vs. accumulate) matches the original (the model replaces, UNSURE).
+* Whether the slow buff's attack speed factor should be applied to the attack cycle (currently stored only).

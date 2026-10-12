@@ -174,7 +174,7 @@ struct Missile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum BuffEffect {
+pub enum BuffEffect {
     Stun,
     /// The move speed delta (negative slows) and the attack speed delta (stored only).
     Slow { move_delta: F32, attack_delta: F32 },
@@ -426,8 +426,8 @@ impl Game {
     }
 
     /// Adds a spell buff: replaces a buff of the same code from an earlier cast (UNSURE: stacking), arms the
-    /// expiry timer when `dur > 0`.
-    fn add_spell_buff(&mut self, unit: ObjKey, code: u32, effect: BuffEffect, dur: F32) {
+    /// expiry timer when `dur > 0`. For stun buffs, increments the stun counter.
+    pub fn add_spell_buff(&mut self, unit: ObjKey, code: u32, effect: BuffEffect, dur: F32) -> u32 {
         let old: Vec<u32> = self
             .spells
             .buffs
@@ -439,7 +439,7 @@ impl Game {
             self.drop_spell_buff(s);
         }
         if !arith::lt(F32::ZERO, dur) {
-            return;
+            return 0;
         }
         let serial = self.add_buff(unit, code, buff_predicates(code));
         let timer = self.timers.start(
@@ -456,15 +456,24 @@ impl Game {
                 code,
             },
         );
+        // Apply stun effect: increment stun counter
+        if code == BUFF_STUN {
+            self.unit_mut(unit).bonuses.stun += 1;
+        }
         self.refresh_slow(unit);
+        serial
     }
 
-    fn drop_spell_buff(&mut self, serial: u32) {
+    pub fn drop_spell_buff(&mut self, serial: u32) {
         let Some(b) = self.spells.buffs.remove(&serial) else {
             return;
         };
         if let Some(t) = b.timer {
             self.timers.cancel(t);
+        }
+        // Remove stun effect: decrement stun counter
+        if b.code == BUFF_STUN {
+            self.unit_mut(b.unit).bonuses.stun = self.unit(b.unit).bonuses.stun.saturating_sub(1);
         }
         self.unit_mut(b.unit).buffs.retain(|x| x.serial != serial);
         self.refresh_slow(b.unit);
