@@ -416,6 +416,7 @@ async fn render_ui_async(
 
     let ui_gpu = crate::ui::gpu::UiGpu::new(
         &device,
+        &queue,
         FORMAT,
         &uniform_layout,
         &texture_layout,

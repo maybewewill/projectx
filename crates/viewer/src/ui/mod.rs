@@ -31,10 +31,21 @@ impl UiScene {
         let fdf_bytes = load_from_mpq(file_name, archive_sources)?;
         let fdf_text = String::from_utf8(fdf_bytes).map_err(|e| e.to_string())?;
 
+        // Normalize backslashes to forward slashes in the FDF text
+        let fdf_text = fdf_text.replace('\\', "/");
+
         // Build library from the FDF text
         let mut library = fdf::Library::new();
+
+        // Create a loader that can load files from MPQ
+        let mut loader = |path: &str| -> Option<String> {
+            let bytes = load_from_mpq(path, archive_sources).ok()?;
+            let text = String::from_utf8(bytes).ok()?;
+            Some(text.replace('\\', "/"))
+        };
+
         library
-            .load_source("<mpq>", &fdf_text, &mut |_path| None)
+            .load_source("<mpq>", &fdf_text, &mut loader)
             .map_err(|e| format!("Failed to build library: {e:?}"))?;
 
         // Find the first root frame
@@ -83,17 +94,20 @@ impl UiScene {
 
 /// Loads a file from the MPQ archives (last archive wins if file is in multiple).
 fn load_from_mpq(file_name: &str, archives: &[&[u8]]) -> Result<Vec<u8>, String> {
+    // Normalize path separators to backslashes (MPQ standard)
+    let normalized = file_name.replace('/', "\\");
+
     for archive_bytes in archives.iter().rev() {
         if let Ok(mpq_arch) = mpq::Archive::open(archive_bytes) {
             // Try to read the file directly first
-            if let Ok(data) = mpq_arch.read(file_name) {
+            if let Ok(data) = mpq_arch.read(&normalized) {
                 return Ok(data);
             }
 
             // If not found, try case-insensitive search via listfile
             if let Ok(entries) = mpq_arch.listfile() {
                 for entry in entries {
-                    if entry.eq_ignore_ascii_case(file_name) {
+                    if entry.eq_ignore_ascii_case(&normalized) {
                         return mpq_arch
                             .read(&entry)
                             .map_err(|e| format!("Cannot read {}: {}", file_name, e));

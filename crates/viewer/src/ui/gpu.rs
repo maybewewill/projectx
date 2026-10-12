@@ -23,6 +23,12 @@ pub struct UiGpu {
     index_buffers: HashMap<String, wgpu::Buffer>,
     /// Index counts for each texture.
     index_counts: HashMap<String, u32>,
+    /// Textures kept alive during rendering.
+    _textures: HashMap<String, wgpu::Texture>,
+    /// Texture views for each texture.
+    texture_views: HashMap<String, wgpu::TextureView>,
+    /// Samplers for each texture.
+    _samplers: HashMap<String, wgpu::Sampler>,
     /// Bind groups for each texture.
     bind_groups: HashMap<String, wgpu::BindGroup>,
     /// Pipeline for rendering UI quads.
@@ -33,6 +39,7 @@ impl UiGpu {
     /// Creates GPU data for rendering the UI scene.
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         uniform_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
@@ -137,10 +144,81 @@ impl UiGpu {
             }
         }
 
-        // Note: wgpu texture creation with persistence is complex. For now, we skip texture
-        // binding and use a placeholder. TODO: implement persistent texture storage.
-        let bind_groups = HashMap::new();
-        // Empty for now - textures would be stored in a more persistent structure
+        // Create textures, views, samplers, and bind groups
+        let mut _textures = HashMap::new();
+        let mut texture_views = HashMap::new();
+        let mut _samplers = HashMap::new();
+        let mut bind_groups = HashMap::new();
+
+        for (tex_name, texture_data) in &ui_scene.textures {
+            // Create wgpu texture
+            let wgpu_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("ui texture {}", tex_name)),
+                size: wgpu::Extent3d {
+                    width: texture_data.width,
+                    height: texture_data.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &wgpu_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &texture_data.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * texture_data.width),
+                    rows_per_image: Some(texture_data.height),
+                },
+                wgpu::Extent3d {
+                    width: texture_data.width,
+                    height: texture_data.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            let view = wgpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(&format!("ui sampler {}", tex_name)),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                ..Default::default()
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("ui bind group {}", tex_name)),
+                layout: texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+
+            texture_views.insert(tex_name.clone(), view);
+            _samplers.insert(tex_name.clone(), sampler);
+            bind_groups.insert(tex_name.clone(), bind_group);
+            _textures.insert(tex_name.clone(), wgpu_texture);
+        }
 
         // Create render pipeline
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -204,6 +282,9 @@ impl UiGpu {
             vertex_buffers,
             index_buffers,
             index_counts,
+            _textures,
+            texture_views,
+            _samplers,
             bind_groups,
             pipeline,
         })
