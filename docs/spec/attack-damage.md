@@ -592,3 +592,58 @@ from Game.dll is written into the repository: the harnesses print only counts an
 3. Missile impacts (weapTp 2, 3, 5..8): the atkType carried by the attack-info object and the impact's own evasion check
    (`0x6F2BEAC0` with a missile object, which also runs the `ChanceToMiss` roll, `CMissile.cpp`). Not run.
 4. Chance field name (12.4) and the definition loader `0x6F265ED0`.
+
+### 12.7 Evasion wired: whose list, which slots (S7, 2026-10-12)
+
+Corrects 12.3 and 11.7. The earlier notes read the `CAbilityEvasion` vtable at `0x6F89D628`; the RTTI complete-object
+locator sits at `-4` from the real start, which is **`0x6F89D62C`** (4 bytes higher). Every slot number given before for
+this class is one dword too high.
+
+- **CONFIRMED vtable slots of `CAbilityEvasion`** (start `0x6F89D62C`): `0x158` = score `0x6F08BDA0` (out, a, b;
+  `ret 0xC`), `0x164` = EvadeAttack `0x6F08BD20` (`ret 8`), slot `0x268` (enabled) = `0x6F052C30`, slot `0x1C` (code) =
+  `'AEev'`. The base class defaults are `0x6F0524B0..` (score writes 0.0) and `0x6F0524E0` (returns 0).
+- **Gate `0x6F2BEAC0`** (ECX = attacker = the attack ability's owner, EDX = target, stack: a3 = missile flag or 0,
+  a4 = flags & 0x400, must be 0). Two walks:
+  - **Walk A** `0x6F077360` via `0x6F2BEA20`: `this` = the **TARGET** (the helper builds a smart pointer from EDX), the
+    arguments are (attacker, a3). Scores with slot `0x158`, executes the best with slot `0x164`. **This is where `AEev` is
+    found: the evading unit's own list.**
+  - **Walk B** `0x6F077420` via `0x6F2BB960`: `this` = the **ATTACKER**, arguments (target, a3), slots `0x15C` / `0x168`.
+    Classes that implement them: `CBuffCurse` (`0x6F89D97C`: `0x6F07F8A0` / `0x6F07F850`), `CBuffSilence`,
+    `CBuffDrunkenHaze`, `CBuffCloudOfFog` (`0x6F1D5E20` / `0x6F1D5DD0`): the miss-the-target abilities of the attacker.
+    Not modelled.
+  - Walk rule (both): the list is the chain of ability pointers reached from the unit's head pair `unit+0x1DC` (index) /
+    `+0x1E0` (key) through `0x6F4786B0` -> `0x6F03FA30` (table entry marker `-2`, `entry+0x18` must equal the key, a
+    removed flag at `entry+0x20` ends the walk, ability = `entry+0x54`); the next link is at `ability+0x24/+0x28`; a pair
+    whose AND is `-1` ends the list. The best score starts at `0.0` and is replaced when `best < score` or the compare is
+    unordered (NaN), so the first of equal scores wins and a score of 0 or less never selects. The selected entry's
+    execute slot runs; its result is the walk's.
+  - After A and B fail: with a3 == 0 (the direct paths) the gate returns 0. With a3 != 0 (missiles) it goes on to the
+    `ChanceToMiss` branch: **one draw on stream 2** (`0x6F2853D0`) is taken whenever it is reached, compared with the
+    Misc `ChanceToMiss` value, plus an unresolved height/level comparison. **Not modelled** (open, see below).
+- **Unicorn** (`tools/emu/evasion_gate_emu.py`): the gate `0x6F2BEAC0` runs for real with the real iterator, the real
+  `CAbilityEvasion` vtable (only slot `0x268` replaced by a stub that returns 1 or 0), a hand-built agent table, and
+  random ability lists on both units (up to 4 entries, stale keys, removed entries, wrong table markers, count gate,
+  disabled entries, chance bit patterns including NaN/inf/-0, levels outside the table, definitions without the data
+  flag). The Python model (A-walk selection and the strict `chance > draw` rule) matched in **700 of 700** cases (76
+  evasions, 155 draws); entries in the attacker's list were never selected (they fall on the base defaults of the B slots).
+- **Draw value CONFIRMED**: `0x6F2853D0` with the runtime constants 0.0 / 1.0 returns exactly the fraction of
+  `random_fraction` (`tools/emu/test_streamreal3.py`: 150 of 150 for the (0,1) case, the real configuration).
+- **Chance field**: `0x6F02E9E0` reads the level record at `+0x20` = **DataA** (Unicorn-checked earlier). The classes
+  `CAbilityCriticalStrike` (`'AOcr'`), `CAbilityDrunkenBrawler` (`'ANdb'`) and `CAbilityBash` (`'AHbh'`) share the same
+  slot pair (their EvadeAttack is `0x6F1A34C0`; its assert text says `CAbilityCriticalStrike::EvadeAttack`) but read
+  `0x6F02EB30`, i.e. **DataD** (`+0x2C`). Whether DataD is ever non-zero for them in 1.26a data is not checked, so they
+  are not wired (UNSURE): with a non-zero DataD they would evade like `AEev`.
+- **Not decoded**: the enabled slot `0x268` (`0x6F052C30`: handle valid, `vf480 || vf484 || no definition` gives 1, else
+  a requirement check `0x6F40FB70`), the count `+0x3C` (what increments it), the list insertion order (does not change
+  the result: ties select the same chance), the effect `0x6F052FB0` (presentation).
+- **Code**: `sim::damage::evasion_select` (A-walk selection), `Game::evasion_check` in `combat.rs` (`AEev` abilities of
+  the target, chance = `SpellLevel.data[0]`, one stream-2 draw only when something is selected), called in
+  `fire_execute` right after the dice for both instant and missile attacks. The loader (`engine::objdata`) reads the
+  `AEev` level records from AbilityData.slk. Tests: `crates/sim/tests/evasion_gate.rs` (behaviour on known seeds, needs
+  `GAME_DLL`).
+- **LIKELY / UNSURE**: that an evaded missile deals no damage (the original runs the gate in the launch function
+  `0x6F2C3F70` and scales the flight's damage by `MissDamageReduction`; only the weapTp "missile" case is decompiled, the
+  other missile types launch through virtual calls); the enabled slot is taken as always true; the count as 0.
+- **Open**: (1) the `ChanceToMiss` branch for missiles (a stream-2 draw per launch that reaches it: the sim takes none,
+  so stream 2 is out of step for ranged attacks); (2) the attacker-side walk B classes (Curse and friends); (3) the
+  DataD classes; (4) crit/bash consumers elsewhere (their damage-side use is not in this gate).

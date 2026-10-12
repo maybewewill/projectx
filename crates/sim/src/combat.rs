@@ -620,6 +620,13 @@ impl Game {
         }
         let ty = self.attack_type_of(unit);
         let damage = self.roll_damage(unit, target, &ty);
+        // Order CONFIRMED (execute `0x6F0CF660`): the dice first, then the miss gate; an evaded attack stops before
+        // the target routine. For missiles the gate runs at launch too (`0x6F2C3F70` calls it before the flight);
+        // that an evaded missile deals no direct damage is UNSURE (the original scales the flight's damage by
+        // MissDamageReduction, not modelled).
+        if self.evasion_check(target) {
+            return None;
+        }
         match ty.missile_speed {
             None => self.apply_damage(target, damage),
             Some(speed) => {
@@ -695,6 +702,36 @@ impl Game {
     /// enemy of itself). Neutral players are enemies by default (UNSURE).
     pub(crate) fn is_enemy(&self, p: u32, q: u32) -> bool {
         p != q && self.player(p).alliances[ALLIANCE_PASSIVE] & (1 << q) == 0
+    }
+
+    /// The miss gate of the execute (`0x6F2BEAC0`, spec `attack-damage.md` section 12.3): the evasion abilities
+    /// (`AEev`) in the TARGET's ability list are scored in list order, the best one is selected and rolls on combat
+    /// stream 2 (one draw, `chance > draw` evades). Returns whether the attack is evaded. No draw is made when no
+    /// entry scores above zero. The count gate (`+0x3C`) and the enabled slot (`0x268`) are modelled as "open"
+    /// (UNSURE: their inputs are not in the model). The attacker's own list is the other walk (curse-like
+    /// abilities, `BuffCurse`/`DrunkenHaze` classes), not modelled.
+    fn evasion_check(&mut self, target: ObjKey) -> bool {
+        let scores: Vec<F32> = self
+            .unit(target)
+            .abilities
+            .iter()
+            .filter(|a| a.base == crate::abilities::EVASION && !a.is_removed())
+            // The chance is the level record's DataA (`+0x20`, `0x6F02E9E0`); a level outside the table gives 0.0.
+            .map(|a| {
+                self.ability_level_record(target, a.base)
+                    .map_or(F32::ZERO, |record| record.data[0])
+            })
+            .collect();
+        let Some(chance) = crate::damage::evasion_select(scores) else {
+            return false;
+        };
+        let Some((table, streams)) = self.rng_parts() else {
+            return false;
+        };
+        let draw = streams
+            .stream_mut(crate::damage::EVASION_STREAM)
+            .random_fraction(table);
+        crate::damage::evades(chance, draw)
     }
 
     /// The damage of one execute, through the installed model.

@@ -16,8 +16,8 @@
 //! critical, bash and the other abilities; their list walk is not in [`target_side_amount`]), the target's counters
 //! and flags (the model uses zero), and the Gaussian dice path above 16 dice (its constants are UNSURE;
 //! [`SpecDamage`] falls back to the weapon's placeholder value there). The evasion decision ([`evades`]) and the
-//! chance table ([`evasion_chance`]) are implemented, but not consulted by [`SpecDamage`]: which unit's abilities
-//! the original's miss gate walks is not decoded (spec section 12.3).
+//! chance table ([`evasion_chance`]) are implemented; the miss gate that consults them (the target's `AEev` abilities,
+//! [`evasion_select`]) runs in `combat.rs` after the dice, not inside [`SpecDamage`] (spec section 12.7).
 //!
 //! The 21-entry negative-armor table at `0x6FAB4300` is in BSS: its values are written by a start-up initialiser
 //! (`0x6F85A4C0`, see `docs/spec/attack-damage.md` section 5.1), so a file read cannot see them.
@@ -473,6 +473,27 @@ pub fn evades(chance: F32, draw: F32) -> bool {
     // Evades unless the chance is less than or equal to the draw. `partial_cmp` is `None` for NaN, which evades.
     let order = f32::from_bits(chance.to_bits()).partial_cmp(&f32::from_bits(draw.to_bits()));
     !matches!(order, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal))
+}
+
+/// The best-of selection of the target walk `0x6F077360` (CONFIRMED, `tools/emu/evasion_gate_emu.py`: 700 random lists
+/// through the real iterator and the real `CAbilityEvasion` vtable, 0 mismatches): over the target's ability list in
+/// order, each entry's score (slot `0x158` = `0x6F08BDA0`: `0.0` when the count `+0x3C` is above zero or the enabled
+/// slot `0x268` says no, else the chance of [`evasion_chance`]) is compared with the best so far, which starts at
+/// `0.0`; an entry replaces the best when `best < score` or the compare is unordered (NaN), so the first of equal
+/// scores wins and a score of `0.0` or less never selects. Returns the selected entry's score (its chance), or `None`
+/// when nothing was selected (no draw is made then).
+pub fn evasion_select(scores: impl IntoIterator<Item = F32>) -> Option<F32> {
+    let mut best = 0.0f32;
+    let mut picked = None;
+    for score in scores {
+        let s = f32::from_bits(score.to_bits());
+        // x87 `fcompp` + `test ah,1`: C0 is set for best < score and for unordered operands.
+        if !(best >= s) {
+            best = s;
+            picked = Some(score);
+        }
+    }
+    picked
 }
 
 /// The evasion chance of one level (`0x6F02E9E0`, CONFIRMED by Unicorn: 100 cases, 0 mismatches): the float stored at
