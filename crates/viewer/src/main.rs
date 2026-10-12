@@ -240,6 +240,17 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     for path in objects.missing_paths.iter().take(8) {
         eprintln!("viewer: object model not found: {path}");
     }
+    let mut by_blend = std::collections::BTreeMap::new();
+    for batch in &terrain.props.batches {
+        *by_blend.entry(format!("{:?}", batch.blend)).or_insert(0usize) += batch.mesh.indices.len() / 3;
+    }
+    eprintln!("viewer: prop triangles by blend mode: {by_blend:?}");
+    eprintln!(
+        "viewer: prop textures: {} read, {} missing{}",
+        terrain.props.textures.len(),
+        terrain.props.missing_textures.len(),
+        if terrain.props.missing_textures.is_empty() { String::new() } else { format!(" (first: {})", terrain.props.missing_textures[0]) }
+    );
     for note in &placements.notes {
         eprintln!("viewer: objects: note: {note}");
     }

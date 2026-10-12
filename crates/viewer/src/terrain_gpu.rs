@@ -11,7 +11,7 @@
 use bytemuck::cast_slice;
 use wgpu::util::DeviceExt;
 
-use crate::props::PropScene;
+use crate::props::{PropBlend, PropScene};
 use crate::scene::TextureData;
 use crate::terrain::{Atlas, Mesh, TerrainMesh, TerrainVertex};
 
@@ -115,7 +115,11 @@ impl GpuMesh {
 pub(crate) struct TerrainGpu {
     ground: wgpu::RenderPipeline,
     cliffs: wgpu::RenderPipeline,
-    props: wgpu::RenderPipeline,
+    /// Prop pipelines, one per [`PropBlend`].
+    props_opaque: wgpu::RenderPipeline,
+    props_cutout: wgpu::RenderPipeline,
+    props_alpha: wgpu::RenderPipeline,
+    props_additive: wgpu::RenderPipeline,
     overlays: wgpu::RenderPipeline,
     water: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
@@ -127,8 +131,8 @@ pub(crate) struct TerrainGpu {
 struct Content {
     ground: Option<GpuMesh>,
     cliffs: Option<GpuMesh>,
-    /// One draw per prop batch: its texture's bind group and its mesh.
-    props: Vec<(wgpu::BindGroup, GpuMesh)>,
+    /// One draw per prop batch, in draw order: blend mode, its texture's bind group and its mesh.
+    props: Vec<(PropBlend, wgpu::BindGroup, GpuMesh)>,
     overlays: Option<GpuMesh>,
     water: Option<GpuMesh>,
     atlas: wgpu::BindGroup,
@@ -219,11 +223,45 @@ impl TerrainGpu {
             true,
             wgpu::CompareFunction::Less,
         );
-        let props = make(
-            "terrain props",
+        // Props: opaque and cut-out write depth; blended and additive read it only.
+        let additive = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let props_opaque = make(
+            "terrain props opaque",
+            "fs_model_opaque",
+            opaque,
+            true,
+            wgpu::CompareFunction::Less,
+        );
+        let props_cutout = make(
+            "terrain props cutout",
             "fs_model",
             opaque,
             true,
+            wgpu::CompareFunction::Less,
+        );
+        let props_alpha = make(
+            "terrain props alpha",
+            "fs_model_alpha",
+            alpha,
+            false,
+            wgpu::CompareFunction::Less,
+        );
+        let props_additive = make(
+            "terrain props additive",
+            "fs_model_add",
+            additive,
+            false,
             wgpu::CompareFunction::Less,
         );
         let overlays = make(
@@ -264,7 +302,10 @@ impl TerrainGpu {
         TerrainGpu {
             ground,
             cliffs,
-            props,
+            props_opaque,
+            props_cutout,
+            props_alpha,
+            props_additive,
             overlays,
             water,
             sampler,
@@ -283,13 +324,14 @@ impl TerrainGpu {
         atlas: &Atlas,
         props: &PropScene,
     ) {
+        // `props.batches` is already in draw order (see `PropScene::sort_back_to_front`).
         let prop_draws = props
             .batches
             .iter()
             .filter_map(|batch| {
                 let texture = props.textures.get(batch.texture)?;
                 let bind = texture_bind_group(device, queue, texture_layout, &self.prop_sampler, texture);
-                Some((bind, GpuMesh::new(device, "terrain prop", &batch.mesh)?))
+                Some((batch.blend, bind, GpuMesh::new(device, "terrain prop", &batch.mesh)?))
             })
             .collect();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -367,8 +409,13 @@ impl TerrainGpu {
             mesh.draw(pass);
         }
         if !content.props.is_empty() {
-            pass.set_pipeline(&self.props);
-            for (bind, mesh) in &content.props {
+            for (blend, bind, mesh) in &content.props {
+                pass.set_pipeline(match blend {
+                    PropBlend::Opaque => &self.props_opaque,
+                    PropBlend::Cutout => &self.props_cutout,
+                    PropBlend::Alpha => &self.props_alpha,
+                    PropBlend::Additive => &self.props_additive,
+                });
                 pass.set_bind_group(1, bind, &[]);
                 mesh.draw(pass);
             }

@@ -21,7 +21,8 @@ use gamedata::Slk;
 use mdx::Model;
 
 use crate::cliff_render::{lambert, PlacedTriangle};
-use crate::props::PropBuilder;
+use crate::model::draw::BlendMode;
+use crate::props::{PropBlend, PropBuilder};
 use crate::terrain_objects::ground_at;
 use raster::{Canvas, View, CLASS_DOODAD, CLASS_UNIT};
 
@@ -64,11 +65,38 @@ impl<'a> Archives<'a> {
     }
 }
 
-/// Type id to model path, from the SLK tables.
+/// The model of one type id, from its SLK row.
+///
+/// Doodads and destructables name a model family, not a file: the file of a placement is
+/// `file` + its variation index + `.mdx` (`Doodads\Ruins\Plants\VinyPlant\VinyPlant` with
+/// variation 2 is `VinyPlant2.mdx`). The `numVar` column bounds the index; like the game, an
+/// index past the last variation uses the last one. Unit types name the file itself.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelType {
+    /// The `file` column, with backslashes and no extension.
+    pub file: String,
+    /// The `numVar` column (0 when absent: the file is used as it is).
+    pub num_var: u32,
+    /// The `texFile` column of destructables: the texture of replaceable texture ids 31 and up.
+    pub tex_file: Option<String>,
+}
+
+impl ModelType {
+    /// The archive path of the model for a placement's variation index.
+    pub fn path_for(&self, variation: u32) -> String {
+        if self.num_var == 0 {
+            return self.file.clone();
+        }
+        let index = variation.min(self.num_var - 1);
+        format!("{}{index}", self.file)
+    }
+}
+
+/// Type id to model, from the SLK tables.
 #[derive(Default)]
 pub struct Catalog {
-    pub doodads: HashMap<[u8; 4], String>,
-    pub units: HashMap<[u8; 4], String>,
+    pub doodads: HashMap<[u8; 4], ModelType>,
+    pub units: HashMap<[u8; 4], ModelType>,
     pub notes: Vec<String>,
 }
 
@@ -81,8 +109,9 @@ fn clean_path(text: &str) -> String {
     text.trim().trim_matches('"').replace('/', "\\")
 }
 
-/// Reads the `file` column of one SLK table into a type-id map; missing files are notes.
-fn load_table(archives: &Archives<'_>, name: &str, out: &mut HashMap<[u8; 4], String>, notes: &mut Vec<String>) {
+/// Reads the `file` column (and `numVar`, `texFile`) of one SLK table into a type-id map;
+/// missing files are notes.
+fn load_table(archives: &Archives<'_>, name: &str, out: &mut HashMap<[u8; 4], ModelType>, notes: &mut Vec<String>) {
     let Some(bytes) = archives.read(name) else {
         notes.push(format!("{name} not found in the archives"));
         return;
@@ -92,10 +121,13 @@ fn load_table(archives: &Archives<'_>, name: &str, out: &mut HashMap<[u8; 4], St
             for row in slk.rows() {
                 let Some(code) = raw_code(row.key()) else { continue };
                 let Some(file) = row.raw("file") else { continue };
-                let path = clean_path(file);
-                if !path.is_empty() {
-                    out.insert(code, path);
+                let file = clean_path(file);
+                if file.is_empty() {
+                    continue;
                 }
+                let num_var = row.raw("numVar").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+                let tex_file = row.raw("texFile").map(clean_path).filter(|t| !t.is_empty());
+                out.insert(code, ModelType { file, num_var, tex_file });
             }
         }
         Err(e) => notes.push(format!("{name}: {e}")),
@@ -131,6 +163,8 @@ pub struct Instance {
     pub scale: [f32; 3],
     /// Owner player slot (units only).
     pub player: Option<u32>,
+    /// Texture of replaceable texture ids 31 and up (destructables: their `texFile`).
+    pub texture: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -159,15 +193,16 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
                 stats.doodads_parsed = doo.doodads.len();
                 for d in &doo.doodads {
                     match catalog.doodads.get(&d.id) {
-                        Some(model) => {
+                        Some(ty) => {
                             stats.doodads_with_model += 1;
                             instances.push(Instance {
                                 kind: Kind::Doodad,
-                                model: model.clone(),
+                                model: ty.path_for(d.variation),
                                 position: d.position,
                                 angle: d.angle,
                                 scale: d.scale,
                                 player: None,
+                                texture: ty.tex_file.clone(),
                             });
                         }
                         None => *unmodelled.entry(code_text(&d.id)).or_insert(0) += 1,
@@ -183,15 +218,16 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
                 stats.units_parsed = units.units.len();
                 for u in &units.units {
                     match catalog.units.get(&u.id) {
-                        Some(model) => {
+                        Some(ty) => {
                             stats.units_with_model += 1;
                             instances.push(Instance {
                                 kind: Kind::Unit,
-                                model: model.clone(),
+                                model: ty.path_for(u.variation),
                                 position: u.position,
                                 angle: u.angle,
                                 scale: u.scale,
                                 player: Some(u.player),
+                                texture: None,
                             });
                         }
                         None => *unmodelled.entry(code_text(&u.id)).or_insert(0) += 1,
@@ -345,12 +381,33 @@ pub struct PlaceStats {
     pub textured_triangles: usize,
 }
 
-/// Texture path of a geoset: the bitmap of its material's first layer. Replaceable textures
-/// (team colour, tree shadow, ...) have no file here and give `None`.
-fn geoset_texture(model: &Model, geoset: &mdx::Geoset) -> Option<String> {
-    let layer = model.materials.get(geoset.material_id as usize)?.layers.first()?;
+/// The first layer of a geoset's material: the texture and filter mode the geoset draws with.
+fn geoset_layer(model: &Model, geoset: &mdx::Geoset) -> Option<mdx::Layer> {
+    model.materials.get(geoset.material_id as usize)?.layers.first().cloned()
+}
+
+/// Texture path of a geoset's first layer. Replaceable ids: 1 is the team colour and 2 the team
+/// glow (`ReplaceableTextures\TeamColor\TeamColorNN.blp` and `...\TeamGlow\TeamGlowNN.blp`, NN the
+/// player slot, 0 for objects without an owner); 31 and up are the instance's own texture (a
+/// destructable's `texFile`). Other replaceable ids give `None`.
+fn geoset_texture(model: &Model, layer: &mdx::Layer, inst: &Instance) -> Option<String> {
     let texture = model.textures.get(layer.texture_id as usize)?;
-    (texture.replaceable_id == 0 && !texture.path.is_empty()).then(|| texture.path.clone())
+    if texture.replaceable_id == 0 {
+        return (!texture.path.is_empty()).then(|| texture.path.clone());
+    }
+    replaceable_path(texture.replaceable_id, inst.player.unwrap_or(0), inst.texture.as_deref())
+}
+
+/// The archive path that replaceable texture `id` stands for, for the player slot `player`
+/// (team colour and glow) or the instance's own texture (`instance_texture`, ids 31 and up).
+fn replaceable_path(id: u32, player: u32, instance_texture: Option<&str>) -> Option<String> {
+    let slot = player.min(11);
+    match id {
+        1 => Some(format!("ReplaceableTextures\\TeamColor\\TeamColor{slot:02}.blp")),
+        2 => Some(format!("ReplaceableTextures\\TeamGlow\\TeamGlow{slot:02}.blp")),
+        31.. => instance_texture.map(str::to_string),
+        _ => None,
+    }
 }
 
 /// Places every instance on the terrain: its triangles go to `props`, lifted onto the ground
@@ -376,6 +433,9 @@ pub fn place_on_terrain(
                 .iter()
                 .enumerate()
                 .map(|(i, g)| {
+                    let layer = geoset_layer(model, g);
+                    let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                    let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
                     let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
                     let tris = g
                         .triangles()
@@ -392,7 +452,7 @@ pub fn place_on_terrain(
                         Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
                     };
                     let tint = tint.map(|c| f32::from(c) / 255.0);
-                    (geoset_texture(model, g), tris, tint)
+                    (texture, blend, tris, tint)
                 })
                 .collect()
         });
@@ -404,7 +464,7 @@ pub fn place_on_terrain(
         };
         used.insert(inst.model.clone());
         stats.placed += 1;
-        for (path, tris, tint) in geosets {
+        for (path, blend, tris, tint) in geosets {
             let texture = path.as_deref().and_then(|p| props.texture(p));
             for (positions, uvs) in tris {
                 let k = lambert(&positions);
@@ -419,7 +479,7 @@ pub fn place_on_terrain(
                     cell: [0.0, 0.0, 1.0, 1.0],
                     color: colour,
                 };
-                props.push(texture, [vertex(0), vertex(1), vertex(2)]);
+                props.push_blend(texture, blend, [vertex(0), vertex(1), vertex(2)]);
                 stats.triangles += 1;
                 if texture.is_some() {
                     stats.textured_triangles += 1;
@@ -462,8 +522,8 @@ fn push_marker(
     stats.markers += 1;
 }
 
-/// One geoset of a placed instance: texture path, world-space triangles and flat tint.
-type PlacedGeoset = (Option<String>, Vec<PlacedTriangle>, [f32; 3]);
+/// One geoset of a placed instance: texture path, draw mode, world-space triangles and flat tint.
+type PlacedGeoset = (Option<String>, PropBlend, Vec<PlacedTriangle>, [f32; 3]);
 
 /// Renders the instances into an RGB canvas. Returns the canvas and a report.
 pub fn render(instances: &[Instance], archives: &Archives<'_>, width: usize, height: usize) -> (Canvas, RenderReport) {
@@ -599,7 +659,60 @@ mod tests {
             angle,
             scale,
             player: None,
+            texture: None,
         }
+    }
+
+    #[test]
+    fn replaceable_textures_resolve_per_player_and_per_instance() {
+        assert_eq!(
+            replaceable_path(1, 3, None).as_deref(),
+            Some("ReplaceableTextures\\TeamColor\\TeamColor03.blp")
+        );
+        assert_eq!(
+            replaceable_path(2, 11, None).as_deref(),
+            Some("ReplaceableTextures\\TeamGlow\\TeamGlow11.blp")
+        );
+        assert_eq!(
+            replaceable_path(1, 40, None).as_deref(),
+            Some("ReplaceableTextures\\TeamColor\\TeamColor11.blp"),
+            "slot clamped"
+        );
+        assert_eq!(replaceable_path(31, 0, Some("Textures\\Tree.blp")).as_deref(), Some("Textures\\Tree.blp"));
+        assert_eq!(replaceable_path(31, 0, None), None, "no destructable texture");
+        assert_eq!(replaceable_path(7, 0, Some("x")), None);
+    }
+
+    #[test]
+    fn doodad_model_path_takes_the_placement_variation() {
+        // Doodads.slk names the family; the placement's variation picks the file (numVar bounds it).
+        let rock = ModelType {
+            file: "Doodads\\Ruins\\Rocks\\Ruins_Rock\\Ruins_Rock".into(),
+            num_var: 6,
+            tex_file: None,
+        };
+        assert_eq!(rock.path_for(0), "Doodads\\Ruins\\Rocks\\Ruins_Rock\\Ruins_Rock0");
+        assert_eq!(rock.path_for(5), "Doodads\\Ruins\\Rocks\\Ruins_Rock\\Ruins_Rock5");
+        assert_eq!(rock.path_for(9), "Doodads\\Ruins\\Rocks\\Ruins_Rock\\Ruins_Rock5", "past numVar uses the last");
+        // Without numVar the file is used as it is (unit types name their file).
+        let unit = ModelType {
+            file: "Units\\Human\\Footman\\Footman.mdl".into(),
+            num_var: 0,
+            tex_file: None,
+        };
+        assert_eq!(unit.path_for(3), "Units\\Human\\Footman\\Footman.mdl");
+    }
+
+    #[test]
+    fn slk_rows_give_file_numvar_and_texture() {
+        let text = "ID;PWXL;N;E\nC;X1;Y1;K\"doodID\"\nC;X2;Y1;K\"file\"\nC;X3;Y1;K\"numVar\"\nC;X4;Y1;K\"texFile\"\n\
+C;X1;Y2;K\"VinP\"\nC;X2;Y2;K\"Doodads\\Ruins\\Plants\\VinyPlant\\VinyPlant\"\nC;X3;Y2;K4\n\
+E\n";
+        let slk = Slk::parse_bytes(text.as_bytes()).expect("slk");
+        let row = slk.rows().next().expect("row");
+        assert_eq!(row.key(), "VinP");
+        assert_eq!(row.raw("numVar").map(str::trim), Some("4"));
+        assert_eq!(clean_path(row.raw("file").expect("file")), "Doodads\\Ruins\\Plants\\VinyPlant\\VinyPlant");
     }
 
     #[test]
