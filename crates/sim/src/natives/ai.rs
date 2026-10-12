@@ -741,12 +741,14 @@ fn ai_call(
         }
         "GetHeroId" | "GetHeroLevelAI" => {
             let gm = env.game.borrow();
-            let hero = captains::ai_hero(&gm, env.player);
+            let ctx_hero = env.shared.borrow().hero_context;
+            let hero = ctx_hero.or_else(|| captains::ai_hero(&gm, env.player));
             let v = hero.map_or(0, |k| {
                 if name == "GetHeroId" {
                     gm.unit(k).type_id as i32
                 } else {
-                    gm.unit(k).hero.as_ref().map_or(0, |h| h.level)
+                    // `0x6F2DE0E0` (CONFIRMED by disassembly): (level - 1) + 1 - skill points + 1.
+                    gm.unit(k).hero.as_ref().map_or(0, |h| h.level - h.skill_points + 1)
                 }
             });
             ret(Value::Integer(v))

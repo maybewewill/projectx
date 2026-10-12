@@ -40,7 +40,7 @@ use jass::compile::Module;
 use jass::vm::{NativeRegistry, RunStatus, ThreadId, Vm};
 use softfloat::{Tables, F32};
 
-use crate::natives::game::Game;
+use crate::natives::game::{Game, ObjKey};
 
 /// The most commands an AI queue holds. A `CommandAI` when the queue is full is dropped (CONFIRMED: the push
 /// checks `count != 12`, decompile `FUN_6f2d4990`).
@@ -172,6 +172,11 @@ pub struct AiShared {
     /// The last clock value [`AiHost::step`] saw, and the restarts counted from it.
     pub last_clock: f32,
     pub clock_rows: u32,
+    /// The hero whose level-up callback is running (`GetHeroId` / `GetHeroLevelAI` answer for it); `None` outside
+    /// the callback (docs/spec/heroes.md section 14).
+    pub hero_context: Option<ObjKey>,
+    /// Hero skills the callbacks chose: `(player, hero, ability code)`, in order (for the report).
+    pub skills_learned: Vec<(u32, ObjKey, u32)>,
 }
 
 /// The shared AI state, as the natives and the host hold it.
@@ -379,6 +384,8 @@ impl AiHost {
             if paused {
                 continue;
             }
+            // The hero-level callback (`SetHeroLevels`) runs for heroes with unspent skill points.
+            self.run_hero_levels(player);
             // The captains move before the script runs: prune, combat state, follow-up orders, threat scan.
             self.update_captains(player, now);
             if let Some(vm) = self.vms.get_mut(&player) {
@@ -390,6 +397,57 @@ impl AiHost {
             }
         }
         ran
+    }
+
+    /// The hero-level callback of `player` (`0x6F2DE140`, CONFIRMED structure, docs/spec/heroes.md section 14): while
+    /// the hero has skill points, the function given to `SetHeroLevels` runs synchronously (budget 300000) with the
+    /// hero as the context, its integer result is the ability code, and the learn (`SelectHeroSkill`'s method with
+    /// force off) runs; the loop ends when a pass leaves the points unchanged. The original calls it from the tail of
+    /// every experience change of a computer-owned hero; the model calls it at each AI step for every hero with points
+    /// (UNSURE timing: at most 0.1 s later). No hero skill event is fired for these learns (UNSURE).
+    fn run_hero_levels(&mut self, player: u32) {
+        let func = match self.shared.borrow().control(player).and_then(|c| c.settings.get("SetHeroLevels")) {
+            Some(AiArg::Code(f)) => *f,
+            _ => return,
+        };
+        let heroes: Vec<ObjKey> = {
+            let gm = self.game.borrow();
+            gm.owned_units(player)
+                .into_iter()
+                .filter(|&k| {
+                    let u = gm.unit(k);
+                    !u.dead && !u.removed && u.hero.as_ref().is_some_and(|h| h.skill_points > 0)
+                })
+                .collect()
+        };
+        for hero in heroes {
+            // At most a few passes: the loop of the original stops when the points do not change.
+            for _ in 0..16 {
+                let before = self.game.borrow().unit(hero).hero.as_ref().map_or(0, |h| h.skill_points);
+                if before <= 0 {
+                    break;
+                }
+                self.shared.borrow_mut().hero_context = Some(hero);
+                let result = match self.vms.get_mut(&player) {
+                    Some(vm) => vm.call_func(func, &[], 0),
+                    None => break,
+                };
+                self.shared.borrow_mut().hero_context = None;
+                let code = match result {
+                    Ok(jass::vm::Value::Integer(c)) => c as u32,
+                    _ => break,
+                };
+                {
+                    let mut gm = self.game.borrow_mut();
+                    let _ = crate::natives::hero::apply_learn(&mut gm, hero, code);
+                }
+                let after = self.game.borrow().unit(hero).hero.as_ref().map_or(0, |h| h.skill_points);
+                if after == before {
+                    break;
+                }
+                self.shared.borrow_mut().skills_learned.push((player, hero, code));
+            }
+        }
     }
 
     /// One step of the player's captains (`captains::update`) and the town threat scan.
