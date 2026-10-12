@@ -90,6 +90,8 @@ struct Modifier {
     rate: F32,
     active: bool,
     timer: Option<usize>,
+    /// A destruction timer is pending (`0x6F4A6970`).
+    destroying: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +109,8 @@ struct Listener {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Owner {
     Modifier(ModId),
+    /// The delayed destruction of a modifier (`0x6F4A6970`): when it runs the rate leaves the slope.
+    ModifierDestroy(ModId),
     Listener(LisId),
 }
 
@@ -349,7 +353,7 @@ impl Agile {
             rate
         };
         let id = ModId(self.mods.len());
-        self.mods.push(Modifier { prop: p, rate: stored, active: true, timer: None });
+        self.mods.push(Modifier { prop: p, rate: stored, active: true, timer: None, destroying: false });
         // Linking sends "begin" to the modifier: the rate joins the slope, the lifetime timer starts.
         self.add_slope(p, stored, t);
         let slot = if fl(horizon) < f32::from_bits(FOREVER_BITS) {
@@ -369,6 +373,84 @@ impl Agile {
         let timer = self.mods[m.0].timer.take();
         self.cancel_timer(timer);
         self.end_modifier(m, t);
+    }
+
+    /// The rate of a modifier.
+    pub fn modifier_rate(&self, m: ModId) -> F32 {
+        self.mods[m.0].rate
+    }
+
+    /// The rate setter `0x6F4A9B00` on a live modifier (`0x6F478C80`): a change below 2e-7 is ignored; otherwise the
+    /// difference `new - old` joins the slope of the property and the new rate is stored.
+    pub fn set_modifier_rate(&mut self, m: ModId, rate: F32, t: &Tables) {
+        if !self.mods[m.0].active {
+            return;
+        }
+        let old = self.mods[m.0].rate;
+        // `fld thr; fld |old - new|; fcompp; test ah, 0x41; je skip`: skipped when thr > |old - new| (NaN is not skipped).
+        let d = f32::from_bits(arith::sub(old, rate).0 & 0x7FFF_FFFF);
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(f32::from_bits(TINY_RATE_BITS) > d) {
+            let p = self.mods[m.0].prop;
+            self.add_slope(p, arith::sub(rate, old), t);
+            self.mods[m.0].rate = rate;
+        }
+    }
+
+    /// The destruction of a modifier through its wrapper (`0x6F478920` -> `0x6F4A6970`): the wrapper is invalid at once, but
+    /// the object only arms a timer of the shortest length (`1e-4` s, sequence number taken now) and ends when that timer
+    /// runs in a later pump: the rate stays in the slope until then.
+    pub fn destroy_modifier(&mut self, m: ModId) {
+        if !self.mods[m.0].active || self.mods[m.0].destroying {
+            return;
+        }
+        self.mods[m.0].destroying = true;
+        self.arm(Owner::ModifierDestroy(m), ZERO, false, None);
+    }
+
+    /// The limits `(lo, hi)` of a property.
+    pub fn limits(&self, p: PropId) -> (F32, F32) {
+        (self.props[p.0].lo, self.props[p.0].hi)
+    }
+
+    /// The limits setter `0x6F4A9390` (the maximum setters `0x6F477400` / `0x6F477460` pass the other limit unchanged): the
+    /// base is refreshed, the limits are stored, the base is moved into them (`lo > B` gives `lo`, else `hi < B` gives `hi`)
+    /// and the listeners see the old and the new base. The slope is kept.
+    pub fn set_limits(&mut self, p: PropId, lo: F32, hi: F32, t: &Tables) {
+        self.refresh(p);
+        let old = self.props[p.0].base;
+        let pr = &mut self.props[p.0];
+        pr.lo = lo;
+        pr.hi = hi;
+        let new = if fl(lo) > fl(old) {
+            lo
+        } else if fl(hi) < fl(old) {
+            hi
+        } else {
+            old
+        };
+        pr.base = new;
+        let subs = pr.subs.clone();
+        for l in subs {
+            self.listener_jump(l, old, new, t);
+        }
+    }
+
+    /// The property after `0x6F4A90B0`: `(base, lo, hi)` with the base refreshed to now (the first step of every setter).
+    pub fn refreshed_cells(&mut self, p: PropId) -> (F32, F32, F32) {
+        self.refresh(p);
+        let pr = &self.props[p.0];
+        (pr.base, pr.lo, pr.hi)
+    }
+
+    /// Writes cells computed from [`Agile::refreshed_cells`] back (the setters of one operation ran on a copy; time did not
+    /// pass in between, so the refreshes in the middle were no-ops). The slope is kept; no listener is told (the unit stat
+    /// properties have none).
+    pub fn put_cells(&mut self, p: PropId, base: F32, lo: F32, hi: F32) {
+        let pr = &mut self.props[p.0];
+        pr.base = base;
+        pr.lo = lo;
+        pr.hi = hi;
     }
 
     fn end_modifier(&mut self, m: ModId, t: &Tables) {
@@ -674,6 +756,7 @@ impl Agile {
     fn finish_entry(&mut self, i: usize, e: Entry) {
         let still_ours = match e.owner {
             Some(Owner::Modifier(m)) => self.mods[m.0].timer == Some(i),
+            Some(Owner::ModifierDestroy(_)) => false,
             Some(Owner::Listener(l)) => self.lis[l.0].timer == Some(i),
             None => false,
         };
@@ -713,6 +796,14 @@ impl Agile {
                 if self.mods[m.0].active && !e.periodic {
                     // Lifetime over: the timer is gone, the rate leaves the slope.
                     self.mods[m.0].timer = None;
+                    self.end_modifier(m, t);
+                }
+            }
+            Some(Owner::ModifierDestroy(m)) => {
+                // `0x6F4A8EB0` -> `0x6F4A6920`: the end message (the rate leaves the slope), the timers are cancelled.
+                if self.mods[m.0].active {
+                    let timer = self.mods[m.0].timer.take();
+                    self.cancel_timer(timer);
                     self.end_modifier(m, t);
                 }
             }

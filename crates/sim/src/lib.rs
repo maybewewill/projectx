@@ -40,6 +40,7 @@ pub mod orders;
 pub mod pathing;
 pub mod push;
 pub mod production;
+pub mod regen;
 pub mod rng;
 pub mod script;
 pub mod shop;
