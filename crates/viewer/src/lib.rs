@@ -10,6 +10,8 @@
 
 pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod cliff_render;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod offscreen;
 pub mod model;
 pub mod renderer;
