@@ -1,6 +1,6 @@
 {
  "wave": "3",
- "updated": "2026-10-13 02:10 (UTC+5)",
+ "updated": "2026-10-13 03:20 (UTC+5)",
  "lanes": [
   {
    "id": "S17",
@@ -15,22 +15,34 @@
    "status": "running"
   },
   {
-   "id": "S19",
-   "model": "Sonnet",
-   "task": "AI: retreat/threat/readiness, expansions, last 9 AI natives; cliff level in the build-spot search",
-   "status": "running"
-  },
-  {
    "id": "S20",
    "model": "Sonnet",
    "task": "Unit sight writer for radius ≥ 3 (span producer, cliffs block sight) — replace the circle stand-in",
    "status": "running"
   },
   {
+   "id": "H23",
+   "model": "Haiku",
+   "task": "HUD: fill the console middle gap, button labels (NormalText), command card slots, portrait area",
+   "status": "running"
+  },
+  {
+   "id": "S21",
+   "model": "Sonnet",
+   "task": "Undead and night elf AI production stalls (acolyte lumber/haunted mine, wisp entangle), AI hero skills (SetHeroLevels)",
+   "status": "running"
+  },
+  {
+   "id": "S19",
+   "model": "Sonnet",
+   "task": "AI: retreat/threat/readiness, expansions, last 9 AI natives; cliff level in the build-spot search (merged)",
+   "status": "done"
+  },
+  {
    "id": "H22",
    "model": "Haiku",
-   "task": "HUD layout: position the resource bar like the game, console centre art, minimap inset, portrait/command card frames",
-   "status": "running"
+   "task": "HUD layout: position the resource bar like the game, console centre art, minimap inset, portrait/command card frames (merged)",
+   "status": "done"
   },
   {
    "id": "H21",
