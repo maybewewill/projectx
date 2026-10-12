@@ -488,11 +488,32 @@ pub fn remove_injuries(gm: &mut Game, attack: &mut Captain, defense: &mut Captai
     }
 }
 
-/// `CaptainIsHome` (`0x6F2E77C0` -> `0x6F2E76E0`, radius 500.0): the captain's position is within the radius of home
-/// (UNSURE: the compare's scale).
+/// The squared limit of the captain position test `0x6F2E76E0` (CONFIRMED by Unicorn, 600 cases, 0 mismatches,
+/// `tools/emu/captain_goal_emu.py`): a radius below 100.0 gives the constant 20000.0 (`0x6FAB4F50`); otherwise
+/// `add(mul(mul(2.0, r), r), 5000.0)` (constants `0x6FAAE504`, `0x6FAB4F54`), all through the soft-float routines.
+pub fn goal_limit(radius: F32) -> F32 {
+    use softfloat::arith::{add, mul};
+    if F32::from_bits((100.0_f32).to_bits()).to_f32() > radius.to_f32() {
+        return F32::from_bits((20000.0_f32).to_bits());
+    }
+    add(mul(mul(F32::from_bits((2.0_f32).to_bits()), radius), radius), F32::from_bits((5000.0_f32).to_bits()))
+}
+
+/// The captain position test `0x6F2E76E0`: true iff the squared distance (`0x6F6EF3B0`, from the captain's position to
+/// the point) does not exceed [`goal_limit`] of the radius.
+pub fn within_goal(captain: (f32, f32), point: (f32, f32), radius: f32) -> bool {
+    use softfloat::arith::dist2;
+    let f = |v: f32| F32::from_bits(v.to_bits());
+    let d = dist2(f(captain.0), f(captain.1), f(point.0), f(point.1));
+    goal_limit(f(radius)).to_f32() >= d.to_f32()
+}
+
+/// `CaptainIsHome` (`0x6F2E77C0` -> `0x6F2E76E0`, radius 500.0): the captain's position passes [`within_goal`] against
+/// home. The squared limit is 2 r^2 + 5000 (about 710 units for 500.0). The captain's position (normaliser
+/// `0x6F4743A0`) is the centre of the members here (UNSURE).
 pub fn is_home(gm: &Game, c: &Captain) -> bool {
     match (center(gm, c), c.home) {
-        (Some(p), Some(h)) => dist(p, h) <= HOME_RADIUS,
+        (Some(p), Some(h)) => within_goal(p, h, HOME_RADIUS),
         _ => false,
     }
 }
@@ -509,7 +530,7 @@ pub fn at_goal(gm: &Game, c: &Captain) -> bool {
             pos(gm, k)
         }
     };
-    center(gm, c).is_some_and(|p| dist(p, target) <= c.goal_radius.max(GOAL_RADIUS))
+    center(gm, c).is_some_and(|p| within_goal(p, target, c.goal_radius.max(GOAL_RADIUS)))
 }
 
 // ---- orders to the group ----

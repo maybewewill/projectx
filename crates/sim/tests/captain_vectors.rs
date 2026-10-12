@@ -60,3 +60,18 @@ fn creep_camp_choice_matches_the_original() {
     }
     assert_eq!(n, 600);
 }
+
+#[test]
+fn captain_position_test_matches_the_original() {
+    // `0x6F2E76E0` (tools/emu/captain_goal_emu.py): 600 cases, radius / captain / point bits and the original's answer.
+    let text = include_str!("vectors/captain_goal_seed1.tsv");
+    let mut n = 0;
+    for line in text.lines().filter(|l| !l.is_empty()) {
+        let f: Vec<&str> = line.split('\t').collect();
+        let b = |i: usize| f32::from_bits(u32::from_str_radix(f[i], 16).unwrap());
+        let got = sim::captains::within_goal((b(1), b(2)), (b(3), b(4)), b(0));
+        assert_eq!(u8::from(got).to_string(), f[5], "line: {line}");
+        n += 1;
+    }
+    assert_eq!(n, 600);
+}
