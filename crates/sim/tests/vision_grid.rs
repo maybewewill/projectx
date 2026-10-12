@@ -155,9 +155,11 @@ fn sight_reveals_the_circle_and_the_refresh_clears_it() {
 fn the_refresh_timer_runs_every_point_four_seconds() {
     let mut host = host_with_footman();
     host.start("make", &[]).expect("make starts");
-    // 0.3 s of game time: the first refresh (0.4 s) has not run yet.
+    // 0.3 s of game time: the first refresh (0.4 s) has not run yet. The new unit has explored the radius around it
+    // (the creation routine calls the unit writer with the explore-only arguments), so its cell is fogged, not masked.
     host.step_ticks(60);
-    assert_eq!(host.game().fog_state_at(0, f(1000.0), f(1000.0)), FOG_MASKED);
+    assert_eq!(host.game().fog_state_at(0, f(1000.0), f(1000.0)), FOG_FOGGED);
+    assert_eq!(host.game().fog_state_at(0, f(3000.0), f(3000.0)), FOG_MASKED, "far from the unit nothing is explored");
     // 0.45 s: the refresh has run once.
     host.step_ticks(30);
     assert_eq!(host.game().fog_state_at(0, f(1000.0), f(1000.0)), FOG_VISIBLE);
@@ -196,4 +198,44 @@ endfunction
     assert!(boolean(&host, "gVis0"), "IsUnitVisible: its cell is visible to player 0");
     assert!(!boolean(&host, "gVis1"), "player 1 does not see it");
     assert!(!boolean(&host, "gFog0"), "a visible cell is not fogged");
+}
+
+/// A footman with a 512-unit day sight and a 256-unit night sight.
+fn footman_type_with_night() -> UnitType {
+    UnitType { night_sight: F32::from_bits(0x4380_0000), ..footman_type() }
+}
+
+/// The day/night switch moves the sight value over 3 seconds (`0x6f27a4e0`: a modifier of `delta / 3` for 3 s on the
+/// unit's sight property); a unit created at night starts at the night value (`0x6f29f180`).
+#[test]
+fn the_night_switch_ramps_the_sight_over_three_seconds() {
+    let Some(t) = tables() else {
+        eprintln!("skipped: GAME_DLL is not set (the sight property needs the soft-float tables)");
+        return;
+    };
+    let src = format!(
+        "{PRELUDE}\nfunction make takes nothing returns nothing\n    local unit u\n    set u = CreateUnit(Player(0), 'hfoo', 1000.0, 1000.0, 0.0)\nendfunction\n"
+    );
+    let prog = jass::parse_with(&src, Some(&t)).expect("parse");
+    let module = compile(&[prog]).expect("compile");
+    let mut host = ScriptHost::new(module, NativeRegistry::with_builtins(), Some(t)).expect("vm");
+    host.game_mut().unit_types_mut().insert(FOOTMAN, footman_type_with_night());
+    host.start("make", &[]).expect("make starts");
+    host.step();
+    let key = host.game().unit_objects().next().map(|(k, _)| k).expect("the footman exists");
+    // The default clock starts at time 0.0 of the day: night.
+    assert!(host.game().is_night());
+    let v = |host: &mut ScriptHost, night: bool| host.game_mut().unit_sight_value(key, night).to_f32();
+    assert_eq!(v(&mut host, true), 256.0, "created at night: the night sight at once");
+    // Dawn: the day sight is approached over three seconds.
+    host.game_mut().set_time_of_day(f(12.0));
+    assert!(!host.game().is_night());
+    let start = v(&mut host, false);
+    assert_eq!(start, 256.0, "the ramp starts from the night value");
+    host.step_ticks(150); // 0.75 s
+    let mid = v(&mut host, false);
+    assert!(mid > 300.0 && mid < 340.0, "a quarter of the way: {mid}");
+    host.step_ticks(600); // 3.75 s in total
+    let end = v(&mut host, false);
+    assert!((end - 512.0).abs() < 0.01, "back at the day sight: {end}");
 }

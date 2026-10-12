@@ -49,7 +49,7 @@
 //! UNSURE), and the rendering of the fog. The tests are in `tests/fog_natives.rs`.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use jass::vm::{NativeRegistry, Value};
@@ -59,7 +59,8 @@ use super::game::{Game, HandleKind, LocationObj, ObjKey, Object, RectObj};
 use super::gamestate::native;
 use super::hashtable::{bool_at, enum_at, real_at};
 use super::player::index_at;
-use crate::vision::VisionGrid;
+use crate::agile::PropId;
+use crate::vision::{self, UnitSightInput, VisionGrid};
 
 pub use crate::vision::{FOG_FOGGED, FOG_MASKED, FOG_VISIBLE};
 
@@ -94,6 +95,20 @@ pub struct FogState {
     pub grid: VisionGrid,
     /// Active fog modifiers, in start order.
     active: Vec<ObjKey>,
+    /// The sight property of every unit that has been through a refresh (`unit+0xFC`, an agile float property).
+    pub(crate) sight_props: BTreeMap<ObjKey, SightProp>,
+}
+
+/// The agile property that holds a unit's current sight (`unit+0xFC`, docs/spec/vision.md section 14.4). It starts at
+/// the day sight; the night switch adds a modifier of `(night - day) / 3` per second for 3 seconds, the day switch the
+/// opposite, so the value moves over 3 seconds. The day and night sight it was built from are kept to notice an edit.
+#[derive(Debug, Clone, Copy)]
+pub struct SightProp {
+    prop: PropId,
+    day: F32,
+    night_sight: F32,
+    /// The phase the property last followed.
+    night: bool,
 }
 
 /// The cells that a rect covers (both ends inclusive).
@@ -138,6 +153,11 @@ pub(super) fn cell_of_size(v: F32, cell: i32) -> i32 {
 }
 
 impl Game {
+    /// The fog grid (cell words, elevation layer and mapping).
+    pub fn fog_grid(&self) -> &VisionGrid {
+        &self.fog.grid
+    }
+
     /// The fog state of point `(x, y)` for player slot `player`: [`FOG_VISIBLE`], [`FOG_FOGGED`] or [`FOG_MASKED`].
     pub fn fog_state_at(&self, player: u32, x: F32, y: F32) -> i32 {
         self.fog.grid.state_at(x, y, player)
@@ -156,15 +176,124 @@ impl Game {
     pub fn vision_refresh(&mut self) {
         self.fog.grid.clear_visible();
         let active = self.fog.active.clone();
-        for k in active {
-            let m = self.fog_modifier(k).clone();
-            self.fog
-                .grid
-                .write_indices(m.state, (m.players & 0xFFFF) as u16, &m.cells);
+        // The modifiers without `afterUnits` first (flag 0x100 clear), then the units, then the `afterUnits` ones
+        // (`0x6f40a8f0`, CONFIRMED structure; the mapping of flag 0x100 to the JASS argument is LIKELY).
+        for after in [false, true] {
+            if after {
+                self.vision_unit_pass();
+            }
+            for &k in &active {
+                let m = self.fog_modifier(k);
+                if m.after_units != after {
+                    continue;
+                }
+                let (state, players, cells) = (m.state, (m.players & 0xFFFF) as u16, m.cells.clone());
+                self.fog.grid.write_indices(state, players, &cells);
+            }
         }
+    }
+
+    /// The unit pass of the refresh: each live unit writes its sight with the radius of its sight property and its
+    /// player mask (`0x6f40ab..0x6f40ac47`). The writes only set visible bits, so the order of the units does not
+    /// matter (CONFIRMED by algebra, vision.md 11.9.4).
+    fn vision_unit_pass(&mut self) {
         let night = self.is_night();
-        for (x, y, radius, mask) in self.unit_sight_sources(night) {
-            self.fog.grid.write_unit_sight(mask, x, y, radius);
+        let keys: Vec<ObjKey> = self
+            .unit_objects()
+            .filter(|(_, u)| !(u.removed || u.dead || u.hidden))
+            .map(|(k, _)| k)
+            .collect();
+        for key in keys {
+            let value = self.unit_sight_value(key, night);
+            let radius = self.fog.grid.sight_cells(value);
+            if radius == 0 {
+                continue;
+            }
+            let input = self.unit_sight_input(key, radius);
+            self.fog.grid.write_unit_sight_cells(&input);
+        }
+    }
+
+    /// The explore a new unit does for its owner (the end of the creation routine `0x6f29f990`: the unit writer is
+    /// called with arguments 3 and 4 set, which uses the radius 4 and clears the black mask without making the cells
+    /// visible). The player mask is the owner's vision mask (the word at player `+0x328`, LIKELY the same as
+    /// [`Game::owner_vision_mask`]); the gate `0x6f26de50(unit, 1)` is taken as true (UNSURE).
+    pub(crate) fn fog_explore_on_create(&mut self, key: ObjKey) {
+        let mask = self.owner_vision_mask(self.unit(key).owner);
+        if mask == 0 {
+            return;
+        }
+        let mut input = self.unit_sight_input(key, 0);
+        input.mask = u32::from(mask);
+        input.use_radius_four = true;
+        input.explore_only = true;
+        self.fog.grid.write_unit_sight_cells(&input);
+    }
+
+    /// The current sight value of a unit (`0x6f29f040`): the sight property clamped to 1800. Without the softfloat
+    /// tables there is no property engine, and the value is the day sight, or the night sight when it is set and it
+    /// is night (the rule before the property was decoded; UNSURE for units whose night sight is 0).
+    pub fn unit_sight_value(&mut self, key: ObjKey, night: bool) -> F32 {
+        let (day, nsight) = {
+            let u = self.unit(key);
+            (u.sight, u.night_sight)
+        };
+        let Some(tables) = self.orders.tables.as_ref() else {
+            return if night && arith::lt(F32::ZERO, nsight) { nsight } else { day };
+        };
+        let fresh = match self.fog.sight_props.get(&key) {
+            Some(s) => s.day != day || s.night_sight != nsight,
+            None => true,
+        };
+        if fresh {
+            // Unit creation (`0x6f29f180`): the property starts at the day sight; at night it is moved at once by
+            // `night - day`.
+            let p = self.agile.new_property(day, F32::from_bits(0xFF7F_FFFF), F32::from_bits(crate::agile::FOREVER_BITS));
+            if night {
+                let delta = arith::sub(nsight, day);
+                let v = arith::add(self.agile.value(p), delta);
+                self.agile.set_value(p, v, tables);
+            }
+            self.fog.sight_props.insert(key, SightProp { prop: p, day, night_sight: nsight, night });
+        } else if let Some(s) = self.fog.sight_props.get_mut(&key) {
+            if s.night != night {
+                // The day/night switch (`0x6f2a0420` / `0x6f2a0330`): a modifier of delta / 3 for 3 seconds.
+                let delta = if night { arith::sub(nsight, day) } else { arith::sub(day, nsight) };
+                let rate = vision::sight_ramp_rate(delta, tables);
+                self.agile.add_modifier(s.prop, rate, vision::SIGHT_RAMP_SECONDS, tables);
+                s.night = night;
+            }
+        }
+        let p = self.fog.sight_props[&key].prop;
+        vision::clamp_sight(self.agile.value(p))
+    }
+
+    /// The writer input of a unit: its pathing cell, the player mask, the movement class and the terrain level of
+    /// its cell (`0x6f409e00`'s arguments and unit fields).
+    fn unit_sight_input(&self, key: ObjKey, radius: u16) -> UnitSightInput {
+        let u = self.unit(key);
+        let origin = self.fog.grid.origin;
+        let path_cell = (
+            crate::pathing::grid::cell_coordinate(u.x, origin.0),
+            crate::pathing::grid::cell_coordinate(u.y, origin.1),
+        );
+        let movement = self.unit_types().get(u.type_id).map_or(0, |t| t.movement);
+        let (terrain_level, ramp_found) = self.terrain().map_or((0, false), |t| t.cell_level_found(path_cell.0, path_cell.1));
+        UnitSightInput {
+            path_cell,
+            radius,
+            mask: u32::from(self.owner_vision_mask(u.owner) | u.vision_extra),
+            owner: u.owner,
+            // Flying units see over cliffs (`unit+0x5C & 0x20000000` with `unit+0x200 <= 0`; LIKELY the flying class).
+            ignore_cliffs: movement & 0x2 != 0,
+            // Ships (movement word exactly 0x10) take their level from the terrain height array, which is empty in a
+            // fresh game (UNSURE).
+            float_move: movement == 0x10,
+            float_height: 0,
+            terrain_level,
+            ramp_found,
+            use_radius_four: false,
+            explore_only: false,
         }
     }
 
@@ -173,32 +302,6 @@ impl Game {
     /// game state 2, `GetFloatGameState(GAME_TIME_OF_DAY)`.
     pub fn is_night(&self) -> bool {
         self.day_cycle.is_night(self.time_of_day())
-    }
-
-    /// The sight sources of the unit pass: the position, the sight radius and the player mask of every live unit with
-    /// a positive radius, in creation order. The mask is the owner's vision mask (own bit plus the shared-vision
-    /// players) and the unit's extra vision bits (`+0x14C`, CONFIRMED value). A unit is skipped when removed, dead or
-    /// hidden (CONFIRMED for the removed flag; dead and hidden LIKELY).
-    fn unit_sight_sources(&self, night: bool) -> Vec<(F32, F32, F32, u16)> {
-        let mut out = Vec::new();
-        for (_, u) in self.unit_objects() {
-            if u.removed || u.dead || u.hidden {
-                continue;
-            }
-            // The night sight is used at night when it is set; an unset (zero) night sight falls back to the day sight
-            // (UNSURE: the original's choice between the two values is not read).
-            let radius = if night && arith::lt(F32::ZERO, u.night_sight) {
-                u.night_sight
-            } else {
-                u.sight
-            };
-            if !arith::lt(F32::ZERO, radius) {
-                continue;
-            }
-            let mask = self.owner_vision_mask(u.owner) | u.vision_extra;
-            out.push((u.x, u.y, radius, mask));
-        }
-        out
     }
 
     /// The vision mask of player slot `owner` (`DAT_6fab6a14[owner]`): its own bit plus the players that share vision

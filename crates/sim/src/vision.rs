@@ -19,14 +19,20 @@
 //!
 //! Units. A unit's sight and its visibility query use the unit fog cell ([`VisionGrid::unit_cell`]): the pathing cell
 //! of the unit shifted right by 2, so 128 units per cell whatever the grid scale (CONFIRMED for the centre function by
-//! Unicorn, LIKELY for the footprint). The sight shape of a unit is the circle of [`VisionGrid::unit_sight_shape`]:
-//! a stand-in, because the original's shape for radii of 3 and up is not the circle (vision.md section 11.9).
+//! Unicorn, LIKELY for the footprint). The sight a unit writes is [`VisionGrid::write_unit_sight_cells`]: for radii
+//! of 3 and up a cliff-aware cast over the grid's elevation layer (module `unit`, vision.md section 14), not a circle.
 
 use std::collections::BTreeSet;
 
 use softfloat::{arith, conv, F32, Tables};
 
 use crate::pathing::grid::cell_coordinate;
+
+mod unit;
+pub use unit::{
+    capped_sight, clamp_sight, dying_sight, sight_ramp_rate, SightRecord, SightShape, UnitSightInput, MAX_SIGHT,
+    SIGHT_RAMP_SECONDS,
+};
 
 /// The fog states of the JASS constants (CONFIRMED: the values the grid lookup returns).
 pub const FOG_MASKED: i32 = 1;
@@ -45,11 +51,6 @@ pub const UNEXPLORED: u16 = 0xFFFF;
 
 /// `1/128` as a soft-float value: the default cell scale (the constructor's scale for a 128-unit cell).
 const DEFAULT_SCALE: F32 = F32::from_bits(0x3C00_0000);
-
-/// The unit path's radius scale: `1/128` (exact in binary, so the product is exact). The sight radius of a unit is
-/// `f2i(radius * 1/128)` cells here (UNSURE: the original reads the shape value `unit+0x10C`, whose writer is not
-/// decoded; a 128-unit fog cell is CONFIRMED for the unit path, see [`VisionGrid::unit_cell`]).
-pub const UNIT_CELL_SCALE: F32 = F32::from_bits(0x3C00_0000);
 
 /// Cell words of one grid cell: visible bits and mask bits, one bit per player slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +224,11 @@ pub struct VisionGrid {
     /// The visible and mask words, `pitch * height` entries each (index `(row << shift) + col`).
     vis: Vec<u16>,
     msk: Vec<u16>,
+    /// The elevation layer (`+0x38`): per fog cell the largest terrain cliff level of its pathing cells, times 128
+    /// (see [`VisionGrid::set_elevation_layer`]). Zero until a map's terrain sets it.
+    elev: Vec<i16>,
+    /// The sight shapes by radius (the cache at `+0x78`).
+    shapes: std::collections::BTreeMap<i32, std::sync::Arc<SightShape>>,
 }
 
 impl Default for VisionGrid {
@@ -250,6 +256,8 @@ impl VisionGrid {
             fog_enabled: true,
             vis: vec![0; n],
             msk: vec![UNEXPLORED; n],
+            elev: vec![0; n],
+            shapes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -455,20 +463,6 @@ impl VisionGrid {
         self.write_indices(mode, mask, &cells);
     }
 
-    /// The unit sight circle: the radius in cells is `f2i(radius * 1/128)` ([`UNIT_CELL_SCALE`], UNSURE) around the
-    /// unit's fog cell ([`VisionGrid::unit_cell`]). The original's row shape for radii of 3 and up is not the span table
-    /// of [`span_table`] (vision.md section 11.9, UNSURE): this is the stand-in shape until it is decoded.
-    pub fn unit_sight_shape(&self, x: F32, y: F32, radius: F32) -> BTreeSet<usize> {
-        let r = conv::f2i(arith::mul(radius, UNIT_CELL_SCALE));
-        let (cx, cy) = self.unit_cell(x, y);
-        self.circle_shape_cells(cx, cy, r)
-    }
-
-    /// Writes the unit sight circle of [`VisionGrid::unit_sight_shape`] in visible mode with the player mask.
-    pub fn write_unit_sight(&mut self, mask: u16, x: F32, y: F32, radius: F32) {
-        let cells = self.unit_sight_shape(x, y, radius);
-        self.write_indices(FOG_VISIBLE, mask, &cells);
-    }
 }
 
 #[cfg(test)]
@@ -655,8 +649,8 @@ mod tests {
     }
 
     #[test]
-    fn unit_cell_is_relative_to_the_playable_minimum() {
-        // The pathing cells are counted from the playable minimum: a minimum of -640 moves the cell by five.
+    fn unit_cell_is_relative_to_the_grid_origin() {
+        // The pathing cells are counted from the grid origin (the whole-map minimum corner): -640 moves the cell by five.
         let g = VisionGrid::with_cells(8, 8, (f(-640.0), f(-640.0)), (f(0.0625), f(0.0625)));
         assert_eq!(g.unit_cell(f(-640.0), f(-640.0)), (0, 0));
         assert_eq!(g.unit_cell(f(-512.0), f(-512.0)), (1, 1));
@@ -664,13 +658,100 @@ mod tests {
     }
 
     #[test]
-    fn unit_sight_radius_is_whole_128_unit_cells() {
+    fn unit_sight_radius_is_rounded_to_whole_cells() {
         let g = grid(16, 16);
-        // 512 units is 4 cells (the footman of the tests); the unit centre is the cell of (1000, 1000), cell 7.
-        assert_eq!(g.unit_sight_shape(f(1000.0), f(1000.0), f(512.0)), g.circle_shape_cells(7, 7, 4));
-        // 500 units is 3 cells (truncation), and a radius below 128 writes nothing
-        assert_eq!(g.unit_sight_shape(f(1000.0), f(1000.0), f(500.0)), g.circle_shape_cells(7, 7, 3));
-        assert!(g.unit_sight_shape(f(1000.0), f(1000.0), f(100.0)).is_empty());
+        // 512 units is 4 cells (the footman of the tests)
+        assert_eq!(g.sight_cells(f(512.0)), 4);
+        // 500 units is 3.9 cells: the conversion rounds (`0x6f406ab0`: floor(x + 0.5)), it does not truncate
+        assert_eq!(g.sight_cells(f(500.0)), 4);
+        assert_eq!(g.sight_cells(f(440.0)), 3);
+        // 100 units is 0.78 cells: rounds to one; zero and negative values give 0
+        assert_eq!(g.sight_cells(f(100.0)), 1);
+        assert_eq!(g.sight_cells(f(0.0)), 0);
+        assert_eq!(g.sight_cells(f(-300.0)), 0);
+    }
+
+    fn sight(path_cell: (i32, i32), radius: u16, mask: u32) -> UnitSightInput {
+        UnitSightInput {
+            path_cell,
+            radius,
+            mask,
+            owner: 0,
+            ignore_cliffs: false,
+            float_move: false,
+            float_height: 0,
+            terrain_level: 0,
+            ramp_found: false,
+            use_radius_four: false,
+            explore_only: false,
+        }
+    }
+
+    #[test]
+    fn flat_terrain_sight_is_the_shape_records_inside_the_span_table() {
+        // No cliffs: nothing blocks, so the cast writes the cells of the shape (the 3 by 3 block and every record). The
+        // eight sweeps leave out a few cells of the span table of the radius (four for radius 3, in a pinwheel), so
+        // the shape is not the circle writer's shape (CONFIRMED against the original).
+        for r in 3..=9u16 {
+            let mut g = grid(40, 40);
+            g.write_unit_sight_cells(&sight((20 * 4 + 1, 20 * 4 + 2), r, 1));
+            let shape = SightShape::build(i32::from(r));
+            let mut want = BTreeSet::new();
+            let mut circle = BTreeSet::new();
+            for (j, (lo, hi)) in span_table(i32::from(r)).into_iter().enumerate() {
+                let row = 20 - i32::from(r) + j as i32;
+                for c in 20 + lo..=20 + hi {
+                    circle.insert(((row as usize) << g.shift) + c as usize);
+                }
+            }
+            for dy in -1..=1i32 {
+                for dx in -1..=1i32 {
+                    want.insert((((20 + dy) as usize) << g.shift) + (20 + dx) as usize);
+                }
+            }
+            for rec in &shape.records {
+                want.insert((((20 + rec.dy) as usize) << g.shift) + (20 + rec.dx) as usize);
+            }
+            let (vis, _) = g.raw_words();
+            let got: BTreeSet<usize> = (0..vis.len()).filter(|&i| vis[i] == 1).collect();
+            assert_eq!(got, want, "radius {r}");
+            assert!(got.is_subset(&circle), "inside the span table, radius {r}");
+            assert!(circle.len() - got.len() <= 4 * usize::from(r), "radius {r} loses only the pinwheel cells");
+        }
+    }
+
+    #[test]
+    fn a_cliff_hides_the_cells_behind_it_but_is_itself_seen() {
+        // A wall of elevation 2 (word 256) three cells east of the unit, which stands on level 0.
+        let mut g = grid(40, 40);
+        let w = g.width;
+        g.set_elevation_layer(|x, _| if x / 4 == 23 { 2 } else { 0 });
+        assert_eq!(g.elevation((23, 5)), 256);
+        assert_eq!(w, 40);
+        g.write_unit_sight_cells(&sight((20 * 4, 20 * 4), 6, 1));
+        let seen = |g: &VisionGrid, c: i32, r: i32| g.words((c, r)).vis & 1 != 0;
+        assert!(seen(&g, 22, 20), "in front of the wall");
+        assert!(seen(&g, 23, 20), "the wall itself");
+        assert!(!seen(&g, 24, 20), "behind the wall");
+        assert!(!seen(&g, 25, 20), "further behind the wall");
+        assert!(seen(&g, 20, 24), "the other directions are open");
+        // a flying unit (ignores cliffs) sees behind it
+        let mut f2 = grid(40, 40);
+        f2.set_elevation_layer(|x, _| if x / 4 == 23 { 2 } else { 0 });
+        let mut input = sight((20 * 4, 20 * 4), 6, 1);
+        input.ignore_cliffs = true;
+        f2.write_unit_sight_cells(&input);
+        assert!(seen(&f2, 24, 20));
+    }
+
+    #[test]
+    fn a_unit_on_high_ground_sees_over_lower_cliffs() {
+        let mut g = grid(40, 40);
+        g.set_elevation_layer(|x, _| if x / 4 == 23 { 1 } else { 0 });
+        let mut input = sight((20 * 4, 20 * 4), 6, 1);
+        input.terrain_level = 1;
+        g.write_unit_sight_cells(&input);
+        assert!(g.words((24, 20)).vis & 1 != 0, "level 1 does not block a unit on level 1");
     }
 
     #[test]
@@ -679,10 +760,12 @@ mod tests {
         // only ever writes FOG_VISIBLE; see vision.md section 11.10).
         let mut a = grid(16, 16);
         let mut b = grid(16, 16);
-        a.write_unit_sight(0b01, f(1000.0), f(1000.0), f(384.0));
-        a.write_unit_sight(0b10, f(1100.0), f(1000.0), f(256.0));
-        b.write_unit_sight(0b10, f(1100.0), f(1000.0), f(256.0));
-        b.write_unit_sight(0b01, f(1000.0), f(1000.0), f(384.0));
+        let u1 = sight((31, 31), 3, 0b01);
+        let u2 = sight((34, 31), 2, 0b10);
+        a.write_unit_sight_cells(&u1);
+        a.write_unit_sight_cells(&u2);
+        b.write_unit_sight_cells(&u2);
+        b.write_unit_sight_cells(&u1);
         assert_eq!(a.vis, b.vis);
         assert_eq!(a.msk, b.msk);
     }

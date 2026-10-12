@@ -572,6 +572,7 @@ pub(crate) fn build(
     gm.combat_on_create(key);
     gm.init_unit_stats(key);
     gm.sync_auras(key);
+    gm.fog_explore_on_create(key);
     Some((key, id))
 }
 
