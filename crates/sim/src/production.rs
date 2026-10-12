@@ -1373,6 +1373,11 @@ impl Game {
     /// time-of-day wrap).
     fn agile_tick(&mut self) {
         let inc = F32::from_bits(crate::lockstep::TICK_INCREMENT_BITS);
+        if self.orders.tables.is_none() && !self.agile.is_idle() {
+            // Timers exist only when they were started with tables; without them nothing can run (cannot happen unless
+            // the tables were removed after a start).
+            return;
+        }
         self.agile.begin_tick(inc);
         loop {
             // The handlers run while the queue time is the firing time (they may start countdowns, which then begin

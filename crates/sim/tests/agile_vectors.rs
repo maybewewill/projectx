@@ -130,6 +130,6 @@ fn scenarios_match_the_original() {
         assert_eq!(values, s.values, "scenario {} values", s.id);
         fired += events.len();
     }
-    assert!(all.len() >= 400, "{} scenarios", all.len());
-    assert!(fired >= 250, "{fired} firings");
+    assert!(all.len() >= 500, "{} scenarios", all.len());
+    assert!(fired >= 200, "{fired} firings");
 }

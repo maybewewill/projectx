@@ -298,3 +298,6 @@ LIKELY, not run.
   that evaluates properties) is UNSURE; the sim fires at `R/D` seconds.
 - Value of the factor constant `0x6FAAE540` and the game-setting flag that selects it (`0x6F4C34D0(0xD)`).
 - `this+0x70` (k) writer for build/train objects other than the default 1.0; research/upgrade use the same start.
+
+### 13.5 Update (agile.md)
+The open item of 13.4 is closed: the evaluation of a modifier, the listener's crossing timer and the 0.005 s tick that pumps them are decoded and checked in Unicorn (`docs/spec/agile.md`, `crates/sim/src/agile.rs`). Completion fires on the tick the engine says (about `200 * bldtm + k` ticks after the start, `k` = soft-float clock drift), not at `R / D` seconds. `production.rs` now runs training, construction, research and upgrades on `Agile::start_countdown` when the tables are loaded.

@@ -676,9 +676,9 @@ def gen_scenario(rnd):
     kinds = rnd.choice(["count", "count", "count", "rise", "set", "mixed"])
     for k in range(nmod):
         if kinds == "count" or kinds == "mixed":
-            d = rnd.choice([1.0, 1.0, 1.0, 0.5, 2.0, 1.5, 4.0, rnd.uniform(0.25, 3.0)])
+            d = rnd.choice([1.0, 1.0, 1.0, 0.5, 2.0, 1.5, 4.0, rnd.uniform(0.25, 3.0), 1e-7, 3e-7, 9e-7])
             rate = f2b(-d)
-            hor = rnd.choice([0.0, 0.0, 1.0, 1e-7, 1e-4, 5.0, 30.0, 200.0, rnd.uniform(1.0, 60.0)])
+            hor = rnd.choice([0.0, 0.0, 1.0, 1e-7, 1e-4, 5.0, 30.0, 200.0, rnd.uniform(1.0, 60.0), 3.4e38, 320.0])
         else:
             d = rnd.choice([1.0, 0.5, 2.0, 0.1, rnd.uniform(0.05, 3.0)])
             rate = f2b(d) if rnd.random() < 0.85 else f2b(-d)
@@ -690,7 +690,7 @@ def gen_scenario(rnd):
         if kinds in ("count", "mixed"):
             ops.append((t, "L", 0, f2b(rnd.choice([0.0, 0.0, 0.0, 5.0, 10.0, rnd.uniform(0.0, 40.0), b2f(base), -5.0, 500.0, 0.004, -0.004])), 0xD01C4 + k))
         else:
-            ops.append((t, "L", 1, f2b(rnd.choice([24.0, 12.0, 100.0, 20.0, rnd.uniform(5.0, 60.0)])), 0xD01C4 + k))
+            ops.append((t, "L", rnd.choice([1, 1, 1, 2]), f2b(rnd.choice([24.0, 12.0, 100.0, 20.0, rnd.uniform(5.0, 60.0)])), 0xD01C4 + k))
         t += rnd.choice([0, 1, 50])
     if kinds in ("set", "mixed") and rnd.random() < 0.8:
         ops.append((t + rnd.choice([100, 500, 1500]), "S", f2b(rnd.choice([0.0, 5.0, 25.0, rnd.uniform(-5.0, 80.0)]))))
