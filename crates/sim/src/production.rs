@@ -367,6 +367,17 @@ impl TrainTimers for AgileTrain<'_> {
     }
 }
 
+/// What the AI build-spot search reads of a unit type (`docs/spec/ai-natives.md` section 8): the `buffType` enum
+/// (record `+0x1B8`), `buffRadius` (`+0x1BC`) and the size of the pathing texture (`pPathingFootprint`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SiteType {
+    /// 0 none, 1 townhall, 2 resource, 4 factory, 8 buffer (`0x6F262E60`).
+    pub buff_type: u32,
+    pub buff_radius: F32,
+    /// The pathing texture size in texels; `None` for a type without one (`pathTex` `_`).
+    pub footprint: Option<crate::ai_site::Footprint>,
+}
+
 /// The production state of a game.
 #[derive(Debug, Default)]
 pub struct Production {
@@ -374,6 +385,10 @@ pub struct Production {
     pub upgrades: BTreeMap<u32, UpgradeType>,
     pub trees: Vec<Tree>,
     pub grid: Option<BuildGrid>,
+    /// Per type: the data of the AI build-spot search (`ai_site.rs`).
+    pub site_types: BTreeMap<u32, SiteType>,
+    /// The Misc `BuildingAngle` after `i2r(f2i(..))` (`0x6F020D30`): selects the footprint orientation.
+    pub building_angle: F32,
     /// `bldtm` of each type, seconds.
     pub build_seconds: BTreeMap<u32, i32>,
     queues: BTreeMap<ObjKey, TrainQueue>,
@@ -682,9 +697,66 @@ impl Game {
     // ------------------------------------------------------------------------------------------------------
     // Construction
 
+    /// The AI's build spot for a building of `type_id` around `anchor` (the town's hall position), for `owner`:
+    /// the search of `0x6F2E50E0` ([`crate::ai_site`], `docs/spec/ai-natives.md` section 8). When the map has no
+    /// pathing grid, the type has no pathing texture or the playable area is unknown, the ring stand-in below is
+    /// used instead.
+    pub fn find_build_site(&self, owner: u32, type_id: u32, anchor: (f32, f32)) -> Option<(f32, f32)> {
+        if let Some(r) = self.find_build_site_ai(owner, type_id, anchor) {
+            return r;
+        }
+        self.find_build_site_rings(owner, type_id, anchor)
+    }
+
+    /// `Some(result)` when the original's search could be run, `None` when its inputs are missing.
+    fn find_build_site_ai(&self, owner: u32, type_id: u32, anchor: (f32, f32)) -> Option<Option<(f32, f32)>> {
+        use crate::ai_site::{self, MarkUnit, Params};
+        let grid = self.production.grid.as_ref()?;
+        let playable = self.playable()?;
+        let footprint = self.production.site_types.get(&type_id)?.footprint?;
+        let rot = ai_site::rotation_class(self.production.building_angle);
+        let center = (F32::from_bits(anchor.0.to_bits()), F32::from_bits(anchor.1.to_bits()));
+        // The structures that mark the window: live units and pending jobs with a pathing texture, within 1600 of the
+        // centre (the range query of `0x6F2DF650`, flag 4 = a live unit; the footprint test stands in for the
+        // flag word check of `0x6F26E490`, UNSURE).
+        let origin = (playable.min_x, playable.min_y);
+        let mut units: Vec<MarkUnit> = Vec::new();
+        for (_, u) in self.unit_objects() {
+            if u.dead || u.removed {
+                continue;
+            }
+            let Some(st) = self.production.site_types.get(&u.type_id) else { continue };
+            let Some(fp) = st.footprint else { continue };
+            if !crate::natives::group::in_range(u.x, u.y, center.0, center.1, ai_site::HALF_WINDOW, origin) {
+                continue;
+            }
+            units.push(MarkUnit { buff_type: st.buff_type, buff_radius: st.buff_radius, x: u.x, y: u.y, footprint: fp });
+        }
+        for job in self.production.jobs.values() {
+            let Some(st) = self.production.site_types.get(&job.type_id) else { continue };
+            let Some(fp) = st.footprint else { continue };
+            let (jx, jy) = (F32::from_bits(job.x.to_bits()), F32::from_bits(job.y.to_bits()));
+            if crate::natives::group::in_range(jx, jy, center.0, center.1, ai_site::HALF_WINDOW, origin) {
+                units.push(MarkUnit { buff_type: st.buff_type, buff_radius: st.buff_radius, x: jx, y: jy, footprint: fp });
+            }
+        }
+        let count = crate::ai_manager::unit_count(self, owner, type_id, false);
+        let params = Params {
+            type_id,
+            player: owner,
+            count_ge_two: count >= 2,
+            center,
+            playable,
+            footprint,
+            rot,
+        };
+        let host = SiteHostImpl::new(self, grid, &units, rot, center, footprint);
+        Some(ai_site::find_site(&host, &params, &units).map(|(x, y)| (x.to_f32(), y.to_f32())))
+    }
+
     /// Finds a free square for a building of `type_id` near `anchor`, for `owner` (UNSURE stand-in, see the module
     /// notes). Rings of 64 units from 192 out to 1700.
-    pub fn find_build_site(&self, owner: u32, type_id: u32, anchor: (f32, f32)) -> Option<(f32, f32)> {
+    pub fn find_build_site_rings(&self, owner: u32, type_id: u32, anchor: (f32, f32)) -> Option<(f32, f32)> {
         let grid = self.production.grid.as_ref()?;
         let half = self.footprint_half(type_id);
         let mut structures: Vec<(f32, f32, f32)> = Vec::new();
@@ -1550,5 +1622,152 @@ impl Game {
             st.researched,
             counts
         )
+    }
+}
+
+impl Game {
+    /// The live structures of `owner` as `(type name, x, y, in progress)`, in creation order. For the boot report
+    /// (`w3boot --buildings`), to check where the AI places its buildings.
+    pub fn building_positions(&self, owner: u32) -> Vec<(String, f32, f32, bool)> {
+        let mut out = Vec::new();
+        for (k, u) in self.unit_objects() {
+            if u.owner != owner || u.dead || u.removed || !self.unit_types().is_building(u.type_id) {
+                continue;
+            }
+            let name = self
+                .unit_types()
+                .get(u.type_id)
+                .map_or_else(|| format!("{:08x}", u.type_id), |t| t.name.clone());
+            let (x, y) = self.unit_xy(k);
+            out.push((name, x, y, u.count_state & REGISTERED_IN_PROGRESS != 0));
+        }
+        out
+    }
+}
+
+/// The engine predicates of the build-spot search, over the model's pathing grid (`SiteHost` of [`crate::ai_site`]).
+///
+/// * `unwalkable`: the cell's pathing byte has the unwalkable bit (`0x02`) or a tree stands on it (a tree blocks the
+///   2 x 2 cells around its position, UNSURE).
+/// * `cell_level`: always 0 (the model has no cliff levels yet; UNSURE).
+/// * `reachable`: the cell is connected to the centre's cell over unwalkable-free cells, 8-neighbours, a diagonal
+///   only past two free orthogonals (the model of the pathing query `0x6F475560`, UNSURE).
+/// * `placement_ok`: every texel of the building's pathing texture lies on a buildable, walkable cell that no other
+///   structure texture, mine texture or tree covers (the model of `0x6F2A50C0`, UNSURE; the textures that matter
+///   are solid over their whole area).
+struct SiteHostImpl<'a> {
+    grid: &'a BuildGrid,
+    /// Cells covered by structures, mines and jobs (their footprint walks).
+    occupied: BTreeSet<(i32, i32)>,
+    trees: BTreeSet<(i32, i32)>,
+    reach: BTreeSet<(i32, i32)>,
+    footprint: crate::ai_site::Footprint,
+    rot: u32,
+}
+
+impl<'a> SiteHostImpl<'a> {
+    fn new(
+        gm: &'a Game,
+        grid: &'a BuildGrid,
+        units: &[crate::ai_site::MarkUnit],
+        rot: u32,
+        center: (F32, F32),
+        footprint: crate::ai_site::Footprint,
+    ) -> Self {
+        let mut me = SiteHostImpl {
+            grid,
+            occupied: BTreeSet::new(),
+            trees: BTreeSet::new(),
+            reach: BTreeSet::new(),
+            footprint,
+            rot,
+        };
+        for t in gm.production.trees.iter().filter(|t| t.wood > 0) {
+            let (cx, cy) = me.cell(t.x, t.y);
+            for dy in -1..=0 {
+                for dx in -1..=0 {
+                    me.trees.insert((cx + dx, cy + dy));
+                }
+            }
+        }
+        for u in units {
+            let mut cells = Vec::new();
+            crate::ai_site::footprint_walk(u.footprint, rot, u.x, u.y, |px, py| {
+                cells.push((px.to_f32(), py.to_f32()));
+            });
+            for (px, py) in cells {
+                let c = me.cell(px, py);
+                me.occupied.insert(c);
+            }
+        }
+        me.flood(center);
+        me
+    }
+
+    fn cell(&self, x: f32, y: f32) -> (i32, i32) {
+        (((x - self.grid.origin_x) / 32.0).floor() as i32, ((y - self.grid.origin_y) / 32.0).floor() as i32)
+    }
+
+    fn walkable_cell(&self, c: (i32, i32)) -> bool {
+        c.0 >= 0
+            && c.1 >= 0
+            && c.0 < self.grid.width
+            && c.1 < self.grid.height
+            && self.grid.types[(c.1 * self.grid.width + c.0) as usize] & 0x02 == 0
+            && !self.trees.contains(&c)
+    }
+
+    /// Flood fill of the walkable cells from the centre, inside the search window.
+    fn flood(&mut self, center: (F32, F32)) {
+        let start = self.cell(center.0.to_f32(), center.1.to_f32());
+        let lim = 55;
+        let mut stack = vec![start];
+        self.reach.insert(start);
+        while let Some((x, y)) = stack.pop() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                let n = (x + dx, y + dy);
+                if (n.0 - start.0).abs() > lim || (n.1 - start.1).abs() > lim || self.reach.contains(&n) {
+                    continue;
+                }
+                if !self.walkable_cell(n) {
+                    continue;
+                }
+                if dx != 0 && dy != 0 && (!self.walkable_cell((x + dx, y)) || !self.walkable_cell((x, y + dy))) {
+                    continue;
+                }
+                self.reach.insert(n);
+                stack.push(n);
+            }
+        }
+    }
+}
+
+impl crate::ai_site::SiteHost for SiteHostImpl<'_> {
+    fn cell_level(&self, _cell_x: i32, _cell_y: i32) -> i32 {
+        0
+    }
+
+    fn unwalkable(&self, x: F32, y: F32) -> bool {
+        !self.walkable_cell(self.cell(x.to_f32(), y.to_f32()))
+    }
+
+    fn reachable(&self, _from: (F32, F32), to: (F32, F32)) -> bool {
+        self.reach.contains(&self.cell(to.0.to_f32(), to.1.to_f32()))
+    }
+
+    fn placement_ok(&self, x: F32, y: F32) -> bool {
+        let mut ok = true;
+        crate::ai_site::footprint_walk(self.footprint, self.rot, x, y, |px, py| {
+            let c = self.cell(px.to_f32(), py.to_f32());
+            let in_grid = c.0 >= 0 && c.1 >= 0 && c.0 < self.grid.width && c.1 < self.grid.height;
+            if !in_grid
+                || self.grid.types[(c.1 * self.grid.width + c.0) as usize] & 0x0A != 0
+                || self.trees.contains(&c)
+                || self.occupied.contains(&c)
+            {
+                ok = false;
+            }
+        });
+        ok
     }
 }

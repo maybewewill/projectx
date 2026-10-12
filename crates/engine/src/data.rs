@@ -531,3 +531,36 @@ fn pick_record(code: &str, ty: &UnitTypeData) -> sim::natives::PickRecord {
         tilesets: ty.tilesets.clone(),
     }
 }
+
+/// Installs the data of the AI build-spot search (`sim::ai_site`, `docs/spec/ai-natives.md` section 8): per unit type
+/// the `buffType` enum, `buffRadius` and the size of the pathing texture (`pathTex`, read from the TGA header in the
+/// game archives; `_` or a missing file means no footprint), and the Misc `BuildingAngle`.
+pub fn install_sites(game: &mut Game, archives: &[&[u8]], data: &GameData, notes: &mut Vec<String>) {
+    let mut sizes: BTreeMap<String, Option<(u32, u32)>> = BTreeMap::new();
+    for (code, ty) in &data.unit_types {
+        let Some(id) = rawcode(code) else { continue };
+        let tex = unittype::unquote(&ty.path_tex).to_string();
+        let footprint = if tex.is_empty() || tex == "_" {
+            None
+        } else {
+            *sizes.entry(tex.clone()).or_insert_with(|| match read_last(archives, &tex) {
+                Ok(Some(b)) if b.len() >= 18 => {
+                    Some((u16::from_le_bytes([b[12], b[13]]) as u32, u16::from_le_bytes([b[14], b[15]]) as u32))
+                }
+                _ => {
+                    notes.push(format!("pathing texture {tex}: not found or too short"));
+                    None
+                }
+            })
+        };
+        game.production_mut().site_types.insert(
+            id,
+            sim::production::SiteType {
+                buff_type: unittype::buff_type_enum(&ty.buff_type),
+                buff_radius: F32::from_bits(ty.buff_radius.to_bits()),
+                footprint: footprint.map(|(w, h)| sim::ai_site::Footprint { w, h }),
+            },
+        );
+    }
+    game.production_mut().building_angle = sim::ai_site::building_angle(data.misc.building_angle);
+}

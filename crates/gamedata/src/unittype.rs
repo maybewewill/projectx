@@ -175,6 +175,9 @@ pub struct UnitTypeData {
     pub buff_radius: f32,
     /// `buffType` (text, the buff type name).
     pub buff_type: String,
+    /// `pathTex` (text, the pathing texture path; `_` for none). Not stored in the record: it names the
+    /// `pPathingFootprint` property (`0x6F32D0B0`).
+    pub path_tex: String,
     /// `race` (text, the race name of `UnitData`).
     pub race: String,
     /// The race enum of the record (offset `+0x1C0`): [`race_enum`] of the `race` cell. CONFIRMED table and call
@@ -558,6 +561,7 @@ pub fn load_unit_type(
         require_water_radius: data.real("requireWaterRadius"),
         buff_radius: data.real("buffRadius"),
         buff_type: data.text("buffType"),
+        path_tex: data.text("pathTex"),
         move_type: data.text("movetp"),
         race: data.text("race"),
         race_id: race_enum(&data.text("race")),
@@ -743,6 +747,21 @@ pub const RACE_TABLE: &[(&str, i32)] = &[
 /// The value of a NULL race text in `0x6F26E210` (CONFIRMED: `lea eax,[ecx+7]`). The builder passes a text pointer;
 /// whether a missing cell gives NULL is UNSURE, so [`load_unit_type`] uses [`race_enum`] of the empty text (0).
 pub const RACE_NULL_TEXT: i32 = 7;
+
+/// The `buffType` enum of the AI placement (`0x6F262E60`): empty or `_` 0, `townhall` 1, `resource` 2, `factory` 4,
+/// `buffer` 8, any other text 0. The compare is a Storm import (case rule LIKELY insensitive, not checked).
+pub fn buff_type_enum(text: &str) -> u32 {
+    let t = unquote(text);
+    if t.is_empty() || t == "_" {
+        return 0;
+    }
+    for (name, v) in [("townhall", 1), ("resource", 2), ("factory", 4), ("buffer", 8)] {
+        if t.eq_ignore_ascii_case(name) {
+            return v;
+        }
+    }
+    0
+}
 
 /// The race enum of a race name (`0x6F26E210`). The first entry of [`RACE_TABLE`] whose name matches gives its value;
 /// no match gives 0. The match is ASCII case-insensitive (LIKELY: the compare is a Storm import, ordinal 508, that is

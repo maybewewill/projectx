@@ -26,7 +26,7 @@ mod force;
 pub mod game;
 mod gamecache;
 pub mod gamestate;
-mod group;
+pub(crate) mod group;
 mod hashtable;
 pub mod hero;
 pub mod item;
