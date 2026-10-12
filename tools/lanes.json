@@ -1,13 +1,7 @@
 {
  "wave": "3",
- "updated": "2026-10-12 22:20 (UTC+5)",
+ "updated": "2026-10-12 23:10 (UTC+5)",
  "lanes": [
-  {
-   "id": "S11",
-   "model": "Sonnet",
-   "task": "Agile modifier evaluation (exact listener tick for countdowns, time of day, life ramps)",
-   "status": "running"
-  },
   {
    "id": "S13",
    "model": "Sonnet",
@@ -31,6 +25,18 @@
    "model": "Sonnet",
    "task": "MDX geoset visibility: correct GEOA/KGAO per-sequence sampling, hide death-only geosets",
    "status": "running"
+  },
+  {
+   "id": "S17",
+   "model": "Sonnet",
+   "task": "Other agile classes: pulse/velocity modifiers → mana/life regen and ability cooldowns on the agile engine",
+   "status": "running"
+  },
+  {
+   "id": "S11",
+   "model": "Sonnet",
+   "task": "Agile modifier evaluation (exact listener tick for countdowns, time of day, life ramps) (merged)",
+   "status": "done"
   },
   {
    "id": "S12",
