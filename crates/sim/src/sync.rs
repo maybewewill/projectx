@@ -456,10 +456,166 @@ pub struct RecordPoint {
     pub net: u32,
 }
 
+/// The pathing-object registry behind the two world words X and Y (docs/spec/lockstep.md section 16).
+///
+/// CONFIRMED against the original (`tools/emu/pr_registry_emu.py`, 400 random sequences, 24,598 operations, 0
+/// mismatches of the whole table state): every `CPrRgEntry`-derived object takes a slot in an entry table
+/// (`0x6F4AEFF0` registers, `0x6F4AEF00` unregisters). Slots come from a free list threaded through the entries
+/// (the most recently freed slot is reused first, like the handle table), else the table grows by one. A
+/// registration with no descriptor (or descriptor slot -1) also takes the **birth tag** `Y` (`world+0x50`, then
+/// incremented); `Y` never decreases. `X` is the head of the free list when it is not -1, else the table length
+/// (the dump prints `world+0x40`, or `world+0x1C` when that is -1).
+///
+/// The second table (descriptor slot -2) hands out the tag from `world+0x54` and is not part of the sync value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrRegistry {
+    used0: Vec<bool>,
+    free0: Vec<u32>,
+    y: u32,
+    y2: u32,
+    used1: Vec<bool>,
+    free1: Vec<u32>,
+}
+
+/// A registration handle: the slot and the tag the object received.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrHandle {
+    /// Table slot; bit 31 set = the flagged table.
+    pub slot: u32,
+    /// The tag (birth tag for table 0).
+    pub tag: u32,
+}
+
+impl PrRegistry {
+    /// An empty registry (the world constructor state: no entries, `Y = 0`).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers an object in table 0 and gives it a birth tag (`0x6F4AEFF0` without a descriptor).
+    pub fn register(&mut self) -> PrHandle {
+        let slot = match self.free0.pop() {
+            Some(s) => s,
+            None => {
+                self.used0.push(false);
+                (self.used0.len() - 1) as u32
+            }
+        };
+        self.used0[slot as usize] = true;
+        let tag = self.y;
+        self.y = self.y.wrapping_add(1);
+        PrHandle { slot, tag }
+    }
+
+    /// Registers an object in the flagged table (descriptor slot -2); it does not touch `Y`.
+    pub fn register_flagged(&mut self) -> PrHandle {
+        let slot = match self.free1.pop() {
+            Some(s) => s,
+            None => {
+                self.used1.push(false);
+                (self.used1.len() - 1) as u32
+            }
+        };
+        self.used1[slot as usize] = true;
+        let tag = self.y2;
+        self.y2 = self.y2.wrapping_add(1);
+        PrHandle {
+            slot: slot | 0x8000_0000,
+            tag,
+        }
+    }
+
+    /// Unregisters an object (`0x6F4AEF00`): its slot goes on the free list; `Y` is unchanged.
+    pub fn unregister(&mut self, h: PrHandle) {
+        let (used, free, i) = if h.slot & 0x8000_0000 != 0 {
+            (&mut self.used1, &mut self.free1, h.slot & 0x7FFF_FFFF)
+        } else {
+            (&mut self.used0, &mut self.free0, h.slot)
+        };
+        if let Some(u) = used.get_mut(i as usize) {
+            if *u {
+                *u = false;
+                free.push(i);
+            }
+        }
+    }
+
+    /// `Y`, the next birth tag.
+    pub fn y(&self) -> u32 {
+        self.y
+    }
+
+    /// `X`: the head of the free list, or the table length when the list is empty.
+    pub fn x(&self) -> u32 {
+        self.free0
+            .last()
+            .copied()
+            .unwrap_or(self.used0.len() as u32)
+    }
+
+    /// Live objects in table 0.
+    pub fn live(&self) -> usize {
+        self.used0.iter().filter(|u| **u).count()
+    }
+
+    /// The world words for the sync value.
+    pub fn world_words(&self) -> WorldWords {
+        WorldWords {
+            f1c: self.used0.len() as u32,
+            f40: self.free0.last().copied().unwrap_or(u32::MAX),
+            f50: self.y,
+        }
+    }
+}
+
+/// Whether a run of "Y only" residuals `r_i = rotr6(D_i)` can come from one monotone counter: a start `y0 < 2^16`
+/// with `y_{i+1} = y_i ^ r_i` and `y_i < y_{i+1} <= y_i + max_step` for every step.
+pub fn y_chain_feasible(run: &[u32], max_step: u32) -> bool {
+    'start: for y0 in 0..(1u32 << 16) {
+        let mut y = y0;
+        for &r in run {
+            let ny = y ^ r;
+            if !(y < ny && ny <= y.saturating_add(max_step)) {
+                continue 'start;
+            }
+            y = ny;
+        }
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rng::{Rng, Streams};
+
+    #[test]
+    fn pr_registry_reuses_most_recently_freed_slot() {
+        let mut r = PrRegistry::new();
+        let a = r.register();
+        let b = r.register();
+        let c = r.register();
+        assert_eq!((a.slot, b.slot, c.slot, r.y(), r.x()), (0, 1, 2, 3, 3));
+        r.unregister(a);
+        r.unregister(c);
+        assert_eq!(r.x(), 2);
+        let d = r.register();
+        assert_eq!((d.slot, d.tag, r.y(), r.x()), (2, 3, 4, 0));
+        r.unregister(d);
+        r.unregister(d);
+        assert_eq!(r.x(), 2);
+        let f = r.register_flagged();
+        assert_eq!(f.slot, 0x8000_0000);
+        assert_eq!(r.y(), 4);
+        assert_eq!(r.live(), 1);
+    }
+
+    #[test]
+    fn y_chain_detects_monotone_runs() {
+        assert!(y_chain_feasible(&[1, 3], 8));
+        assert!(!y_chain_feasible(&[0x8000, 0x8000], 8));
+    }
 
     /// Step-by-step version written in the order of the machine code, used as the reference.
     fn asm_order(t: u32, a: u32, x: u32, y: u32, r: u32) -> u32 {

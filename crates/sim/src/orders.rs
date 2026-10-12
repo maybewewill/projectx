@@ -558,6 +558,7 @@ impl Game {
             (u.x, u.y)
         };
         let straight = vec![goal];
+        self.pr_path_request();
         let Some(map) = self.orders.pathing.as_mut() else {
             return straight;
         };

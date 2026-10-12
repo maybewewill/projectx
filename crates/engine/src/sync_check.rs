@@ -17,7 +17,8 @@
 use std::fmt::Write as _;
 
 use sim::sync::{
-    participant_rotation, residual, slot, tick_clock_at_slot, RecordPoint, SyncState,
+    participant_rotation, residual, slot, tick_clock_at_slot, y_chain_feasible, RecordPoint,
+    SyncState,
 };
 use w3g::{Block, Replay};
 
@@ -53,6 +54,12 @@ pub struct SyncReport {
     pub longest_exact_run: usize,
     /// Exact pairs per window of [`WINDOW`] pairs.
     pub exact_per_window: Vec<usize>,
+    /// Runs (of at least 2) of consecutive birth-tag-only pairs.
+    pub y_runs: usize,
+    /// Of those, runs that one monotone counter `Y` can produce (steps up to 4096, runs cut at 12 pairs).
+    pub y_chain_runs: usize,
+    /// Pairs inside the chain-consistent runs.
+    pub y_chain_pairs: usize,
     /// Leave blocks folded into the net checksum.
     pub leaves: usize,
     /// The net checksum at the end of the file.
@@ -97,6 +104,11 @@ impl SyncReport {
             self.first_exact_pair
                 .map_or("none".to_string(), |i| i.to_string()),
             self.longest_exact_run
+        );
+        let _ = writeln!(
+            s,
+            "  birth-tag runs (>= 2 pairs): {}  consistent with one monotone counter Y: {} ({} pairs)",
+            self.y_runs, self.y_chain_runs, self.y_chain_pairs
         );
         if !self.exact_per_window.is_empty() {
             let _ = write!(s, "  exact pairs per {WINDOW} pairs:");
@@ -167,6 +179,8 @@ pub fn check_blocks(blocks: &[Block]) -> SyncReport {
     }
     report.final_net = state.net().value();
     let mut run = 0usize;
+    let mut y_run: Vec<u32> = Vec::new();
+    let mut y_runs: Vec<Vec<u32>> = Vec::new();
     for (k, pair) in points.windows(2).enumerate() {
         let r = residual(&pair[0], &pair[1], report.net_rotation);
         report.pairs += 1;
@@ -186,9 +200,25 @@ pub fn check_blocks(blocks: &[Block]) -> SyncReport {
             report.first_inexact_pair.get_or_insert(k);
             if r.rotate_right(6) < (1 << 16) {
                 report.tag_like_pairs += 1;
+                y_run.push(r.rotate_right(6));
+                continue;
             } else {
                 report.other_pairs += 1;
             }
+        }
+        if !y_run.is_empty() {
+            y_runs.push(std::mem::take(&mut y_run));
+        }
+    }
+    if !y_run.is_empty() {
+        y_runs.push(y_run);
+    }
+    for mut r in y_runs.into_iter().filter(|r| r.len() >= 2) {
+        r.truncate(12);
+        report.y_runs += 1;
+        if y_chain_feasible(&r, 4096) {
+            report.y_chain_runs += 1;
+            report.y_chain_pairs += r.len();
         }
     }
     report
