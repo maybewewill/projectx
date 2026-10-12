@@ -7,22 +7,21 @@ LIKELY (the mechanism is read, a detail is inferred), UNSURE (not fully decoded,
 
 Behaviour is written in plain words. The bodies were read in a Ghidra decompile kept outside the repo.
 
-## 1. Counts (2026-10-12, after S15; the older figures are in the parentheses)
+## 1. Counts (2026-10-12, after S19; the older figures are in the parentheses)
 
 | | Count |
 |---|---|
 | AI natives in table `ai` | 124 |
-| Bound (`implemented: true`) | 115 (100 after lane H, 97 before) |
-| Not bound (`implemented: false`, logged and return the default) | 9 (24, 27) |
+| Bound (`implemented: true`) | **124** (115 after S15, 100 after lane H, 97 before) |
+| Not bound (`implemented: false`, logged and return the default) | **0** (9 after S15, 24, 27) |
 | Level of the bound rows: CONFIRMED / LIKELY / UNSURE | 44 / 54 / 21 (a grep of the table also counts the 4 main-VM rows) |
 | Raised to CONFIRMED by a Unicorn run | the bodies of 5 town natives (section 6), the assault request flow and the creep-camp chooser (section 9) |
 
-The 9 unbound: `GetHeroId`, `GetHeroLevelAI`, `GetTownUnitCount`, `GetNextExpansion`, `GetExpansionPeon`, `SetExpansion`,
+S19 bound the last 9 (section 10). The list below is the state after S15, kept for the history. The 9 that were unbound: `GetHeroId`, `GetHeroLevelAI`, `GetTownUnitCount`, `GetNextExpansion`, `GetExpansionPeon`, `SetExpansion`,
 `GetBuilding`, `GetMegaTarget`, `IgnoredUnits`. A 900 s run of orc vs human calls three of them (`GetExpansionPeon`
 x188, `GetMegaTarget` x9, `GetNextExpansion` x342) and gets the defaults.
 
-The unbound natives are pinned by a test (`unbound_ai_natives_are_pinned`). A change in the list has to change
-that test on purpose. Lane G bound 9: the five town natives (section 6) and four captain/threat reads (6.4).
+The test `no_ai_native_is_left_unbound` replaces the old pin (`unbound_ai_natives_are_pinned`). Lane G bound 9: the five town natives (section 6) and four captain/threat reads (6.4).
 
 ## 2. The unbound natives and what they need (written for the 36 of the first pass; 9 are bound now, see section 6)
 
@@ -556,3 +555,130 @@ attack captain with its unit types, the first player-versus-player kill and the 
   unbound natives of section 1.
 * Unicorn-isolable next: the camp creep assignment `0x6F2E38A0` (needs the Misc reader stubbed), the readiness `0x6F2E91A0`
   (needs a unit list), the at-goal compare `0x6F2E76E0`.
+
+## 10. S19: captain routines, expansions and the last nine natives (2026-10-12)
+
+Code: `crates/sim/src/captains.rs` (`goal_limit`, `within_goal`, `readiness_with`, `assign_camp`, `next_expansion`,
+`expansion_peon`, `mega_target`, `ignored_units`, `first_building`, `ai_hero`, `town_unit_count`), the bindings in
+`crates/sim/src/natives/ai.rs`. Harnesses (Unicorn, real code of the routine, helpers stubbed): `tools/emu/captain_goal_emu.py`,
+`captain_ready_emu.py`, `camp_assign_emu.py`; vectors `crates/sim/tests/vectors/captain_goal_seed1.tsv`,
+`captain_ready_seed1.tsv`, `camp_assign_seed1.tsv`, replayed by `crates/sim/tests/captain_vectors.rs` (the readiness test
+needs `GAME_DLL` for the reciprocal table). The bodies were read in IDA on the user's `game.dll.i64`; nothing of it is in
+the repo.
+
+### 10.1 Checked in Unicorn (0 mismatches)
+* **Captain position test `0x6F2E76E0`** (`CaptainIsHome` -> `0x6F2E77C0`, `CaptainAtGoal` -> `0x6F2E77F0`), **600 cases**.
+  True iff `V >= D`: D is the soft-float squared distance (`0x6F6EF3B0`) from the captain's position (vtable slot `0xB8`)
+  to the point; V is `20000.0` (`0x6FAB4F50`) when the radius is below `100.0` (`0x6FAAE574`), else
+  `add(mul(mul(2.0, r), r), 5000.0)` (constants `0x6FAAE504`, `0x6FAB4F54`). So the radius 500.0 of "home" means about 710.6
+  world units and the default goal radius 200.0 about 291.5 (the older reading "distance <= radius" was wrong; the
+  squared compare of section 9.1 is settled). UNSURE: the captain's position is the centre of the members in the model; the
+  normaliser `0x6F4743A0` that converts the slot's result was stubbed.
+* **Captain readiness `0x6F2E91A0`** (`CaptainReadiness`, `...HP`, `...Ma`), **600 cases** (random groups of 0..12 units
+  with heroes, illusions and mana users). The routine reads only its first stack argument (the life flag); the wrappers
+  push (1,1), (1,0), (0,1), so **`CaptainReadiness` equals `CaptainReadinessHP`** (life) and only `...Ma` is mana. Heroes
+  (type code with an upper-case first letter, illusion flag `0x40000000` at `+0x5C` clear) and other units have separate
+  life sums; mana is pooled. Every sum starts at 1.0; the others' maximum life also gets `(captain+0xB8 - captain+0xBC) * 400`
+  (units the captain should hold minus the group size: missing units count as 400 maximum life with no life). Result
+  `f2i(div(mul(sum, 100.0), max_sum))`; with the life flag the smaller of the hero and the others' percentage. The old model
+  (min of life and mana for the combined native, no hero split, no missing-unit term) is replaced. UNSURE: the field
+  `+0xB8` has no model (the sim uses 0 missing).
+* **Creep camp assignment `0x6F2E38A0`**, **600 cases**: the squared limit is `I2R(d * d)` with `d` = Misc
+  `CreepCampPathingCellDistance` (cached at `0x6FAB4EBC`), camps with 12 members or without a living first member are
+  skipped, the strictly nearest wins (first on ties). The sim's registration already matched; it now calls the same function.
+  UNSURE: the distance routine `0x6F477070` -> `0x6F476860` (stubbed) is taken as the squared cell distance.
+
+### 10.2 The retreat rule (bit 2 of the captain flags), decoded, not run
+The bit is set at exactly one place, `0x6F2ED560(point, ..., flag)`, when called with the flag from `0x6F2EDB80`, which
+is called twice from `0x6F2D2160` for the attack and the defense captain. `0x6F2D2160` is called by the handler of an
+ability cast (`0x6F14CD30`) when the caster, a unit of a captain's group, uses a teleport-like ability and its life is at
+most the constant at `0x6FAAE594`: the group then retreats to the cast point. Nothing else sets the bit; the scripts
+read it with `CaptainRetreating`. The clearing: attack-move clears it (section 9.1), and the go-home step `0x6F2EC670`
+(`CaptainGoHome`) clears it when the group is home (`0x6F2E77C0`) and at least half of the group (record `+0xC4`, "units
+home", against `+0xBC / 2`) is home; if not home it issues the move order `0xD0012` toward the home point. The sim has no
+town portal / teleport use by AI units, so the bit stays 0 there (CONFIRMED rule, no trigger in the model); `go_home` now
+follows the clearing rule. In 40 minutes of the runs below `CaptainRetreating` was called ~40 times and always false, which
+matches this.
+
+### 10.3 Expansions
+* **`GetNextExpansion`** (`0x6F2E10D0`): CONFIRMED structure. It keeps a cache (record `+0x19C`) with a timer and
+  re-ranks when the timer is idle: candidates are the town sites whose mine holds more than 600 gold, that no AI of the
+  player or an ally already holds in a town slot (`0x6F2DF2A0`), and where no town hall or haunted mine stands (callback
+  `0x6F2DF330`). Three classes by path cost from the defense captain's home (`0x6F4758D0`, limit 5000, lowered by the
+  world bound + 100): reachable with no player's unit near the site (callback `0x6F2DC600`), reachable with one near,
+  unreachable (nearest by straight distance). The native returns the site index, -1 when none. The model ranks by straight
+  distance and treats every site as reachable (UNSURE), returns the index of the registered town site that holds the mine.
+* **`GetExpansionPeon`** (`0x6F2D1F40`): CONFIRMED structure. From the AI's units that are alive, have a build ability that is
+  not currently building and whose type flags are not both `0x30000000`, the nearest by path cost (limit 700) to the
+  expansion's mine, in three classes: AI mode 0 or 7 (idle), then mode 5/6 split by a type flag bit, then none. The model:
+  idle workers, then gold harvesters, then lumber harvesters, straight distance.
+* **`SetExpansion(peon, id)`** (`0x6F2D8130` -> `0x6F2D7F90`): CONFIRMED structure: gate `0x6F2D1A20`; the peon leaves its captain
+  (`0x6F2EC850`); the peon's build ability must accept the type (vtable `+0x270`); the AI timer value at `+0x188` must be zero;
+  the build-spot search `0x6F2E50E0` runs centred on the expansion site (`+0x3C`, `+0x44` of the site record); a failure
+  (status below 0) starts a retry timer (message `0xD0244`, `0x6FAAE528`) and returns 0; for the haunted-mine type `ugol` the order is
+  the haunt order `0x6F294D40` on the mine, otherwise `0x6F294B30` at the found point; returns 1. The model uses the
+  S14 search ([`ai_site`]) centred on the mine and `start_build_job`; returns whether the job started.
+* **`GetExpansionFoe`** (`0x6F2E15C0` -> the group builder with a default callback): unchanged (camp nearest to the
+  site within 1100).
+* **`GetTownUnitCount(type, town, only_done)`** (`0x6F2DD0C0`, no function in IDA, read as disassembly): `0x6F2D1C10(type)`
+  (workers on their way to build it: state 2 and the build ability accepts the type) plus `0x6F2D5430(type, town,
+  only_done)`: the AI's units of the type whose AI record's town reference (`+0x48`) equals the site of the given town slot
+  (slot above 3 or empty gives 0); with the flag set, units with `+0x5C & 0x2000000` (under construction) are left out. The
+  model counts units within 1024 of the town's anchor.
+
+### 10.4 The other natives
+* **`GetMegaTarget`** (`0x6F2DDD60`): reads the reference at AI state `+0x2C4` (`0x6F2D6500`). It is written by `0x6F2D7EC0`
+  (a message handler `0x6F2DBEE0`, message `0xD0243`): only when `SetWatchMegaTargets` set the flag `0x2000`, a scan of all
+  units (callback `0x6F2D18D0`) adds strengths (hero: `(level+1)/2 + 4`, other: the type level, a few structure types fixed
+  1/3/4) to the totals of own, allied (own + allies) and enemy (and per enemy player); with allied > enemy and own >= 20
+  the first player index (not self) with a recorded key building and own > 2 * that player's strength gives the target.
+  Model: re-evaluated at each call; the key building is an enemy town hall (the original sets it inside a branch whose
+  guard `0x6F26DE50` is not decoded, UNSURE).
+* **`IgnoredUnits(type)`** (`0x6F2DCE80`): the AI's units of the type (group builder) whose AI record (`0x6F275D90`) is
+  missing or has none of its three references (`+0x30`, `+0x3C`, `+0x48`) resolving. The model: not in a captain and not
+  harvesting or building (UNSURE).
+* **`GetBuilding(player)`** (`0x6F2E2E80`): null for a null/removed player; the group builder returns the first
+  structure that does not have the ability `Buns` (callback `0x6F2DC120`; `Unsummon` puts it on). The model remembers the
+  buildings `Unsummon` was called on.
+* **`GetHeroId`** (`0x6F2DDF50`) / **`GetHeroLevelAI`** (`0x6F2DE0E0`): read the AI's hero record (`+0x1F0`) and, inside a hero-level
+  callback, the hero being levelled. The model takes the first living hero of the AI. Note: the engine calls the
+  function given to `SetHeroLevels` when a hero levels up; the sim does not do that yet, so AI heroes learn no skills
+  (the two natives are only read by `SkillArrays`, which that call would run).
+
+### 10.5 The build-spot search and the cliff level
+The search host answered level 0 for `0x6F0128C0`. It now asks `Game::terrain()` (`TerrainGrid::cell_level`, S13) and the
+cell numbers start at the whole-map corner (`Game::world_bounds()`, terrain.md section 1) instead of the playable minimum. On
+(2)Circumvention the building positions of section 8.8 are unchanged (every cell inside the windows has the centre's level,
+or the same ones differ only outside the playable window), so the 1200 s run below gives the same spots.
+
+### 10.6 Runs (release build of `w3boot`, 12000 steps = 1200 s, SpecDamage, seed 0)
+`--computer 0:orc --computer 1:human`, (2)Circumvention: 0 aborted AI threads, 9103 logged calls.
+* Waves: orc 1 (336.2 s, 4 units: blademaster, 2 grunts, head hunter, against a creep camp); human 4 (362.7 s 6 footmen, 479.9 s 7,
+  708.8 s 10, 846.2 s 10), all at creep camps. **No base attack by either AI**: no wave has an enemy structure as its goal.
+  The orc's next waves never start (see the reasons below).
+* **Expansions**: the human takes one (a town hall at (3520, -64) with two guard towers at about 600 s: `GetNextExpansion` 113
+  calls, `GetExpansionPeon` 1, `SetExpansion` 1, `GetTownUnitCount` 1032). The orc never does: `GetExpansionFoe` is non-null
+  in all 165 calls (a creep camp is at the site), `StartExpansion` returns at once, `GetExpansionPeon` is never called.
+* Kills: p0 -> creeps 3, p1 -> creeps 10, creeps -> p0 1, creeps -> p1 4. **No player-versus-player kill** (S15 had one at
+  597.7 s because its readiness model let the second waves meet in the middle; with the life-only readiness above the orc
+  waits until its group is healthy, and the sim has no life regeneration, so it never is: the survivors stay at 5 % life).
+* At 1200 s: orc fortress, 14 peons, 6 grunts, 3 head hunters, 3 berserkers, 2 demolishers, hero; human keep, 16 peasants,
+  8 footmen, 4 riflemen, hero, 2 guard towers (+ the expansion).
+
+`--computer 0:orc --computer 1:human --computer 2:undead --computer 3:nightelf`, (4)TwistedMeadows: 0 aborted threads, 13585
+logged calls. Orc: 2 waves (380.8 s 2 grunts, 410.0 s 6), one expansion (SetExpansion x1); human: 1 wave (197.0 s, Mountain King
+and 2 footmen); **undead and night elf do not progress** (undead: 5 acolytes, 2 ghouls, 10615 gold, 0 lumber, food 9/20, no hero;
+night elf: 7 wisps, 4100 lumber, 140 gold; no wave, none of the natives above called): their economy in the production model is
+stuck (undead gets no lumber, night elf has no entangled mine); this is older than S19 and not in the natives. Kills: orc ->
+creeps 7, human -> creeps 2, creeps -> human 1; no player kill. With `0:orc 1:human 2:orc 3:human` instead: waves p0 2, p1 1, p2 1, p3 1;
+expansions: p0 one; kills: p0 -> creeps 7, p1/p2/p3 -> creeps 2 each; again no base attack and no player kill.
+
+### 10.7 Open items (in order of effect on the AI's play)
+1. **Life regeneration of units** (and mana): not in the sim; groups never recover, so `CaptainReadiness >= readyPercent` stops
+   new waves after the first fight. This is the main reason that no AI attacks a base in 1200 s.
+2. The hero-level callback (`SetHeroLevels`) is never run: AI heroes learn no skills.
+3. Undead and night elf economy/production (undead lumber, night elf entangle and moon-well building).
+4. The captain mover (leader and formation), the retreat trigger (needs unit teleport use), the threat scan behind
+   `TownThreatened` (record `+0x164`, writer not found), the path-cost unit of `0x6F4758D0`, the mega-target timer and its
+   key-building branch, the `+0xB8` field of the captain record, the expansion cache timer.
+5. Wave composition after the first wave depends on the same readiness gate.
