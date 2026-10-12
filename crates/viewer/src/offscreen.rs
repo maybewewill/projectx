@@ -51,8 +51,22 @@ pub fn render_terrain_at(
     camera_target: Option<[f32; 3]>,
     zoom: f32,
 ) -> Result<Vec<u8>, String> {
+    render_terrain_hud(terrain, width, height, camera_target, zoom, None)
+}
+
+/// As [`render_terrain_at`], with an optional UI layer drawn over the terrain in the same pass
+/// (`viewer --hud`). The UI covers the whole image: its window is the viewport, and its transparent
+/// parts show the terrain.
+pub fn render_terrain_hud(
+    terrain: &TerrainScene,
+    width: u32,
+    height: u32,
+    camera_target: Option<[f32; 3]>,
+    zoom: f32,
+    hud: Option<&crate::ui::UiScene>,
+) -> Result<Vec<u8>, String> {
     let (width, height) = (width.max(1), height.max(1));
-    pollster::block_on(render_terrain_async(terrain, width, height, camera_target, zoom))
+    pollster::block_on(render_terrain_async(terrain, width, height, camera_target, zoom, hud))
 }
 
 /// Brings the camera `zoom` times closer to its target (the clip planes follow the distance).
@@ -92,6 +106,7 @@ async fn render_terrain_async(
     height: u32,
     camera_target: Option<[f32; 3]>,
     zoom: f32,
+    hud: Option<&crate::ui::UiScene>,
 ) -> Result<Vec<u8>, String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     // A hardware adapter if there is one, otherwise the software fallback (WARP on Windows).
@@ -239,6 +254,41 @@ async fn render_terrain_async(
             multiview_mask: None,
         });
         terrain_gpu.draw(&mut pass, &uniform_bind_group);
+    }
+    if let Some(ui_scene) = hud {
+        // Same colour target, loaded (not cleared), no depth: the UI is alpha-blended over the terrain.
+        let ui_gpu = crate::ui::gpu::UiGpu::new(
+            &device,
+            &queue,
+            FORMAT,
+            &uniform_layout,
+            &texture_layout,
+            ui_scene,
+            (width, height),
+        )?;
+        let t = ui_gpu.text_stats;
+        eprintln!(
+            "ui: text: {} runs drawn, {} skipped, {} glyph quads, {} distinct glyphs, {} lines",
+            t.runs_drawn, t.runs_skipped, t.glyphs, t.distinct_glyphs, t.lines
+        );
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("hud pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_bind_group(0, &uniform_bind_group, &[]);
+        ui_gpu.render(&mut pass);
     }
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {

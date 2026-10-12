@@ -180,8 +180,15 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 camera_start = Some(it.next().ok_or("--camera-start needs a player slot")?.parse()?);
             }
             "--zoom" => zoom = it.next().ok_or("--zoom needs a factor")?.parse()?,
+            "--hud" => {
+                let race = it.next().ok_or("--hud needs a race (human, orc, undead, nightelf)")?;
+                sim.hud = Some(race.clone());
+            }
             other => return Err(format!("unknown option {other}").into()),
         }
+    }
+    if sim.hud.is_some() && sim.seconds.is_none() {
+        return Err("--hud needs --sim-seconds (the HUD shows the live simulation)".into());
     }
     // --camera-start PLAYER: the start location of that player slot from war3map.w3i.
     if let (Some(slot), None) = (camera_start, camera_at) {
@@ -334,6 +341,30 @@ struct SimArgs {
     /// `--frames K --every S`: K pictures, the first at `seconds`, then one every S game seconds.
     frames: Option<usize>,
     every: Option<f64>,
+    /// `--hud RACE`: draw the ConsoleUI layer and the minimap over the frame.
+    hud: Option<String>,
+}
+
+/// The `--hud` state of a run: the console scene, the minimap frame and its picture of the map.
+#[cfg(not(target_arch = "wasm32"))]
+struct HudState {
+    scene: viewer::ui::UiScene,
+    slot: Option<viewer::hud::MinimapSlot>,
+    base: viewer::minimap::MinimapBase,
+    /// The player whose resources are shown: the first computer slot of that race, else slot 0.
+    player: u32,
+}
+
+/// `--hud` race name to the race id of `--computer` (`None` for an unknown name).
+#[cfg(not(target_arch = "wasm32"))]
+fn race_id(name: &str) -> Option<u32> {
+    match name {
+        "human" => Some(1),
+        "orc" => Some(2),
+        "undead" => Some(3),
+        "nightelf" => Some(4),
+        _ => None,
+    }
 }
 
 /// What [`run_sim`] renders.
@@ -411,6 +442,11 @@ fn run_sim(run: SimRun) -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Result<Vec<Vec<u8>>, String>>()?;
     let sources: Vec<&[u8]> = archive_bytes.iter().map(Vec::as_slice).collect();
 
+    let mut hud = match run.args.hud.as_deref() {
+        None => None,
+        Some(race) => Some(load_hud(race, &run.args.computers, &map_bytes, &sources)?),
+    };
+
     let frames = run.args.frames.unwrap_or(1).max(1);
     let (w, h) = run.size;
     for k in 0..frames {
@@ -436,7 +472,14 @@ fn run_sim(run: SimRun) -> Result<(), Box<dyn std::error::Error>> {
             let z = w3e_of(&map_bytes).map_or(terrain.bounds.center().z, |t| terrain_objects::ground_at(&t, x, y));
             [x, y, z]
         });
-        let rgba = offscreen::render_terrain_at(&terrain, w, h, target, run.zoom)?;
+        let rgba = match hud.as_mut() {
+            None => offscreen::render_terrain_at(&terrain, w, h, target, run.zoom)?,
+            Some(state) => {
+                let summary = update_hud(state, &engine, &units, &terrain, target, run.zoom, (w, h))?;
+                eprintln!("viewer:   hud: {summary}");
+                offscreen::render_terrain_hud(&terrain, w, h, target, run.zoom, Some(&state.scene))?
+            }
+        };
         let path = if run.args.frames.is_some() { frame_path(&run.out, k) } else { run.out.clone() };
         offscreen::write_png(&path, w, h, &rgba)?;
         let s = offscreen::summarize(w, h, &rgba);
@@ -452,6 +495,124 @@ fn run_sim(run: SimRun) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+/// Loads the ConsoleUI layer for `race`, finds the minimap frame and the map picture. The player
+/// shown in the top bar is the first computer slot of that race, else slot 0.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_hud(
+    race: &str,
+    computers: &[(u32, Option<u32>)],
+    map: &[u8],
+    sources: &[&[u8]],
+) -> Result<HudState, Box<dyn std::error::Error>> {
+    use viewer::{hud, minimap::MinimapBase, ui::UiScene};
+
+    // The library keys frame names in lower case. ResourceBarFrame is its own FDF in the game (the top
+    // bar texts are its children), so it is laid out with the console.
+    let mut scene = UiScene::from_mpq_frames(&["consoleui", "resourcebarframe"], sources, race)?;
+    let slot = hud::install_minimap(&mut scene);
+    let base = match hud::map_picture(map) {
+        Some(picture) => {
+            eprintln!("viewer: hud: minimap picture war3mapMap.blp {}x{}", picture.width, picture.height);
+            picture
+        }
+        None => {
+            eprintln!("viewer: hud: no war3mapMap.blp in the map; the minimap is a flat colour");
+            MinimapBase::flat(256, 256, [40, 70, 40])
+        }
+    };
+    let player = race_id(race)
+        .and_then(|id| computers.iter().find(|(_, r)| *r == Some(id)).map(|(s, _)| *s))
+        .unwrap_or(0);
+    match slot {
+        Some(s) => eprintln!("viewer: hud: minimap frame at node {} drawn {}x{} px", s.node, s.width, s.height),
+        None => eprintln!("viewer: hud: no minimap slot (no *Minimap* frame and no bottom-left art); no minimap"),
+    }
+    eprintln!("viewer: hud: top bar shows player {player}");
+    Ok(HudState { scene, slot, base, player })
+}
+
+/// Fills the HUD for one frame: the resource texts from the simulation and the minimap. Returns a
+/// one-line summary for the log.
+#[cfg(not(target_arch = "wasm32"))]
+fn update_hud(
+    state: &mut HudState,
+    engine: &engine::Engine,
+    units: &[viewer::scene_objects::SimUnit],
+    terrain: &viewer::terrain::TerrainScene,
+    target: Option<[f32; 3]>,
+    zoom: f32,
+    size: (u32, u32),
+) -> Result<String, Box<dyn std::error::Error>> {
+    use std::collections::BTreeSet;
+
+    use sim::economy::Res;
+    use viewer::{hud, minimap, offscreen, terrain_camera::TerrainCamera};
+
+    let game = engine.host().game();
+    let p = state.player;
+    let stock = |res: Res| game.player_economy(p).map_or(0, |e| e.stored(res) / 10);
+    let resources = hud::Resources {
+        gold: i64::from(stock(Res::Gold)),
+        lumber: i64::from(stock(Res::Lumber)),
+        food_used: game.food_used_of(p),
+        food_made: game.food_made_of(p),
+    };
+    let (set, missing) = hud::set_resource_texts(&mut state.scene, &resources);
+
+    // The minimap shows the playable area; the terrain bounds stand in when the map has none.
+    let world = match game.playable() {
+        Some(pl) => minimap::WorldRect {
+            min_x: pl.min_x.to_f32(),
+            min_y: pl.min_y.to_f32(),
+            max_x: pl.max_x.to_f32(),
+            max_y: pl.max_y.to_f32(),
+        },
+        None => minimap::WorldRect {
+            min_x: terrain.bounds.min.x,
+            min_y: terrain.bounds.min.y,
+            max_x: terrain.bounds.max.x,
+            max_y: terrain.bounds.max.y,
+        },
+    };
+
+    // The camera exactly as the offscreen render builds it, then its ground footprint.
+    let (w, h) = size;
+    let mut cam = TerrainCamera::fit(&terrain.bounds, w as f32 / h as f32);
+    if let Some([x, y, z]) = target {
+        cam.target = glam::Vec3::new(x, y, z);
+    }
+    let cam = offscreen::zoomed(cam, zoom);
+    let footprint = minimap::camera_footprint(&cam, cam.target.z);
+
+    let buildings: BTreeSet<u32> = units
+        .iter()
+        .map(|u| u.type_id)
+        .filter(|id| game.unit_types().is_building(*id))
+        .collect();
+    let mut summary = format!(
+        "player {p}: gold {} lumber {} food {}/{}; top bar set {:?}, missing {:?}",
+        resources.gold, resources.lumber, resources.food_used, resources.food_made, set, missing
+    );
+    if let Some(slot) = state.slot {
+        hud::update_minimap(
+            &mut state.scene,
+            slot,
+            &state.base,
+            world,
+            units,
+            &|id| buildings.contains(&id),
+            footprint,
+        )?;
+        summary.push_str(&format!(
+            "; minimap {}x{} px, camera box {}",
+            slot.width,
+            slot.height,
+            if footprint.is_some() { "drawn" } else { "not on the ground" }
+        ));
+    }
+    Ok(summary)
 }
 
 /// The parsed `war3map.w3e` of a map (`None` if unreadable).
@@ -491,6 +652,7 @@ fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut png: Option<PathBuf> = None;
     let mut size = (1280u32, 960u32);
     let mut race = "human".to_string();
+    let mut list_frames = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -498,6 +660,7 @@ fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "--mpq" => mpqs.push(it.next().ok_or("--mpq needs a file")?.into()),
             "--race" => race = it.next().ok_or("--race needs a value")?.clone(),
             "--offscreen" => png = Some(it.next().ok_or("--offscreen needs a file")?.into()),
+            "--list-frames" => list_frames = true,
             "--size" => {
                 let text = it.next().ok_or("--size needs WxH")?;
                 let (w, h) = text.split_once('x').ok_or("--size needs WxH")?;
@@ -520,6 +683,17 @@ fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         ui_name,
         ui_scene.draw_list.items.len()
     );
+    if list_frames {
+        // Every named frame with its laid-out rectangle in UI units (`--list-frames`).
+        for (i, name) in ui_scene.node_names.iter().enumerate() {
+            if let Some(r) = ui_scene.node_rects.get(i).copied().flatten() {
+                eprintln!(
+                    "viewer: frame {i} {name}: left {:.3} bottom {:.3} right {:.3} top {:.3}",
+                    r.left, r.bottom, r.right, r.top
+                );
+            }
+        }
+    }
 
     match png {
         Some(out) => {

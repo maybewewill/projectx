@@ -13,6 +13,8 @@ pub mod app;
 pub mod cliff_render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offscreen;
+pub mod hud;
+pub mod minimap;
 pub mod model;
 pub mod props;
 pub mod renderer;

@@ -32,6 +32,8 @@ wgpu = { version = "30.0.1", features = ["webgl"] }
 pollster = "1.0.1"
 # The live simulation for `--sim-seconds` (the boot path is `engine::cli`).
 engine = { path = "../engine" }
+# Resource stock and unit types for the `--hud` top bar and minimap.
+sim = { path = "../sim" }
 # PNG output of the offscreen renderer (zlib and CRC only; the image is written by hand).
 flate2 = "1.1.10"
 
