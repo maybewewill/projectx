@@ -193,5 +193,5 @@ fn the_cap_is_the_sum_of_the_room_of_the_slots() {
         4 => Some(0),
         _ => None,
     });
-    assert_eq!(cap, 3 + 1 + 3 + 0);
+    assert_eq!(cap, 7);
 }

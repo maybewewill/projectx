@@ -303,12 +303,13 @@ fn the_skill_point_cap_follows_the_hero_slots() {
     w.host.game_mut().unit_mut(h3).hero.as_mut().unwrap().level = 3;
     w.kill("h3", "k"); // 300 XP: levels 2, 3, 4 -> 3 points, capped at max(0,1-0) + max(0,2-0) = 3
     assert_eq!(w.hero("h1"), (4, 300, 3));
-    // Learn: the cap now sees 0 learned of 3; with one point already spent it would be lower. Pin by direct arithmetic.
+    // The cap helper on the same slots, by direct arithmetic.
     let g = w.host.game();
     let u = g.unit(h1);
     let slots = u.hero.as_ref().unwrap().slots;
     assert_eq!(sim::heroes::skill_point_cap(&slots, &|_| None), 3);
-    assert_eq!(sim::heroes::skill_point_cap(&slots, &|c| (c == 0x4130_0002).then_some(1)), 1 + 0 + 0 + 0 + 0 + 0 - 0 + 0, "slot 0: 1, slot 1: 2 - 2 = 0");
+    // Slot 1 holds two levels (index 1): its room is 2 - 2 = 0; slot 0 still has 1.
+    assert_eq!(sim::heroes::skill_point_cap(&slots, &|c| (c == 0x4130_0002).then_some(1)), 1);
 }
 
 #[test]

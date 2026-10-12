@@ -49,7 +49,7 @@ A_LOOKUP, A_TYPE, A_PLAYER, A_AVAIL, A_DEPS, A_COUNTER, A_CHEAT, A_MISC = (
 A_ERR, A_SETLVL, A_ADD, A_ND, A_U, A_N = 0x6F2077A0, 0x6F296F70, 0x6F2076F0, 0x6F3329F0, 0x6F021270, 0x6F26FE50
 A_472890 = 0x6F472890
 
-ROA, ROU = 0x41726F61, 0x41726F75  # 'Aroa', 'Arou' (the alias pair of the slot search)
+ROA, ROU = 0x41556661, 0x41556675  # 'AUfa', 'AUfu' (Frost Armor and its autocast form: the alias pair of the slot search)
 
 
 def rd32(a):
@@ -286,8 +286,8 @@ def main():
         nz = [x for x in c["codes"] if x]
         if nz:
             choices += [rng.choice(nz)] * 6
-        if rng.random() < 0.1:
-            choices.append(ROA)
+        if rng.random() < 0.1 or (ROU in c["codes"] and rng.random() < 0.7):
+            choices += [ROA] * 8
         a2 = rng.choice(choices)
         a3 = rng.choice([0, 0, 0, 1])
         setup(c)

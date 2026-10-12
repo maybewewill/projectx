@@ -1009,11 +1009,11 @@ pub fn kill_distance2(rec: (F32, F32), cand: (F32, F32)) -> F32 {
 // (the real routines run; the callees below the hero object are stand-ins), compared by `tests/hero_learn_vectors.rs`.
 // ---------------------------------------------------------------------------------------------------------------------
 
-/// The ability a learn of `'Aroa'` also matches a slot holding `'Arou'` for (`0x6F209646`:
-/// `a2 == 0x41726F61 && slot == 0x41726F75`).
-pub const ALIAS_ABILITY: u32 = 0x4172_6F61;
+/// The ability a learn of `'AUfa'` (Frost Armor) also matches a slot holding `'AUfu'` (its autocast form) for
+/// (`0x6F209646`: `a2 == 1096115809 && slot == 1096115829`, i.e. `0x41556661` and `0x41556675`).
+pub const ALIAS_ABILITY: u32 = 0x4155_6661;
 /// The slot code the alias matches.
-pub const ALIAS_SLOT: u32 = 0x4172_6F75;
+pub const ALIAS_SLOT: u32 = 0x4155_6675;
 
 /// What the learn gate and the learn read from outside the hero object (the stand-ins of the Unicorn harness).
 pub struct LearnEnv<'a> {

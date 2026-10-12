@@ -27,25 +27,42 @@ use softfloat::{arith, F32};
 use crate::heroes::{self, BonusEnv, EngineEnv, KillEnv, KillVictim};
 use crate::natives::game::{Game, HeroObj, ObjKey};
 
-/// The unit flag bit 30 (illusion) and the removal-sequence bit are the two candidate exclusions; the model holds them
-/// as the unit's `illusion` and `removed` fields.
-fn passive_ally(game: &Game, killer_owner: u32, victim_owner: u32) -> bool {
-    if killer_owner >= 16 || victim_owner >= 16 {
-        return false;
-    }
-    game.player(killer_owner).alliances[0] & (1 << victim_owner) != 0
+/// Bit `0x10000` of the unit flag word `+0x5C`: the unit is a structure (`0x6F26DE50`).
+pub const STRUCTURE_FLAG: u32 = 0x1_0000;
+
+/// The structure gate of the candidate builder (`0x6F26DE50(killer, 0)` against Misc `BuildingKillsGiveExp`): a killer
+/// whose flag word has [`STRUCTURE_FLAG`] stops the builder unless the Misc flag is on. CONFIRMED in Unicorn
+/// (`tools/emu/hero_kill_gate_emu.py`, `tests/hero_kill_gate_vectors.rs`).
+pub fn structure_blocks(flags: u32, building_kills: bool) -> bool {
+    !building_kills && flags & STRUCTURE_FLAG != 0
 }
 
-/// Whether the killer's shared-experience row reaches the candidate's owner (`0x6F3A34E0`: type 3). A player's own
-/// heroes always count (UNSURE, see the module notes).
+/// The bit test of an alliance row (`0x6F3A3400`, `0x6F3A34B0`): the mask has the bit of owner index `owner` (the shift
+/// count wraps at 32). CONFIRMED in Unicorn.
+pub fn mask_has(mask: u32, owner: u32) -> bool {
+    mask & (1u32 << (owner & 31)) != 0
+}
+
+/// `0x6F285B00(killer, dying)` is false: the killer's owner row of type 0 (passive, row `+0x38`; CONFIRMED by the
+/// address the real routine reads) has the victim owner's bit, so the victim's owner is a passive ally of the killer's
+/// and the kill gives nothing.
+fn passive_ally(game: &Game, killer_owner: u32, victim_owner: u32) -> bool {
+    if killer_owner >= 16 {
+        return false;
+    }
+    mask_has(game.player(killer_owner).alliances[0], victim_owner)
+}
+
+/// Whether the killer's shared-experience row (type 3, row `+0x68`, `0x6F3A34B0`) has the candidate's owner. A player's
+/// own heroes always count (UNSURE, see the module notes).
 fn shares_xp(game: &Game, killer_owner: u32, cand_owner: u32) -> bool {
     if killer_owner == cand_owner {
         return true;
     }
-    if killer_owner >= 16 || cand_owner >= 16 {
+    if killer_owner >= 16 {
         return false;
     }
-    game.player(killer_owner).alliances[3] & (1 << cand_owner) != 0
+    mask_has(game.player(killer_owner).alliances[3], cand_owner)
 }
 
 /// The skill point cap of a hero's slots against the abilities its unit holds (`heroes::skill_point_cap`), in the
@@ -87,7 +104,8 @@ pub fn grant_kill_xp(game: &mut Game, victim: ObjKey, killer: ObjKey) {
     if k_removed || v_illusion || passive_ally(game, k_owner, v_owner) {
         return;
     }
-    if !cfg.building_kills && game.unit_types().is_building(k_type) {
+    let k_flags = if game.unit_types().is_building(k_type) { STRUCTURE_FLAG } else { 0 };
+    if structure_blocks(k_flags, cfg.building_kills) {
         return;
     }
     let Some(tables) = game.order_tables().cloned() else {
