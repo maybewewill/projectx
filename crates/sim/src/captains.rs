@@ -627,6 +627,21 @@ pub fn go_home(gm: &mut Game, c: &mut Captain) {
     prune(gm, c);
     c.mode = Mode::GoHome;
     c.goal = None;
+    // `0x6F2EC670`: at home (the position test of `0x6F2E77C0`) the retreat bit is cleared once at least half of the
+    // group (record `+0xC4` against `+0xBC / 2`) is home, and no order is issued; otherwise the group is sent home.
+    if is_home(gm, c) {
+        let size = c.members.len();
+        let home = c.home;
+        let at_home = c
+            .members
+            .iter()
+            .filter(|&&k| home.is_some_and(|h| within_goal(pos(gm, k), h, HOME_RADIUS)))
+            .count();
+        if at_home >= size / 2 {
+            c.flags &= !RETREATING;
+        }
+        return;
+    }
     if let Some(h) = c.home {
         for k in c.members.clone() {
             issue_point(gm, k, ORDER_MOVE, h);
@@ -1010,8 +1025,29 @@ pub fn is_towered(gm: &Game, hall: ObjKey) -> bool {
         > 1
 }
 
-/// The expansion site the AI would take next (UNSURE): the nearest gold mine with gold left that is not within 900
-/// units of a town hall of any player.
+/// Gold a mine must still hold to count as an expansion (CONFIRMED: `0x6F2E10D0` compares the amount of the mine's
+/// gold ability with `0x258`).
+pub const EXPANSION_MIN_GOLD: i32 = 600;
+/// A mine this close to a town hall of any player is taken (UNSURE: the original asks whether a registered AI town
+/// owns the site, `0x6F2DF2A0`, and whether a hall or haunted mine stands near it, callback `0x6F2DF330`).
+const EXPANSION_HALL_CLEARANCE: f32 = 900.0;
+/// Radius of the "enemy units are near the site" test that ranks a site behind a free one (UNSURE: the callback
+/// `0x6F2DC600` flags any unit of a real player; the scan area is not decoded).
+const EXPANSION_BLOCK_RADIUS: f32 = 700.0;
+/// The AI flag bit `SetWatchMegaTargets` sets (CONFIRMED, `0x6F2E31A0`).
+pub const WATCH_MEGA_TARGETS: u32 = 0x2000;
+
+/// Whether `other` is `player` or an ally of it (not the neutral players).
+fn same_side(gm: &Game, player: u32, other: u32) -> bool {
+    other == player || (other < NEUTRAL_HOSTILE && !gm.is_enemy(player, other))
+}
+
+/// `GetNextExpansion` / `GetExpansionX/Y` (`0x6F2E10D0`; the ranking is a model). CONFIRMED structure: every town site
+/// whose mine holds more than 600 gold, that no AI of the side owns and where no hall or haunted mine stands, is a
+/// candidate; the candidates are ranked by path cost from the defense captain's home with three classes: the reachable
+/// ones with no real player's unit near the site first (lowest cost), then the reachable ones with a unit near, then
+/// the unreachable (nearest by straight distance). The model has the same three classes with the straight distance in
+/// place of the path cost, and treats every site as reachable (UNSURE).
 pub fn next_expansion(gm: &Game, player: u32) -> Option<(ObjKey, (f32, f32))> {
     let from = anchor_of(gm, player)?;
     let halls: Vec<(f32, f32)> = gm
@@ -1019,19 +1055,165 @@ pub fn next_expansion(gm: &Game, player: u32) -> Option<(ObjKey, (f32, f32))> {
         .filter(|(k, u)| !u.dead && !u.removed && is_hall(gm, *k))
         .map(|(k, _)| pos(gm, k))
         .collect();
-    let mut best: Option<(f32, ObjKey)> = None;
+    let mut best: Option<((bool, f32), ObjKey)> = None;
     for (k, u) in gm.unit_objects() {
-        if u.dead || u.removed || gm.resource_amount(k).map_or(true, |a| a <= 0) {
+        if u.dead || u.removed || gm.resource_amount(k).map_or(true, |a| a <= EXPANSION_MIN_GOLD) {
             continue;
         }
         let p = pos(gm, k);
-        if halls.iter().any(|&h| dist(h, p) < 900.0) {
+        if halls.iter().any(|&h| dist(h, p) < EXPANSION_HALL_CLEARANCE) {
             continue;
         }
-        let d = dist(from, p);
-        if best.map_or(true, |(bd, _)| d < bd) {
-            best = Some((d, k));
+        let blocked = gm.unit_objects().any(|(o, ou)| {
+            !ou.dead
+                && !ou.removed
+                && ou.owner < NEUTRAL_HOSTILE
+                && !same_side(gm, player, ou.owner)
+                && !is_structure(gm, o)
+                && dist(pos(gm, o), p) < EXPANSION_BLOCK_RADIUS
+        });
+        let key = (blocked, dist(from, p));
+        if best.map_or(true, |(bk, _)| key < bk) {
+            best = Some((key, k));
         }
     }
     best.map(|(_, k)| (k, pos(gm, k)))
+}
+
+/// `GetExpansionPeon` (`0x6F2D1F40`, CONFIRMED structure): of the AI's worker-type units that are completed, not
+/// under construction and not busy with a build order, the nearest (path cost with a 700 limit in the original;
+/// straight distance here) to the next expansion's mine is taken from three classes in order: AI mode 0 or 7 (idle),
+/// then a gold harvester (mode 5; the original uses a type flag bit for the split between classes 2 and 3), then a
+/// lumber harvester (mode 6). A unit on its way to build (mode 2) is never taken.
+pub fn expansion_peon(gm: &Game, player: u32, mine_pos: (f32, f32)) -> Option<ObjKey> {
+    use crate::ai_manager::{mode_of, MODE_GOLD, MODE_IDLE, MODE_WOOD};
+    let mut best: [Option<(f32, ObjKey)>; 3] = [None, None, None];
+    for k in gm.owned_units(player) {
+        if !alive(gm, k) || is_structure(gm, k) || !gm.unit_completed(k) {
+            continue;
+        }
+        let builds = gm.production().tech.get(&gm.unit(k).type_id).is_some_and(|t| !t.builds.is_empty());
+        if !builds {
+            continue;
+        }
+        let class = match mode_of(gm, k) {
+            MODE_IDLE => 0,
+            MODE_GOLD => 1,
+            MODE_WOOD => 2,
+            _ => continue,
+        };
+        let d = dist(pos(gm, k), mine_pos);
+        if best[class].map_or(true, |(bd, _)| d < bd) {
+            best[class] = Some((d, k));
+        }
+    }
+    best.iter().flatten().next().map(|&(_, k)| k)
+}
+
+/// The combat strength a unit adds in the mega-target scan (`0x6F2D18D0`): a hero counts `(level + 1) / 2 + 4`, any
+/// other unit its type level (`0x6F29DCA0`, at least 1 here). The original gives some structure types fixed weights
+/// (1, 3 or 4, by type code) that are not mapped (UNSURE).
+fn strength_of(gm: &Game, k: ObjKey) -> i32 {
+    let u = gm.unit(k);
+    match &u.hero {
+        Some(h) => (h.level + 1) / 2 + 4,
+        None => gm
+            .unit_types()
+            .pick_records()
+            .iter()
+            .find(|(id, _)| *id == u.type_id)
+            .map_or(1, |(_, r)| r.level.max(1)),
+    }
+}
+
+/// `GetMegaTarget` (`0x6F2DDD60` reads the reference at AI state `+0x2C4`, written by `0x6F2D7EC0`). CONFIRMED rule of
+/// the writer: only when the AI flag `0x2000` (`SetWatchMegaTargets`) is set, the scan adds the strength of every
+/// unit of a real player (own, allied and enemy totals, plus one total per enemy player); when the allied total is
+/// above the enemy total and the own total is at least 20, the first enemy player (ascending index) that has a key
+/// building and whose strength is below half of the own total gives the target. The model re-evaluates at each call
+/// (the original on a timer message of its own, not located), takes an alive town hall as the key building (the
+/// original sets it in a branch whose condition `0x6F26DE50` is not decoded) and uses [`strength_of`] (UNSURE).
+pub fn mega_target(gm: &Game, player: u32, flags: u32) -> Option<ObjKey> {
+    if flags & WATCH_MEGA_TARGETS == 0 {
+        return None;
+    }
+    let (mut allied, mut own, mut enemy) = (0i32, 0i32, 0i32);
+    let mut per = [0i32; NEUTRAL_HOSTILE as usize];
+    let mut key: [Option<ObjKey>; NEUTRAL_HOSTILE as usize] = [None; NEUTRAL_HOSTILE as usize];
+    for (k, u) in gm.unit_objects() {
+        if u.dead || u.removed || u.owner >= NEUTRAL_HOSTILE {
+            continue;
+        }
+        let w = strength_of(gm, k);
+        let o = u.owner as usize;
+        if u.owner == player {
+            own += w;
+            allied += w;
+        } else if same_side(gm, player, u.owner) {
+            allied += w;
+        } else {
+            per[o] += w;
+            enemy += w;
+            if is_hall(gm, k) {
+                key[o] = Some(k);
+            }
+        }
+    }
+    if allied <= enemy || own < 20 {
+        return None;
+    }
+    (0..NEUTRAL_HOSTILE as usize).find(|&p| p as u32 != player && key[p].is_some() && own > 2 * per[p]).and_then(|p| key[p])
+}
+
+/// `IgnoredUnits(type)` (`0x6F2DCE80`, callback `0x6F2D3360`): the AI player's units of the type whose AI record holds
+/// none of its three references (`+0x30`, `+0x3C`, `+0x48`). The references tie a unit to a captain group or a town;
+/// the model counts units that are in neither captain and that are neither harvesting nor building (UNSURE).
+pub fn ignored_units(gm: &Game, player: u32, type_id: u32, caps: &[Captain; 2]) -> i32 {
+    gm.owned_units(player)
+        .into_iter()
+        .filter(|&k| {
+            alive(gm, k)
+                && gm.unit(k).type_id == type_id
+                && !caps.iter().any(|c| c.members.contains(&k))
+                && gm.production().harvester(k).is_none()
+                && !gm.production().is_building(k)
+        })
+        .count() as i32
+}
+
+/// `GetBuilding(player)` (`0x6F2E2E80`, callback `0x6F2DC120`): the first structure of the player (in the scan order of
+/// the group builder; the model uses creation order) that does not carry the ability `Buns` (the marker `Unsummon`
+/// puts on a building, which is why `UnsummonAll` loops until this returns null). The marker is `unsummoned`.
+pub fn first_building(gm: &Game, player: u32, unsummoned: &[ObjKey]) -> Option<ObjKey> {
+    gm.unit_objects()
+        .find(|(k, u)| u.owner == player && !u.dead && !u.removed && is_structure(gm, *k) && !unsummoned.contains(k))
+        .map(|(k, _)| k)
+}
+
+/// The AI's hero for `GetHeroId` / `GetHeroLevelAI` (`0x6F2DDF50`, `0x6F2DE0E0`): the original reads the hero record
+/// of the AI state (`+0x1F0`) and, inside a hero-level callback, the hero being levelled; the model takes the first
+/// living hero of the player (UNSURE).
+pub fn ai_hero(gm: &Game, player: u32) -> Option<ObjKey> {
+    gm.owned_units(player).into_iter().find(|&k| alive(gm, k) && gm.unit(k).hero.is_some())
+}
+
+/// `GetTownUnitCount(type, town, only_done)` (`0x6F2DD0C0`): the workers on their way to build the type
+/// (`0x6F2D1C10`) plus the AI's units of the type that belong to the town (`0x6F2D5430`: the town reference at `+0x48`
+/// of the unit's AI record equals the slot's site; with `only_done` units under construction are left out). The model
+/// takes the units within `radius` of the town's anchor as the town's units (UNSURE).
+pub fn town_unit_count(gm: &Game, player: u32, type_id: u32, anchor: (f32, f32), radius: f32, only_done: bool) -> i32 {
+    let mut n = 0;
+    for k in gm.owned_units(player) {
+        if gm.production().pending_build_type(k) == Some(type_id) {
+            n += 1;
+        }
+        if alive(gm, k)
+            && gm.unit(k).type_id == type_id
+            && (!only_done || gm.unit_completed(k))
+            && dist(pos(gm, k), anchor) <= radius
+        {
+            n += 1;
+        }
+    }
+    n
 }

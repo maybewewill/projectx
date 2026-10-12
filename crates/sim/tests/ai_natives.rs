@@ -979,11 +979,64 @@ endfunction
     assert!(sh.unimplemented.values().all(|&n| n == 1));
 }
 
+/// `IgnoredUnits` counts the AI's unassigned units of a type (those in no captain), `GetHeroId` / `GetHeroLevelAI`
+/// are 0 without a hero, `GetNextExpansion` is -1 without a mine, and `GetMegaTarget` is null without the watch flag.
+#[test]
+fn s19_natives_answer_on_a_small_world() {
+    let main = r#"
+function main takes nothing returns nothing
+    call CreateUnit(Player(0), 'hfoo', 0.0, 0.0, 0.0)
+    call CreateUnit(Player(0), 'hfoo', 64.0, 0.0, 0.0)
+    call CreateUnit(Player(0), 'hfoo', 128.0, 0.0, 0.0)
+    call StartMeleeAI(Player(0), "cap.ai")
+endfunction
+"#;
+    let ai_src = r#"
+native CreateCaptains takes nothing returns nothing
+native InitAssault takes nothing returns nothing
+native AddAssault takes integer qty, integer id returns boolean
+native IgnoredUnits takes integer id returns integer
+native GetHeroId takes nothing returns integer
+native GetHeroLevelAI takes nothing returns integer
+native GetNextExpansion takes nothing returns integer
+native GetMegaTarget takes nothing returns unit
+native GetBuilding takes player p returns unit
+globals
+    integer free_before = -9
+    integer free_after = -9
+    integer hero = -9
+    integer level = -9
+    integer next_exp = -9
+    integer mega_null = -9
+    integer bldg_null = -9
+endglobals
+function main takes nothing returns nothing
+    call CreateCaptains()
+    set free_before = IgnoredUnits('hfoo')
+    call InitAssault()
+    call AddAssault(2, 'hfoo')
+    set free_after = IgnoredUnits('hfoo')
+    set hero = GetHeroId()
+    set level = GetHeroLevelAI()
+    set next_exp = GetNextExpansion()
+    if GetMegaTarget() == null then
+        set mega_null = 1
+    endif
+    if GetBuilding(null) == null then
+        set bldg_null = 1
+    endif
+endfunction
+"#;
+    let mut r = captain_rig(main, ai_src);
+    tick(&mut r);
+    let got = ["free_before", "free_after", "hero", "level", "next_exp", "mega_null", "bldg_null"].map(|n| ai_int(&r, 0, n));
+    assert_eq!(got, [3, 1, 0, 0, -1, 1, 1]);
+}
+
 /// The table's level labels and the not-implemented list are consistent: a not-implemented row always has a reason.
 #[test]
 fn not_implemented_rows_say_why() {
     let missing: Vec<&AiNative> = AI_NATIVES.iter().filter(|r| !r.implemented).collect();
-    assert!(!missing.is_empty());
     for row in missing {
         assert!(row.note.starts_with("NOT IMPLEMENTED: "), "{}", row.name);
     }
