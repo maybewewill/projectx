@@ -165,6 +165,10 @@ pub struct Instance {
     pub player: Option<u32>,
     /// Texture of replaceable texture ids 31 and up (destructables: their `texFile`).
     pub texture: Option<String>,
+    /// Animation sequence name (live sim units only); empty for static bind pose.
+    pub sequence_name: String,
+    /// Animation time in milliseconds (live sim units only).
+    pub animation_time_ms: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -203,6 +207,8 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
                                 scale: d.scale,
                                 player: None,
                                 texture: ty.tex_file.clone(),
+                                sequence_name: String::new(),
+                                animation_time_ms: None,
                             });
                         }
                         None => *unmodelled.entry(code_text(&d.id)).or_insert(0) += 1,
@@ -228,6 +234,8 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
                                 scale: u.scale,
                                 player: Some(u.player),
                                 texture: None,
+                                sequence_name: String::new(),
+                                animation_time_ms: None,
                             });
                         }
                         None => *unmodelled.entry(code_text(&u.id)).or_insert(0) += 1,
@@ -242,6 +250,21 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
     top.truncate(12);
     stats.unmodelled.extend(top);
     (instances, stats)
+}
+
+/// Unit animation state for sequence selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimUnitSequenceState {
+    /// Unit is moving: play "Walk" sequence or Stand if unavailable.
+    Moving,
+    /// Unit is attacking or under attack: play "Attack" sequence.
+    Attacking,
+    /// Unit is under construction: play "Birth" sequence.
+    Building,
+    /// Unit is dead (life reaches zero): try "Death" then "Decay".
+    Dead,
+    /// Unit idle (default): play "Stand" sequence.
+    Standing,
 }
 
 /// A unit of the live simulation, as the viewer draws it (copied out of `sim::Game` by
@@ -259,6 +282,10 @@ pub struct SimUnit {
     pub hidden: bool,
     pub dead: bool,
     pub removed: bool,
+    /// Unit handle id for deterministic phase offset (sequence time = (game_time * 1000 + handle * 137) % length).
+    pub handle: u32,
+    /// Sequence name base: "Walk", "Attack", "Birth", "Death", "Decay", "Stand", or empty string.
+    pub sequence_state: SimUnitSequenceState,
 }
 
 /// What [`sim_unit_instances`] did with the live units.
@@ -275,7 +302,7 @@ pub struct SimUnitStats {
 /// Draw instances for the live simulation's units, in the same form as the map's unit placements:
 /// the model comes from the unit table by type code (the variation is 0: the simulation has none),
 /// the position and facing are the unit's, and the tint is the owner's player colour.
-pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog) -> (Vec<Instance>, SimUnitStats) {
+pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog, game_time_ms: u32) -> (Vec<Instance>, SimUnitStats) {
     let mut instances = Vec::new();
     let mut stats = SimUnitStats::default();
     let mut unmodelled: HashMap<String, usize> = HashMap::new();
@@ -288,6 +315,20 @@ pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog) -> (Vec<Instance
         match catalog.units.get(&code) {
             Some(ty) => {
                 let scale = if u.scale > 0.0 { u.scale } else { 1.0 };
+
+                // Choose sequence name based on unit state
+                let sequence_name = match u.sequence_state {
+                    SimUnitSequenceState::Moving => "Walk",
+                    SimUnitSequenceState::Attacking => "Attack",
+                    SimUnitSequenceState::Building => "Birth",
+                    SimUnitSequenceState::Dead => "Death", // fallback to "Decay" is in the renderer
+                    SimUnitSequenceState::Standing => "Stand",
+                };
+
+                // Deterministic animation time: (game_time_ms + handle * 137) mod sequence_length
+                // game_time_ms is already in milliseconds
+                let animation_time_offset = game_time_ms.wrapping_add(u.handle.wrapping_mul(137));
+
                 instances.push(Instance {
                     kind: Kind::Unit,
                     model: ty.path_for(0),
@@ -296,6 +337,8 @@ pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog) -> (Vec<Instance
                     scale: [scale; 3],
                     player: Some(u.owner),
                     texture: None,
+                    sequence_name: sequence_name.to_string(),
+                    animation_time_ms: Some(animation_time_offset),
                 });
                 stats.drawn += 1;
             }
@@ -333,6 +376,8 @@ mod sim_unit_tests {
             hidden: false,
             dead: false,
             removed: false,
+            handle: 0x100000,
+            sequence_state: SimUnitSequenceState::Standing,
         }
     }
 
@@ -340,7 +385,7 @@ mod sim_unit_tests {
     fn sim_unit_maps_to_a_draw_instance() {
         let hpea = u32::from_be_bytes(*b"hpea");
         let catalog = catalog_with(b"hpea", "units\\human\\Peasant\\Peasant");
-        let (inst, stats) = sim_unit_instances(&[unit(hpea)], &catalog);
+        let (inst, stats) = sim_unit_instances(&[unit(hpea)], &catalog, 1000);
         assert_eq!(stats.drawn, 1);
         assert!(stats.unmodelled.is_empty());
         assert_eq!(inst.len(), 1);
@@ -351,6 +396,7 @@ mod sim_unit_tests {
         assert_eq!(i.angle, 1.5);
         assert_eq!(i.scale, [1.25, 1.25, 1.25]);
         assert_eq!(i.player, Some(2));
+        assert_eq!(i.sequence_name, "Stand");
     }
 
     #[test]
@@ -363,7 +409,7 @@ mod sim_unit_tests {
         dead.dead = true;
         let mut removed = unit(hpea);
         removed.removed = true;
-        let (inst, stats) = sim_unit_instances(&[hidden, dead, removed], &catalog);
+        let (inst, stats) = sim_unit_instances(&[hidden, dead, removed], &catalog, 1000);
         assert!(inst.is_empty());
         assert_eq!(stats.not_visible, 3);
         assert_eq!(stats.drawn, 0);
@@ -375,7 +421,7 @@ mod sim_unit_tests {
         let mut zero_scale = unit(u32::from_be_bytes(*b"hpea"));
         zero_scale.scale = 0.0;
         let other = unit(u32::from_be_bytes(*b"ngol"));
-        let (inst, stats) = sim_unit_instances(&[zero_scale, other, other], &catalog);
+        let (inst, stats) = sim_unit_instances(&[zero_scale, other, other], &catalog, 1000);
         assert_eq!(inst.len(), 1);
         assert_eq!(inst[0].scale, [1.0, 1.0, 1.0]);
         assert_eq!(stats.unmodelled, vec![("ngol".to_string(), 2)]);
@@ -570,15 +616,87 @@ fn replaceable_path(id: u32, player: u32, instance_texture: Option<&str>) -> Opt
     }
 }
 
+/// Skin animated geosets for a unit. Evaluates the skeleton at the animation time
+/// and uses per-sequence geoset visibility. Skeleton evaluation and vertex skinning are TODO.
+fn geosets_animated(
+    model: &Model,
+    inst: &Instance,
+    lifted: &Instance,
+    seq_idx: Option<usize>,
+    seq_time_ms: Option<u32>,
+) -> Option<Vec<PlacedGeoset>> {
+    // Use per-sequence geoset visibility (replaces idle visibility)
+    let visible = model.geoset_visibility(seq_idx);
+    // Pose of the chosen sequence; without bones (or a sequence) the bind pose is drawn.
+    let pose = seq_idx.and_then(|s| {
+        let skeleton = mdx::Skeleton::new(model).ok()?;
+        skeleton.evaluate_sequence(model, s, seq_time_ms.unwrap_or(0) as f32, None)
+    });
+
+    Some(model
+        .geosets
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
+        .flat_map(|(i, g)| {
+            let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+            let skinned: Vec<[f32; 3]> = match &pose {
+                Some(pose) => {
+                    let groups: Vec<_> = mdx::skin::matrix_groups(g)
+                        .iter()
+                        .map(|ids| {
+                            let ms: Vec<_> = ids.iter().filter_map(|&id| pose.skin_matrix(id as i32)).collect();
+                            mdx::skin::average(&ms)
+                        })
+                        .collect();
+                    mdx::skin::skin_geoset(g, &groups).into_iter().map(|(p, _)| p).collect()
+                }
+                None => g.vertices.clone(),
+            };
+
+            let tris = g
+                .triangles()
+                .iter()
+                .filter_map(|t| {
+                    let [a, b, c] = t.map(usize::from);
+                    let v = |vi: usize| skinned.get(vi).map(|p| to_world(lifted, *p));
+                    let uv = |vi: usize| uvs.get(vi).copied().unwrap_or([0.0, 0.0]);
+                    Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
+                })
+                .collect();
+
+            let tint = match inst.kind {
+                Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
+                Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+            };
+            let tint = tint.map(|c| f32::from(c) / 255.0);
+
+            let layers = geoset_layers(model, g);
+            let tris: Vec<PlacedTriangle> = tris;
+            layers
+                .into_iter()
+                .map(|layer| {
+                    let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                    let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                    (texture, blend, tris.clone(), tint)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect())
+}
+
 /// Places every instance on the terrain: its triangles go to `props`, lifted onto the ground
 /// height at its position (the `z` of the placement is an offset above that ground). Textured
 /// geosets sample their first layer's texture; the others are flat in the doodad tints (units:
-/// the player colour). Presentation only: no animation, team colour or transparency sorting.
+/// the player colour). For animated units, vertices are skinned using bone matrices; otherwise
+/// bind pose is used. Presentation only: no team colour or transparency sorting.
 pub fn place_on_terrain(
     instances: &[Instance],
     terrain: &w3map::Terrain,
     props: &mut PropBuilder<'_, '_>,
 ) -> PlaceStats {
+    use crate::unit_animation;
+
     let mut stats = PlaceStats::default();
     let mut used = BTreeSet::new();
     let mut missing = BTreeSet::new();
@@ -588,43 +706,96 @@ pub fn place_on_terrain(
         lifted.position[2] += ground_at(terrain, inst.position[0], inst.position[1]);
         // The triangles of every geoset as (texture path, world-space triangles, tint).
         let geosets: Option<Vec<PlacedGeoset>> = props.model(&inst.model).map(|model| {
-            // Death-only and upgrade-only geosets are hidden by their GEOA alpha in the idle pose.
-            let visible = model.idle_geoset_visibility();
-            model
-                .geosets
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
-                .flat_map(|(i, g)| {
-                    let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
-                    let tris = g
-                        .triangles()
-                        .iter()
-                        .filter_map(|t| {
-                            let [a, b, c] = t.map(usize::from);
-                            let v = |i: usize| g.vertices.get(i).map(|p| to_world(&lifted, *p));
-                            let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
-                            Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
-                        })
-                        .collect();
-                    let tint = match inst.kind {
-                        Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
-                        Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
-                    };
-                    let tint = tint.map(|c| f32::from(c) / 255.0);
-                    // Every layer is drawn in order (team colour base, then the texture on top).
-                    let layers = geoset_layers(model, g);
-                    let tris: Vec<PlacedTriangle> = tris;
-                    layers
-                        .into_iter()
-                        .map(|layer| {
-                            let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
-                            let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
-                            (texture, blend, tris.clone(), tint)
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect()
+            // Check if this instance has animation data
+            if let Some(time_offset_ms) = inst.animation_time_ms {
+                // Find the sequence
+                let fallbacks = match () {
+                    _ if inst.sequence_name.starts_with("Death") => &["Decay"] as &[&str],
+                    _ => &[],
+                };
+                let seq_idx = unit_animation::select_sequence(model, &inst.sequence_name, fallbacks);
+
+                // Compute animation time within the sequence
+                let seq_time_ms = unit_animation::animation_time_ms(model, seq_idx, time_offset_ms);
+
+                // Render with animation
+                geosets_animated(model, inst, &lifted, seq_idx, seq_time_ms)
+                    .unwrap_or_else(|| {
+                        // Fallback to bind pose if animation fails
+                        let visible = model.idle_geoset_visibility();
+                        model
+                            .geosets
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
+                            .flat_map(|(i, g)| {
+                                let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+                                let tris = g
+                                    .triangles()
+                                    .iter()
+                                    .filter_map(|t| {
+                                        let [a, b, c] = t.map(usize::from);
+                                        let v = |i: usize| g.vertices.get(i).map(|p| to_world(&lifted, *p));
+                                        let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+                                        Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
+                                    })
+                                    .collect();
+                                let tint = match inst.kind {
+                                    Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
+                                    Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+                                };
+                                let tint = tint.map(|c| f32::from(c) / 255.0);
+                                let layers = geoset_layers(model, g);
+                                let tris: Vec<PlacedTriangle> = tris;
+                                layers
+                                    .into_iter()
+                                    .map(|layer| {
+                                        let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                                        let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                                        (texture, blend, tris.clone(), tint)
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect()
+                    })
+            } else {
+                // Static bind pose rendering
+                let visible = model.idle_geoset_visibility();
+                model
+                    .geosets
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
+                    .flat_map(|(i, g)| {
+                        let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+                        let tris = g
+                            .triangles()
+                            .iter()
+                            .filter_map(|t| {
+                                let [a, b, c] = t.map(usize::from);
+                                let v = |i: usize| g.vertices.get(i).map(|p| to_world(&lifted, *p));
+                                let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+                                Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
+                            })
+                            .collect();
+                        let tint = match inst.kind {
+                            Kind::Doodad => DOODAD_TINTS[i % DOODAD_TINTS.len()],
+                            Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
+                        };
+                        let tint = tint.map(|c| f32::from(c) / 255.0);
+                        let layers = geoset_layers(model, g);
+                        let tris: Vec<PlacedTriangle> = tris;
+                        layers
+                            .into_iter()
+                            .map(|layer| {
+                                let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                                let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                                (texture, blend, tris.clone(), tint)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            }
         });
         let Some(geosets) = geosets else {
             stats.unplaced += 1;
@@ -830,6 +1001,8 @@ mod tests {
             scale,
             player: None,
             texture: None,
+            sequence_name: String::new(),
+            animation_time_ms: None,
         }
     }
 

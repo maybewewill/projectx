@@ -769,16 +769,19 @@ impl TerrainScene {
         map: &[u8],
         sources: &[&[u8]],
     ) -> Result<TerrainScene, MapError> {
-        TerrainScene::from_map_with_sim_units(map, sources, None)
+        TerrainScene::from_map_with_sim_units(map, sources, None, 0)
     }
 
     /// Like [`TerrainScene::from_map_with_sources`], but the units come from the live simulation
     /// when `sim_units` is given: the map's unit placements (`war3mapUnits.doo`) are dropped and
     /// the simulation's units are drawn in their place. Doodads always come from the map.
+    /// `game_time_ms` is the current simulation game time in milliseconds, used for deterministic
+    /// animation playback (sequence time = (game_time_ms * 1000 + unit_handle * 137) % sequence_length).
     pub fn from_map_with_sim_units(
         map: &[u8],
         sources: &[&[u8]],
         sim_units: Option<&[crate::scene_objects::SimUnit]>,
+        game_time_ms: u32,
     ) -> Result<TerrainScene, MapError> {
         let archive = mpq::Archive::open(map)?;
         let terrain = W3eTerrain::parse(&archive.read("war3map.w3e")?)?;
@@ -801,7 +804,7 @@ impl TerrainScene {
         if let Some(units) = sim_units {
             use crate::scene_objects::{sim_unit_instances, Kind};
             instances.retain(|i| i.kind != Kind::Unit);
-            let (sim_instances, stats) = sim_unit_instances(units, &catalog);
+            let (sim_instances, stats) = sim_unit_instances(units, &catalog, game_time_ms);
             placements.notes.push(format!(
                 "units from the live simulation: {} drawn, {} hidden/dead/removed, {} with no model",
                 stats.drawn,

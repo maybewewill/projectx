@@ -27,6 +27,8 @@ pub mod terrain_camera;
 pub mod terrain_gpu;
 pub mod terrain_objects;
 pub mod ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod unit_animation;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
