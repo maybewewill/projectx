@@ -35,8 +35,8 @@ UNIT = D + 0x2400
 PLAYER = D + 0x2500
 TYPEDEF = D + 0x2600
 CHEAT = D + 0x2700
-CELL = D + 0x2710
-CFLAGS = D + 0x2720
+CELL = D + 0x2780
+CFLAGS = D + 0x2790
 OUTFLAG = D + 0x2800
 VTAB = D + 0x3000
 STUB_LVLUP = D + 0x3800
@@ -215,16 +215,16 @@ def rand_case(rng):
         if c == 0:
             continue
         if rng.random() < 0.6:
-            learned[c] = rng.randint(0, 4)
+            learned[c] = rng.randint(0, max(maxl[i] - 1, 0)) if rng.random() < 0.8 else rng.randint(0, 5)
         if rng.random() < 0.7:
             skip[c] = rng.choice([0, 0, 1, 2, 2, 3, 6])
     return dict(
         codes=codes, maxl=maxl, req=req, learned=learned, skip=skip,
-        points=rng.choice([0, 0, 1, 1, 2, 3, 5]),
-        avail=rng.choice([0, 1, 1, 1]),
-        deps_ok=rng.choice([0, 1, 1]),
+        points=rng.choice([0, 1, 1, 2, 3, 5]),
+        avail=rng.choice([0, 1, 1, 1, 1, 1]),
+        deps_ok=rng.choice([0, 1, 1, 1, 1]),
         deps_flag=rng.choice([0, 1]),
-        counter=rng.randint(0, 9),
+        counter=rng.randint(0, 14),
         cheat=rng.choice([0, 0, 0x100]),
         misc=rng.choice([0, 1, 2, 3]),
         dep_ptr=rng.choice([0, 0x1234, 0xBEEF00]),

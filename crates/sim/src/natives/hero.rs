@@ -82,9 +82,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "SelectHeroSkill",
-        support: Support::NotImplemented(
-            "N:skill learning (FUN_6F2095D0) not read",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "SetHeroAgi",
@@ -171,27 +169,33 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     let g = Rc::clone(game);
     reg.register("AddHeroXP", move |_, a| {
-        with_hero(&g, a, |t, h| heroes::add_xp(t, h, conv::i2r(int_arg(a, 1)), None));
+        with_hero(&g, a, |t, h, s| heroes::add_xp(t, h, conv::i2r(int_arg(a, 1)), s));
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
     reg.register("SetHeroXP", move |_, a| {
-        with_hero(&g, a, |t, h| heroes::set_xp(t, h, int_arg(a, 1), None));
+        with_hero(&g, a, |t, h, s| heroes::set_xp(t, h, int_arg(a, 1), s));
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
     reg.register("SetHeroLevel", move |_, a| {
-        with_hero(&g, a, |t, h| heroes::set_level(t, h, int_arg(a, 1), None));
+        with_hero(&g, a, |t, h, s| heroes::set_level(t, h, int_arg(a, 1), s));
         NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
     reg.register("UnitStripHeroLevel", move |_, a| {
         let mut removed = false;
-        with_hero(&g, a, |t, h| removed = heroes::strip_levels(t, h, int_arg(a, 1) as u32));
+        with_hero(&g, a, |t, h, _| removed = heroes::strip_levels(t, h, int_arg(a, 1) as u32));
         NativeResult::Return(Value::Boolean(removed))
+    });
+
+    let g = Rc::clone(game);
+    reg.register("SelectHeroSkill", move |ctx, a| {
+        select_hero_skill(&g, ctx, a);
+        NativeResult::Return(Value::Null)
     });
 
     let g = Rc::clone(game);
@@ -245,15 +249,129 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 }
 
-/// Runs `f` on the experience tables and the hero state of argument 0 when the hero gate passes.
-fn with_hero(g: &Rc<RefCell<Game>>, a: &[Value], f: impl FnOnce(&heroes::XpTables, &mut HeroObj)) {
+/// Runs `f` on the experience tables, the hero state of argument 0 and the skill point cap when the hero gate passes.
+/// The cap (`heroes::skill_point_cap`, the learnable levels of the five skill slots) is `None` for a hero without
+/// skill slots, which the model leaves uncapped (the original would cap such a hero at 0: UNSURE, kept so that
+/// synthetic heroes without a `heroAbilList` still gain points).
+fn with_hero(
+    g: &Rc<RefCell<Game>>,
+    a: &[Value],
+    f: impl FnOnce(&heroes::XpTables, &mut HeroObj, Option<i32>),
+) {
     let mut gm = g.borrow_mut();
     let Some(k) = hero_key(&gm, a) else {
         return;
     };
     let tables = gm.hero_xp().clone();
+    let slack = skill_cap(&gm, k);
     if let Some(h) = gm.unit_mut(k).hero.as_mut() {
-        f(&tables, h);
+        f(&tables, h, slack);
+    }
+}
+
+/// The skill point cap of the hero `k` (see [`with_hero`]).
+fn skill_cap(gm: &Game, k: ObjKey) -> Option<i32> {
+    let u = gm.unit(k);
+    let h = u.hero.as_ref()?;
+    if h.slots.iter().all(|s| s.code == 0) {
+        return None;
+    }
+    Some(heroes::skill_point_cap(&h.slots, &|code| u.abilities.get(code).map(|ab| ab.level_index)))
+}
+
+/// `SelectHeroSkill(whichHero, abilCode)` (`0x6F3C7050` -> unit method `0x6F277A00` -> hero learn `0x6F2095D0`,
+/// CONFIRMED structure and Unicorn-checked arithmetic, `docs/spec/heroes.md` section 12). The unit method learns when the
+/// unit has no such ability, or its level index is below its max minus one; the learn is [`heroes::learn`]. The
+/// effects are applied to the unit's abilities and the hero skill event (player-unit 0x2A, unit 0x4F) fires after the
+/// level is set. The dependency check and the debug bit have no model: the dependency answers pass (UNSURE).
+fn select_hero_skill(g: &Rc<RefCell<Game>>, ctx: &mut dyn super::ScriptRuntime, a: &[Value]) {
+    use super::event::{Datum, Field, Firing};
+    use super::unit_event::{fire_observers_in, KEY_BASE};
+    use heroes::LearnEffect;
+
+    let code = int_arg(a, 1) as u32;
+    let (k, owner, levels) = {
+        let mut gm = g.borrow_mut();
+        let Some(k) = hero_key(&gm, a) else {
+            return;
+        };
+        let u = gm.unit(k);
+        let owner = u.owner;
+        // `0x6F277A00`: an ability the unit holds is learned only below its max minus one.
+        if let Some(ab) = u.abilities.get(code) {
+            if ab.level_index >= ab.max_level() - 1 {
+                return;
+            }
+        }
+        let available = !gm.misc.players[(owner as usize).min(15)].unavailable_abilities.contains(&code_of_slot(u, code));
+        let misc_skip = gm.kill_xp_config().hero_ability_level_skip;
+        let u = gm.unit(k);
+        let h = u.hero.as_ref().expect("hero gate");
+        let learned = |c: u32| u.abilities.get(c).map(|ab| ab.level_index);
+        let skip = |c: u32| gm.hero_ability_def(c).map_or(0, |d| d.level_skip);
+        let env = heroes::LearnEnv {
+            learned: &learned,
+            level_skip: &skip,
+            misc_skip,
+            available,
+            deps: (true, true),
+            level_counter: h.level - 1,
+            cheat: false,
+        };
+        let mut points = h.skill_points;
+        let slots = h.slots;
+        let effects = heroes::learn(&mut points, &slots, code, false, &env);
+        // Apply.
+        let mut set_levels = Vec::new();
+        let ability_types = gm.ability_types().clone();
+        let unit = gm.unit_mut(k);
+        for e in &effects {
+            match e {
+                LearnEffect::LevelUp(c) => {
+                    if let Some(ab) = unit.abilities.get_mut(*c) {
+                        ab.inc_level();
+                    }
+                }
+                LearnEffect::Add(c) => {
+                    unit.abilities.attach(crate::abilities::Ability::new(*c, ability_types.get(*c).copied()));
+                }
+                LearnEffect::SetLevel(c, l) => set_levels.push((*c, *l)),
+                _ => {}
+            }
+        }
+        if !effects.is_empty() && !matches!(effects[0], LearnEffect::Error(_)) {
+            unit.hero.as_mut().expect("hero").skill_points = points;
+        }
+        (k, owner, set_levels)
+    };
+    for (c, l) in levels {
+        let firing = {
+            let mut gm = g.borrow_mut();
+            gm.firings.push(Firing {
+                id: 0x4F,
+                data: vec![
+                    (Field::Learner, Datum::Object(k)),
+                    (Field::Skill, Datum::Int(c as i32)),
+                    (Field::SkillLevel, Datum::Int(l)),
+                ],
+            });
+            (gm.firings.len() - 1) as u32
+        };
+        fire_observers_in(g, ctx, ObjKey(owner), 0x2A + KEY_BASE, k, Some(firing));
+        fire_observers_in(g, ctx, k, 0x4F + KEY_BASE, k, Some(firing));
+    }
+}
+
+/// The ability code the availability check reads: the slot's code (the learn tests the code of the slot it found, which
+/// differs from the requested code only for the `'Aroa'` / `'Arou'` alias).
+fn code_of_slot(u: &crate::natives::game::UnitObj, code: u32) -> u32 {
+    match u.hero.as_ref() {
+        Some(h) => h
+            .slots
+            .iter()
+            .find(|s| (code == heroes::ALIAS_ABILITY && s.code == heroes::ALIAS_SLOT) || s.code == code)
+            .map_or(code, |s| s.code),
+        None => code,
     }
 }
 

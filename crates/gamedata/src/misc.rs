@@ -268,6 +268,14 @@ pub struct HeroMisc {
     /// `MaxLevelHeroesDrainExp` (`0x6FA70E98`): heroes at the maximum level still take kill experience (key at
     /// `0x6F92F270`). Absent gives `false` (LIKELY, same reader).
     pub max_level_heroes_drain_exp: bool,
+    /// `HeroExpRange` (real, world units): the distance within which a hero shares a kill's experience. Read with the
+    /// real reader `0x6F009EE0` (default 0.0).
+    pub hero_exp_range: F32,
+    /// `SummonedKillFactor` (real): the kill experience of a summoned unit is scaled by it (default 0.0).
+    pub summoned_kill_factor: F32,
+    /// `HeroAbilityLevelSkip` (integer, element 0): the level skip of a hero skill whose definition has none
+    /// (`0x6F207B60`, default 0).
+    pub hero_ability_level_skip: i32,
 }
 
 /// The eight reals that turn a hero attribute into a derived bonus (`docs/spec/heroes.md`, section 9). Each is read
@@ -337,6 +345,9 @@ impl HeroMisc {
         let building_kills_give_exp = reader.int_element("BuildingKillsGiveExp") != 0;
         let global_experience = reader.int_element("GlobalExperience") != 0;
         let max_level_heroes_drain_exp = reader.int_element("MaxLevelHeroesDrainExp") != 0;
+        let hero_exp_range = reader.real_or_zero("HeroExpRange");
+        let summoned_kill_factor = reader.real_or_zero("SummonedKillFactor");
+        let hero_ability_level_skip = reader.int_element("HeroAbilityLevelSkip");
         HeroMisc {
             max_hero_level,
             need_hero_xp,
@@ -351,6 +362,9 @@ impl HeroMisc {
             building_kills_give_exp,
             global_experience,
             max_level_heroes_drain_exp,
+            hero_exp_range,
+            summoned_kill_factor,
+            hero_ability_level_skip,
         }
     }
 }

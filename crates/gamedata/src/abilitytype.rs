@@ -185,6 +185,13 @@ pub fn read_ability(slk: &Slk, key: &str) -> Option<AbilityTypeData> {
     })
 }
 
+/// The skill data of a row: `(levels, reqLevel, levelSkip)` (definition `+0x3C`, `+0x40`, `+0x44`), what a hero skill
+/// slot copies (`0x6F20AA10`). `None` when the row is missing.
+pub fn read_skill(slk: &Slk, key: &str) -> Option<(i32, i32, i32)> {
+    slk.row(key)?;
+    Some((int(slk, key, "levels"), int(slk, key, "reqLevel"), int(slk, key, "levelSkip")))
+}
+
 /// Reads every row of the table, keyed by raw code (deterministic order).
 pub fn load_all(slk: &Slk) -> BTreeMap<u32, AbilityTypeData> {
     slk.rows()
