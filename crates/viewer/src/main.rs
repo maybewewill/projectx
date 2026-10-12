@@ -146,9 +146,20 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut camera_at: Option<(f32, f32)> = None;
     let mut camera_start: Option<usize> = None;
     let mut zoom: f32 = 1.0;
+    let mut sim = SimArgs::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--sim-seconds" => {
+                sim.seconds = Some(it.next().ok_or("--sim-seconds needs seconds")?.parse()?);
+            }
+            "--computer" => {
+                let text = it.next().ok_or("--computer needs SLOT[:RACE]")?;
+                sim.computers.push(parse_computer(text)?);
+            }
+            "--dll" => sim.dll = Some(it.next().ok_or("--dll needs a file")?.into()),
+            "--frames" => sim.frames = Some(it.next().ok_or("--frames needs a count")?.parse()?),
+            "--every" => sim.every = Some(it.next().ok_or("--every needs seconds")?.parse()?),
             "--map" => map = Some(it.next().ok_or("--map needs a file")?.into()),
             "--mpq" => mpqs.push(it.next().ok_or("--mpq needs a file")?.into()),
             "--render-png" => png = Some(it.next().ok_or("--render-png needs a file")?.into()),
@@ -187,6 +198,26 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         camera_at = Some((player.start_x, player.start_y));
     }
     let map = map.ok_or("usage: viewer --map map.w3x [--mpq archive]... [--render-png out.png]")?;
+    if sim.seconds.is_none() && (sim.frames.is_some() || sim.every.is_some() || !sim.computers.is_empty()) {
+        return Err("--frames, --every, --computer and --dll need --sim-seconds".into());
+    }
+    if sim.frames.is_some() && sim.every.is_none() {
+        return Err("--frames needs --every SECONDS".into());
+    }
+    if let Some(seconds) = sim.seconds {
+        let out = png.ok_or("--sim-seconds needs --render-png out.png")?;
+        let run = SimRun {
+            map,
+            mpqs,
+            out,
+            size,
+            camera_at,
+            zoom,
+            seconds,
+            args: sim,
+        };
+        return run_sim(run);
+    }
 
     let map_bytes = std::fs::read(&map)?;
     let archive_bytes = mpqs
@@ -288,6 +319,137 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("viewer: luma histogram (32-wide bins): {:?}", s.luma_histogram);
         }
         None => viewer::run_terrain(terrain)?,
+    }
+    Ok(())
+}
+
+/// The `--sim-seconds` options (see [`run_sim`]).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct SimArgs {
+    seconds: Option<f64>,
+    /// `--computer SLOT[:RACE]` (race ids as `engine::cli` takes them).
+    computers: Vec<(u32, Option<u32>)>,
+    dll: Option<std::path::PathBuf>,
+    /// `--frames K --every S`: K pictures, the first at `seconds`, then one every S game seconds.
+    frames: Option<usize>,
+    every: Option<f64>,
+}
+
+/// What [`run_sim`] renders.
+#[cfg(not(target_arch = "wasm32"))]
+struct SimRun {
+    map: std::path::PathBuf,
+    mpqs: Vec<std::path::PathBuf>,
+    out: std::path::PathBuf,
+    size: (u32, u32),
+    camera_at: Option<(f32, f32)>,
+    zoom: f32,
+    seconds: f64,
+    args: SimArgs,
+}
+
+/// `--computer SLOT[:RACE]` with RACE human, orc, undead or nightelf.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_computer(text: &str) -> Result<(u32, Option<u32>), String> {
+    let (slot, race) = match text.split_once(':') {
+        Some((s, r)) => (s, Some(r)),
+        None => (text, None),
+    };
+    let slot = slot.parse::<u32>().map_err(|_| format!("--computer: bad slot {text}"))?;
+    let race = match race {
+        None => None,
+        Some("human") => Some(1),
+        Some("orc") => Some(2),
+        Some("undead") => Some(3),
+        Some("nightelf") => Some(4),
+        Some(other) => return Err(format!("--computer: unknown race {other}")),
+    };
+    Ok((slot, race))
+}
+
+/// Game ticks of `seconds` of game time (one tick is 0.005 s, `docs/spec/lockstep.md` section 9).
+#[cfg(not(target_arch = "wasm32"))]
+fn ticks_for(seconds: f64) -> u64 {
+    (seconds.max(0.0) * 200.0).round() as u64
+}
+
+/// `out.png` with frame index `k` in the name: `out_000.png`.
+#[cfg(not(target_arch = "wasm32"))]
+fn frame_path(out: &std::path::Path, k: usize) -> std::path::PathBuf {
+    let stem = out.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+    let name = match out.extension().and_then(|e| e.to_str()) {
+        Some(ext) => format!("{stem}_{k:03}.{ext}"),
+        None => format!("{stem}_{k:03}"),
+    };
+    out.with_file_name(name)
+}
+
+/// `viewer --map ... --sim-seconds N [--computer SLOT:RACE]... [--frames K --every S]`: boots the map
+/// with `engine::cli` (the same path as `w3boot`), runs N game seconds, then draws the live units of the
+/// simulation in place of the map's unit placements (doodads stay from the map). With `--frames` it
+/// writes K pictures, one every S game seconds, named after `--render-png` with the index added.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_sim(run: SimRun) -> Result<(), Box<dyn std::error::Error>> {
+    use viewer::{offscreen, sim_view, terrain::TerrainScene, terrain_objects};
+
+    let boot = engine::cli::BootArgs {
+        map: Some(run.map.to_string_lossy().into_owned()),
+        dll: run.args.dll.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        mpqs: run.mpqs.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+        computers: run.args.computers.clone(),
+        ..Default::default()
+    };
+    let mut engine = engine::cli::boot(&boot)?;
+    engine.step_ticks(ticks_for(run.seconds));
+
+    let map_bytes = std::fs::read(&run.map)?;
+    let archive_bytes = run
+        .mpqs
+        .iter()
+        .map(|path| std::fs::read(path).map_err(|e| format!("{}: {e}", path.display())))
+        .collect::<Result<Vec<Vec<u8>>, String>>()?;
+    let sources: Vec<&[u8]> = archive_bytes.iter().map(Vec::as_slice).collect();
+
+    let frames = run.args.frames.unwrap_or(1).max(1);
+    let (w, h) = run.size;
+    for k in 0..frames {
+        if k > 0 {
+            engine.step_ticks(ticks_for(run.args.every.unwrap_or(0.0)));
+        }
+        let now = engine.report().game_time;
+        let units = sim_view::units(&engine);
+        let terrain = TerrainScene::from_map_with_sim_units(&map_bytes, &sources, Some(&units))?;
+        let alive = sim_view::alive_per_owner(&units);
+        let alive_text: Vec<String> = alive.iter().map(|(p, n)| format!("p{p}={n}")).collect();
+        eprintln!(
+            "viewer: frame {k} at game time {now:.2}s: units alive per player: {}",
+            if alive_text.is_empty() { "none".to_string() } else { alive_text.join(" ") }
+        );
+        for slot in run.args.computers.iter().map(|c| c.0) {
+            eprintln!("viewer:   p{slot}: {}", engine.host().game().production_summary(slot));
+        }
+        for note in terrain.object_placements.notes.iter().filter(|n| n.starts_with("units from")) {
+            eprintln!("viewer:   {note}");
+        }
+        let target = run.camera_at.map(|(x, y)| {
+            let z = w3e_of(&map_bytes).map_or(terrain.bounds.center().z, |t| terrain_objects::ground_at(&t, x, y));
+            [x, y, z]
+        });
+        let rgba = offscreen::render_terrain_at(&terrain, w, h, target, run.zoom)?;
+        let path = if run.args.frames.is_some() { frame_path(&run.out, k) } else { run.out.clone() };
+        offscreen::write_png(&path, w, h, &rgba)?;
+        let s = offscreen::summarize(w, h, &rgba);
+        eprintln!(
+            "viewer: wrote {} ({}x{}): {} distinct colours, mean RGB {:.1} {:.1} {:.1}",
+            path.display(),
+            w,
+            h,
+            s.distinct_colors,
+            s.mean_rgb[0],
+            s.mean_rgb[1],
+            s.mean_rgb[2]
+        );
     }
     Ok(())
 }

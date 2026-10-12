@@ -718,6 +718,17 @@ impl TerrainScene {
         map: &[u8],
         sources: &[&[u8]],
     ) -> Result<TerrainScene, MapError> {
+        TerrainScene::from_map_with_sim_units(map, sources, None)
+    }
+
+    /// Like [`TerrainScene::from_map_with_sources`], but the units come from the live simulation
+    /// when `sim_units` is given: the map's unit placements (`war3mapUnits.doo`) are dropped and
+    /// the simulation's units are drawn in their place. Doodads always come from the map.
+    pub fn from_map_with_sim_units(
+        map: &[u8],
+        sources: &[&[u8]],
+        sim_units: Option<&[crate::scene_objects::SimUnit]>,
+    ) -> Result<TerrainScene, MapError> {
         let archive = mpq::Archive::open(map)?;
         let terrain = W3eTerrain::parse(&archive.read("war3map.w3e")?)?;
         let archives: Vec<mpq::Archive<'_>> = sources
@@ -734,8 +745,20 @@ impl TerrainScene {
         let plan = crate::cliff_render::plan_cliffs(&terrain, &cliff_types, &mut props);
         // Doodads and pre-placed units, lifted onto the ground and added to the same props.
         let catalog = crate::scene_objects::Catalog::load(&objects_archives);
-        let (instances, mut placements) = crate::scene_objects::placements(map, &catalog);
+        let (mut instances, mut placements) = crate::scene_objects::placements(map, &catalog);
         placements.notes.extend(catalog.notes.iter().cloned());
+        if let Some(units) = sim_units {
+            use crate::scene_objects::{sim_unit_instances, Kind};
+            instances.retain(|i| i.kind != Kind::Unit);
+            let (sim_instances, stats) = sim_unit_instances(units, &catalog);
+            placements.notes.push(format!(
+                "units from the live simulation: {} drawn, {} hidden/dead/removed, {} with no model",
+                stats.drawn,
+                stats.not_visible,
+                stats.unmodelled.iter().map(|(_, n)| n).sum::<usize>()
+            ));
+            instances.extend(sim_instances);
+        }
         let objects = crate::scene_objects::place_on_terrain(&instances, &terrain, &mut props);
         let (mut prop_scene, flat_props) = props.finish();
         // Blended props are drawn back to front for the default camera direction (the yaw and

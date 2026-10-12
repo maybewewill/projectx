@@ -30,6 +30,8 @@ wgpu = { version = "30.0.1", features = ["webgl"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1.0.1"
+# The live simulation for `--sim-seconds` (the boot path is `engine::cli`).
+engine = { path = "../engine" }
 # PNG output of the offscreen renderer (zlib and CRC only; the image is written by hand).
 flate2 = "1.1.10"
 

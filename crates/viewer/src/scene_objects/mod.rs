@@ -244,8 +244,142 @@ pub fn placements(map: &[u8], catalog: &Catalog) -> (Vec<Instance>, Stats) {
     (instances, stats)
 }
 
+/// A unit of the live simulation, as the viewer draws it (copied out of `sim::Game` by
+/// `crate::sim_view`). `type_id` is the raw code as a big-endian integer, as `GetUnitTypeId` gives it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimUnit {
+    pub type_id: u32,
+    pub owner: u32,
+    pub x: f32,
+    pub y: f32,
+    /// Facing in radians (the mover's heading).
+    pub facing: f32,
+    /// Uniform scale; a non-positive value is drawn at 1.0.
+    pub scale: f32,
+    pub hidden: bool,
+    pub dead: bool,
+    pub removed: bool,
+}
+
+/// What [`sim_unit_instances`] did with the live units.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SimUnitStats {
+    /// Units that became draw instances.
+    pub drawn: usize,
+    /// Hidden, dead or removed units (not drawn).
+    pub not_visible: usize,
+    /// Type codes with no model in the unit tables, with their counts (sorted by count, then name).
+    pub unmodelled: Vec<(String, usize)>,
+}
+
+/// Draw instances for the live simulation's units, in the same form as the map's unit placements:
+/// the model comes from the unit table by type code (the variation is 0: the simulation has none),
+/// the position and facing are the unit's, and the tint is the owner's player colour.
+pub fn sim_unit_instances(units: &[SimUnit], catalog: &Catalog) -> (Vec<Instance>, SimUnitStats) {
+    let mut instances = Vec::new();
+    let mut stats = SimUnitStats::default();
+    let mut unmodelled: HashMap<String, usize> = HashMap::new();
+    for u in units {
+        if u.hidden || u.dead || u.removed {
+            stats.not_visible += 1;
+            continue;
+        }
+        let code = u.type_id.to_be_bytes();
+        match catalog.units.get(&code) {
+            Some(ty) => {
+                let scale = if u.scale > 0.0 { u.scale } else { 1.0 };
+                instances.push(Instance {
+                    kind: Kind::Unit,
+                    model: ty.path_for(0),
+                    position: [u.x, u.y, 0.0],
+                    angle: u.facing,
+                    scale: [scale; 3],
+                    player: Some(u.owner),
+                    texture: None,
+                });
+                stats.drawn += 1;
+            }
+            None => *unmodelled.entry(code_text(&code)).or_insert(0) += 1,
+        }
+    }
+    let mut top: Vec<(String, usize)> = unmodelled.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    stats.unmodelled = top;
+    (instances, stats)
+}
+
 fn code_text(id: &[u8; 4]) -> String {
     String::from_utf8_lossy(id).into_owned()
+}
+
+#[cfg(test)]
+mod sim_unit_tests {
+    use super::*;
+
+    fn catalog_with(code: &[u8; 4], file: &str) -> Catalog {
+        let mut c = Catalog::default();
+        c.units.insert(*code, ModelType { file: file.to_string(), num_var: 0, tex_file: None });
+        c
+    }
+
+    fn unit(type_id: u32) -> SimUnit {
+        SimUnit {
+            type_id,
+            owner: 2,
+            x: 100.0,
+            y: -200.5,
+            facing: 1.5,
+            scale: 1.25,
+            hidden: false,
+            dead: false,
+            removed: false,
+        }
+    }
+
+    #[test]
+    fn sim_unit_maps_to_a_draw_instance() {
+        let hpea = u32::from_be_bytes(*b"hpea");
+        let catalog = catalog_with(b"hpea", "units\\human\\Peasant\\Peasant");
+        let (inst, stats) = sim_unit_instances(&[unit(hpea)], &catalog);
+        assert_eq!(stats.drawn, 1);
+        assert!(stats.unmodelled.is_empty());
+        assert_eq!(inst.len(), 1);
+        let i = &inst[0];
+        assert_eq!(i.kind, Kind::Unit);
+        assert_eq!(i.model, "units\\human\\Peasant\\Peasant");
+        assert_eq!(i.position, [100.0, -200.5, 0.0]);
+        assert_eq!(i.angle, 1.5);
+        assert_eq!(i.scale, [1.25, 1.25, 1.25]);
+        assert_eq!(i.player, Some(2));
+    }
+
+    #[test]
+    fn hidden_dead_removed_units_are_not_drawn() {
+        let hpea = u32::from_be_bytes(*b"hpea");
+        let catalog = catalog_with(b"hpea", "x");
+        let mut hidden = unit(hpea);
+        hidden.hidden = true;
+        let mut dead = unit(hpea);
+        dead.dead = true;
+        let mut removed = unit(hpea);
+        removed.removed = true;
+        let (inst, stats) = sim_unit_instances(&[hidden, dead, removed], &catalog);
+        assert!(inst.is_empty());
+        assert_eq!(stats.not_visible, 3);
+        assert_eq!(stats.drawn, 0);
+    }
+
+    #[test]
+    fn unknown_type_is_counted_and_non_positive_scale_becomes_one() {
+        let catalog = catalog_with(b"hpea", "x");
+        let mut zero_scale = unit(u32::from_be_bytes(*b"hpea"));
+        zero_scale.scale = 0.0;
+        let other = unit(u32::from_be_bytes(*b"ngol"));
+        let (inst, stats) = sim_unit_instances(&[zero_scale, other, other], &catalog);
+        assert_eq!(inst.len(), 1);
+        assert_eq!(inst[0].scale, [1.0, 1.0, 1.0]);
+        assert_eq!(stats.unmodelled, vec![("ngol".to_string(), 2)]);
+    }
 }
 
 /// Triangle list of one model, grouped per geoset.
