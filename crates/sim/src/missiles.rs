@@ -12,6 +12,9 @@
 //!   slot), 0 mismatches against the model below; the vectors are in `tests/missile/gate_data.rs`.
 //! * **Impact gate** ([`impact_check`]): slot 45 (`0x6F2C42D0`). It sets the "hit done" flag `0x20000000` and launches
 //!   when the gate holds, and otherwise hands over to slot 47. Same Unicorn run (CONFIRMED).
+//! * **Launch miss tail** ([`chance_to_miss`], [`miss_cell`]): every missile launch that no evasion ability catches takes one
+//!   stream-2 draw for `ChanceToMiss`; CONFIRMED by Unicorn (`tools/emu/miss_gate_emu.py`, 2,400 cases, 0 mismatches),
+//!   `docs/spec/missiles.md` section 9.
 //! * **Flight time** ([`flight_seconds`]): distance over speed, in game seconds. LIKELY in form only: the original's
 //!   flight arithmetic (speed, arc, homing) is not decoded, so the value and the rounding are a model (UNSURE).
 //!
@@ -170,6 +173,38 @@ pub fn impact_check(g: GateInputs) -> ImpactCheck {
     } else {
         ImpactCheck::Arrive
     }
+}
+
+/// The combat stream of the `ChanceToMiss` draw (`0x6F2853D0` with EDX = 2, CONFIRMED: the stream of the dice and
+/// of the evasion roll).
+pub const MISS_STREAM: usize = 2;
+/// The movement word bit of flying units (`unit +0x1FC & 2`), the first condition of the attacker exemption of the
+/// uphill miss (`0x6F0C7DE0`).
+pub const MOVE_FLY: u32 = 0x2;
+
+/// One coordinate of the cell the uphill rule compares: `f2i(scale32(v - origin))`, truncated toward zero (not
+/// floored: `0x6F0D8DF0` / `0x6F0D8DC0` followed by `0x6F6EEC20`, CONFIRMED by Unicorn). The x origin is the world
+/// object's `+0x6C`, the y origin `+0x70`.
+pub fn miss_cell(v: F32, origin: F32) -> i32 {
+    softfloat::conv::f2i(crate::pathing::scale_by_1_32(arith::sub(v, origin)))
+}
+
+/// The `ChanceToMiss` tail of the miss gate `0x6F2BEAC0` for a missile launch (CONFIRMED by Unicorn, 1,200 cases,
+/// `tools/emu/miss_gate_emu.py`). `draw` is the stream-2 draw already taken (it is taken whenever the tail is
+/// reached), `chance` the Misc `ChanceToMiss`. The launch misses iff `!(chance <= draw)` (an unordered compare
+/// misses too), the attacker is not exempt, and the target's level is strictly above the attacker's. `levels` is
+/// only called when the first two conditions hold, and returns `(attacker level, target level)`.
+pub fn chance_to_miss(
+    chance: F32,
+    draw: F32,
+    attacker_exempt: bool,
+    levels: impl FnOnce() -> (i32, i32),
+) -> bool {
+    if chance.to_f32() <= draw.to_f32() || attacker_exempt {
+        return false;
+    }
+    let (attacker, target) = levels();
+    target > attacker
 }
 
 /// The distance between two points in world units: `sqrt(dx*dx + dy*dy)` in soft float (2D; the Z of the launch and

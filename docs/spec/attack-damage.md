@@ -619,7 +619,10 @@ this class is one dword too high.
     execute slot runs; its result is the walk's.
   - After A and B fail: with a3 == 0 (the direct paths) the gate returns 0. With a3 != 0 (missiles) it goes on to the
     `ChanceToMiss` branch: **one draw on stream 2** (`0x6F2853D0`) is taken whenever it is reached, compared with the
-    Misc `ChanceToMiss` value, plus an unresolved height/level comparison. **Not modelled** (open, see below).
+    Misc `ChanceToMiss` value, plus a terrain level comparison. **Decoded and wired in S10** (`missiles.md` section 9,
+    Unicorn 2,400 cases, 0 mismatches): `chance <= draw` -> no miss; else a flying attacker is exempt; else it misses
+    iff the target's cell level is above the attacker's. A miss scales the launch record's `+0x44` / `+0x48` by
+    `MissDamageReduction` and leaves the missile unbound (no direct damage, LIKELY).
 - **Unicorn** (`tools/emu/evasion_gate_emu.py`): the gate `0x6F2BEAC0` runs for real with the real iterator, the real
   `CAbilityEvasion` vtable (only slot `0x268` replaced by a stub that returns 1 or 0), a hand-built agent table, and
   random ability lists on both units (up to 4 entries, stale keys, removed entries, wrong table markers, count gate,
@@ -644,6 +647,6 @@ this class is one dword too high.
 - **LIKELY / UNSURE**: that an evaded missile deals no damage (the original runs the gate in the launch function
   `0x6F2C3F70` and scales the flight's damage by `MissDamageReduction`; only the weapTp "missile" case is decompiled, the
   other missile types launch through virtual calls); the enabled slot is taken as always true; the count as 0.
-- **Open**: (1) the `ChanceToMiss` branch for missiles (a stream-2 draw per launch that reaches it: the sim takes none,
-  so stream 2 is out of step for ranged attacks); (2) the attacker-side walk B classes (Curse and friends); (3) the
+- **Open**: (1) ~~the `ChanceToMiss` branch for missiles~~ done in S10 (one stream-2 draw per ranged launch, see
+  `missiles.md` section 9); the engine still has no terrain level provider; (2) the attacker-side walk B classes (Curse and friends); (3) the
   DataD classes; (4) crit/bash consumers elsewhere (their damage-side use is not in this gate).

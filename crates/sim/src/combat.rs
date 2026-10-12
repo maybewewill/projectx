@@ -142,6 +142,17 @@ pub struct CombatMisc {
     /// The Misc `ReactionDelay` in seconds (CONFIRMED key). TODO(gamedata): the default is not in the container.
     /// The default here is zero, a placeholder.
     pub reaction_delay: F32,
+    /// The Misc `ChanceToMiss` (CONFIRMED key, `0x6F2BEAC0`): the probability of the uphill miss of a missile. A
+    /// missing key reads `0.0` in the original, which is also the default here.
+    pub chance_to_miss: F32,
+}
+
+/// The terrain level of a pathing cell, as the miss gate reads it (`0x6F0128C0`): the host adapter over the map's
+/// cliff levels (and ramps). Without a provider every cell is level 0 and the uphill rule never fires; the draw
+/// of the gate is taken either way.
+pub trait CliffLevels: std::fmt::Debug {
+    /// The level of the cell `(cell_x, cell_y)` (32-unit cells, origin at the playable minimum).
+    fn level(&self, cell_x: i32, cell_y: i32) -> i32;
 }
 
 /// The damage of one execute. The model is called once per execute, after the target is known to be valid and
@@ -287,6 +298,7 @@ pub struct CombatSystem {
     damage: Option<Box<dyn DamageModel>>,
     point_damages: BTreeMap<u32, PointDamage>,
     next_point_damage: u32,
+    cliffs: Option<Box<dyn CliffLevels>>,
 }
 
 /// The parameters of one `UnitDamagePoint` call (`0x6F3C8770`), kept until a delayed call comes due.
@@ -334,6 +346,11 @@ impl Game {
     /// The attack data of unit type `type_id`; the all-zero value for an unregistered type.
     pub fn attack_type(&self, type_id: u32) -> AttackType {
         self.combat.types.get(&type_id).copied().unwrap_or_default()
+    }
+
+    /// Installs the terrain level provider of the missile miss gate (`None` removes it).
+    pub fn set_cliff_levels(&mut self, provider: Option<Box<dyn CliffLevels>>) {
+        self.combat.cliffs = provider;
     }
 
     /// Sets the Misc values of the attack cycle.
@@ -630,6 +647,12 @@ impl Game {
         match ty.missile_speed {
             None => self.apply_damage(target, damage),
             Some(speed) => {
+                // A launch also runs the `ChanceToMiss` tail of the gate: ONE stream-2 draw per launch, always
+                // (CONFIRMED, `docs/spec/missiles.md` section 9). A missed missile is not bound to its target and
+                // deals no direct damage (LIKELY).
+                if self.chance_to_miss_check(unit, target) {
+                    return None;
+                }
                 let delay = self.impact_delay(unit, target, speed);
                 self.arm(delay, unit, AttackMsg::Impact { target, damage });
                 None
@@ -732,6 +755,40 @@ impl Game {
             .stream_mut(crate::damage::EVASION_STREAM)
             .random_fraction(table);
         crate::damage::evades(chance, draw)
+    }
+
+    /// The `ChanceToMiss` tail of the miss gate `0x6F2BEAC0` for a missile launch (`a3 != 0`), reached when no
+    /// evasion ability fired (CONFIRMED by Unicorn, `tools/emu/miss_gate_emu.py`). It always takes one draw of stream
+    /// 2 (the same `0x6F2853D0` call as the evasion roll), then misses iff `!(ChanceToMiss <= draw)` (NaN misses),
+    /// the attacker is not exempt, and the target's cell level is above the attacker's. Returns whether it missed.
+    fn chance_to_miss_check(&mut self, attacker: ObjKey, target: ObjKey) -> bool {
+        let Some((table, streams)) = self.rng_parts() else {
+            return false;
+        };
+        let draw = streams
+            .stream_mut(missiles::MISS_STREAM)
+            .random_fraction(table);
+        let chance = self.combat.misc.chance_to_miss;
+        let (a, t) = (self.unit(attacker), self.unit(target));
+        // LIKELY: the exemption (`0x6F0C7DE0`: movement word bit 1, flag `+0x5C & 0x20000000`, `+0x200 <= 0`) is a
+        // flying attacker; the two other conditions are taken as met.
+        let movement = self.unit_types().get(a.type_id).map_or(0, |ty| ty.movement);
+        let exempt = movement & missiles::MOVE_FLY != 0;
+        let origin = match self.playable() {
+            Some(p) => (p.min_x, p.min_y),
+            None => (F32::ZERO, F32::ZERO),
+        };
+        let cells = (
+            (missiles::miss_cell(a.x, origin.0), missiles::miss_cell(a.y, origin.1)),
+            (missiles::miss_cell(t.x, origin.0), missiles::miss_cell(t.y, origin.1)),
+        );
+        let level = |c: (i32, i32)| {
+            self.combat
+                .cliffs
+                .as_ref()
+                .map_or(0, |p| p.level(c.0, c.1))
+        };
+        missiles::chance_to_miss(chance, draw, exempt, || (level(cells.0), level(cells.1)))
     }
 
     /// The damage of one execute, through the installed model.

@@ -78,6 +78,9 @@ pub struct MiscData {
     pub ethereal_damage_bonus: [F32; ETHEREAL_ENTRIES],
     /// `ReactionDelay` in seconds.
     pub reaction_delay: F32,
+    /// `ChanceToMiss`: the probability of the uphill miss of a missile (`0.0` when absent, as in the original;
+    /// `docs/spec/missiles.md` section 9).
+    pub chance_to_miss: F32,
     /// `AttackHalfAngle`, or `None` when no layer sets it.
     pub attack_half_angle: Option<F32>,
     /// The hero experience keys (`docs/spec/heroes.md`, section 2).
@@ -147,6 +150,7 @@ impl MiscData {
         let reaction_delay = reader
             .real("ReactionDelay")
             .unwrap_or(defaults.reaction_delay);
+        let chance_to_miss = reader.real("ChanceToMiss").unwrap_or(defaults.chance_to_miss);
         let attack_half_angle = reader.real("AttackHalfAngle");
         let upkeep_usage = reader
             .ints::<UPKEEP_TIERS>("UpkeepUsage")
@@ -174,6 +178,7 @@ impl MiscData {
             damage_bonus,
             ethereal_damage_bonus,
             reaction_delay,
+            chance_to_miss,
             attack_half_angle,
             hero,
             defaulted,
@@ -210,6 +215,7 @@ impl MiscData {
             damage_bonus: [[F32::ZERO; ARMOR_COLUMNS]; ATTACK_ROWS],
             ethereal_damage_bonus: [F32::ZERO; ETHEREAL_ENTRIES],
             reaction_delay: F32::ZERO,
+            chance_to_miss: F32::ZERO,
             attack_half_angle: None,
             hero: HeroMisc::default(),
             defaulted: Vec::new(),

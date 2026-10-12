@@ -396,6 +396,7 @@ fn reaction_delay_draws_from_stream_nine() {
     host.game_mut().set_combat_misc(CombatMisc {
         attack_half_angle: None,
         reaction_delay: f(0.5),
+        ..Default::default()
     });
     let ua = unit_key(&host, "ua");
     // The expected draw: the same stream state, one step of stream 9, taken before the order is issued. ua's
@@ -550,6 +551,7 @@ fn facing_turns_an_attacker_towards_its_target() {
     host.game_mut().set_combat_misc(CombatMisc {
         attack_half_angle: Some(f(0.5)),
         reaction_delay: F32::ZERO,
+        ..Default::default()
     });
     host.start("attack_one", &[]).expect("order");
     host.step();
@@ -558,4 +560,123 @@ fn facing_turns_an_attacker_towards_its_target() {
         facing.abs() < 0.01,
         "ua turned to face ub (facing {facing})"
     );
+}
+
+/// A cliff provider where the level is the x cell: a unit to the east stands higher than one to the west.
+#[derive(Debug)]
+struct EastIsHigher;
+
+impl sim::combat::CliffLevels for EastIsHigher {
+    fn level(&self, cell_x: i32, _cell_y: i32) -> i32 {
+        cell_x
+    }
+}
+
+/// A host for a missile attack of `ua` on `ub` (distance 100, speed 100) with the real RNG, seeded, and `ChanceToMiss`.
+fn missile_host(chance: f32) -> Option<(ScriptHost, RngTable)> {
+    tables()?;
+    let table = rng_table()?;
+    let mut host = host_for(DUEL);
+    host.set_rng_table(table.clone());
+    host.start_game_rng(0x0BAD_CAFE);
+    host.start("setup", &[]).expect("setup");
+    host.step();
+    host.game_mut().set_attack_type(
+        FOOTMAN,
+        AttackType {
+            missile_speed: Some(f(100.0)),
+            ..weapon()
+        },
+    );
+    host.game_mut().set_combat_misc(CombatMisc {
+        chance_to_miss: f(chance),
+        ..Default::default()
+    });
+    Some((host, table))
+}
+
+/// The steps until `ua`'s first execute point has passed.
+fn run_to_first_execute(host: &mut ScriptHost, ua: ObjKey) {
+    let mut was_pending = false;
+    for _ in 1..=40 {
+        host.step();
+        let pending = host
+            .game()
+            .attack_view(ua)
+            .is_some_and(|v| v.execute_expiry.is_some());
+        if was_pending && !pending {
+            return;
+        }
+        was_pending = pending;
+    }
+    panic!("no execute point");
+}
+
+/// Every missile launch takes exactly one stream-2 draw (the `ChanceToMiss` tail of the miss gate), whatever the
+/// Misc value; a direct (melee) attack takes none. The placeholder damage model rolls no dice, so the draw is the only
+/// stream-2 use (needs `GAME_DLL`).
+#[test]
+fn a_missile_launch_takes_one_stream_two_draw() {
+    for chance in [0.0f32, 0.25, 1.0] {
+        let Some((mut host, table)) = missile_host(chance) else {
+            return;
+        };
+        let ua = unit_key(&host, "ua");
+        host.start("attack_one", &[]).expect("order");
+        let before = host.rng().clone();
+        run_to_first_execute(&mut host, ua);
+        let mut expected = before.clone();
+        let _ = expected.stream_mut(2).random_fraction(&table);
+        let after = host.rng().clone();
+        assert_eq!(
+            after.stream(2),
+            expected.stream(2),
+            "ChanceToMiss {chance}: exactly one draw of stream 2"
+        );
+    }
+    // A melee attack (no missile speed) draws nothing from stream 2.
+    let Some((mut host, _)) = missile_host(0.5) else {
+        return;
+    };
+    host.game_mut().set_attack_type(FOOTMAN, weapon());
+    let ua = unit_key(&host, "ua");
+    host.start("attack_one", &[]).expect("order");
+    let before = host.rng().clone();
+    run_to_first_execute(&mut host, ua);
+    assert_eq!(
+        host.rng().stream(2),
+        before.stream(2),
+        "a direct attack has no miss draw"
+    );
+}
+
+/// With `ChanceToMiss` 1.0 and the target on higher ground the draw (always below 1.0) misses: no damage. On level
+/// ground, or with a flying attacker, or with chance 0.0, the missile lands (needs `GAME_DLL`).
+#[test]
+fn uphill_missiles_miss_with_the_misc_chance() {
+    if tables().is_none() || rng_table().is_none() {
+        return;
+    }
+    let landed = |chance: f32, cliffs: bool, flyer: bool| -> bool {
+        let (mut host, _) = missile_host(chance).expect("host");
+        if cliffs {
+            host.game_mut().set_cliff_levels(Some(Box::new(EastIsHigher)));
+        }
+        if flyer {
+            let mut g = host.game_mut();
+            let mut ty = g.unit_types().get(FOOTMAN).cloned().expect("type");
+            ty.movement = 2;
+            g.unit_types_mut().insert(FOOTMAN, ty);
+        }
+        let ub = unit_key(&host, "ub");
+        host.start("attack_one", &[]).expect("order");
+        for _ in 0..25 {
+            host.step();
+        }
+        life(&host, ub) < 100.0
+    };
+    assert!(!landed(1.0, true, false), "uphill with chance 1.0 misses");
+    assert!(landed(1.0, false, false), "level ground never misses");
+    assert!(landed(0.0, true, false), "chance 0.0 never misses");
+    assert!(landed(1.0, true, true), "a flying attacker is exempt");
 }

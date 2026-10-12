@@ -17,7 +17,10 @@ Summary in plain words:
   damage. Then it calls the missile's slot 42 (`0x6F2BD010`).
 - The **impact check** (slot 45, `0x6F2C42D0`) runs the same gate. When the gate and the ability checks hold, it sets the
   "hit done" flag `0x20000000` and launches (`0x6F2C2AF0`). Otherwise it hands over to slot 47.
-- The **flight time** is not decoded. The model is distance over speed (UNSURE).
+- The **flight** is a mover walk of the missile's position component, not a timer (section 3.5, CONFIRMED structure);
+  its time is not decoded. The model is still distance over speed (UNSURE).
+- The **launch** (`0x6F2C3F70`) runs the miss gate with the missile flag: every launch that no evasion ability catches
+  takes **one stream-2 draw** for `ChanceToMiss` (section 9, CONFIRMED by Unicorn).
 - The damage amount is rolled at the execute point, before the missile type switch (CONFIRMED, `attack-cycle.md` 4.4),
   so a missile carries the amount it was given. Nothing is rolled at arrival.
 
@@ -145,6 +148,42 @@ mover walk (speed in the mover's units, per 0.005 s tick) or a separate timer is
 decides the flight time. The decompile is ambiguous here (the softfloat operands are passed in registers), so it was not
 settled in this pass.
 
+### 3.5 Flight is a mover walk (S10, 2026-10-12; CONFIRMED structure, Unicorn on the argument mapping)
+
+The launch function `0x6F2C3F70` (ECX = the missile, one stack argument = the launch record `rec`) builds the flight in
+this order: the start position is stored into the missile's position component at `+0x78` (`0x6F47A560`), the component
+flag `0x2000000` is set (`0x6F47A990(1)`), the **speed `rec+0x50` is stored in a plain float property at `missile+0x8C`**
+(the object at `+0x88` has the vtable `0x6F876D38` whose slot 0 is `this[1] = *arg`), and then the **move issue**
+`0x6F2BCC50` -> `0x6F47A650` runs. That is the same move-issue routine a unit's point move uses (`movement-5.md` 7), with
+the message id **`0xD019C`** and the missile as the notified object. Unicorn (`tools/emu/missile_move_args_emu.py`, the
+real `0x6F47A650` and `0x6F2BCC50` with `0x6F497080` stubbed to record): the move-target routine `0x6F497080` receives
+- `a1` -> float 0: `rec.z / 32` (launch height in cells; `p1` is the pointer `rec+8`),
+- `a2` -> float 0: `missile+0x54 / 32` (`rec+0x54`, the weapon field read by the attack ability slot `0x2D0`, `0x6F0CE640`),
+- `a3` -> the target point in cells: `((x - origin_x) / 32, (y - origin_y) / 32, z / 32)` after the playable-area clamp
+  `0x6F469490`, with the origins at the world object `+0x6C` / `+0x70`,
+- `a4` -> `60.0`, and `a5` -> the float at `missile+0x8C` (the speed, 900.0 in the probe), forwarded to the path
+  request `0x6F496D10`; the speed is **not** read in the first 420 bytes of `0x6F497080`.
+
+The completion: the id `0xD019C` is the message the mover posts to the missile when the move ends. The missile's
+message handler (slot 3, `0x6F2BB4F0`, jump table at `0x6F2BB544`) maps `0xD0196` and `0xD019C` to **slot 45** (the impact
+check, section 5, which falls through to slot 47), `0xD0198` and `0xD019F` to the vtable slot at `+0x5C` (end of life),
+`0xD01A4` to a third handler. So the arrival time of a missile is the moment its mover finishes the move, and the
+damage follows at once through the gates of sections 4 and 5. The per-frame callback registered at the end of the launch
+(`0x6F4E86E0` with `0x6F2BCCE0`) only places the missile for drawing (presentation).
+
+What this settles: the flight is **not** a separate timer. What it leaves open (UNSURE, no formula yet): how `rec+0x50`
+becomes the mover's cap (the move-target routine ends with `0x6F4969F0`, which sets the cap to FLT_MAX and the velocity
+to the direction vector; the speed pointer goes to the path request), the missile mover's acceleration step, turn cap and
+arrival radius (`U+0xB4/B8/B0`; for a unit they come from `0x6F474D40`, not from this path), and whether the speed bound
+522.67 applies to a missile. Until those are read, `flight_seconds` stays distance over speed.
+
+The weapon fields behind `rec+0x50`: the attack ability slots `0x2C4` (`0x6F0C68F0`), `0x2C8` (`0x6F0C68C0`), `0x2CC`
+(`0x6F0C6920`) read the unit type's tables named by the strings `rangeMissileSpeed`, `rangeMissileArc` and
+`rangeMissileHoming` (`0x6F32D180`, `0x6F32D1D0`, `0x6F32D220`, indexed by the weapon slot `ability+0x2B8`, with the index
+clamped to the table length - 1), and `0x6F02E260` stores them into the record: `rec+0x4C` = arc, `rec+0x50` = speed,
+`rec+0x64` = homing, `rec+0x54` = the slot-`0x2D0` field, `rec+0x38` = the source. LIKELY: the three tables are the unit
+type's `Missilespeed` / `Missilearc` / `MissileHoming` columns, one entry per weapon.
+
 ### 3.3 Death of the missile (CONFIRMED)
 
 `0x6F2BCBF0` sets a flag on the missile (`vtable+0x8C`, argument 1), reads the Misc key **"BulletDeathTime"** (`0x6F009EE0`),
@@ -241,9 +280,10 @@ arrival of a missile whose impact check did not launch.
 
 ## 8. What is still open (ordered by value)
 
-1. **Flight arithmetic**: is the flight a mover walk (0.005 s ticks, mover speed) or a timer with distance over speed?
-   The call chain of 3.2 reaches the mover setup `0x6F497080`. Test: a dynamic run of the original under Wine with a
-   known distance and speed, measuring the arrival tick.
+1. **Flight arithmetic**: settled structurally (3.5): a mover walk, completion message `0xD019C`. Open: the missile
+   mover's cap / acceleration / turn / radius, the speed bound, and the `0x6F4969F0` velocity. Test: read `0x6F496D10`
+   (its fourth argument is the speed pointer) and `0x6F4AA560` / `0x6F4AA6A0`, then run the move issue with the real
+   mover record in Unicorn (the unit move kernels of `movement-6.md` are the template), or a dynamic run under Wine.
 2. **Which record feeds a weapon's `Missilespeed`/`Missilearc`/homing** (the loader `0x6F3222C0` is per record kind). Map
    the unit weapon column (`UnitWeapons.slk`) and the attack path that calls `0x6F0408B0`/`0x6F040830`.
 3. **Projectile list key** (`+0x18`, `0x6F4E84B0`): arrival time, expiry or position sort? Its consumer is not read.
@@ -256,3 +296,60 @@ arrival of a missile whose impact check did not launch.
    slope in the original.
 8. **`BulletDeathTime`** value and when the missile object is released (no effect on damage, but on handle ids if a
    missile holds one).
+
+## 9. The `ChanceToMiss` branch of the launch (S10, 2026-10-12; CONFIRMED by Unicorn)
+
+The launch function `0x6F2C3F70` calls the miss gate `0x6F2BEAC0` with the **missile flag** (first stack argument 1) when
+the launch record has a target (`rec+0x78`, set to 1 by the basic-attack execute) and the second argument `rec+0x68`
+(`flags & 0x400`) is 0. Walks A and B (the evasion abilities, `attack-damage.md` 12.7) run first and are unchanged by the
+flag (Unicorn: 80 of 600 mixed cases evaded with the same result as the a3 = 0 harness). When neither returns 1, the gate
+does not return 0 (as the direct form does) but continues:
+
+1. A Misc read of `ChanceToMiss` (`0x6F009EE0`, section `Misc`, a real, `0.0` when the key is missing).
+2. **One draw**: `0x6F2853D0` with EDX = 2 (stream 2, the stream of the dice and the evasion roll), the value of
+   `GetRandomReal(0, 1)` of that stream. The draw is taken **every time the tail is reached**, whatever the Misc value, the
+   positions or the unit kinds. So every ranged launch consumes one stream-2 step (plus the evasion draw when an `AEev`
+   ability was selected on the target).
+3. `0x6F01FD80(draw, chance)` returns 1 iff `chance <= draw` (ordered x87 compare): the gate returns 0, no miss. A NaN on
+   either side compares unordered and does not stop here.
+4. The attacker exemption `0x6F0C7DE0`: returns 1 (no miss) iff `attacker+0x1FC & 2` (the movement word's flying bit,
+   `unit-classification.md`) and `attacker+0x5C & 0x20000000` and not `attacker+0x200 > 0`. The sim takes a flying attacker
+   as exempt (LIKELY; the last two conditions are taken as met).
+5. The uphill rule: for the attacker and then the target, the world position (vtable slot `0xB8` -> normaliser `0x6F4743A0`)
+   is converted to a pathing cell, `cell = f2i(scale32(v - origin))` with the soft subtract, the exponent shift and the
+   flush of `0x6F0D8DF0` (y, origin `world+0x70`) and `0x6F0D8DC0` (x, origin `world+0x6C`), truncating toward zero (not
+   floor), and the terrain level function `0x6F0128C0(ecx = cell x, edx = cell y)` is called for the attacker first, then for
+   the target. The gate returns **1 (miss) iff target level > attacker level** (signed compare).
+6. The level function: the cell is mapped to a terrain tile `(c + 2) >> 2` (`0x6F73AFA0`), the record at
+   `table + 28 * index` has a byte at `+0xA` whose low nibble is the base level (`0x6F742820`, index `(w+1) * tx + ty`), and
+   a ramp list lookup (`0x6F0118C0`) raises it to the larger ramp value. This needs the loaded map's terrain; the sim has no
+   provider by default and treats every cell as level 0, so the uphill rule never fires without a host adapter
+   (`combat::CliffLevels`, `Game::set_cliff_levels`). The draw is taken in either case. UNSURE: the exact byte of the w3e
+   corner that feeds the nibble (cliff level versus layer), so the engine does not install a provider yet.
+
+**What a miss does** (`0x6F2C4037`..): the launch calls `0x6F2BB970` (miss text), reads the Misc key
+**`MissDamageReduction`** (`0x6F932314`) and multiplies the launch record's two fields `rec+0x44` and `rec+0x48` by it
+(softfloat `0x6F6EEE20`); it then skips the target binding `0x6F2C1B50` and starts the flight to the target point anyway
+(`0x6F2C3CF0`). The missile therefore flies unbound; with the target mask unset the arrival (slot 47) finds no target and
+applies nothing (section 4, "no target"). So a missed single-target missile deals no direct damage (LIKELY: the mask is
+assumed to start at -1; the two scaled fields are probably the area damage amounts, which only the splash types use and
+which are not modelled). The sim: no damage when the tail misses.
+
+**Unicorn:** `tools/emu/miss_gate_emu.py` runs the real gate `0x6F2BEAC0` with a3 = 1 (real helper `0x6F2BEA20`, walks,
+iterator, compare `0x6F01FD80`, exemption `0x6F0C7DE0`, cell helpers and the float-to-int; stubs: the RNG helper
+(records the stream), the Misc reader (records the key), the position getter and normaliser, and the level function as an
+asymmetric deterministic stand-in of the two integer arguments). **1,200 cases without evasion entries and 1,200 mixed
+cases with random evasion lists, 0 mismatches** (161 misses, 544 level compares reached; every case took exactly the
+modelled draws on stream 2; the key read is `ChanceToMiss`). Vectors: `crates/sim/tests/missile/miss_gate_data.rs`; test
+`crates/sim/tests/missile_miss_gate.rs`.
+
+**Code:** `sim::missiles::{chance_to_miss, miss_cell, MISS_STREAM}`, `Game::chance_to_miss_check` (called in
+`fire_execute` after the evasion check, for attacks with a missile speed only), `CombatMisc::chance_to_miss` (engine fills it
+from `gamedata::misc::MiscData::chance_to_miss`). End-to-end tests (`crates/sim/tests/combat_natives.rs`, need `GAME_DLL`):
+`a_missile_launch_takes_one_stream_two_draw` (the exact stream-2 state after the first launch equals one `random_fraction`
+step, for `ChanceToMiss` 0.0 / 0.25 / 1.0; a melee attack takes none) and `uphill_missiles_miss_with_the_misc_chance`.
+
+**Open:** the terrain provider for the engine (w3e cliff level and ramps); the exemption's two other conditions; the
+meaning of `rec+0x68` bit `0x400` (the sim assumes 0, as in the direct-path gate); `MissDamageReduction` for the splash
+types; whether the other launch callers (`0x6F07E8F8`, `0x6F0988D6`, ... 17 call sites of `0x6F2C3F70`, spells and the other
+missile classes) also reach the draw (they share the launch function, so the draw is LIKELY for them too).

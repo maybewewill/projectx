@@ -205,6 +205,7 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
     game.set_combat_misc(CombatMisc {
         attack_half_angle: data.misc.attack_half_angle,
         reaction_delay: data.misc.reaction_delay,
+        chance_to_miss: data.misc.chance_to_miss,
     });
 
     // The day cycle of the map's Misc data (`docs/spec/vision.md`, section 13). Without any [Misc] layer the usual
