@@ -172,6 +172,38 @@ pub fn impact_check(g: GateInputs) -> ImpactCheck {
     }
 }
 
+/// The combat stream of the `ChanceToMiss` draw (`0x6F2853D0` with EDX = 2, CONFIRMED: the stream of the dice and
+/// of the evasion roll).
+pub const MISS_STREAM: usize = 2;
+/// The movement word bit of flying units (`unit +0x1FC & 2`), the first condition of the attacker exemption of the
+/// uphill miss (`0x6F0C7DE0`).
+pub const MOVE_FLY: u32 = 0x2;
+
+/// One coordinate of the cell the uphill rule compares: `f2i(scale32(v - origin))`, truncated toward zero (not
+/// floored: `0x6F0D8DF0` / `0x6F0D8DC0` followed by `0x6F6EEC20`, CONFIRMED by Unicorn). The x origin is the world
+/// object's `+0x6C`, the y origin `+0x70`.
+pub fn miss_cell(v: F32, origin: F32) -> i32 {
+    softfloat::conv::f2i(crate::pathing::scale_by_1_32(arith::sub(v, origin)))
+}
+
+/// The `ChanceToMiss` tail of the miss gate `0x6F2BEAC0` for a missile launch (CONFIRMED by Unicorn, 1,200 cases,
+/// `tools/emu/miss_gate_emu.py`). `draw` is the stream-2 draw already taken (it is taken whenever the tail is
+/// reached), `chance` the Misc `ChanceToMiss`. The launch misses iff `!(chance <= draw)` (an unordered compare
+/// misses too), the attacker is not exempt, and the target's level is strictly above the attacker's. `levels` is
+/// only called when the first two conditions hold, and returns `(attacker level, target level)`.
+pub fn chance_to_miss(
+    chance: F32,
+    draw: F32,
+    attacker_exempt: bool,
+    levels: impl FnOnce() -> (i32, i32),
+) -> bool {
+    if chance.to_f32() <= draw.to_f32() || attacker_exempt {
+        return false;
+    }
+    let (attacker, target) = levels();
+    target > attacker
+}
+
 /// The distance between two points in world units: `sqrt(dx*dx + dy*dy)` in soft float (2D; the Z of the launch and
 /// of the impact is not part of the model, see the module notes).
 pub fn distance(dx: F32, dy: F32, tables: &Tables) -> F32 {
