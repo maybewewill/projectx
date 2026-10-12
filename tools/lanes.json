@@ -1,17 +1,11 @@
 {
  "wave": "3",
- "updated": "2026-10-12 20:30 (UTC+5)",
+ "updated": "2026-10-12 21:00 (UTC+5)",
  "lanes": [
   {
    "id": "S9",
    "model": "Sonnet",
    "task": "Sync birth tag Y: which gameplay events create pathing objects",
-   "status": "running"
-  },
-  {
-   "id": "S10",
-   "model": "Sonnet",
-   "task": "Missiles: ChanceToMiss stream-2 draw and flight arithmetic",
    "status": "running"
   },
   {
@@ -27,10 +21,28 @@
    "status": "running"
   },
   {
+   "id": "S13",
+   "model": "Sonnet",
+   "task": "Terrain level/height functions for the sim (uphill miss, ramps `0x6F0118C0`), missile mover cap",
+   "status": "running"
+  },
+  {
+   "id": "H18",
+   "model": "Haiku",
+   "task": "Watch a game: render the running simulation (units from the engine) over the map to PNG frames",
+   "status": "running"
+  },
+  {
+   "id": "S10",
+   "model": "Sonnet",
+   "task": "Missiles: ChanceToMiss stream-2 draw and flight arithmetic (merged)",
+   "status": "done"
+  },
+  {
    "id": "H17",
    "model": "Haiku",
-   "task": "Map render: missing doodad models (variations), team-colour textures, alpha blending",
-   "status": "running"
+   "task": "Map render: missing doodad models (variations), team-colour textures, alpha blending (merged)",
+   "status": "done"
   },
   {
    "id": "S5",
