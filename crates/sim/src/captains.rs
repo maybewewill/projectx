@@ -97,13 +97,15 @@ pub enum Goal {
 }
 
 /// One departure of a group (report only).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Departure {
     /// Agile clock seconds.
     pub at: f32,
     /// Group size when the order was given.
     pub size: usize,
     pub goal: Goal,
+    /// The type codes of the members, in group order.
+    pub types: Vec<u32>,
 }
 
 /// A captain record as the model keeps it.
@@ -434,6 +436,58 @@ pub fn center(gm: &Game, c: &Captain) -> Option<(f32, f32)> {
     Some((live.iter().map(|p| p.0).sum::<f32>() / n, live.iter().map(|p| p.1).sum::<f32>() / n))
 }
 
+/// A one-line description of a captain for run reports: size, centre, goal, goal distance and the lowest member life.
+pub fn describe(gm: &Game, c: &Captain) -> String {
+    let centre = center(gm, c).map_or("-".to_string(), |p| format!("({:.0},{:.0})", p.0, p.1));
+    let goal = match c.goal {
+        None => "none".to_string(),
+        Some(Goal::Point(x, y)) => format!("point({x:.0},{y:.0})"),
+        Some(Goal::Unit(k)) => {
+            let u = gm.unit(k);
+            format!(
+                "unit {:?} owner {} {} at ({:.0},{:.0}) life {:.0}",
+                gm.unit(k).type_id,
+                u.owner,
+                if alive(gm, k) { "alive" } else { "dead" },
+                u.x.to_f32(),
+                u.y.to_f32(),
+                u.life.to_f32()
+            )
+        }
+    };
+    let low = c
+        .members
+        .iter()
+        .filter(|&&k| alive(gm, k))
+        .map(|&k| hp_fraction(gm, k))
+        .fold(1.0f32, f32::min);
+    let idle = c.members.iter().filter(|&&k| alive(gm, k) && gm.unit_order_ids(k).is_empty()).count();
+    format!("centre {centre}, goal {goal}, lowest hp {low:.2}, idle {idle}")
+}
+
+/// `RemoveInjuries` (`0x6F2DDDA0` -> `0x6F2EEE50`, CONFIRMED structure): every non-hero member of the attack captain
+/// whose life fraction is at most 0.5 (the constant at `0x6FAAE4D0`) leaves the group, joins the defense captain and is
+/// sent to that captain's home. (When the AI has no defense captain the original releases only the most injured one;
+/// the model always has both captains.)
+pub fn remove_injuries(gm: &mut Game, attack: &mut Captain, defense: &mut Captain) {
+    prune(gm, attack);
+    let hurt: Vec<ObjKey> = attack
+        .members
+        .iter()
+        .copied()
+        .filter(|&k| gm.unit(k).hero.is_none() && hp_fraction(gm, k) <= 0.5)
+        .collect();
+    for k in hurt {
+        attack.members.retain(|&m| m != k);
+        if !defense.members.contains(&k) {
+            defense.members.push(k);
+        }
+        if let Some(h) = defense.home {
+            issue_point(gm, k, ORDER_MOVE, h);
+        }
+    }
+}
+
 /// `CaptainIsHome` (`0x6F2E77C0` -> `0x6F2E76E0`, radius 500.0): the captain's position is within the radius of home
 /// (UNSURE: the compare's scale).
 pub fn is_home(gm: &Game, c: &Captain) -> bool {
@@ -470,10 +524,12 @@ pub fn attack_move_xy(gm: &mut Game, c: &mut Captain, p: (f32, f32), now: f32) {
     for k in c.members.clone() {
         issue_point(gm, k, ORDER_AIMOVE, p);
     }
+    let types = c.members.iter().map(|&k| gm.unit(k).type_id).collect();
     c.departures.push(Departure {
         at: now,
         size: c.members.len(),
         goal: Goal::Point(p.0, p.1),
+        types,
     });
 }
 
@@ -492,10 +548,12 @@ pub fn attack_move_kill(gm: &mut Game, c: &mut Captain, target: ObjKey, now: f32
     for k in c.members.clone() {
         issue_point(gm, k, ORDER_AIMOVE, tp);
     }
+    let types = c.members.iter().map(|&k| gm.unit(k).type_id).collect();
     c.departures.push(Departure {
         at: now,
         size: c.members.len(),
         goal: Goal::Unit(target),
+        types,
     });
 }
 

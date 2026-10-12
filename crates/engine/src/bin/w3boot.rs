@@ -155,17 +155,74 @@ fn run(argv: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let mut engine = cli::boot(&args.boot)?;
+    let mut last_pvp = 0usize;
     for i in 0..args.steps {
         engine.step();
+        // Player-versus-player kills as they happen (both killer and victim a real player slot).
+        let pvp = engine
+            .host()
+            .game()
+            .kill_log
+            .iter()
+            .filter(|&&(k, v, _)| k < 12 && v < 12 && k != v)
+            .count();
+        if pvp != last_pvp {
+            if last_pvp == 0 {
+                println!("first player-vs-player kill at step {} ({:.1} s)", i + 1, (i + 1) as f32 / 10.0);
+            }
+            last_pvp = pvp;
+        }
         // One status line per game minute for every computer slot.
         if (i + 1) % 600 == 0 {
             for &(slot, _) in &args.boot.computers {
                 let line = engine.host().game().production_summary(slot);
                 println!("t={:4}s p{slot}: {line}", (i + 1) / 10);
+                let shared = engine.ai().shared().borrow();
+                if let Some(c) = shared.control(slot).map(|c| &c.captains[0]) {
+                    println!(
+                        "         captain: {} members, mode {:?}, combat {}, full {}, departures {}",
+                        c.members.len(),
+                        c.mode,
+                        c.in_combat,
+                        c.flags & 1,
+                        c.departures.len()
+                    );
+                    println!("         {}", sim::captains::describe(&engine.host().game(), c));
+                }
             }
         }
     }
     print!("{}", engine.report());
+    {
+        let shared = engine.ai().shared().borrow();
+        for &(slot, _) in &args.boot.computers {
+            if let Some(c) = shared.control(slot) {
+                for d in &c.captains[0].departures {
+                    let kinds: Vec<String> = d
+                        .types
+                        .iter()
+                        .map(|t| String::from_utf8_lossy(&t.to_be_bytes()).into_owned())
+                        .collect();
+                    println!(
+                        "departure p{slot}: t={:.1}s size {} goal {:?} units {}",
+                        d.at,
+                        d.size,
+                        d.goal,
+                        kinds.join(",")
+                    );
+                }
+            }
+        }
+        // Deaths by (killer owner -> victim owner).
+        let mut table: std::collections::BTreeMap<(u32, u32), u32> = std::collections::BTreeMap::new();
+        for &(k, v, _) in &engine.host().game().kill_log {
+            *table.entry((k, v)).or_default() += 1;
+        }
+        for ((k, v), n) in table {
+            let killer = if k == u32::MAX { "none".to_string() } else { format!("p{k}") };
+            println!("kills: {killer} -> p{v}: {n}");
+        }
+    }
     if args.ai_log > 0 {
         let shared = engine.ai().shared().borrow();
         for (i, c) in shared.commands.iter().take(args.ai_log).enumerate() {

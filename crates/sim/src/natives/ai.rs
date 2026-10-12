@@ -186,7 +186,7 @@ pub const AI_NATIVES: &[AiNative] = &[
     AiNative { name: "TownThreatened", sig: "()B", addr: 0x6F2D_D8E0, level: Level::Unsure, implemented: true, note: "true when the player record's threat reference (+0x164) resolves (CONFIRMED body, FUN_6f2dd8e0); AiControl::town_threatened, false unless a host sets it (UNSURE: no threat scan)" },
     AiNative { name: "CaptainAtGoal", sig: "()B", addr: 0x6F2D_D930, level: Level::Unsure, implemented: true, note: "the group's centre is within the goal radius of the goal; true when the goal unit is dead; false without a goal (FUN_6f2e76e0 on the goal point; scale UNSURE)" },
     AiNative { name: "CreepsOnMap", sig: "()B", addr: 0x6F2D_C0F0, level: Level::Unsure, implemented: true, note: "any living neutral hostile non-structure unit (the callback 0x6F2DC0E0 flags the first unit the builder gives it; the builder's mode 0x1B/8/0x1F filter is not decoded)" },
-    AiNative { name: "RemoveInjuries", sig: "()V", addr: 0x6F2D_DDA0, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
+    AiNative { name: "RemoveInjuries", sig: "()V", addr: 0x6F2D_DDA0, level: Level::Likely, implemented: true, note: "non-hero members of the attack group with life at most 50 % (CONFIRMED constant 0x6FAAE4D0) move to the defense captain and go to its home (FUN_6f2eee50)" },
     AiNative { name: "RemoveSiege", sig: "()V", addr: 0x6F2D_DE00, level: Level::Likely, implemented: true, note: "recorded; no game effect" },
     AiNative { name: "IsTowered", sig: "(Hunit;)B", addr: 0x6F2E_0950, level: Level::Unsure, implemented: true, note: "more than one enemy structure that can attack within 900 units of the unit (the body counts units near it with an attack and a predicate, radius from vtable slot 0xEC; the model's radius and predicate are UNSURE)" },
     AiNative { name: "DisablePathing", sig: "()V", addr: 0x6F2E_06E0, level: Level::Confirmed, implemented: true, note: "sets bit 0x4000 of the captain record (+0x6C); recorded" },
@@ -557,18 +557,25 @@ fn ai_call(
             });
             Some(log(env, ctx, name, a, Value::Boolean(ok)))
         }
+        "RemoveInjuries" => {
+            with_caps(env, |gm, caps, _| {
+                let (first, second) = caps.split_at_mut(1);
+                captains::remove_injuries(gm, &mut first[0], &mut second[0]);
+            });
+            Some(log(env, ctx, name, a, Value::Null))
+        }
         "CaptainGoHome" => {
             with_caps(env, |gm, caps, _| captains::go_home(gm, &mut caps[0]));
             Some(log(env, ctx, name, a, Value::Null))
         }
         "AttackMoveXY" => {
             let p = (int_arg(a, 0) as f32, int_arg(a, 1) as f32);
-            let now = ctx.now().to_f32();
+            let now = env.shared.borrow().elapsed;
             with_caps(env, |gm, caps, _| captains::attack_move_xy(gm, &mut caps[0], p, now));
             Some(log(env, ctx, name, a, Value::Null))
         }
         "AttackMoveKill" => {
-            let now = ctx.now().to_f32();
+            let now = env.shared.borrow().elapsed;
             let target = env.game.borrow().unit_of_handle(handle_arg(a, 0));
             if let Some(t) = target {
                 with_caps(env, |gm, caps, _| captains::attack_move_kill(gm, &mut caps[0], t, now));
@@ -859,7 +866,7 @@ fn ai_call(
             if gate {
                 // The group attack-moves to the nearest structure (SuicidePlayer) or unit of the player (UNSURE: the
                 // original's suicide routine 0x6F2EF160 is not decoded).
-                let now = ctx.now().to_f32();
+                let now = env.shared.borrow().elapsed;
                 let victim = player_of(&env.game, a);
                 let units_only = name == "SuicidePlayerUnits";
                 let from = with_caps(env, |gm2, caps, _| captains::center(gm2, &caps[0])).unwrap_or((0.0, 0.0));
@@ -892,7 +899,6 @@ fn ai_call(
         | "TeleportCaptain"
         | "ClearCaptainTargets"
         | "CaptainAttack"
-        | "RemoveInjuries"
         | "RemoveSiege"
         | "Unsummon"
         | "LoadZepWave"

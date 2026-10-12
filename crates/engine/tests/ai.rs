@@ -24,7 +24,7 @@ native CommandAI takes player whichPlayer, integer command, integer data returns
 "#;
 
 /// `common.ai`: the AI natives that the AI scripts call. Natives with no implementation in the model
-/// (`GetEnemyBase`) are declared too, so the scripts still compile.
+/// (`GetMegaTarget`) are declared too, so the scripts still compile.
 const COMMON_AI: &str = r#"
 native CommandsWaiting takes nothing returns integer
 native GetLastCommand takes nothing returns integer
@@ -32,7 +32,7 @@ native GetLastData takes nothing returns integer
 native PopLastCommand takes nothing returns nothing
 native Sleep takes real duration returns nothing
 native AttackMoveXY takes integer x, integer y returns nothing
-native GetEnemyBase takes nothing returns unit
+native GetMegaTarget takes nothing returns unit
 "#;
 
 /// `test.ai`: waits for a command from the map, records it, pops it, then logs an attack-move
@@ -69,7 +69,7 @@ function main takes nothing returns nothing
     call PopLastCommand()
     set gLeft = CommandsWaiting()
     call AttackMoveXY(10, 20)
-    if GetEnemyBase() == null then
+    if GetMegaTarget() == null then
         set gBase = 1
     endif
 endfunction
@@ -207,7 +207,7 @@ fn check_command_reaches_the_ai(with_dll: bool) {
     assert_eq!(attack.args, vec![AiArg::Int(10), AiArg::Int(20)]);
     assert_eq!(
         report.ai.unimplemented,
-        vec![("GetEnemyBase".to_string(), 1)]
+        vec![("GetMegaTarget".to_string(), 1)]
     );
     assert_eq!(
         ai_global_int(&engine, 1, "gBase"),
@@ -218,7 +218,7 @@ fn check_command_reaches_the_ai(with_dll: bool) {
 
     let text = report.to_string();
     assert!(text.contains("AI players started (1): 1"), "{text}");
-    assert!(text.contains("GetEnemyBase x1"), "{text}");
+    assert!(text.contains("GetMegaTarget x1"), "{text}");
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn w3boot_takes_ai_script_files() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "stderr: {stderr}");
     assert!(stdout.contains("AI players started (1): 1"), "{stdout}");
-    assert!(stdout.contains("GetEnemyBase x1"), "{stdout}");
+    assert!(stdout.contains("GetMegaTarget x1"), "{stdout}");
     assert!(stdout.contains("AI: "), "{stdout}");
 }
 
