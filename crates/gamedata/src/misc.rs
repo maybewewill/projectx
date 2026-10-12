@@ -115,6 +115,9 @@ pub struct MiscData {
     pub dawn: F32,
     /// `Dusk`: the hour at which night starts (exclusive). `0.0` when absent.
     pub dusk: F32,
+    /// `BuildingAngle`: the orientation of the AI's building footprints in degrees (`0x6F020D30`; the engine passes
+    /// it through `i2r(f2i(..))`). `0.0` when absent.
+    pub building_angle: F32,
 }
 
 impl MiscData {
@@ -169,6 +172,7 @@ impl MiscData {
         let day_hours = reader.real("DayHours").unwrap_or(F32::ZERO);
         let dawn = reader.real("Dawn").unwrap_or(F32::ZERO);
         let dusk = reader.real("Dusk").unwrap_or(F32::ZERO);
+        let building_angle = reader.real("BuildingAngle").unwrap_or(F32::ZERO);
         let hero = HeroMisc::read(&mut reader);
         let Reader {
             defaulted, notes, ..
@@ -195,6 +199,7 @@ impl MiscData {
             day_hours,
             dawn,
             dusk,
+            building_angle,
         }
     }
 
@@ -232,6 +237,7 @@ impl MiscData {
             day_hours: F32::ZERO,
             dawn: F32::ZERO,
             dusk: F32::ZERO,
+            building_angle: F32::ZERO,
         }
     }
 }

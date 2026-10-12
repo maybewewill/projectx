@@ -295,8 +295,9 @@ logged), hero revive, `MergeUnits` / `ConvertUnits`, item and shop buying, undea
 (wisp, entangled mines) production.
 
 ### 7.5 Stand-ins (UNSURE)
-* Build spot (`0x6F2E50E0` is not decoded): rings of 64 units around the town hall, first free square on the buildable
-  grid, clear of structures, mines and trees; footprint half-size 128 / 96 / 64 by type (no pathing-texture data).
+* Build spot: **decoded in section 8** (2026-10-12, `crates/sim/src/ai_site.rs`). The ring search of this section
+  (rings of 64 units around the town hall, footprint half-size 128 / 96 / 64 by type) is kept only as the fallback
+  `find_build_site_rings` for maps or types without a pathing grid, a pathing texture or a playable area.
 * Builder among equals: the first eligible unit in creation order (CONFIRMED order rule); the town membership test is
   not modelled, any worker may serve any town.
 * Times: training and construction = `bldtm` (the progress timers are not decoded), research = `UpgradeData` time,
@@ -305,3 +306,147 @@ logged), hero revive, `MergeUnits` / `ConvertUnits`, item and shop buying, undea
 * Hero requirement tiers (`Requires`, `Requires1`, ...) follow the number of heroes owned; the food ceiling is 100.
 * Trees are the doodads whose second type letter is `T` (the category column is `D` for them).
 * The `ProdStats` totals are per game, not per player.
+
+## 8. The AI build-spot search (2026-10-12, lane S14)
+
+Replaces the ring stand-in of 7.5 for structures. Code: `crates/sim/src/ai_site.rs` (the port), the host adapter and the
+call site in `crates/sim/src/production.rs` (`find_build_site`, `SiteHostImpl`), the data install in
+`crates/engine/src/data.rs` (`install_sites`). Harness: `tools/emu/ai_site_emu.py` (Unicorn, real code of the routines
+below), vectors `crates/sim/tests/vectors/ai_site_seed1.tsv` and `ai_site_hard1.tsv`, replay test
+`crates/sim/tests/ai_site_vectors.rs`. Constants (`tools/emu/ai_site_consts.py`, start-up values): `0x6FAB4EB0` = 1600.0,
+`0x6FAB4EB4` = 1/32, `0x6FAB4EB8` = -99999.0, `0x6FADB3F8` = 32.0, `0x6FAB68A4` = 32.0, `0x6FAB68A8` = 16.0.
+
+### 8.1 Call path (CONFIRMED, static)
+`SetProduce` -> build request `0x6F2D2B70` -> `0x6F2D2880`. That body walks the AI player's units for a builder
+(AI mode at `+0x194` of 0, 5 or 6, as in 7.1; its build ability accepts the type; when a town slot is given the builder
+belongs to it), takes the builder's town
+(`0x6F275D90` -> hall reference at `+0x48`, `0x6F4786B0` resolves it), and calls the search
+`0x6F2E50E0(this = AI state, &status, &centre_x, &centre_y, type, &out_xy, builder)` with the **position of the
+town's hall** as the centre. The status float is `1.0` (found) or `-1.0`. On success the builder gets the build order
+(`0x6F294B30` at the returned point; `0x6F294D40` for the haunted mine). On failure the caller keeps the failed site
+index in a three-entry list and tries the next candidate (not modelled). Other callers of the search, not read:
+`0x6F152D60`, `0x6F2D7F90`.
+
+The wrapper `0x6F2E50E0`: builds the buffer (`0x6F2E1630`), marks the structures (`0x6F2DF650`), copies the buffer
+(`0x6F2E4810`), runs the search with the reachability check on (`0x6F2DF6F0`, third argument 1). Only when that
+fails (`-1.0`) **and** a reachability query failed during it (buffer `+0x20` set), it runs the search again on the
+copy with the check off. The "second pass" flag `a6` of the buffer builder is `GetUnitCount(type) >= 2`
+(`0x6F2D1C10` plus the typed count of mask `0x36`).
+
+### 8.2 The window (`0x6F2E1630`, CONFIRMED by Unicorn)
+A 101 x 101 window of 32-unit cells whose world origin is `centre - 1600.0` (softfloat sub; the origin in cell units is
+`origin * (1/32)`). Two byte grids per cell: the *value* grid and the *state* grid (5 untouched, 6 queued, 7 done,
+4 taken). Value cell: `5` when the cell has the **same cliff level** as the centre cell (`0x6F0128C0` at the playable
+minimum's cell numbers) and is not unwalkable (`0x6F468F90(&x, &y, 2)` at the cell's lower-left corner, advanced by
+softfloat adds of 32.0 per cell and row); `0x9C` unwalkable; `0x9E` another level. The queue is a ring of 10,201 pairs
+with the centre cell (50, 50) in it.
+
+### 8.3 Marking (`0x6F2DF650` -> `0x6F2DF4A0` -> `0x6F3E0D30` -> `0x6F2DF420` -> `0x6F2DF380`, CONFIRMED)
+The units within a circle of 1600 of the centre (`0x6F2A3270` builder, case 9 range, flag 2) are visited by the callback
+`0x6F2DF4A0`. Its inputs are two fields of the **unit type record**: `+0x1B8` = the `buffType` enum
+(`0x6F262E60`: `""` or `_` 0, `townhall` 1, `resource` 2, `factory` 4, `buffer` 8, other 0) and `+0x1BC` = `buffRadius`
+(UnitData). The pair (radius `r`, tier) is: townhall (r = trunc(buffRadius), tier 0); resource (trunc, 1);
+factory (trunc, 2); buffer (trunc, 3) except that when the building being placed is a scout tower `hwtw` or ziggurat
+`uzig` the radius is **15** (the AI already has two or more) or **5** (fewer); any other enum (including 0:
+houses, farms, graveyards) is tier 3 with `r = 6`. A unit marks **every texel of its pathing texture**
+(`pPathingFootprint`, the size of the TGA named by `pathTex`; a type without one is never passed in, so mobile units do
+not take part, UNSURE which flag test of `0x6F26E490` enforces that): the footprint walk `0x6F3E0D30` starts at the
+unit position (orientation from the Misc `BuildingAngle`: 90 -> 1, 180 -> 2, 270 -> 3, else 0, through
+`i2r(f2i())`), walks rows then columns with softfloat adds of +-32 from the first texel centre, resetting the
+coordinate the column step moves after each row. Each texel position becomes a window cell
+(`f2i(position * (1/32) - cell origin)`) and `0x6F2DF380` runs: the cell itself becomes `0x9D` when its **signed**
+value is above -99 (so a free cell under a footprint becomes `0x9D`, an unwalkable `0x9C` stays); then every cell of
+the square of Chebyshev radius `r` takes the marker's tier when its signed value is above the tier (so a cell keeps the
+smallest tier that covers it; negative cells never change). The result does not depend on the order of the units.
+
+### 8.4 The search (`0x6F2DF6F0`, `0x6F2DF680`, CONFIRMED by Unicorn)
+Pop a queue cell (x, y); world corner `origin + i2r(x) * 32.0` (softfloat; y alike); snap the corner by `0x6F3E0B50`
+(8.5); the snapped point's window cell (i, j) = `f2i((1/32) * (point - origin))`. Inside the window:
+* value `5` and state not 7: if the reachability check is on and fails, set the failed flag and skip; else if the
+  placement test `0x6F2A50C0` passes, mark the cell 4 in both grids and **return the point**.
+* value `0..3` (signed): if the tier's bucket is empty and the state is not 7: same checks; on success the bucket
+  keeps the point (first candidate per tier only).
+Then the neighbours of the popped cell (x, y) are queued when their state is 5 (set to 6), in the order
+(x-1, y), (x-1, y-1), (x-1, y+1), (x+1, y), (x+1, y-1), (x+1, y+1), (x, y-1), (x, y+1), each only inside 0..100; then
+the snapped cell gets state 7. The queue is first in first out, so the search is a breadth-first walk from the centre
+and the first free cell in that order wins. When the queue empties the buckets are tried from tier 3 down to 0 (so
+being next to a buffer is preferred over being next to a resource, factory or town hall); the winner's cell is marked
+4 and its point returned; no bucket: `-1.0`.
+
+### 8.5 The snap (`0x6F3E0B50`, CONFIRMED)
+Clamp into the playable area (`0x6F469490`), then per axis: the integer part truncated to a multiple of 64 toward zero,
+plus +-32 when bit 1 of the footprint size on that axis is set (sign follows the side of zero), converted back, plus
++-16.0 when the footprint size on that axis is odd (0.0 when even). The sizes are (w, h) for orientation 0 and 2 and
+(h, w) for 1 and 3.
+
+### 8.6 What is not decoded, and the model used
+The four engine predicates are stubbed in the harness and modelled in the sim (`SiteHostImpl`):
+* cliff level of a cell (`0x6F0128C0`: terrain level `0x6F742820`, ramps `0x6F0118C0`) - the model has no cliffs: every
+  cell is level 0 (UNSURE; buildings can be chosen across a cliff when a ramp connects).
+* the unwalkable test (`0x6F468F90`, mask 2 of the cell word's top byte) - the wpm byte's bit 0x02 or a tree (2 x 2 cells).
+* reachability (`0x6F475560(from = hall, to = candidate, 1, 15, builder's footprint objects, ...)`: it erases the
+  builder's own pathing footprint from the pyramid (`0x6F488330`, flag 1), issues the path request `0x6F49A8F0` from the
+  hall's cell to the candidate with a tolerance radius argument 15, restores the footprint and returns the request's
+  result; `-1` = no path, LIKELY) - modelled as an 8-neighbour flood fill over walkable cells from the hall's cell
+  (UNSURE; the tolerance radius and partial paths are not modelled).
+* the placement test (`0x6F2A50C0`, returns 0 when the building may stand: texture against the pathing map, units, mine
+  and tree rules, visibility of the player) - every texel of the building's texture on a buildable walkable cell not
+  covered by another structure's texture, mine or tree (the textures of structures are solid blue over their whole
+  area, so the rectangle is exact for placement; UNSURE for the rest).
+RNG: none of `0x6F2E50E0`, `0x6F2E1630`, `0x6F2DF6F0`, `0x6F2DF4A0`, `0x6F3E0B50`, `0x6F3E0D30` calls a random routine
+(CONFIRMED by reading them); `0x6F2A50C0` and `0x6F475560` were not read to the bottom (LIKELY none).
+Open: whether `0x6F26E490` (flag word `+0x5C` bit `0x10000`, not `0x80` unless `0x8000000`) selects structures only;
+the other callers of the search; the builder loop's retry over town sites; that dead structures never take part.
+
+### 8.7 Verification (CONFIRMED)
+`tools/emu/ai_site_emu.py` runs the real `0x6F2E1630`, `0x6F2DF4A0` (with the real footprint walk, cell callback, cell marker),
+`0x6F2E4810` and `0x6F2DF6F0` (with the real snap, clamp, neighbour push and softfloat library), the wrapper's retry
+included, against hash models of the four engine predicates and of the type tables (stubs at the entries of
+`0x6F0128C0`, `0x6F468F90`, `0x6F475560`, `0x6F2A50C0`, `0x6F32D0B0`, `0x6F29C300`, `0x6F29C330`, `0x6F020D30`, the unit
+position getter). 500 random cases (map rectangle, centre, building type and texture size 1..16 x 1..16, angle in
+0/45/89/90/180/270, 0..30 structures with `buffType` 0/1/2/3/4/5/8/16, radii -1..25, texture sizes 1..16) in three sets:
+`ai_site_seed1.tsv` (330, ordinary), `ai_site_hard1.tsv` (110, placement rarely or never passes, reachability fails
+often), `ai_site_dense1.tsv` (60, the window is covered by buffers so the tier buckets decide). The Rust port
+(`sim::ai_site`) reproduces, for every case, the value grid and the state grid after the marking (FNV hash of all 10,201
+bytes each) and the final status and point bit for bit: **500 / 500, 0 mismatches** (457 found, 43 failure exits, 68
+second passes after a failed reachability query, 19 results taken from a tier bucket). Test:
+`cargo test -p sim --test ai_site_vectors` (no DLL needed). Re-generate with
+`GAME_DLL=... py -I tools/emu/ai_site_emu.py OUT.tsv N SEED [hard|dense]`.
+Findings of the Unicorn pass that the static read got wrong: the cell marker compares the cell **signed** (`jle`), so a
+free cell under a footprint becomes `0x9D`; the operand order of the softfloat mul differs between the cell index of the
+search (`mul(1/32, diff)`) and the bucket cell (`mul(diff, 1/32)`).
+
+### 8.8 In the sim, and the positions it gives
+`Game::find_build_site` runs the port with the structures within 1600 of the anchor (live units and walking builders'
+jobs that have a pathing texture) and falls back to the old ring search otherwise. The footprints are not written into
+the wpm cells: later searches avoid earlier buildings because every structure is a unit (or a job) and takes part in the
+marking and in the occupancy of the placement model, in the same way as in the original (where the units of the player
+mark the window). The pathing pyramid is not touched (as in the original: the footprint is stamped by the unit's own
+registration, not by the AI).
+`w3boot ... --computer 0:orc --computer 1:human --steps 3000 --buildings (2)Circumvention.w3x`, 300 s (the `*` marks a
+building still under construction):
+
+| orc, slot 0 (hall at -1024, 3776) | | human, slot 1 (hall at 1472, -4288) | |
+|---|---|---|---|
+| altarofstorms | (-1568, 3808) | altarofkings | (1504, -4832) |
+| trollburrow | (-1568, 3296) | humanbarracks | (1216, -3776) |
+| trollburrow | (-1184, 3232) | farm | (960, -3776) |
+| orcbarracks | (-512, 3776) | farm | (1728, -3776) |
+| warmill | (-800, 3232) | farm | (1984, -4288) |
+| trollburrow * | (-1568, 4256) | farm | (1984, -4032) |
+
+At 600 s the orc adds a voodoolounge (-512, 3264) and a burrow (-288, 4256); the human adds a blacksmith (1984, -4608),
+three more farms ((1984, -3776), (896, -4288), (1984, -4992)), an arcanevault (704, -3520) and a lumber mill under
+construction (2272, -4256). No two buildings coincide; the nearest neighbours are 256 apart (two 6 x 6 or 4 x 4 textures
+plus their buffers). Before the change (rings): orc burrows at (-1088, 3520) and (-896, 3520), altar at (-1280, 3520),
+all within 300 of the hall.
+
+### 8.9 Open
+* The cliff level of a cell (`0x6F0128C0`) and ramps: the model returns level 0, so a spot below a cliff that a ramp
+  connects to the hall is not rejected as the original would.
+* The path request behind `0x6F475560` (tolerance radius 15, the builder's movement type) and the full placement test
+  `0x6F2A50C0` (including the mine and tree rules and visibility) are modelled, not decoded.
+* Which structures are enumerated (the flag test of `0x6F26E490`) and whether trees and other destructables take part
+  (they do not: the callback reads a unit type record).
+* The builder loop of `0x6F2D2880` that retries other town sites after a failure; the two other callers of the search.
+* Pathing texture pixel flags beyond the whole-texture rectangle (the placement model treats every texel as blocking).

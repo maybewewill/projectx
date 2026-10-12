@@ -697,7 +697,7 @@ fn cell_float(v: F32, origin: F32) -> F32 {
 /// Origins (UNSURE): spec 2.1 subtracts `W+0x6C` from the centre's first coordinate and `W+0x70` from the
 /// second, while spec 1.2 names `W+0x70` as the x origin. The port uses one origin per axis (the playable
 /// minimum), which is the reading in which a unit at the centre has distance 0.
-pub(super) fn in_range(x: F32, y: F32, cx: F32, cy: F32, radius: F32, origin: (F32, F32)) -> bool {
+pub(crate) fn in_range(x: F32, y: F32, cx: F32, cy: F32, radius: F32, origin: (F32, F32)) -> bool {
     let d = arith::dist2(
         cell_float(x, origin.0),
         cell_float(y, origin.1),

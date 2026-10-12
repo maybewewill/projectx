@@ -3,7 +3,7 @@
 //! ```text
 //! w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | --mpq War3.mpq [--mpq War3x.mpq])
 //!        [--ai-common common.ai] [--ai-script NAME=PATH]... [--computer SLOT[:RACE]]... [--ai-log N]
-//!        [--seed S] [--steps N] [--check-natives] map.w3x
+//!        [--seed S] [--steps N] [--buildings] [--check-natives] map.w3x
 //! w3boot --replay FILE.w3g --check-sync
 //! ```
 //!
@@ -27,13 +27,15 @@ use engine::cli::{self, BootArgs};
 
 const USAGE: &str = "usage: w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | \
 --mpq War3.mpq [--mpq War3x.mpq]) [--ai-common common.ai] [--ai-script NAME=PATH]... \
-[--seed S] [--steps N] [--check-natives] map.w3x";
+[--seed S] [--steps N] [--buildings] [--check-natives] map.w3x";
 
 #[derive(Debug, Default)]
 struct Args {
     boot: BootArgs,
     /// `--ai-log N`: print the first N entries of the AI command log (0: none).
     ai_log: usize,
+    /// `--buildings`: print the structures of every computer slot after the run.
+    buildings: bool,
     /// `--check-sync`: with `--replay`, compare the replay's 0x22 sync records with the model (no map needed).
     check_sync: bool,
     steps: u64,
@@ -99,6 +101,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .push(parse_ai_script(&value("--ai-script")?)?),
             "--check-natives" => args.boot.check_natives = true,
             "--check-sync" => args.check_sync = true,
+            "--buildings" => args.buildings = true,
             "--seed" => args.boot.seed = Some(parse_seed(&value("--seed")?)?),
             "--replay" => args.boot.replay = Some(value("--replay")?),
             "--ai-log" => {
@@ -162,6 +165,13 @@ fn run(argv: &[String]) -> Result<(), String> {
             for &(slot, _) in &args.boot.computers {
                 let line = engine.host().game().production_summary(slot);
                 println!("t={:4}s p{slot}: {line}", (i + 1) / 10);
+            }
+        }
+    }
+    if args.buildings {
+        for &(slot, _) in &args.boot.computers {
+            for (name, x, y, wip) in engine.host().game().building_positions(slot) {
+                println!("building p{slot} {name:<16} ({x:9.1}, {y:9.1}){}", if wip { " *" } else { "" });
             }
         }
     }

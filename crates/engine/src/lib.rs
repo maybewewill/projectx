@@ -378,6 +378,7 @@ impl Engine {
             Err(_) => notes.push("no war3map.wts: TRIGSTR_nnn names stay unresolved".to_string()),
         }
         let combat = data::install(&mut host.game_mut(), &game_data, tables.as_ref());
+        data::install_sites(&mut host.game_mut(), &game_refs, &game_data, &mut notes);
         // Names, art, sounds, global strings, shop stock and the gold mine amount (docs/spec/real-map-boot.md).
         let object_text = objdata::load(&game_refs)?;
         notes.extend(object_text.notes.iter().cloned());
