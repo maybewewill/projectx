@@ -221,7 +221,7 @@ _unit_n = [0]
 
 
 def make_unit():
-    """A synthetic unit/mover object: pair (id, tag) at +0x14/+0x18, a refcount block at +0x98, a flag block at +0xA8."""
+    """A synthetic unit/mover object: pair (id, tag) at +0x14/+0x18, a refcount block at +0x98, a path object at +0xA8."""
     n = _unit_n[0]
     _unit_n[0] += 1
     u = UNITS + 0x800 * (n % 64)
@@ -275,6 +275,68 @@ def main():
     for k in sorted(seen):
         print('   k =', k, sorted(seen[k]))
     print(f'C5 cases={cases} mismatches against (2k, 1): {bad}')
+    # C8: the mover start 0x6F474D40 (MoveTo) on a live unit: generator + cluster + path
+    # (Y + 3, one unregistration); on a dead unit (the pair no longer resolves) only the generator is born.
+    for addr, stub in ((0x6F4956C0, 28), (0x6F4937D0, 4), (0x6F48EF80, 4), (0x6F48F010, 4), (0x6F471AB0, 8), (0x6F471B70, 8),
+                       (0x6F4A73F0, 4), (0x6F4937B0, 4), (0x6F48EEC0, 4), (0x6F48F070, 4), (0x6F48E5D0, 4)):
+        ret_stub(addr, stub)
+    mu.mem_map(0x00270000, 0x1000)
+    mu.mem_write(0x00270100, bytes([0xC3]))
+    for i in range(64):
+        wr32(0x00270000 + 4 * i, 0x00270100)
+    wr32(0x6FAB7368, GW + 0x2000)       # movement bounds block read by 0x6F474D40 (zero floats are fine here)
+    seen8 = {}
+    for case in range(cases):
+        reset_world()
+        LOOKUP.clear()
+        u = make_unit()
+        m = GW + 0x1000
+        mu.mem_write(m, bytes(0x100))
+        wr32(m, 0x00270000)
+        wr32(m + 8, rd32(u + 0x14))
+        wr32(m + 12, rd32(u + 0x18))
+        flt = GW + 0x1800
+        for i in range(8):
+            mu.mem_write(flt + 4 * i, struct.pack('<f', rng.uniform(-3000, 3000)))
+        alive = rng.random() < 0.8
+        if not alive:
+            LOOKUP.clear()
+        # first, ensure the unit's own path exists like creation does
+        which = 'move'
+        r = births(0x6F474D40, ecx=m, args=(flt, flt + 4, 852374, 852376, m, flt + 8, 1, flt + 12))
+        seen8.setdefault((which, alive), set()).add(r)
+    print('C8 mover start (reg, unreg, dY) by kind and unit alive:', {str(k): sorted(v) for k, v in seen8.items()})
+    # C7: releasing a cluster through its vtable slot 4 (0x6F493130): the path it owns and the cluster itself unregister
+    seen7 = {}
+    for case in range(cases):
+        reset_world()
+        LOOKUP.clear()
+        births(0x6F48DF00, ecx=out, edx=0, args=(1,))
+        c = rd32(out)
+        vt = rd32(c)
+        r = births(rd32(vt + 16), ecx=c, args=(0,))
+        seen7.setdefault('release', set()).add(r)
+        # the freed pool entry is reused by the next creation (LIFO): create again and release again
+        births(0x6F48DF00, ecx=out, edx=0, args=(1,))
+        seen7.setdefault('release2', set()).add(births(rd32(rd32(rd32(out)) + 16), ecx=rd32(out), args=(0,)))
+    print('C7 cluster release via vtable slot 4 (reg, unreg, dY):', {k: sorted(v) for k, v in seen7.items()})
+    # C6: unit creation, 0x6F2A0E30 calls 0x6F474C10 on the unit's mover (unit+0x164) with a2 = 0: the first call
+    # creates the mover's path object (one registration); later calls find it and register nothing.
+    seen6 = {}
+    for case in range(cases):
+        reset_world()
+        LOOKUP.clear()
+        u = make_unit()
+        wr32(u + 168, 0)   # the unit's path pointer (unit+0xA8) is empty before the first call
+        m = GW + 0x1000 + 0x100 * (case % 8)
+        mu.mem_write(m, bytes(0x100))
+        wr32(m + 8, rd32(u + 0x14))
+        wr32(m + 12, rd32(u + 0x18))
+        first = births(0x6F474C10, ecx=m, args=(rng.randint(0, 1) * 0,))
+        again = births(0x6F474C10, ecx=m, args=(rng.randint(0, 1),))
+        seen6.setdefault('first', set()).add(first)
+        seen6.setdefault('again', set()).add(again)
+    print('C6 0x6F474C10 on a fresh mover (first / again) -> (reg, unreg, dY):', {k: sorted(v) for k, v in seen6.items()})
 
 
 if __name__ == '__main__':

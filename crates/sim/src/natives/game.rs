@@ -1291,10 +1291,8 @@ pub struct Game {
     item_orders: Vec<ItemOrder>,
     /// Pathing-object registry behind the sync words X and Y (docs/spec/lockstep.md section 16).
     pub pr: crate::sync::PrRegistry,
-    /// Registrations of the movement clusters (12 unit records each, LIKELY).
-    pub(crate) pr_clusters: Vec<crate::sync::PrHandle>,
-    /// Units created so far, for the cluster rule.
-    pub(crate) pr_units: u32,
+    /// The registrations behind each unit's movement objects (docs/spec/lockstep.md section 17).
+    pub(crate) pr_objs: crate::unit_position::PrObjects,
     /// Item handles of the running `GetEnumItem` scopes (`EnumItemsInRect`), innermost last.
     enum_items: Vec<u32>,
     /// Item handles of the running `GetFilterItem` scopes, innermost last.
@@ -1407,8 +1405,7 @@ impl Game {
             packs: BTreeMap::new(),
             item_orders: Vec::new(),
             pr: crate::sync::PrRegistry::new(),
-            pr_clusters: Vec::new(),
-            pr_units: 0,
+            pr_objs: Default::default(),
             enum_items: Vec::new(),
             filter_items: Vec::new(),
             destructable_types: DestructableTypes::new(),

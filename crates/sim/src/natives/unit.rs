@@ -639,6 +639,7 @@ pub(crate) fn remove_unit(gm: &mut Game, k: ObjKey) {
 fn remove(gm: &mut Game, k: ObjKey) {
     count_unregister(gm, k);
     gm.food_release(k);
+    gm.pr_unit_removed(k);
     gm.unit_mut(k).removed = true;
     gm.push_unit_event(UnitEvent::Removed(k));
     for id in REMOVE_SEQUENCE {

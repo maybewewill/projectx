@@ -1408,3 +1408,95 @@ pairs are coincidences with X, R or data-slot changes.
 1. Locate creation/release of `CPrBehavior` and `CPrRelation` (they dominate Y), e.g. by Unicorn runs of the order start path.
 2. Start values of X and Y after the DotA map script (needs the full unit-creation order).
 3. R, data slots 5..9 and 12..19 remain unknown; an absolute match needs them all.
+
+## 17. Pass 14 (2026-10-12): who creates and releases the pathing objects (the birth tag Y), and what the replay says
+
+Tools: `tools/emu/births_emu.py` (Unicorn, real code of Game.dll on a fake registry world and fake pools), `crates/engine/examples/ybirth.rs`
+(replay analysis), `sim::unit_position::PrObjects` + the `pr_*` hooks. Labels as in section 13. Replay: `2856263.w3g`
+(71,308 computed records; found in the game's `Replay` folder). All addresses are Game.dll 1.26a.
+
+### 17.1 How a registration happens (CONFIRMED structure)
+
+`0x6F4AEFF0` is **virtual slot 3** of `CPresenceTagged` (the base of every pathing object) and `0x6F4AEF00` is **slot 4**. Creators are
+small wrappers of the shape "get the pool from the movement world `[0x6FAB73D8]`; allocate (`CDataAllocator` free list
+`0x6F4C1AB0`); construct; store the pointer; if the third argument is non-zero call `[vtable+0xC]` (= slot 3, the registration)".
+So a registration is a separate step after construction and several creation paths build without it (`a3 = 0`).
+The pools are in the movement world: generators `+0x638` (ctor `0x6F4916D0`), clusters `+0x678` (ctor `0x6F486A90`), paths `+0x958`
+(ctor `0x6F49CA10`). Attach overrides (slot 3) that nest a second registration: `CPrCluster` `0x6F4924D0` calls the base **and**
+`0x6F48BFD0(1)` (creates and attaches a `CLrPath`, stored at cluster+0x3C).
+
+### 17.2 The table (the 12 register callers, with their creators and triggers)
+
+| class (slot-3 override) | creator / constructor | trigger | births | lifetime / release |
+|---|---|---|---|---|
+| `CPrCluster` `0x6F4924D0` | `0x6F48DF00` (pool `+0x678`) | the flush `0x6F493590` of a generator makes one per alive member (`0x6F4934E0`); also world build | 2 (itself + its `CLrPath`) | the walk `0x6F493410` calls slot 4 `0x6F493130` when no member is alive: unregisters the path, then itself (2) |
+| `CLrPath` `0x6F49B680` (no own slot 4: base `0x6F4AEF00`) | `0x6F48BFD0` -> `0x6F48ACC0` -> ctor `0x6F49CA10` (pool `+0x958`) | (a) cluster attach, (b) the unit's own path: `0x6F474C10` -> `0x6F495960` creates it when unit+0xA8 is empty; `0x6F474C10` is called by `CUnit::vf107` `0x6F2A0E30` (unit creation) and by 5 missile paths (`0x6F2BF3E0`, `0x6F2C1360`, `0x6F2C3DC0`, `0x6F2C3E90`, `0x6F2EBAB0`) | 1 | with its owner |
+| `CPrClusterGen` `0x6F48F0D0` | `0x6F474220` (pool `+0x638`, ctor `0x6F4916D0`); `0x6F47B270` (creates without the flush, group moves) | a mover start: `0x6F474D40` (move to a point: `CAbilityMove` start from `0x6F205890` at 4 sites, missiles `CMissileLine` / `CArtilleryLine` / `CBulletPath` / `CMissilePath` and `0x6F2EC310`), `0x6F475030` (turn towards: `CAbilityMove` `0x6F206960`, missiles), `0x6F475230` (**`SetUnitFacingTimed`** `0x6F3C5B30` and `CAbilityMove` `0x6F204750`), `0x6F493620` via `0x6F4761E0` (stop / clear movement: buffs Ensnare, Web, EntanglingRoots, Purge, `0x6F202FF0`, `0x6F12A1D0`) | 1 | released inside the same call by the flush (1 unregister) |
+| `CPrClusterGroup` `0x6F48ED30` | `0x6F47B7E0` (wrapper `0x6F47B810`), ctors `0x6F47B1B0`, `0x6F489750` | missile code (`0x6F2EA810` <- `0x6F2EAD00`), world build | 1 | the walk `0x6F48E4C0` releases an empty one (slot 4) |
+| `CPmRegion` `0x6F49E0C0` | `0x6F48ACF0`, `0x6F48C000`; chain `0x6F48D410` <- `0x6F48DA90` <- `0x6F4A03F0` <- `0x6F4A0440` <- `0x6F47C1A0`, `CTriggerRegion` vf24 `0x6F47D210` | JASS regions (UNSURE) and world build | 1 per region | region destroy (`0x6F49DE40`) |
+| `CPrRelation` `0x6F4A6070` and its 11 callers (`CRlAgent`, `CRlAgentDef`, `CRlProperty`, 8 `CPo*` modifiers / listeners) | ctors `0x6F4801E0`, `0x6F4803B0`, `0x6F487390`, `0x6F488C50`, `0x6F488DD0`, `0x6F489E70`, `0x6F48AE90` ... `0x6F48C6E0` | all reachable only from the one-time world build `0x6F48E490` (called from `0x6F4830D0`) and from static tables; no per-tick creator | per map | map end |
+| `CPrBehavior` / `CBhPoBehavior` / `CBhPoProjectile` `0x6F4AA340`, `0x6F496A40` | ctors `0x6F479D10`, `0x6F479E40` have no caller; `0x6F479F90` only from the dead pool allocator `0x6F47A9C0` and `0x6F47AA10` <- `0x6F47AA70` | world build, function table entry `0x6F47AAA0` (`.rdata` `0x6F877F34`); **no gameplay trigger found** | per map | UNSURE |
+| `CBaseMap<CPaCell>` / `CAcceleratorMap` `0x6F487ED0`, `CBaseMap<CPmCell>` `0x6F49F5D0`, `CProximityMap` `0x6F4A04D0`, `CLrPathingAcc` `0x6F49A330`, `CLrPathingSys` `0x6F4A0710`, `0x6F483080` | ctors `0x6F4845C0`, `0x6F4891F0`, `0x6F49F2A0`, `0x6F49FAA0`, `0x6F4889E0`, `0x6F4A1B00` | map load | one each | map end (`0x6F487F70`, `0x6F49A600`, `0x6F49F670`, `0x6F4A3960`) |
+
+Unregister callers (11): `0x6F487F70` (maps), `0x6F48ED60` (group), `0x6F48F130` (generator), `0x6F493130` (cluster), `0x6F49A600` (pathing
+accelerator), `0x6F49DE40` / `0x6F49E0D0` (region), `0x6F49F670`, `0x6F4A3960`, `0x6F4A6920` (relation), `0x6F4AA550` (behaviour). The
+`CLrPath` uses the base routine directly. Triggers: the movement walk `0x6F483300` (empty groups `0x6F48E4C0`, finished clusters
+`0x6F493410`), the end of every flush (the generator), unit teardown (the unit's path), map end.
+
+So in play **Y moves because of `CLrPath`, `CPrClusterGen`, `CPrCluster` and `CPrClusterGroup` objects**; relations, behaviours and
+regions are map-load objects and do not move Y during play (the map script's `Region` natives are the only gameplay exception).
+This contradicts the section-16 guess that behaviours and relations dominate.
+
+### 17.3 Unicorn results (`births_emu.py`, 300 cases each, real code, fake pools)
+
+* C1 `0x6F48DF00(1)` creates a cluster: **2** registrations (classes `0x6F95230C` cluster, `0x6F95336C` path), 0 unregistrations; without
+  the attach flag 0. C2 `0x6F474220(1)` (generator): **1**. C3 `0x6F48BFD0(1)` (path): **1**. All 300/300 identical.
+* C5 the flush `0x6F493590` of a generator with k valid members (k = 0..12, random): **2k** registrations and exactly **1**
+  unregistration (the generator) for every k: 300/300. The non-creating callees (`0x6F4927A0`, `0x6F4927F0`, `0x6F4932D0`,
+  `0x6F491410`, `0x6F48E5F0`, `0x6F48E600`, `0x6F48F650`) are stubbed; that none of them registers or unregisters is by reading only
+  (`0x6F4927F0` is large and recursive: **UNSURE**, it detaches the member from its old cluster).
+* C6 `0x6F474C10` on a fresh mover: first call **1** registration, later calls **0**: 300/300. Hence a created unit is **+1** (its own path).
+* C7 releasing a cluster through its vtable slot 4: **2** unregistrations (path first, then the cluster): 300/300.
+* C8 the mover start `0x6F474D40` (stubs for its pure movement callees, real flush): live unit **3** registrations + 1
+  unregistration; unit whose pair no longer resolves **1** + 1: 300 cases, 0 deviations.
+  `0x6F475030` and `0x6F475230` have the same generator + member + flush shape by reading (LIKELY 3), not run.
+
+CONFIRMED: the counts of these entry points as listed. LIKELY: that the gameplay events listed in the table reach them as described
+(static caller trees; virtual calls hide some edges, e.g. who calls the `CAbilityMove` handler and how often).
+
+### 17.4 The sim hooks (`sim::unit_position`, `PrObjects`)
+
+Replaced the section-16 hooks (a cluster per 12 units, a register+release per path request: both unsupported; a path request creates no
+registered object: no creator is reachable from the dispatcher `0x6F49A800`).
+* unit created (`place_new_unit`): +1 (`pr_unit_created`; C6).
+* route start or chase repath (`issue_route_motion`): mover start, Y + 3, the generator slot is the free-list head again (`pr_mover_start`; C1, C2, C5, C8).
+* waypoint reached (`step_unit`): a new mover start per leg (UNSURE: that the original restarts the mover per leg).
+* unit stops after moving, unit removed: its cluster pair is released at the next walk, path then cluster (`pr_mover_idle`, `pr_walk_release`; C7);
+  removal also unregisters the unit's path (`pr_unit_removed`).
+* missile launch: one mover start, released at impact in launch order (`pr_missile_launch`, `pr_missile_impact`; UNSURE: the missile's own objects).
+Not modelled: stop / face / SetUnitFacingTimed starts, group moves (`0x6F47B270`), `CPrClusterGroup`, region natives, the map script's objects.
+Tests: `unit_position::tests::registrations_follow_the_movement_object_counts`, `missiles_release_oldest_first`.
+
+### 17.5 What the replay says (numbers exact; `w3boot --replay ... --check-sync`, `ybirth`)
+
+Unchanged by the hooks (the check needs no map and does not run the sim): 71,308 computed records, 71,307 pairs, **516 exact**, 16,268
+birth-tag-like, 54,523 other, 468 chain-consistent runs (1,031 pairs). The map of this replay (DotA Imba v6.63z10) is not on this
+machine, so the sim cannot be run on the replay and **no absolute match or sim-vs-replay ΔY is available**.
+What the replay's own order stream shows (`crates/engine/examples/ybirth.rs`; tag-like pairs with a feasible step up to 1500):
+* windows in which no player did anything: median minimal step **3** (3,419 pairs <= 400, mean 48.7).
+* windows with a movement order (move, smart, attack, attack-move, patrol): median **140**, mean 158.2 (387 pairs); other orders: median 212 (29 pairs).
+* the cost is not proportional to the selection: one selected unit 151.5 (354 pairs), 4-6 predicted births 175.9, 7-12 165.1, i.e. not `3 n`.
+* idle windows by the number of movement orders in the previous 20 records: 0 orders: median 3 (2,705 pairs); 1 order: 256; 3: 257; 6: 497; 7: 514; 8 or more:
+  411 (mean 408 to 597 against 143.6). **Births follow the units that are walking, after the order**, which is what the per-leg mover start predicts qualitatively.
+* the model predicts `3 n` births for the order alone; the feasible step set of the pair contains exactly that number in 12 of 4,044 pairs, which is chance level
+  (the hit rate of a fixed step in these sets is about 1 to 2 percent): **no pair is explained exactly**, and the exact-pair count stays at 516.
+The window attribution is coarse (a pair spans one computed record, the births of an order spread over the following seconds).
+
+### 17.6 Open
+
+1. How many legs a path has and when the original starts each leg (whether `CAbilityMove` restarts the mover per waypoint): the idle-after-order excess (median
+   about 250 to 500 per 20 records) says the rate is high; a Unicorn run of the `CAbilityMove` handler `0x6F206EE0` with a built path is needed.
+2. The member detach `0x6F4927F0` and the old cluster of a unit that starts again: whether the release is the next walk (modelled) or something else.
+3. Group moves (`0x6F47B270` with up to 12 members, `0x6F203520`) and `CPrClusterGroup` creation (missile formations?).
+4. Absolute Y after the map script (units, regions, relations at load): needs the map and the full creation order.
+5. `SetUnitFacingTimed` and stop starts are not hooked.

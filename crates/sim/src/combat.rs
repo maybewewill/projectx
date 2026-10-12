@@ -603,7 +603,10 @@ impl Game {
                 None
             }
             AttackMsg::Execute => self.fire_execute(unit),
-            AttackMsg::Impact { target, damage } => self.missile_arrive(unit, target, damage),
+            AttackMsg::Impact { target, damage } => {
+                self.pr_missile_impact();
+                self.missile_arrive(unit, target, damage)
+            }
         }
     }
 
@@ -624,6 +627,7 @@ impl Game {
             None => self.apply_damage(target, damage),
             Some(speed) => {
                 let delay = self.impact_delay(unit, target, speed);
+                self.pr_missile_launch();
                 self.arm(delay, unit, AttackMsg::Impact { target, damage });
                 None
             }
