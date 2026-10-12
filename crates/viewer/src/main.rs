@@ -1,8 +1,9 @@
 //! Native viewer: `viewer [--seq NAME] [--texture-dir DIR] [model.mdx [texture.blp]]`,
-//! or `viewer --map map.w3x [--mpq archive]... [--render-png out.png] [--size WxH]` for the
-//! terrain of a map. The `--mpq` archives (load order, last wins) supply the ground textures;
-//! without them the procedural sheets are used. `--render-png` draws offscreen to a PNG file
-//! instead of opening a window (see `viewer::offscreen`).
+//! or `viewer --map map.w3x [--mpq archive]... [--render-png out.png] [--size WxH] [--camera-at X,Y]`
+//! for the terrain of a map. The `--mpq` archives (load order, last wins) supply the ground
+//! textures; without them the procedural sheets are used. `--render-png` draws offscreen to a PNG
+//! file instead of opening a window (see `viewer::offscreen`). `--camera-at X,Y` positions the
+//! camera at world coordinates X, Y for offscreen rendering.
 //!
 //! Without a model it shows a built-in cube. With one, the model is animated and plays its
 //! "Stand" sequence (or the one named by `--seq`). Textures are matched by file name, ignoring
@@ -137,6 +138,7 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut png: Option<PathBuf> = None;
     let mut dump_atlas: Option<PathBuf> = None;
     let mut size = (1280u32, 720u32);
+    let mut camera_at: Option<(f32, f32)> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -150,6 +152,11 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 let text = it.next().ok_or("--size needs WxH")?;
                 let (w, h) = text.split_once('x').ok_or("--size needs WxH")?;
                 size = (w.parse()?, h.parse()?);
+            }
+            "--camera-at" => {
+                let text = it.next().ok_or("--camera-at needs X,Y")?;
+                let (x, y) = text.split_once(',').ok_or("--camera-at needs X,Y")?;
+                camera_at = Some((x.parse()?, y.parse()?));
             }
             other => return Err(format!("unknown option {other}").into()),
         }
@@ -182,7 +189,7 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     match png {
         Some(out) => {
             let (w, h) = size;
-            let rgba = offscreen::render_terrain(&terrain, w, h)?;
+            let rgba = offscreen::render_terrain_at(&terrain, w, h, camera_at)?;
             offscreen::write_png(&out, w, h, &rgba)?;
             let s = offscreen::summarize(w, h, &rgba);
             eprintln!(
