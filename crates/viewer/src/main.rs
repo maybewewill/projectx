@@ -225,9 +225,10 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// `viewer --ui FDF_NAME [--mpq archive]... [--offscreen out.png] [--size WxH]`.
+/// `viewer --ui FDF_NAME [--mpq archive]... [--race human|orc|nightelf|undead] [--offscreen out.png] [--size WxH]`.
 ///
 /// `--mpq` archives supply the FDF and texture files; give them in load order, the last one wins.
+/// `--race` selects the race for texture name resolution (default: human).
 /// With `--offscreen` the UI is drawn to a PNG file; without it the window opens.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -240,11 +241,13 @@ fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut mpqs: Vec<PathBuf> = Vec::new();
     let mut png: Option<PathBuf> = None;
     let mut size = (1280u32, 960u32);
+    let mut race = "human".to_string();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--ui" => ui_name = Some(it.next().ok_or("--ui needs a name")?.clone()),
             "--mpq" => mpqs.push(it.next().ok_or("--mpq needs a file")?.into()),
+            "--race" => race = it.next().ok_or("--race needs a value")?.clone(),
             "--offscreen" => png = Some(it.next().ok_or("--offscreen needs a file")?.into()),
             "--size" => {
                 let text = it.next().ok_or("--size needs WxH")?;
@@ -254,7 +257,7 @@ fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             other => return Err(format!("unknown option {other}").into()),
         }
     }
-    let ui_name = ui_name.ok_or("usage: viewer --ui FDF_NAME [--mpq archive]... [--offscreen out.png] [--size WxH]")?;
+    let ui_name = ui_name.ok_or("usage: viewer --ui FDF_NAME [--mpq archive]... [--race RACE] [--offscreen out.png] [--size WxH]")?;
 
     let archive_bytes = mpqs
         .iter()
@@ -262,7 +265,7 @@ fn run_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Result<Vec<Vec<u8>>, String>>()?;
     let sources: Vec<&[u8]> = archive_bytes.iter().map(Vec::as_slice).collect();
 
-    let ui_scene = UiScene::from_mpq(&ui_name, &sources)?;
+    let ui_scene = UiScene::from_mpq(&ui_name, &sources, &race)?;
     eprintln!(
         "viewer: {}: {} items in draw list",
         ui_name,
