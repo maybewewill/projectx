@@ -12,6 +12,9 @@
 //!   slot), 0 mismatches against the model below; the vectors are in `tests/missile/gate_data.rs`.
 //! * **Impact gate** ([`impact_check`]): slot 45 (`0x6F2C42D0`). It sets the "hit done" flag `0x20000000` and launches
 //!   when the gate holds, and otherwise hands over to slot 47. Same Unicorn run (CONFIRMED).
+//! * **Launch miss tail** ([`chance_to_miss`], [`miss_cell`]): every missile launch that no evasion ability catches takes one
+//!   stream-2 draw for `ChanceToMiss`; CONFIRMED by Unicorn (`tools/emu/miss_gate_emu.py`, 2,400 cases, 0 mismatches),
+//!   `docs/spec/missiles.md` section 9.
 //! * **Flight time** ([`flight_seconds`]): distance over speed, in game seconds. LIKELY in form only: the original's
 //!   flight arithmetic (speed, arc, homing) is not decoded, so the value and the rounding are a model (UNSURE).
 //!
