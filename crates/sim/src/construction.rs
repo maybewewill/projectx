@@ -352,6 +352,66 @@ pub fn remaining_after_percent(total: F32, percent: i32, tables: &softfloat::Tab
     softfloat::arith::mul(total, fraction)
 }
 
+/// Message posted to the object when its countdown property reaches 0 (`0xD01C4`): the in-progress base class
+/// maps it to the completion slot 205 (`0x6F025C60`: `0xD01A2 + 0x22`). CONFIRMED by disassembly of the listener
+/// creation in `0x6F030920` and of the dispatcher.
+pub const COMPLETION_MESSAGE: u32 = 0xD01C4;
+
+const ONE_BITS: u32 = 0x3F80_0000;
+/// `2.0e-7` (`0x6FAAE614` at run time).
+const TINY_BITS: u32 = 0x3456_BF95;
+/// `0.001` (`0x6FAAE47C` at run time).
+const EPS_BITS: u32 = 0x3A83_126F;
+
+/// What the timed start `0x6F030920` hands to the agile engine: a modifier on the remaining-time property
+/// (`this+0x7C`) with the given slope per agile second and horizon, plus a listener that posts
+/// [`COMPLETION_MESSAGE`] when the property reaches `0.0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimedStart {
+    /// `-D` (sign bit flipped).
+    pub slope: F32,
+    /// `R / D + 1.0`.
+    pub horizon: F32,
+}
+
+/// The timed start `0x6F030920(this, &D)`; `D` is the object's speed factor (`this+0x70`, from `0x6F281530`: 1.0
+/// unless a cheat constant applies), `remaining` the current value `R` of the property at `this+0x7C` (the total
+/// time, stored by `0x6F023A30` just before), `gate` the pause counter `this+0x48`. CONFIRMED in Unicorn
+/// (`tools/emu/timed_start_emu.py`, 500 vectors in `tests/vectors/timed_start.tsv`, 0 mismatches).
+/// Nothing is started when `gate > 0` (signed) or `2.0e-7 > |D|`; a NaN `D` starts.
+pub fn timed_start(remaining: F32, factor: F32, gate: i32, tables: &softfloat::Tables) -> Option<TimedStart> {
+    let a = softfloat::arith::sub(factor, F32(0)).0 & 0x7FFF_FFFF;
+    if f32::from_bits(TINY_BITS) > f32::from_bits(a) || gate > 0 {
+        return None;
+    }
+    let slope = F32(factor.0 ^ 0x8000_0000);
+    let r_over_d = softfloat::arith::div(remaining, factor, tables);
+    let horizon = softfloat::arith::add(r_over_d, F32(ONE_BITS));
+    Some(TimedStart { slope, horizon })
+}
+
+/// The life modifier the construction tick `0x6F045600` creates on the unit's life property (rate per agile
+/// second, horizon). Life climbs from the 10% start value to the maximum exactly when the remaining-time
+/// property reaches 0: `rate = ((A * (1.0 - 0.1)) / total) * k`, `horizon = R / k + 1.0`, with `A` the owner's
+/// slot-0x130 float (the agent's `+0x84`), `total` = `this+0x78`, `k` = `this+0x70`, `R` the remaining time.
+/// Nothing is created when `total == 0` or `0.001 > |k|`. CONFIRMED in Unicorn
+/// (`tools/emu/construction_tick_emu.py`, 700 vectors, 0 mismatches).
+pub fn life_ramp(a: F32, total: F32, remaining: F32, k: F32, tables: &softfloat::Tables) -> Option<(F32, F32)> {
+    if f32::from_bits(total.0) == 0.0 {
+        return None;
+    }
+    let kabs = softfloat::arith::sub(k, F32(0)).0 & 0x7FFF_FFFF;
+    if f32::from_bits(EPS_BITS) > f32::from_bits(kabs) {
+        return None;
+    }
+    let t = softfloat::arith::sub(F32(ONE_BITS), F32(TENTH_BITS));
+    let x = softfloat::arith::mul(a, t);
+    let q = softfloat::arith::div(x, total, tables);
+    let rate = softfloat::arith::mul(q, k);
+    let horizon = softfloat::arith::add(softfloat::arith::div(remaining, k, tables), F32(ONE_BITS));
+    Some((rate, horizon))
+}
+
 /// Fraction of the maximum hit points a building has at `progress` (UNVERIFIED placeholder: the original's
 /// rule is not found; the value is linear from 0 to 1).
 pub fn hp_fraction(progress: f32) -> f32 {

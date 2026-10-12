@@ -291,6 +291,9 @@ struct Construction {
     start: f32,
     seconds: f32,
     consumed: bool,
+    /// The life modifier of the construction tick (`0x6F045600`): start life and rate per second, when the
+    /// soft-float tables are loaded (`construction::life_ramp`).
+    ramp: Option<(F32, F32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -412,6 +415,20 @@ impl Production {
 
 fn fl(x: f32) -> F32 {
     F32::from_bits(x.to_bits())
+}
+
+/// Seconds until the countdown property of a timed object reaches 0: `R / D` with `R = I2R(bldtm)` stored by
+/// `0x6F023A30` and `D` the speed factor (1.0; the cheat constant of `0x6F281530` is not applied), both through
+/// the soft float (`0x6F030920` computes `R / D` for the modifier horizon, `construction::timed_start`). Without
+/// tables the plain integer is used. Whether the listener fires exactly at `R / D` is the agile engine's
+/// modifier evaluation, which is not decoded (UNSURE).
+fn countdown_seconds(tables: Option<&softfloat::Tables>, bldtm: i32) -> f32 {
+    match tables {
+        Some(t) => {
+            softfloat::arith::div(softfloat::conv::i2r(bldtm), F32::ONE, t).to_f32()
+        }
+        None => bldtm as f32,
+    }
 }
 
 fn square_gap(ax: f32, ay: f32, ar: f32, bx: f32, by: f32, br: f32) -> bool {
@@ -551,7 +568,8 @@ impl Game {
         let Some(ty) = self.unit_types().get(type_id).cloned() else {
             return Err(ProdError::NotAvailable);
         };
-        let seconds = self.production.build_seconds.get(&type_id).copied().unwrap_or(0) as f32;
+        let bldtm = self.production.build_seconds.get(&type_id).copied().unwrap_or(0);
+        let seconds = countdown_seconds(self.order_tables(), bldtm);
         let item = TrainItem {
             type_id,
             gold: ty.gold_cost,
@@ -760,11 +778,20 @@ impl Game {
         let max = ty.max_life;
         let start_life = fl(max.to_f32() * START_LIFE);
         self.unit_mut(k).life = start_life;
-        let seconds = self.production.build_seconds.get(&type_id).copied().unwrap_or(0) as f32;
+        let bldtm = self.production.build_seconds.get(&type_id).copied().unwrap_or(0);
+        let seconds = countdown_seconds(self.order_tables(), bldtm);
+        // The construction tick creates a life modifier from the 10 % start value (`0x6F05FF50`: A * 0.1) with
+        // rate (A * 0.9 / total) * k (`construction::life_ramp`, CONFIRMED in Unicorn).
+        let ramp = self.order_tables().and_then(|t| {
+            let total = softfloat::conv::i2r(bldtm);
+            let a = ty.max_life;
+            let start_life = softfloat::arith::mul(a, F32::from_bits(0x3DCC_CCCD));
+            crate::construction::life_ramp(a, total, total, F32::ONE, t).map(|(rate, _)| (start_life, rate))
+        });
         let race = self.player(owner).race;
         let consumed = race == 3 || race == 4;
         let start = self.production.now;
-        self.production.constructions.insert(k, Construction { builder, start, seconds, consumed });
+        self.production.constructions.insert(k, Construction { builder, start, seconds, consumed, ramp });
         self.production.events.push(ProdEvent::BuildStarted { builder, building: k, type_id });
         Ok(k)
     }
@@ -1306,7 +1333,15 @@ impl Game {
         for (k, c) in sites {
             let frac = if c.seconds <= 0.0 { 1.0 } else { ((now - c.start) / c.seconds).clamp(0.0, 1.0) };
             let max = self.unit(k).max_life.to_f32();
-            self.unit_mut(k).life = fl(max * (START_LIFE + (1.0 - START_LIFE) * frac));
+            let life = match c.ramp {
+                Some((start_life, rate)) => {
+                    let elapsed = fl((now - c.start).clamp(0.0, c.seconds.max(0.0)));
+                    let l = softfloat::arith::add(start_life, softfloat::arith::mul(rate, elapsed));
+                    if l.to_f32() > max { fl(max) } else { l }
+                }
+                None => fl(max * (START_LIFE + (1.0 - START_LIFE) * frac)),
+            };
+            self.unit_mut(k).life = life;
         }
         let jobs: Vec<ObjKey> = self.production.jobs.keys().copied().collect();
         for b in jobs {
