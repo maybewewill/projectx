@@ -1,17 +1,11 @@
 {
  "wave": "3",
- "updated": "2026-10-12 21:40 (UTC+5)",
+ "updated": "2026-10-12 22:20 (UTC+5)",
  "lanes": [
   {
    "id": "S11",
    "model": "Sonnet",
    "task": "Agile modifier evaluation (exact listener tick for countdowns, time of day, life ramps)",
-   "status": "running"
-  },
-  {
-   "id": "S12",
-   "model": "Sonnet",
-   "task": "Heroes: ability learning (AHer), hero skill points, kill XP into the death path",
    "status": "running"
   },
   {
@@ -27,16 +21,28 @@
    "status": "running"
   },
   {
-   "id": "H19",
-   "model": "Haiku",
-   "task": "Model render fixes: black slabs (geoset visibility/GEOA alpha, team glow), Stand pose",
-   "status": "running"
-  },
-  {
    "id": "S15",
    "model": "Sonnet",
    "task": "AI captains and attack waves: bind the remaining AI natives (attack groups, targets, threat)",
    "status": "running"
+  },
+  {
+   "id": "S16",
+   "model": "Sonnet",
+   "task": "MDX geoset visibility: correct GEOA/KGAO per-sequence sampling, hide death-only geosets",
+   "status": "running"
+  },
+  {
+   "id": "S12",
+   "model": "Sonnet",
+   "task": "Heroes: ability learning (AHer), hero skill points, kill XP into the death path (merged)",
+   "status": "done"
+  },
+  {
+   "id": "H19",
+   "model": "Haiku",
+   "task": "Model render fixes: black slabs (geoset visibility/GEOA alpha, team glow), Stand pose — failed: GEOA sampling wrong; handed to S16",
+   "status": "failed"
   },
   {
    "id": "S9",
