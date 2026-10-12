@@ -547,19 +547,20 @@ fn support_tables_cover_the_work_list() {
     // Plus UnitDamageTarget, UnitDamagePoint, UnitUseItem, UnitUseItemPoint, UnitUseItemTarget, SetUnitRescuable.
     // Plus IsUnitType, IsUnitIdType, UnitAddType, UnitRemoveType, IsUnitInTransport, UnitSetUsesAltIcon (unit-classification.md).
     // Plus SetUnitUseFood and UnitSuspendDecay (lane_f.rs).
-    assert_eq!(implemented, 85);
+    // Plus SelectHeroSkill (the hero learn, heroes.md section 12).
+    assert_eq!(implemented, 86);
 
     let host = host_for(
         r#"
 native GetUnitName takes unit whichUnit returns string
-native SelectHeroSkill takes unit whichHero, integer abilcode returns nothing
+native GetHeroProperName takes unit whichHero returns string
 native GetUnitLevel takes unit whichUnit returns integer
 native GetHeroXP takes unit whichUnit returns integer
 function unused takes nothing returns nothing
     local string s
     local unit u
     set s = GetUnitName(u)
-    call SelectHeroSkill(u, 5)
+    set s = GetHeroProperName(u)
     set s = null
 endfunction
 function main takes nothing returns nothing
@@ -568,6 +569,6 @@ endfunction
     );
     let unbound = host.vm().unbound_natives();
     assert!(unbound.contains(&"GetUnitName"));
-    assert!(unbound.contains(&"SelectHeroSkill"));
+    assert!(unbound.contains(&"GetHeroProperName"));
     assert!(!unbound.contains(&"GetHeroXP"), "GetHeroXP is registered");
 }

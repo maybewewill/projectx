@@ -164,6 +164,10 @@ pub(crate) fn dispatch_unit_death_by(
     killer: Option<ObjKey>,
 ) {
     let owner = game.borrow().unit(unit).owner;
+    // The death handler `0x6F2A4880` gives the kill experience first (UNSURE order against the JASS events).
+    if let Some(k) = killer {
+        crate::kill_xp::grant_kill_xp(&mut game.borrow_mut(), unit, k);
+    }
     let firing = killer.map(|k| {
         let mut gm = game.borrow_mut();
         gm.firings.push(Firing {

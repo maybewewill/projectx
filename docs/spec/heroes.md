@@ -322,15 +322,15 @@ the user's `Misc.txt` is not in the repo: UNSURE.
 dying owner)` (the `+0x38` mask; a non-zero result returns with no record). The routine's `0x6F3A34E0` uses the `+0x68`
 mask. Mask names are LIKELY (`+0x38` passive or alliance, `+0x68` shared experience), not confirmed.
 
-**Wiring (NOT done).** `sim::heroes::distribute_kill` is not called from the death path: the normaliser's cell term and the
-candidate list order are not confirmed, so the candidate set and the distances would be guesses. Killer tracking is wired
-(section 8.6).
+**Wiring (done in pass 6, section 13).** `sim::kill_xp::grant_kill_xp` is called from the death path when a killer is known.
+The normaliser's cell term is no longer a blocker (unit positions are stored as cells, unit-position.md); the candidate list
+order is still unconfirmed and does not change any amount. Killer tracking is wired (section 8.6).
 
 ### 8.4 Model status
 
-- `sim::heroes::{experience_engine, distribute_kill, kill_amount}` implement 8.2 with `Gain` (handicap, walk, range).
-  Not wired into the death path: the candidate set (8.3) is not confirmed end to end (the normaliser's cell term and the
-  list order are open). The routine's gate and range rule are in `sim::heroes::{is_candidate, in_range}` (tests only).
+- `sim::heroes::{experience_engine, distribute_kill, kill_amount}` implement 8.2 with `Gain` (handicap, walk, range). They
+  are wired into the death path by `sim::kill_xp` (section 13); the routine's gate and range rule are in
+  `sim::heroes::{is_candidate, in_range}`.
 
 ### 8.5 Model changes
 
@@ -734,6 +734,9 @@ which the original reaches only from invalid input) are not modelled.
 
 ## 11. Open items (priority)
 
+0. (pass 6) The kill experience is wired (section 13) and the skill learning is decoded (section 12). What stays open from
+   them: the `'AHer'` category insert and order (13.3), `0x6F2A00E0`, the dependency check `0x6F40FB70`, dead-hero
+   recipients, and the shared-XP self bit (13.4, 12.9).
 1. Kill candidate selection (section 8.3): decode the normaliser's cell term (`0x6F483E70`) and the `0x6F38B0B0`
    transform fully, the candidate list's insertion order and predicate (`0x6F46D0B0` / `0x6F46D1B0`), and the mask names
    (`+0x38`, `+0x68`). The routine's gate and the range rule are CONFIRMED (Unicorn, section 8.3). The numeric split is
@@ -779,3 +782,169 @@ The hero setter (`natives/hero.rs`, `with_attribute_change`) now sends the mana 
 `permanent + 1` as for life (LIKELY the same mode flag, not read from `0x6F209210` directly). Mana floor `+0.0` (LIKELY).
 The regeneration and attack-speed setters are still stored only (10.3).
 
+---
+
+## 12. Skill learning and the hero skill slots (pass 6, 2026-10-12)
+
+Labels as before: CONFIRMED = read in the disassembly and reproduced in Unicorn with 0 mismatches; LIKELY = read, not
+run; UNSURE = open. Harness: `tools/emu/hero_learn_emu.py` (the real routines below run; the callees under the hero
+object are stand-ins). Check: `crates/sim/tests/hero_learn_vectors.rs` (`HERO_CAN_VECTORS`, `HERO_LEARN_VECTORS`).
+Model: `sim::heroes::{required_level, can_learn, learn, skill_point_cap, learned_count, slot_max}`, `HeroObj::slots`,
+`natives/hero.rs::select_hero_skill`.
+
+### 12.1 The hero object and its skill slots (CONFIRMED by disassembly)
+
+The hero state is the `'AHer'` ability object, 324 bytes (factory object `0x6FAB3AF0`, vtable `0x6F92A464`, vf0 allocates,
+vf1 frees; constructor `0x6F20A780`). The unit holds it at `unit+0x1F0` and sets it in the attach switch `0x6F079A73`.
+Fields used here: `+0x30` the unit (0 gives `0x6F472890`), `+0x34` the code the type lookup `0x6F265ED0` and the
+dependency check use (UNSURE which code), `+0x6C` the level counter reference (`0x6F473170` answers level - 1), `+0x7C`
+the intelligence base, `+0x8C` experience, `+0x90` skill points, `+0xCC` primary attribute (copied from the init record
+`+0x0C`), `+0xE8` (init record `+0x1C`), `+0xF0 = 5` and the five **slot codes** at `+0xF4`, `+0x108 = 5` and the five
+**slot max levels** at `+0x10C`, `+0x120 = 5` and the five **slot required levels** at `+0x124`, `+0x138` the owner's hero
+counter (`player+0x334`, incremented at init).
+
+### 12.2 The initialiser `0x6F20AA10` (CONFIRMED structure)
+
+After the attribute fields are set it reads the string at init record `+0x20` (the type's `heroAbilList`, type record
+`+0x8F0`, builder binding at `0x6F2649E8`). Tokens are cut at any of `" ,-_\t"` (`0x6F6EB606` into a 16-byte buffer), at
+most five; each token is parsed to a rawcode (`0x6F4C3F50`) and looked up (`0x6F265ED0`). A token that has a definition
+stores `code` at `+0xF4+4i`, `levels` (definition `+0x3C`) at `+0x10C+4i` and `reqLevel` (definition `+0x40`) at
+`+0x124+4i`; the slot index `i` advances for every token (a failed lookup leaves a gap). A running total adds the slot
+max of every token (`0x6F207CC0`). Then **`+0x90 := 1`, capped at that total** (so a new hero has one skill point, or
+fewer if its skills have fewer levels in all), `+0x8C := 0`.
+
+### 12.3 Required level `0x6F207B60` (CONFIRMED, Unicorn)
+
+`req(slot, next) = reqBase[slot] + next * skip`, with `next` the index the ability would have (0 when the unit does not
+hold it, else its zero-based level index + 1) and `skip` the definition's `levelSkip` (`+0x44`); when the definition is
+missing or its `levelSkip` is 0, Misc `HeroAbilityLevelSkip` (integer reader `0x6F009F90`, element 0, default 0) is used.
+Wrapping int arithmetic.
+
+### 12.4 The gate `0x6F208A00` (CONFIRMED, Unicorn)
+
+For a slot: `room = next < slotMax (unsigned) and available`, with `available = 0x6F40B490(owner, code)` = the owner's
+tech record for the ability has bit 0 (or no record) = `SetPlayerAbilityAvailable` (LIKELY, same record). With
+`deps = 0x6F40FB70(+0x34, next, &flag, 0x6F02E640)`: `level_ok = deps and levelCounter + 1 >= req` (signed). The result is
+`room and (level_ok or (flag and debug))`, where `debug` is bit `0x100` of the object `0x6F4C34D0(13)`'s flag word (a
+cheat/debug switch, LIKELY off in a normal game). The out value is `room and flag`. The dependency record walk
+(`HasDepAbil` requirement lists) is stand-in only: the model answers `(true, true)` (UNSURE).
+
+### 12.5 The learn `0x6F2095D0` (CONFIRMED, Unicorn)
+
+`learn(code, force)` (the natives pass `force = 0`):
+1. `skillPoints == 0 and not force`: error text 0 ("without points to spend", `0x6F2077A0`), return.
+2. `code == 0`: error 2 ("with no ability defined"), return.
+3. Slot search over the five codes: the first slot with `slot == code`, **or** `code == 'AUfa'` (`0x41556661`, Frost Armor) with
+   `slot == 'AUfu'` (`0x41556675`, its autocast form). Not found: error 1 ("unknown ability ID"), return. *(The first
+   draft of the model had the alias as 'Aroa'/'Arou'; the Unicorn run caught it, 1 mismatch in 1000.)*
+4. The gate for the slot; false: return silently.
+5. With `slotCode` (the slot's code, not the requested one): if the unit holds the ability, level it up (vtable slot 185 =
+   `+0x2E4`, CONFIRMED meaning in abilities.md) and call `0x6F296F70(slotCode, indexAfter + 1)`; else create it
+   (`0x6F2076F0`: factory + attach) and call `0x6F296F70(slotCode, 1)`. `0x6F296F70` sets the level (`0x6F41C2A0`) and
+   dispatches the hero skill event (posted message `0x8004F`: unit event 0x4F, player-unit event 0x2A, payload learner,
+   skill, level; the getters `GetLearningUnit`, `GetLearnedSkill`, `GetLearnedSkillLevel` already accept 0x2A/0x4F).
+6. Unless `force`: `skillPoints -= 1`; when it reaches 0 the "no points left" refresh `0x6F3329F0` runs.
+7. Refresh `0x6F021270`, then `0x6F26FE50(0)`.
+
+### 12.6 The native and the unit method (CONFIRMED structure)
+
+`SelectHeroSkill(hero, code)` `0x6F3C7050`: unit lookup, the hero gate of 8.1 (uppercase type id, not removed, not an
+illusion) then the unit method `0x6F277A00(code)`: if the unit has no ability `code` (`0x6F0787D0`) it learns; otherwise it
+learns only when the ability's level index is below `max - 1` (`max` = `0x6F02E570`, the ability max level). Model:
+`select_hero_skill` applies the effects to the unit's ability list (`Ability::inc_level`, `attach`) and fires the events
+after the level is set.
+
+### 12.7 Skill point cap (CONFIRMED, Unicorn on the helpers)
+
+`0x6F207C80(code)` is the unit's learned level count (index + 1, 0 if absent); `0x6F207CC0(code)` the max of the first slot
+holding the code (-1 if none). The cap used by the experience tail is `sum over the five slot codes of (max - learned)
+where learned < max` (`heroes::skill_point_cap`). The model now passes it to `add_xp` / `set_xp` / `set_level` and to the
+kill split for any hero that has slots; a hero **without** slots is left uncapped (the original would cap it at 0: the
+synthetic heroes of the older tests have no `heroAbilList`; UNSURE decision, noted in `with_hero`).
+
+### 12.8 Unicorn numbers
+
+`tools/emu/hero_learn_emu.py`, seed 11 (after the alias fix; seeds 1 and 7 passed before it because they asked for the alias rarely): 1,000 learn cases (203 learned a level, 77 with the
+`'AUfa'` alias request), 1,000 gate runs (334 learnable), 1,000 required-level runs, 3,000 cap-helper runs, **0
+mismatches**. The harness asserts that
+the counter read uses `hero+0x6C`. Stand-ins: the ability lookup, type lookup, player accessor, availability test,
+dependency check, counter value, debug object, Misc integer, and the notification calls (recorded and compared); the level
+up is a stub that adds one to the index (its meaning is from abilities.md).
+
+### 12.9 Engine wiring and open items
+
+Engine: the unit data reader keeps `heroAbilList` (`gamedata::unittype`), `UnitType::hero_abilities` takes the first five
+codes, the ability table rows give `(levels, reqLevel, levelSkip)` (`gamedata::abilitytype::read_skill`,
+`ObjectText::ability_skill`), the engine installs `HeroAbilityDef` and an `AbilityType { max_level }` for every code in a
+hero list, and `HeroAbilityLevelSkip` comes from Misc. New heroes fill their slots in `Game::new_hero`.
+
+Open: (a) the dependency check `0x6F40FB70` (`HasDepAbil` lists, per-level tech requirements); (b) the meaning of
+`hero+0x34` and `0x6F02E640`; (c) `0x6F40B490` against `SetPlayerAbilityAvailable` is LIKELY; (d) the per-unit proper name
+index `+0x138`; (e) `ReviveHero`; (f) `GetHeroInt` / `SetHeroInt`: the native `0x6F3C68C0` gate is the same hero gate
+(illusion bit included) and calls `0x6F277850(includeBonuses)` = the core `0x6F0DB3A0` minus the bonus total when the flag
+is 0; the model has no item/aura intelligence bonus, so both flag values answer the core (already CONFIRMED in section 6);
+the base term needs nothing further.
+
+---
+
+## 13. Kill experience in the death path (pass 6, 2026-10-12)
+
+Harness: `tools/emu/hero_kill_gate_emu.py` (gate routines; `tests/hero_kill_gate_vectors.rs`). Model: `sim::kill_xp`
+(`grant_kill_xp`), called from `natives/unit_event.rs::dispatch_unit_death_by` when a killer is known. Tests:
+`crates/sim/tests/hero_kill_xp.rs` (10 tests, need `GAME_DLL` for the division table).
+
+### 13.1 The death handler `0x6F2A4880` (CONFIRMED by disassembly, gates Unicorn-checked)
+
+ECX = the dying unit. In order: (1) killer = the pair at `+0x250` resolved by `0x6F4786B0`; none: skip everything. (2)
+`0x6F285B00(killer, dying)` = `not 0x6F3A3430(killer.owner, dying)` -> `0x6F3A3400(killer owner index, dying owner index)` =
+**the killer owner's row `ext+0x38` has the dying owner's bit**; if it has it (passive ally) the handler stops. The row
+address is `ext + 0x38 + 16 * type` (also `GetPlayerAlliance`: `shl ecx,4`), so `+0x38` is alliance type 0 (passive) and
+`+0x68` type 3 (**shared experience**, used by `0x6F3A34B0` in the candidate routine). **CONFIRMED** (1,500 + 1,200 Unicorn
+cases of the real `0x6F3A3400`/`0x6F3A34B0`/`0x6F26DE50`, 0 mismatches; the harness asserts the row addresses). (3) The killer's
+player gets `+0x250 += 1` (hero kills counter) when the dying unit's type starts with an uppercase letter and is not an
+illusion. (4) An illusion (`+0x5C` bit 30) gives nothing more. (5) Otherwise `0x6F2A00E0(killer)` (not decoded), the
+candidate builder `0x6F2A46F0`, then the split `0x6F2A3190`.
+
+The builder `0x6F2A46F0(record, dying, killer)` stops when `0x6F285AC0(killer, dying)` is non-zero (the same passive mask) or
+when `Misc BuildingKillsGiveExp` is 0 and **the killer** is a structure: `0x6F26DE50(killer, 0)` returns 1 exactly when
+`killer+0x5C` has bit `0x10000` (CONFIRMED, Unicorn; the earlier note that this concerned the victim was wrong: ECX of that
+call is the killer, `edi = arg_4`).
+
+### 13.2 What the model does
+
+`grant_kill_xp(game, victim, killer)`: killer removed / victim illusion / passive ally / structure killer without the Misc flag:
+nothing. Else every hero of the game, in unit creation order, is tested with `heroes::is_candidate` (drain flag or below
+max level, not an illusion or removed, the killer owner's shared-XP row has the candidate's owner or it is the killer's own
+owner [UNSURE]); with `GlobalExperience` it goes to the global list first; `heroes::in_range` (squared distance of the
+normalised positions, here `Unit.x/y` which are the normaliser output since the cell storage change, against
+`HeroExpRange^2`) decides the in-range list. The recipients are the in-range list, or the global list when that is empty
+(CONFIRMED rule); `heroes::distribute_kill` does the amount, split and engine (Unicorn-confirmed in section 8). Inputs the
+model takes from the world: the recipient owner's `SetPlayerHandicapXP` value (`player+0x2A4`), the victim's level (hero
+counter + 1, else the unit type `level` clamped to `MaxUnitLevel` like `0x6F29DCA0`), summoned (`UnitObj::summoned`),
+the skill point cap from the slots (12.7). The upgrade bonus `0x6F40B340('HERO')` counts as 0 (no research model for it).
+Without the softfloat tables nothing is granted (the split divides in softfloat).
+
+### 13.3 The 'AHer' category list: findings of this pass (the insert is still NOT found)
+
+- `0x6F46D1B0` looks the key up in the table at `[0x6FAB7368]+0xC` (`0x6F4C8520` key, `0x6F001EC0` lookup) and walks
+  `entry+0x6C -> category +0x58` with `0x6F46D0B0` (as in groups-events.md 3.9). The registry entry for an ability class is
+  made by `0x6F4716D0(code, key2, factory)`: it builds a trial instance with the factory (`factory vf0`), reads the instance's
+  class code (`vf7`), calls `0x6F4729C0(code, exists)` which **lazily creates the category object** (`0x6F471F40`: the world
+  agent factory `[0x6FAB73D8]+16` with the agent tag text `"^adf^adf"`) and stores it at `entry+0x6C`, hands it to the
+  instance (`vf8`) and frees the instance (`factory vf1`). So the category is created at start-up for every registered
+  ability class, not by the saved-game loader `0x6F471460` (which only restores `entry+0x6C` from a handle in a load).
+- About 100 small functions at `0x6F0638E0..0x6F0A4C2A` build a cached pair `{category, ...}` per ability code through
+  `0x6F472C20` (`a1[3] = 0x6F4729C0(code)`): they are the typed lookups of the ability factory, not membership inserts.
+- The walk's node (`+8` next, `+0x20` flags, `+0x54` a reference whose `+0xC/+0x10` are a handle) is not an ability object
+  (ability `+0x54` is the definition) and not the 12-byte CUnitSet node. The writer of `category+0x58` is still unknown.
+  Because every hero has the `'AHer'` ability from creation and the kill experience works in the game, the model uses all
+  heroes; the amounts do not depend on the order.
+
+### 13.4 Open items
+
+(1) The `'AHer'` category insert and its order (changes only the order of level-up side effects, not any number).
+(2) `0x6F2A00E0(killer)`. (3) Whether dead heroes take experience (neither the candidate routine nor the walk tests life:
+LIKELY yes). (4) Whether a player's shared-XP row contains its own bit (the model assumes the owner's own heroes share).
+(5) The order of the experience grant against the JASS death events (the model grants first). (6) The killer context for
+JASS kills (`KillUnit`, `SetWidgetLife`) is still null, so they give no experience. (7) The bounty/`+0x250` hero-kill
+counter is not modelled.

@@ -120,6 +120,8 @@ pub struct ObjectText {
     pub gold_mine_amount: Option<i32>,
     /// The level records of the spells the cast core knows (`sim::cast`), by raw code.
     pub spell_levels: BTreeMap<u32, Vec<sim::cast::SpellLevel>>,
+    /// The skill data `(levels, reqLevel, levelSkip)` of every ability row, by raw code (hero skill slots).
+    pub ability_skill: BTreeMap<u32, (i32, i32, i32)>,
     /// The levels of the aura abilities the model knows (`sim::auras::AuraKind`), by raw code: `Area`, `DataA` to
     /// `DataD`, the first `BuffID` and `targs`.
     pub auras: BTreeMap<u32, Vec<sim::auras::AuraLevel>>,
@@ -343,6 +345,11 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
             return Ok(());
         }
     };
+    for row in slk.rows() {
+        if let Some(s) = gamedata::abilitytype::read_skill(&slk, row.key()) {
+            out.ability_skill.insert(gamedata::abilitytype::raw_code(row.key()), s);
+        }
+    }
     for (name, code) in [
         ("AHtb", sim::cast::STORM_BOLT),
         ("AHhb", sim::cast::HOLY_LIGHT),

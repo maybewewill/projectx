@@ -27,6 +27,7 @@ pub mod daynight;
 pub mod economy;
 pub mod handles;
 pub mod heroes;
+pub mod kill_xp;
 pub mod hashmap;
 pub mod lockstep;
 pub mod missiles;

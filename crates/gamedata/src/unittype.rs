@@ -284,6 +284,10 @@ pub struct UnitTypeData {
     /// `abilList` of `UnitAbilities.slk`: the ability rawcodes of the type, in file order (the comma-separated
     /// cell split and trimmed; empty entries dropped). Empty when the table or the cell is missing.
     pub abil_list: Vec<String>,
+    /// `heroAbilList` of `UnitAbilities.slk` (type record `+0x8F0`): the hero skill codes in file order. The hero
+    /// initialiser `0x6F20AA10` splits the cell at any of `" ,-_\t"` and takes at most five tokens
+    /// (`docs/spec/heroes.md` section 12). Empty for a unit that is not a hero.
+    pub hero_abil_list: Vec<String>,
     /// `acquire` (real, after the load-time rule: below 1.0 becomes `sight`).
     pub acquire: f32,
     /// `minRange` (real).
@@ -627,6 +631,13 @@ pub fn load_unit_type(
     out.abil_list = abil
         .text("abilList")
         .split(',')
+        .map(|t| unquote(t).to_owned())
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    out.hero_abil_list = abil
+        .text("heroAbilList")
+        .split([' ', ',', '-', '_', '\t'])
         .map(|t| unquote(t).to_owned())
         .filter(|t| !t.is_empty())
         .collect();

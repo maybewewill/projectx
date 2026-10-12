@@ -185,6 +185,19 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
     }
     // The derived attribute bonus rates (`docs/spec/heroes.md`, section 9): plain reals, no table needed.
     game.set_hero_rates(hero_rates(&data.misc));
+    // The kill experience Misc values and the hero skill level skip (`docs/spec/heroes.md`, sections 8 and 12).
+    {
+        let h = &data.misc.hero;
+        game.set_kill_xp_config(sim::natives::game::KillXpConfig {
+            hero_exp_range: h.hero_exp_range,
+            summon_factor: h.summoned_kill_factor,
+            max_unit_level: h.max_unit_level,
+            global_experience: h.global_experience,
+            max_level_drain: h.max_level_heroes_drain_exp,
+            building_kills: h.building_kills_give_exp,
+            hero_ability_level_skip: h.hero_ability_level_skip,
+        });
+    }
     for (code, row) in data.units.iter() {
         let Some(id) = rawcode(code) else {
             continue;
@@ -345,6 +358,14 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         point_value: ty.points,
         food_used: ty.food_used,
         food_made: ty.food_made,
+        // The hero skill codes (`heroAbilList`, at most five): a hero fills its skill slots from them.
+        hero_abilities: ty
+            .hero_abil_list
+            .iter()
+            .take(5)
+            .map(|c| gamedata::abilitytype::raw_code(c))
+            .collect(),
+        level: ty.level,
         // The `abilList` rawcodes of `UnitAbilities.slk`, in file order, after the fixed move and attack slots. The
         // `Amov` and `Aatk` entries are dropped: those two are the fixed slots, decided by the record (`type_order_data`),
         // and the original keeps them outside the ability factory (`docs/spec/abilities.md`).

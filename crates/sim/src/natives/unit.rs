@@ -537,6 +537,7 @@ pub(crate) fn build(
         buffs: Vec::new(),
         bonuses: crate::auras::StatBonuses::default(),
         hero: is_hero_id(type_id).then(|| gm.new_hero(type_id)),
+        summoned: false,
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
     // of units is UNSURE; 0 is used, as for the other handle types the scripts create on demand.

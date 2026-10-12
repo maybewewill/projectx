@@ -389,6 +389,26 @@ impl Engine {
             })
             .collect();
         objdata::install(&mut host.game_mut(), &object_text, &unit_stock);
+        // The skill data and the ability types of the hero skills (`docs/spec/heroes.md` section 12): a hero fills its
+        // five slots from `heroAbilList` and the definitions' `levels`, `reqLevel`, `levelSkip`.
+        {
+            let mut g = host.game_mut();
+            for ty in game_data.unit_types.values() {
+                for code in ty.hero_abil_list.iter().take(5) {
+                    let id = gamedata::abilitytype::raw_code(code);
+                    if let Some(&(levels, req_level, level_skip)) = object_text.ability_skill.get(&id) {
+                        g.set_hero_ability_def(
+                            id,
+                            sim::natives::game::HeroAbilityDef { levels, req_level, level_skip },
+                        );
+                        if g.ability_types().get(id).is_none() {
+                            g.ability_types_mut()
+                                .insert(id, sim::abilities::AbilityType { max_level: Some(levels) });
+                        }
+                    }
+                }
+            }
+        }
         notes.push(format!(
             "object text: {} global strings, {} names, {} art lists, {} sound lists, {} item stock rows, Agld gold {:?}",
             object_text.localized.len(),
