@@ -1,13 +1,7 @@
 {
  "wave": "3",
- "updated": "2026-10-13 04:30 (UTC+5)",
+ "updated": "2026-10-13 05:20 (UTC+5)",
  "lanes": [
-  {
-   "id": "S18",
-   "model": "Sonnet",
-   "task": "Missile homing/arc and impact; unit z (fly height + ground) for attacks and vision",
-   "status": "running"
-  },
   {
    "id": "S20",
    "model": "Sonnet",
@@ -31,6 +25,18 @@
    "model": "Sonnet",
    "task": "Why AI waves stop after the second one (captain combat flag stuck); first base attack, game end",
    "status": "running"
+  },
+  {
+   "id": "S23",
+   "model": "Sonnet",
+   "task": "Other attack kinds: splash, bounce, line, artillery missiles; weapon 2; attack cooldown/dmgpt/backswing timing",
+   "status": "running"
+  },
+  {
+   "id": "S18",
+   "model": "Sonnet",
+   "task": "Missile homing/arc and impact; unit z (fly height + ground) for attacks and vision (merged)",
+   "status": "done"
   },
   {
    "id": "S17",
