@@ -510,7 +510,8 @@ fn load_hud(
 
     // The library keys frame names in lower case. ResourceBarFrame is its own FDF in the game (the top
     // bar texts are its children), so it is laid out with the console.
-    let mut scene = UiScene::from_mpq_frames(&["consoleui", "resourcebarframe"], sources, race)?;
+    let placed = hud::top_placements(fdf::layout::Rect::new(0.0, 0.0, 0.8, 0.6));
+    let mut scene = UiScene::from_mpq_frames_placed(&["consoleui", "resourcebarframe", "upperbuttonbarframe"], sources, race, &placed)?;
     let slot = hud::install_minimap(&mut scene);
     let base = match hud::map_picture(map) {
         Some(picture) => {

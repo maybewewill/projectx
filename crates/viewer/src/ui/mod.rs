@@ -64,6 +64,17 @@ impl UiScene {
     /// As [`UiScene::from_mpq`], with several root frames laid out together (for example ConsoleUI and
     /// ResourceBarFrame, which is a separate FDF file in the game).
     pub fn from_mpq_frames(frame_names: &[&str], archive_sources: &[&[u8]], race: &str) -> Result<Self, String> {
+        Self::from_mpq_frames_placed(frame_names, archive_sources, race, &fdf::layout::ExternalFrames::new())
+    }
+
+    /// As [`UiScene::from_mpq_frames`], with host-placed root frames (`placed`: frame name to its
+    /// rectangle in UI units). The game places some root frames in code, not in the FDF files.
+    pub fn from_mpq_frames_placed(
+        frame_names: &[&str],
+        archive_sources: &[&[u8]],
+        race: &str,
+        placed: &fdf::layout::ExternalFrames,
+    ) -> Result<Self, String> {
         let toc_bytes = load_from_mpq(FRAMEDEF_TOC, archive_sources)?;
         let toc_text = String::from_utf8(toc_bytes).map_err(|e| e.to_string())?;
         let fdf_files = fdf::parse_toc(&toc_text);
@@ -99,7 +110,7 @@ impl UiScene {
 
         // A 16:9 window; the layout pillarboxes the 4:3 UI space inside it.
         let screen = fdf::layout::Screen::for_window(1920, 1080);
-        let layout = fdf::layout::solve(&scene, &screen, &std::collections::BTreeMap::new())
+        let layout = fdf::layout::solve_placed(&scene, &screen, &std::collections::BTreeMap::new(), placed)
             .map_err(|e| format!("Failed to solve layout: {e:?}"))?;
         let draw_list = fdf::DrawList::build(&scene, &layout, &library)
             .map_err(|e| format!("Failed to build draw list: {e}"))?;

@@ -230,6 +230,13 @@ async fn render_terrain_async(
         label: Some("offscreen frame"),
     });
     {
+        // With the HUD the console is opaque in the game: the world shows only between the top bar and
+        // the bottom console, and everything else starts black.
+        let clear = if hud.is_some() { wgpu::Color::BLACK } else { CLEAR };
+        let world = hud.and_then(crate::hud::world_region).map(|ui| {
+            let window = hud.map(|h| h.screen.window).unwrap_or(ui);
+            crate::hud::scissor_px(ui, window, width, height)
+        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("offscreen terrain pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -237,7 +244,7 @@ async fn render_terrain_async(
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(CLEAR),
+                    load: wgpu::LoadOp::Clear(clear),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -253,6 +260,9 @@ async fn render_terrain_async(
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if let Some((x, y, w, h)) = world {
+            pass.set_scissor_rect(x, y, w, h);
+        }
         terrain_gpu.draw(&mut pass, &uniform_bind_group);
     }
     if let Some(ui_scene) = hud {

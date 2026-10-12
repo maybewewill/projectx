@@ -192,6 +192,22 @@ pub fn solve(
     screen: &Screen,
     externals: &ExternalFrames,
 ) -> Result<Layout, LayoutError> {
+    solve_placed(scene, screen, externals, &ExternalFrames::new())
+}
+
+/// As [`solve`], with host-placed root frames: a root node whose name is a key of `placed` (case-
+/// insensitive) takes that rectangle instead of the screen rectangle. The game positions such frames
+/// in code (for example ResourceBarFrame's SetPoint), which the FDF files do not say.
+pub fn solve_placed(
+    scene: &Scene,
+    screen: &Screen,
+    externals: &ExternalFrames,
+    placed: &ExternalFrames,
+) -> Result<Layout, LayoutError> {
+    let placed: BTreeMap<String, Rect> = placed
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), *v))
+        .collect();
     let ext: BTreeMap<String, Rect> = externals
         .iter()
         .map(|(k, v)| (k.to_ascii_lowercase(), *v))
@@ -231,6 +247,12 @@ pub fn solve(
     let mut warnings = Vec::new();
     for &i in &order {
         let node = &scene.nodes[i];
+        if node.parent.is_none() {
+            if let Some(rect) = placed.get(&node.name.to_ascii_lowercase()) {
+                rects[i] = Some(*rect);
+                continue;
+            }
+        }
         let parent_rect = match node.parent {
             Some(p) => rects[p],
             None => Some(screen.root_rect(node)),

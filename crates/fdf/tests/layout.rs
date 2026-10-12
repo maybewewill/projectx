@@ -404,3 +404,29 @@ fn rect_helpers() {
     assert!(near(Rect::new(0.1, 0.2, 0.4, 0.7).width(), 0.3));
     assert!(near(Rect::new(0.1, 0.2, 0.4, 0.7).height(), 0.5));
 }
+
+#[test]
+fn placed_root_takes_the_host_rectangle_and_its_children_follow() {
+    let src = r#"
+Frame "SIMPLEFRAME" "ResourceBarFrame" {
+    Width 0.4,
+    Height 0.02,
+    String "GoldText" {
+        Anchor TOPRIGHT, -0.1, 0,
+        Width 0.1,
+        Height 0.02,
+    }
+}
+"#;
+    let scene = scene_of(src, &["ResourceBarFrame"]);
+    let mut placed = ExternalFrames::new();
+    // Host placement: the frame's top-right corner at (0.8, 0.6).
+    placed.insert("resourcebarframe".to_string(), Rect::new(0.4, 0.58, 0.8, 0.6));
+    let layout = fdf::layout::solve_placed(&scene, &Screen::safe_area(), &ExternalFrames::new(), &placed)
+        .expect("solve");
+    assert_rect(layout.rects[node(&scene, "ResourceBarFrame")], 0.4, 0.58, 0.8, 0.6);
+    assert_rect(layout.rects[node(&scene, "GoldText")], 0.6, 0.58, 0.7, 0.6);
+    // Without the placement the root fills the screen rectangle.
+    let (scene2, plain) = run(src, &["ResourceBarFrame"]);
+    assert_rect(plain.rects[node(&scene2, "ResourceBarFrame")], 0.0, 0.0, 0.8, 0.6);
+}
