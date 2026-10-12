@@ -16,8 +16,8 @@
 //! critical, bash and the other abilities; their list walk is not in [`target_side_amount`]), the target's counters
 //! and flags (the model uses zero), and the Gaussian dice path above 16 dice (its constants are UNSURE;
 //! [`SpecDamage`] falls back to the weapon's placeholder value there). The evasion decision ([`evades`]) and the
-//! chance table ([`evasion_chance`]) are implemented, but not consulted by [`SpecDamage`]: which unit's abilities
-//! the original's miss gate walks is not decoded (spec section 12.3).
+//! chance table ([`evasion_chance`]) are implemented; the miss gate that consults them (the target's `AEev` abilities,
+//! [`evasion_select`]) runs in `combat.rs` after the dice, not inside [`SpecDamage`] (spec section 12.7).
 //!
 //! The 21-entry negative-armor table at `0x6FAB4300` is in BSS: its values are written by a start-up initialiser
 //! (`0x6F85A4C0`, see `docs/spec/attack-damage.md` section 5.1), so a file read cannot see them.
