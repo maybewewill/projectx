@@ -207,7 +207,7 @@ fn death_stops_the_cycle() {
     let mut host = duel_host();
     let (ua, ub) = (unit_key(&host, "ua"), unit_key(&host, "ub"));
     // One hit kills ub.
-    host.game_mut().unit_mut(ub).life = f(10.0);
+    host.game_mut().write_life(ub, f(10.0));
     host.start("duel", &[]).expect("duel");
     run(&mut host, 60);
     assert!(host.game().unit(ub).dead, "ub died from the first hit");

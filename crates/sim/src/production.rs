@@ -900,7 +900,11 @@ impl Game {
         self.food_release(k);
         let max = ty.max_life;
         let start_life = fl(max.to_f32() * START_LIFE);
-        self.unit_mut(k).life = start_life;
+        // The building in progress: its life regeneration is disabled (`0x6F28CB10`, CAbilityBuildInProgress start) and its life
+        // is the construction ramp until the completion.
+        self.stats_set_life_disabled(k, true);
+        self.stats_set_mana_disabled(k, true);
+        self.write_life(k, start_life);
         let bldtm = self.production.build_seconds.get(&type_id).copied().unwrap_or(0);
         let seconds = countdown_seconds(self.order_tables(), bldtm);
         // The construction tick creates a life modifier from the 10 % start value (`0x6F05FF50`: A * 0.1) with
@@ -945,11 +949,11 @@ impl Game {
         if let Some(p) = self.player_mut(owner) {
             p.counts.finish(type_id, class, false);
         }
-        {
-            let u = self.unit_mut(k);
-            u.count_state = REGISTERED_COMPLETED;
-            u.life = max;
-        }
+        self.unit_mut(k).count_state = REGISTERED_COMPLETED;
+        // The completion (`0x6F060020`): the regeneration flags come back and the life is full.
+        self.stats_set_life_disabled(k, false);
+        self.stats_set_mana_disabled(k, false);
+        self.write_life(k, max);
         self.food_apply_creation(k);
         // The builder: a worker that stays goes back to being idle; a consumed one is gone already.
         self.production.jobs.remove(&c.builder);
@@ -1099,12 +1103,12 @@ impl Game {
         }
         self.food_release(unit);
         if let Some(ty) = self.unit_types().get(to).cloned() {
-            let u = self.unit_mut(unit);
-            let frac = if u.max_life.to_f32() > 0.0 { u.life.to_f32() / u.max_life.to_f32() } else { 1.0 };
-            u.type_id = to;
-            u.max_life = ty.max_life;
-            u.life = fl(ty.max_life.to_f32() * frac);
-            u.class_flags = ty.classification;
+            let (life, max_life) = (self.unit(unit).life, self.unit(unit).max_life);
+            let frac = if max_life.to_f32() > 0.0 { life.to_f32() / max_life.to_f32() } else { 1.0 };
+            self.unit_mut(unit).type_id = to;
+            self.write_max_life(unit, ty.max_life);
+            self.write_life(unit, fl(ty.max_life.to_f32() * frac));
+            self.unit_mut(unit).class_flags = ty.classification;
         }
         self.food_apply_creation(unit);
         self.production.events.push(ProdEvent::UnitUpgraded { unit, to });
@@ -1463,6 +1467,11 @@ impl Game {
                 self.time_of_day_wrap();
                 continue;
             }
+            if self.tod.watch.owns(f.listener) {
+                // The world's handler of message 0x80263 re-evaluates the day flag (`0x6F429460`).
+                self.day_watch_run();
+                continue;
+            }
             let Some((done, cd)) = self.production.countdowns.remove(&f.listener) else { continue };
             if let Some(t) = self.orders.tables.as_ref() {
                 self.agile.end_countdown(&cd, t);
@@ -1474,6 +1483,8 @@ impl Game {
                 Done::Upgrade(u) => self.finish_unit_upgrade(u),
             }
         }
+        // Life and mana are properties that move with the clock: the caches follow.
+        self.sync_unit_stats();
     }
 
     /// Starts the countdown of a timed object on the agile engine when the tables are loaded.
@@ -1550,7 +1561,7 @@ impl Game {
                 }
                 None => fl(max * (START_LIFE + (1.0 - START_LIFE) * frac)),
             };
-            self.unit_mut(k).life = life;
+            self.write_life(k, life);
         }
         let jobs: Vec<ObjKey> = self.production.jobs.keys().copied().collect();
         for b in jobs {

@@ -698,14 +698,14 @@ which the original reaches only from invalid input) are not modelled.
   sink with `mode = permanent + 1` (10.2). The "before" value is the derived bonus of the previous attributes, which
   assumes the stored value at `+0xA4` equals it (LIKELY, see 10.5).
 - **Mana**: the change goes through the mana sink (10.6) on the hero's mana cells (current, floor = `+0.0`, maximum).
-  The floor of the mana object is taken as `+0.0` (LIKELY; not read from the object).
+  The floor of the mana object is the default lower limit `-FLT_MAX` of a new property (CONFIRMED structure, agile.md section 9.2); the sinks now run on the property with that floor when the unit has stats.
 - **Armor**: the total derived armor is stored on the unit (`UnitObj::hero_armor`) and added to the type armor by
   `combat::unit_defense` (`armor = type armor + bonus`, only when the bonus is non-zero). LIKELY: the original's armor
   path adds the delta to the object at `+0x6C` and then `0x6F201D50`; the armor read by the damage path is `+0xE0`.
 - **Move speed**: the delta of the move bonus is added to `UnitObj::move_speed`, which the mover reads (LIKELY; the
   original's move chain `0x6F202F50` / `0x6F201D50` is not fully decoded).
 - **Regeneration** (`UnitObj::hero_regen`) and **attack speed** (`UnitObj::hero_attack_speed`): stored totals only.
-  The simulation has no regeneration tick (LIKELY absent). The attack speed reader in the attack cycle is the setter
+  **Superseded (agile.md section 9):** regeneration is a forever modifier on the life property; the strength regeneration is the hero's own modifier (`0x6F209090`, rebuilt at every change, `Game::set_hero_regen`), the intelligence one (`0x6F2092A0`, `0x6F2082C0` reads `IntRegenBonus`) is not wired yet. The mana floor is the property's default lower limit `-FLT_MAX`, not 0.0 (agile.md 9.2). The attack speed reader in the attack cycle is the setter
   chain `0x6F208880` -> `0x6F0C9090` (the attack ability setter), which is not decoded; the cooldown is not changed.
 - **Attack damage** (`UnitObj::hero_attack`, total): `damage::SpecDamage::raw` adds `r2i(hero_attack)` of the attacker to
   the weapon's dice bonus before the dice roll. CONFIRMED that `GetDamageAmount` sums two bonus fields

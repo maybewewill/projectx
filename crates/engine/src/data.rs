@@ -389,6 +389,10 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         weapons_on: ty.weapons_on as u32,
         weapon_kind: ty.weapon_kind,
         weapon_targs: ty.weapon_targs,
+        // UnitBalance `regenHP`, `regenMana` (reals through the atof model) and `regenType` (the name table at `0x6FA70F88`).
+        regen_hp: soft(ty.regen_hp),
+        regen_mana: soft(ty.regen_mana),
+        regen_type: sim::regen::regen_type_from_name(&ty.regen_type),
     }
 }
 

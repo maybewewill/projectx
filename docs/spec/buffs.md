@@ -84,7 +84,7 @@ Implemented (`auras.rs`, hooks in `unit.rs` creation, `UnitAddAbility`/`UnitRemo
 `movement.rs`, `orders.rs`, `script.rs`): the emitter timers (2.0 s and 0.5 s), apply/refresh/expire with the strength
 rules, stat modifiers for armor (`unit_defense`), movement (`effective_move_speed`, used by the mover), attack speed
 (cooldown of new swings divided by the multiplier), damage (added to the dice bonus), regeneration (stored per second;
-`Game::tick_regen` applies it on request), stun (attacks and movement stop; `apply_stun`) and slow (`apply_slow`), removal
+`Game::tick_regen` applies it on request for units without stats; with the tables loaded the aura regeneration is a forever modifier of its own on the property (`AuraBuff::regen_mod`, agile.md 9.6)), stun (attacks and movement stop; `apply_stun`) and slow (`apply_slow`), removal
 of timed life with the kill. Engine: `engine::objdata` reads the six aura abilities from `AbilityData.slk` into
 `sim::auras::AuraTypes`.
 

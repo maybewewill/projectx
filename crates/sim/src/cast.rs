@@ -704,7 +704,7 @@ fn stage3(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
         if !arith::eq(cost, F32::ZERO) {
             let mana = gm.unit(rec.caster).mana;
             let (_, new_mana) = pay_mana(mana, cost);
-            gm.unit_mut(rec.caster).mana = new_mana;
+            gm.write_mana(rec.caster, new_mana);
         }
     }
     run_effect(game, rt, &rec);

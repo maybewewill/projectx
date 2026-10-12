@@ -319,7 +319,7 @@ fn a_combat_kill_hands_the_experience_to_the_hero() {
     };
     let mut w = World::new(t);
     let v = w.unit("v");
-    w.host.game_mut().unit_mut(v).life = f(10.0);
+    w.host.game_mut().write_life(v, f(10.0));
     w.host.start("duel", &[]).expect("duel");
     for _ in 0..60 {
         w.host.step();

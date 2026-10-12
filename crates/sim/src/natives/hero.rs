@@ -420,32 +420,17 @@ fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], permanent: bool, f:
     let mode = if permanent { 2 } else { 1 };
     let hp_delta = heroes::max_life_delta(&before, &after);
     let mana_delta = heroes::max_mana_delta(&before, &after);
-    let (mana, max_mana) = {
-        let u = gm.unit(k);
-        (u.mana, u.max_mana)
-    };
-    let mut mana_cells = heroes::LifeCells {
-        life: mana,
-        max: max_mana,
-        floor: softfloat::F32::ZERO,
-    };
+    let mut mana_cells = gm.mana_cells(k);
     let move_delta = softfloat::arith::sub(after.move_speed, before.move_speed);
-    let (life, max_life, flagged) = {
-        let u = gm.unit(k);
-        (u.life, u.max_life, u.dead)
-    };
-    let mut cells = heroes::LifeCells {
-        life,
-        max: max_life,
-        floor: softfloat::F32::ZERO,
-    };
+    let flagged = gm.unit(k).dead;
+    let mut cells = gm.life_cells(k);
     heroes::life_sink(&mut cells, flagged, hp_delta, mode, gm.order_tables());
     heroes::mana_sink(&mut mana_cells, mana_delta, mode, gm.order_tables());
+    gm.put_life_cells(k, cells);
+    gm.put_mana_cells(k, mana_cells);
+    // `0x6F209090`: the strength regeneration is a modifier of its own; it is rebuilt at every change.
+    gm.set_hero_regen(k, after.regen);
     let u = gm.unit_mut(k);
-    u.life = cells.life;
-    u.max_life = cells.max;
-    u.mana = mana_cells.life;
-    u.max_mana = mana_cells.max;
     u.move_speed = softfloat::arith::add(u.move_speed, move_delta);
     u.hero_armor = after.armor;
     u.hero_regen = after.regen;

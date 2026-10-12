@@ -481,11 +481,9 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         // no such flags, so only the first one is posted (UNSURE).
         gm.push_unit_event(UnitEvent::Notify { unit: k, id: 0xD_015A });
         // UNSURE: the result is a dead unit (life 0, no death event).
-        {
-            let u = gm.unit_mut(k);
-            u.life = F32::ZERO;
-            u.dead = true;
-        }
+        gm.write_life(k, F32::ZERO);
+        gm.unit_mut(k).dead = true;
+        gm.stats_set_dead(k, true);
         let id = gm.handle_or_create(k);
         NativeResult::Return(Value::Handle(id))
     });

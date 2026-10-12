@@ -42,6 +42,7 @@ pub mod orders;
 pub mod pathing;
 pub mod push;
 pub mod production;
+pub mod regen;
 pub mod rng;
 pub mod script;
 pub mod shop;
@@ -51,6 +52,7 @@ pub mod timer;
 pub mod unit_counts;
 pub mod unitclass;
 pub mod unit_position;
+mod unit_stats;
 pub mod vision;
 
 mod pe;

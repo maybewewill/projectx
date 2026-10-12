@@ -294,14 +294,14 @@ fn cooldown_blocks_a_second_cast_then_ends() {
 fn not_enough_mana_refuses_the_cast() {
     let mut h = host();
     let c = unit(&h, "caster");
-    h.game_mut().unit_mut(c).mana = f(74.0);
+    h.game_mut().write_mana(c, f(74.0));
     call(&mut h, "bolt");
     run(&mut h, 1);
     assert!(!accepted(&h), "74 < 75: error 209");
     assert_eq!(int(&h, "order"), 0, "no event fired");
     assert_eq!(mana(&h, c), 74.0);
     // Exactly enough mana is enough (the compare is mana >= cost).
-    h.game_mut().unit_mut(c).mana = f(75.0);
+    h.game_mut().write_mana(c, f(75.0));
     call(&mut h, "bolt");
     run(&mut h, 1);
     assert!(accepted(&h));
@@ -312,7 +312,7 @@ fn not_enough_mana_refuses_the_cast() {
 fn holy_light_heals_an_ally_and_clamps_at_max_life() {
     let mut h = host();
     let (c, a) = (unit(&h, "caster"), unit(&h, "ally"));
-    h.game_mut().unit_mut(a).life = f(400.0);
+    h.game_mut().write_life(a, f(400.0));
     call(&mut h, "holy_ally");
     run(&mut h, 1);
     assert!(accepted(&h));
@@ -387,7 +387,7 @@ fn reset_cooldown_shortens_a_running_cooldown_to_ten_milliseconds() {
 fn killing_bolt_reports_the_caster_as_killer() {
     let mut h = host();
     let t = unit(&h, "tgt");
-    h.game_mut().unit_mut(t).life = f(50.0);
+    h.game_mut().write_life(t, f(50.0));
     call(&mut h, "bolt");
     run(&mut h, 6);
     assert!(h.game().unit(t).dead);
