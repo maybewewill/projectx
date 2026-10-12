@@ -1,8 +1,9 @@
 //! Native viewer: `viewer [--seq NAME] [--texture-dir DIR] [model.mdx [texture.blp]]`,
-//! or `viewer --map map.w3x [--mpq archive]... [--render-png out.png] [--size WxH]` for the
-//! terrain of a map. The `--mpq` archives (load order, last wins) supply the ground textures;
-//! without them the procedural sheets are used. `--render-png` draws offscreen to a PNG file
-//! instead of opening a window (see `viewer::offscreen`).
+//! or `viewer --map map.w3x [--mpq archive]... [--render-png out.png] [--size WxH] [--camera-at X,Y]`
+//! for the terrain of a map. The `--mpq` archives (load order, last wins) supply the ground
+//! textures; without them the procedural sheets are used. `--render-png` draws offscreen to a PNG
+//! file instead of opening a window (see `viewer::offscreen`). `--camera-at X,Y` positions the
+//! camera at world coordinates X, Y for offscreen rendering.
 //!
 //! Without a model it shows a built-in cube. With one, the model is animated and plays its
 //! "Stand" sequence (or the one named by `--seq`). Textures are matched by file name, ignoring
@@ -137,6 +138,7 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut png: Option<PathBuf> = None;
     let mut dump_atlas: Option<PathBuf> = None;
     let mut size = (1280u32, 720u32);
+    let mut camera_at: Option<(f32, f32)> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -150,6 +152,11 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 let text = it.next().ok_or("--size needs WxH")?;
                 let (w, h) = text.split_once('x').ok_or("--size needs WxH")?;
                 size = (w.parse()?, h.parse()?);
+            }
+            "--camera-at" => {
+                let text = it.next().ok_or("--camera-at needs X,Y")?;
+                let (x, y) = text.split_once(',').ok_or("--camera-at needs X,Y")?;
+                camera_at = Some((x.parse()?, y.parse()?));
             }
             other => return Err(format!("unknown option {other}").into()),
         }
@@ -174,6 +181,19 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         terrain.mesh.ground.quad_count() + terrain.mesh.overlays.quad_count()
     );
 
+    // Scan for cliff tiles and try to load cliff models
+    {
+        use viewer::cliff_render;
+        let archive = mpq::Archive::open(&map_bytes)?;
+        let w3e_bytes = archive.read("war3map.w3e")?;
+        let w3e = w3map::Terrain::parse(&w3e_bytes)?;
+        let cliff_stats = cliff_render::scan_cliff_tiles(&w3e, "Cliffs", &sources);
+        eprintln!(
+            "viewer: cliffs: {} tiles found, {} models loaded, {} missing",
+            cliff_stats.cliff_tiles_found, cliff_stats.models_loaded, cliff_stats.models_missing
+        );
+    }
+
     if let Some(out) = dump_atlas {
         let size = terrain.atlas.size;
         offscreen::write_png(&out, size, size, &terrain.atlas.rgba)?;
@@ -182,7 +202,7 @@ fn run_map(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     match png {
         Some(out) => {
             let (w, h) = size;
-            let rgba = offscreen::render_terrain(&terrain, w, h)?;
+            let rgba = offscreen::render_terrain_at(&terrain, w, h, camera_at)?;
             offscreen::write_png(&out, w, h, &rgba)?;
             let s = offscreen::summarize(w, h, &rgba);
             eprintln!(

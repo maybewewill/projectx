@@ -37,8 +37,20 @@ struct Uniforms {
 /// Renders `terrain` from the default camera at `width x height` and returns tightly packed
 /// RGBA8 rows, top row first.
 pub fn render_terrain(terrain: &TerrainScene, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    render_terrain_at(terrain, width, height, None)
+}
+
+/// Renders `terrain` from a camera position (optional) at `width x height` and returns tightly
+/// packed RGBA8 rows, top row first. If `camera_at` is Some, the camera is positioned at that
+/// world XY with a fixed height and angle; otherwise the default camera is used.
+pub fn render_terrain_at(
+    terrain: &TerrainScene,
+    width: u32,
+    height: u32,
+    camera_at: Option<(f32, f32)>,
+) -> Result<Vec<u8>, String> {
     let (width, height) = (width.max(1), height.max(1));
-    pollster::block_on(render_terrain_async(terrain, width, height))
+    pollster::block_on(render_terrain_async(terrain, width, height, camera_at))
 }
 
 async fn request_device(
@@ -68,6 +80,7 @@ async fn render_terrain_async(
     terrain: &TerrainScene,
     width: u32,
     height: u32,
+    camera_at: Option<(f32, f32)>,
 ) -> Result<Vec<u8>, String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     // A hardware adapter if there is one, otherwise the software fallback (WARP on Windows).
@@ -113,7 +126,14 @@ async fn render_terrain_async(
         ],
     });
 
-    let camera = TerrainCamera::fit(&terrain.bounds, width as f32 / height as f32);
+    let camera = if let Some((x, y)) = camera_at {
+        // Position camera at world XY with fixed height and angle
+        let mut cam = TerrainCamera::fit(&terrain.bounds, width as f32 / height as f32);
+        cam.target = glam::Vec3::new(x, y, cam.target.z);
+        cam
+    } else {
+        TerrainCamera::fit(&terrain.bounds, width as f32 / height as f32)
+    };
     let uniforms = Uniforms {
         view_proj: camera.view_projection().to_cols_array_2d(),
     };

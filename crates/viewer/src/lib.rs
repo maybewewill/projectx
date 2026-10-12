@@ -10,6 +10,8 @@
 
 pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod cliff_render;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod offscreen;
 pub mod model;
 pub mod renderer;
@@ -18,6 +20,7 @@ pub mod scene_objects;
 pub mod terrain;
 pub mod terrain_camera;
 pub mod terrain_gpu;
+pub mod terrain_objects;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
