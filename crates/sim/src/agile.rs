@@ -186,6 +186,14 @@ impl Agile {
         self.slots.iter().flatten().count()
     }
 
+    /// Removes the pending firings of listener `l` (made outside a tick: creation, value changes) and tells whether there were
+    /// any. The unit death listener is read this way right after a life write.
+    pub fn take_fired(&mut self, l: LisId) -> bool {
+        let before = self.events.len();
+        self.events.retain(|f| f.listener != l);
+        self.events.len() != before
+    }
+
     /// Takes the listener firings that happened outside a tick (creation, value changes).
     pub fn take_events(&mut self) -> Vec<Fired> {
         std::mem::take(&mut self.events).into()

@@ -17,6 +17,7 @@ type unit extends widget
 native Player takes integer i returns player
 native CreateUnit takes player id, integer unitid, real x, real y, real face returns unit
 native KillUnit takes unit whichUnit returns boolean
+native SetWidgetLife takes widget w, real life returns nothing
 "#;
 
 const FOOT: u32 = u32::from_be_bytes(*b"hfoo");
@@ -59,6 +60,11 @@ function main takes nothing returns nothing
     set elf = CreateUnit(Player(0), 'ewsp', 200.0, 0.0, 0.0)
     set sun = CreateUnit(Player(0), 'hsun', 400.0, 0.0, 0.0)
     set caster = CreateUnit(Player(0), 'hmpr', 600.0, 0.0, 0.0)
+endfunction
+function wound takes nothing returns nothing
+    call SetWidgetLife(elf, 0.3)
+    call SetWidgetLife(sun, 0.5)
+    call SetWidgetLife(caster, 0.399)
 endfunction
 function kill_foot takes nothing returns nothing
     call KillUnit(foot)
@@ -186,4 +192,16 @@ fn caches_follow_every_tick() {
         last = l;
     }
     assert!(last > 10.0);
+}
+
+#[test]
+fn a_life_below_the_death_threshold_kills_the_unit() {
+    // The life listener of the original (`0x6F277370`): falling to 0.4 sends the death message. 0.3 and 0.399 are dead, 0.5 is not.
+    let Some(mut host) = rig(false) else { return };
+    let (elf, sun, caster) = (key(&host, "elf"), key(&host, "sun"), key(&host, "caster"));
+    host.start("wound", &[]).expect("wound");
+    assert!(host.game().unit(elf).dead, "0.3 is below the threshold");
+    assert!(host.game().unit(caster).dead, "0.399 is below the threshold");
+    assert!(!host.game().unit(sun).dead, "0.5 is above it");
+    assert_eq!(life(&host, sun), 0.5);
 }

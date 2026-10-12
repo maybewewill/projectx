@@ -27,6 +27,11 @@ pub const LIFE_REGEN_DISABLED: u32 = 0x80;
 /// `unit+0x20` bit: the mana regeneration is disabled (`0x6F28D570` sets it).
 pub const MANA_REGEN_DISABLED: u32 = 0x100;
 
+/// `0.4` (`0x6FAAE4C4`, runtime `0x3ECCCCCD`): the life below which a unit is dead.
+pub const DEATH_THRESHOLD_BITS: u32 = 0x3ECC_CCCD;
+/// The message the life listener sends the unit when the life falls to the threshold (`0xD019F`, `0x6F277370`).
+pub const DEATH_MESSAGE: u32 = 0xD_019F;
+
 /// The regeneration state of one unit's life and mana properties.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UnitStats {
@@ -44,13 +49,15 @@ pub struct UnitStats {
     pub flags: u32,
     /// Unit `+0x5C & 0x100`: dead.
     pub dead: bool,
+    /// The falling listener on the life (unit `+0xA8`, `0x6F277370`): fires at [`DEATH_THRESHOLD_BITS`].
+    pub death: Option<crate::agile::LisId>,
 }
 
 impl UnitStats {
     /// The stats of a unit whose properties exist: rates as the creation wrote them (`vt[0]` of the cell objects), no modifier
     /// yet (the first refresh creates them, `0x6F28CAA0`).
     pub fn new(life: PropId, mana: PropId, life_rate: F32, mana_rate: F32, flags: u32, dead: bool) -> Self {
-        UnitStats { life, mana, life_rate, mana_rate, life_mod: None, mana_mod: None, flags, dead }
+        UnitStats { life, mana, life_rate, mana_rate, life_mod: None, mana_mod: None, flags, dead, death: None }
     }
 
     /// Whether a life regeneration modifier exists.
@@ -96,6 +103,13 @@ impl UnitStats {
             ag.set_modifier_rate(m, rate, t);
         } else {
             *slot = Some(ag.add_modifier(prop, rate, F32::ZERO, t));
+        }
+    }
+
+    /// `0x6F277370` (first step of `0x6F28CAA0`): the death listener on the life, once.
+    pub fn start_death_watch(&mut self, ag: &mut Agile, t: &Tables) {
+        if self.death.is_none() {
+            self.death = Some(ag.add_listener(self.life, 0, F32(DEATH_THRESHOLD_BITS), DEATH_MESSAGE, t));
         }
     }
 

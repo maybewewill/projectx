@@ -53,6 +53,8 @@ impl Game {
         self.agile.set_limits(mp, NEG_FLT_MAX, max_mana, t);
         self.agile.set_value(mp, mana, t);
         let mut st = UnitStats::new(lp, mp, regen_hp, regen_mana, flags, false);
+        // `0x6F28CAA0`: the death listener first, then the two regeneration refreshes.
+        st.start_death_watch(&mut self.agile, t);
         st.refresh_both(&mut self.agile, t);
         self.unit_mut(k).stats = Some(st);
         self.recache_stats(k);
@@ -91,6 +93,15 @@ impl Game {
                 self.recache_stats(k);
             }
             _ => self.unit_mut(k).life = x,
+        }
+    }
+
+    /// Whether the life listener (falling to 0.4, `0x6F277370`) fired during the writes since it was last asked; the unit is dead
+    /// then (the handler of `0xD019F`, LIKELY). The pending firing is consumed.
+    pub(crate) fn life_death_fired(&mut self, k: ObjKey) -> bool {
+        match self.unit(k).stats.and_then(|s| s.death) {
+            Some(l) => self.agile.take_fired(l),
+            None => false,
         }
     }
 

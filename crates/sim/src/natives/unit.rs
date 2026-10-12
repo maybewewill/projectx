@@ -666,9 +666,11 @@ pub(crate) fn set_life(gm: &mut Game, k: ObjKey, value: F32) -> bool {
     };
     // `vf73`: the life property moves to the value (the clamp to the limits is the property's).
     gm.write_life(k, stored);
+    // The life listener of the original (falling to 0.4, `0x6F277370`) kills a unit whose life drops below the threshold.
+    let below_threshold = gm.life_death_fired(k);
     let newly_dead = {
         let u = gm.unit_mut(k);
-        if stored.to_bits() == 0 && !u.dead {
+        if (stored.to_bits() == 0 || below_threshold) && !u.dead {
             u.dead = true;
             true
         } else {
