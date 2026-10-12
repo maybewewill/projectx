@@ -192,14 +192,22 @@ fn request(gm: &mut Game, player: u32, type_id: u32, town: Option<TownInfo>) -> 
 
 /// The train path (`0x6F2D5B90`).
 fn train_request(gm: &mut Game, player: u32, type_id: u32, town: Option<TownInfo>) -> bool {
-    // A hero the player already has (alive or dead) is the revive path: nothing to train (`0x6F2D2D80`).
+    // A hero the player already has (alive or dead) is the revive path (`0x6F2D2D80`): an alive hero needs nothing; a dead
+    // one is revived at an altar that can train the type (UNSURE model of the cost and time, see `Game::revive_hero_at`).
     if crate::natives::hero::is_hero_id(type_id) {
-        let has = gm.owned_units(player).into_iter().any(|k| gm.unit(k).type_id == type_id)
-            || gm
-                .unit_objects()
-                .any(|(_, u)| u.owner == player && u.type_id == type_id && u.dead && !u.removed);
-        if has {
+        if gm.owned_units(player).into_iter().any(|k| gm.unit(k).type_id == type_id) {
             return true;
+        }
+        if let Some(h) = gm.dead_hero_of(player, type_id) {
+            for k in gm.owned_units(player) {
+                if gm.building_usable(k) && gm.can_train(k, type_id) && gm.revive_hero_at(k, h).is_ok() {
+                    return true;
+                }
+            }
+            return true;
+        }
+        if gm.unit_objects().any(|(_, u)| u.owner == player && u.type_id == type_id && u.dead && !u.removed) {
+            return true; // already being revived
         }
     }
     for k in gm.owned_units(player) {

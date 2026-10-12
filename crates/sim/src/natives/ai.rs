@@ -610,9 +610,9 @@ fn ai_call(
             let (mn, mx, fly) = (int_arg(a, 0), int_arg(a, 1), bool_arg(a, 2));
             let from = with_caps(env, |gm, caps, _| captains::center(gm, &caps[0]));
             let found = {
-                let gm = env.game.borrow();
+                let mut gm = env.game.borrow_mut();
                 let from = from.or_else(|| captains::anchor_of(&gm, env.player)).unwrap_or((0.0, 0.0));
-                env.shared.borrow_mut().camps.creep_camp(&gm, from, mn, mx, fly)
+                env.shared.borrow_mut().camps.creep_camp(&mut gm, from, mn, mx, fly)
             };
             ret(unit_value(env, found))
         }
