@@ -478,6 +478,10 @@ impl Game {
     }
 
     fn add_attack_speed(&mut self, unit: ObjKey, delta: F32) {
+        // With the soft-float tables the bonus also rescales the pending swing timers (`0x6F0C9090`).
+        if self.combat_add_attack_speed(unit, delta) {
+            return;
+        }
         let u = self.unit_mut(unit);
         u.bonuses.attack_mult = snap_to_one(arith::add(u.bonuses.attack_mult, delta));
     }

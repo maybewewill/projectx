@@ -53,13 +53,15 @@ use crate::natives::game::{Game, ObjKey, Object, Payload};
 use crate::natives::{circle_candidates, dispatch_unit_death_by, set_life, ScriptRuntime};
 use crate::orders::{Order, OrderClass, ORDER_AIMOVE, ORDER_ATTACK};
 use crate::pathing::scale_by_1_32;
+use crate::attack_timing;
 use crate::missiles;
 use crate::timer::TimerId;
 
 /// Message id of the reaction delay end (`0xD01AF`, CONFIRMED).
 pub const MSG_REACTION: u32 = 0x000D_01AF;
-/// Message id of the swing end (`0xD01B0`, CONFIRMED value; its meaning as the backswing end is LIKELY).
-pub const MSG_SWING_END: u32 = 0x000D_01B0;
+/// Message id of the backswing end (`0xD01B2`, CONFIRMED: handler `0x6F0CD7B0` clears the busy flags and drains the
+/// order list). `0xD01B0` is the cooldown end ([`crate::attack_timing::MSG_COOLDOWN_END`], handler `0x6F0D0C70`).
+pub const MSG_SWING_END: u32 = crate::attack_timing::MSG_BACKSWING_END;
 /// Message id of the execute point (`0xD01B1`, CONFIRMED).
 pub const MSG_EXECUTE: u32 = 0x000D_01B1;
 /// Message id of the acquisition scan (`0xD01C1`, CONFIRMED).
@@ -254,7 +256,8 @@ impl AttackMsg {
             AttackMsg::Reaction => Some(MSG_REACTION),
             AttackMsg::SwingEnd => Some(MSG_SWING_END),
             AttackMsg::Execute => Some(MSG_EXECUTE),
-            AttackMsg::Cooldown | AttackMsg::Impact { .. } => None,
+            AttackMsg::Cooldown => Some(crate::attack_timing::MSG_COOLDOWN_END),
+            AttackMsg::Impact { .. } => None,
         }
     }
 }
@@ -597,31 +600,101 @@ impl Game {
         }
     }
 
-    /// Starts a swing: the cooldown, the execute point and the swing end.
+    /// Starts a swing (`0x6F0CD74D`/`0x6F0CD755`, CONFIRMED by Unicorn in [`crate::attack_timing`]): the cooldown timer
+    /// (`0xD01B0`) gets the weapon cooldown over the attack speed multiplier and the execute timer (`0xD01B1`) the damage
+    /// point over the multiplier, at most `cooldown - 0.01`. The backswing timer is armed when the execute point fires
+    /// ([`Game::fire_execute`]), not here.
     fn start_swing(&mut self, unit: ObjKey, ty: &AttackType) {
-        let cooldown = self.arm(self.swing_cooldown(unit, ty.cooldown), unit, AttackMsg::Cooldown);
-        let execute = self.arm(ty.damage_point, unit, AttackMsg::Execute);
-        let swing = arith::add(ty.damage_point, ty.backswing);
-        let swing_end = self.arm(swing, unit, AttackMsg::SwingEnd);
-        let st = self.st(unit);
-        st.cooldown = Some(cooldown);
-        st.execute = Some(execute);
-        st.swing_end = Some(swing_end);
+        let cmds = match self.order_tables() {
+            Some(t) => {
+                let speed = self.attack_speed_of(unit);
+                let delay = attack_timing::cycle_delay(speed, false, ty.cooldown, t);
+                let remaining = self.timer_remaining(self.snap(unit).cooldown);
+                attack_timing::schedule(speed, false, ty.damage_point, delay, true, remaining, t)
+            }
+            // Without the soft-float tables the values are used unscaled (UNVERIFIED fallback).
+            None => vec![
+                attack_timing::Cmd::Start { timer: attack_timing::Timer::Cooldown, seconds: ty.cooldown },
+                attack_timing::Cmd::Start { timer: attack_timing::Timer::DamagePoint, seconds: ty.damage_point },
+            ],
+        };
+        self.apply_timing(unit, &cmds);
     }
 
-    /// The cooldown of a new swing for `unit`: the weapon cooldown divided by the attack speed multiplier that buffs
-    /// maintain (`crate::auras`; the multiplier is 1.0 without buffs, and the division needs the softfloat tables, so
-    /// without them the cooldown is unscaled). LIKELY direction; the original also rescales the timers of a swing in
-    /// progress (`0x6F0C9090` re-arms them in proportion), which is not modelled.
-    fn swing_cooldown(&self, unit: ObjKey, cooldown: F32) -> F32 {
-        let mult = self.unit(unit).bonuses.attack_mult;
-        if mult == F32::ONE {
-            return cooldown;
+    /// The two stored attack speed values of `unit`: `base` is the buff multiplier (1.0 without buffs), `slow` is zero
+    /// (the sim keeps no separate slow property; LIKELY folded into the multiplier by the buff code).
+    fn attack_speed_of(&self, unit: ObjKey) -> attack_timing::Speed {
+        attack_timing::Speed { base: self.unit(unit).bonuses.attack_mult, slow: F32::ZERO }
+    }
+
+    /// The time left on a timer (the getter the original's routines use), zero for an empty or expired one.
+    fn timer_remaining(&self, id: Option<TimerId>) -> F32 {
+        let Some(e) = id.and_then(|i| self.timers.expiry_of(i)) else {
+            return F32::ZERO;
+        };
+        let (e, n) = (F32::from_bits(e.to_bits()), F32::from_bits(self.timers.now().to_bits()));
+        let d = arith::sub(e, n);
+        if d.to_f32() > 0.0 {
+            d
+        } else {
+            F32::ZERO
         }
-        match self.order_tables() {
-            Some(t) => arith::div(cooldown, mult, t),
-            None => cooldown,
+    }
+
+    /// Executes the timer commands of [`attack_timing`]: a start replaces the pending timer, a stop cancels it.
+    fn apply_timing(&mut self, unit: ObjKey, cmds: &[attack_timing::Cmd]) {
+        use attack_timing::{Cmd, Timer};
+        for c in cmds {
+            let (timer, seconds) = match *c {
+                Cmd::Start { timer, seconds } => (timer, Some(seconds)),
+                Cmd::Stop { timer } => (timer, None),
+            };
+            let old = match timer {
+                Timer::Cooldown => self.snap(unit).cooldown,
+                Timer::DamagePoint => self.snap(unit).execute,
+                Timer::Backswing => self.snap(unit).swing_end,
+            };
+            self.disarm(old);
+            let msg = match timer {
+                Timer::Cooldown => AttackMsg::Cooldown,
+                Timer::DamagePoint => AttackMsg::Execute,
+                Timer::Backswing => AttackMsg::SwingEnd,
+            };
+            let id = seconds.map(|s| self.arm(s, unit, msg));
+            let st = self.st(unit);
+            match timer {
+                Timer::Cooldown => st.cooldown = id,
+                Timer::DamagePoint => st.execute = id,
+                Timer::Backswing => st.swing_end = id,
+            }
         }
+    }
+
+    /// An attack speed bonus on `unit` (`0x6F0C9090`, CONFIRMED by Unicorn): the stored multiplier changes and the three
+    /// pending swing timers are restarted with their remaining time divided by `new / old`. Returns false when the
+    /// tables are missing (the caller then only updates the stored value).
+    pub(crate) fn combat_add_attack_speed(&mut self, unit: ObjKey, delta: F32) -> bool {
+        let Some(t) = self.order_tables() else {
+            return false;
+        };
+        let speed = self.attack_speed_of(unit);
+        let has_state = self.combat.states.contains_key(&unit);
+        let pending = if has_state {
+            let st = self.snap(unit);
+            attack_timing::Pending {
+                cooldown: self.timer_remaining(st.cooldown),
+                damage_point: self.timer_remaining(st.execute),
+                backswing: self.timer_remaining(st.swing_end),
+            }
+        } else {
+            attack_timing::Pending { cooldown: F32::ZERO, damage_point: F32::ZERO, backswing: F32::ZERO }
+        };
+        let (new, cmds) = attack_timing::add_bonus(speed, delta, false, pending, t);
+        self.unit_mut(unit).bonuses.attack_mult = new.base;
+        if has_state {
+            self.apply_timing(unit, &cmds);
+        }
+        true
     }
 
     /// Runs the handler of an attack timer. Returns the target that died from it, so the caller can run the death
@@ -661,6 +734,22 @@ impl Game {
     /// (instant) or on impact (missile).
     fn fire_execute(&mut self, unit: ObjKey) -> Option<ObjKey> {
         self.st(unit).execute = None;
+        // The backswing timer (`0xD01B2`) is armed first thing, before any check (`0x6F0CF6CF`, CONFIRMED order).
+        if self.attacker_live(unit) {
+            if let Some(t) = self.order_tables() {
+                let ty = self.attack_type_of(unit);
+                let speed = self.attack_speed_of(unit);
+                let remaining = self.timer_remaining(self.snap(unit).cooldown);
+                let cmds = attack_timing::backswing(speed, false, ty.backswing, remaining, t);
+                self.apply_timing(unit, &cmds);
+            } else {
+                let ty = self.attack_type_of(unit);
+                self.apply_timing(
+                    unit,
+                    &[attack_timing::Cmd::Start { timer: attack_timing::Timer::Backswing, seconds: ty.backswing }],
+                );
+            }
+        }
         if !self.attacker_live(unit) {
             return None;
         }
@@ -1195,10 +1284,10 @@ mod tests {
     #[test]
     fn messages_keep_the_spec_ids() {
         assert_eq!(AttackMsg::Reaction.spec_id(), Some(0xD01AF));
-        assert_eq!(AttackMsg::SwingEnd.spec_id(), Some(0xD01B0));
+        assert_eq!(AttackMsg::SwingEnd.spec_id(), Some(0xD01B2));
+        assert_eq!(AttackMsg::Cooldown.spec_id(), Some(0xD01B0));
         assert_eq!(AttackMsg::Execute.spec_id(), Some(0xD01B1));
         assert_eq!(AttackMsg::Scan.spec_id(), Some(0xD01C1));
-        assert_eq!(AttackMsg::Cooldown.spec_id(), None);
         assert_eq!(REACTION_STREAM, 9);
     }
 }
