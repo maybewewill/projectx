@@ -328,6 +328,7 @@ pub enum ProdEvent {
     UnitUpgraded { unit: ObjKey, to: u32 },
     Researched { building: ObjKey, tech: u32, level: i32 },
     Deposit { worker: ObjKey, resource: Res, amount: i32 },
+    Revived { unit: ObjKey },
 }
 
 /// Totals for the report.
@@ -533,6 +534,8 @@ pub struct Production {
     last_mine_time: f32,
     entangles: Vec<PendingEntangle>,
     last_entangle_scan: f32,
+    /// Dead heroes whose revive is queued at an altar (the queue item revives instead of creating a unit).
+    reviving: std::collections::BTreeSet<ObjKey>,
 }
 
 impl Production {
@@ -755,6 +758,37 @@ impl Game {
 
     /// Queues `type_id` at `building`. The cost is paid now; the unit counts as in progress for its owner.
     pub fn train_unit(&mut self, building: ObjKey, type_id: u32) -> Result<(), ProdError> {
+        self.train_inner(building, type_id, None)
+    }
+
+    /// Queues the revive of the dead hero `hero` at the altar `building` (the AI's `SetProduce` of a hero it owns that is
+    /// dead; `0x6F2D2D80` is the revive path). UNSURE model: the original's cost and time formulas are not decoded; the
+    /// cost is the type cost times `0.4 + 0.1 * level` (level 1..10), the time the build time times the same factor, and no
+    /// food is taken (a dead hero keeps its food).
+    pub fn revive_hero_at(&mut self, building: ObjKey, hero: ObjKey) -> Result<(), ProdError> {
+        let type_id = self.unit(hero).type_id;
+        if self.production.reviving.contains(&hero) {
+            return Ok(());
+        }
+        let level = self.hero_level_of(hero).clamp(1, 10) as f32;
+        let factor = 0.4 + 0.1 * level;
+        self.train_inner(building, type_id, Some(factor))?;
+        self.production.reviving.insert(hero);
+        Ok(())
+    }
+
+    fn hero_level_of(&self, hero: ObjKey) -> i32 {
+        self.unit(hero).hero.as_ref().map_or(1, |h| h.level)
+    }
+
+    /// A dead, not removed hero of `owner` and `type_id` that is not being revived yet.
+    pub fn dead_hero_of(&self, owner: u32, type_id: u32) -> Option<ObjKey> {
+        self.unit_objects()
+            .find(|(k, u)| u.owner == owner && u.type_id == type_id && u.dead && !u.removed && !self.production.reviving.contains(k))
+            .map(|(k, _)| k)
+    }
+
+    fn train_inner(&mut self, building: ObjKey, type_id: u32, revive: Option<f32>) -> Result<(), ProdError> {
         if !self.unit_live(building) {
             return Err(ProdError::BadUnit);
         }
@@ -766,12 +800,13 @@ impl Game {
             return Err(ProdError::NotAvailable);
         };
         let bldtm = self.production.build_seconds.get(&type_id).copied().unwrap_or(0);
-        let seconds = countdown_seconds(self.order_tables(), bldtm);
+        let scale = |v: i32| revive.map_or(v, |f| (v as f32 * f) as i32);
+        let seconds = countdown_seconds(self.order_tables(), revive.map_or(bldtm, |f| (bldtm as f32 * f) as i32));
         let item = TrainItem {
             type_id,
-            gold: ty.gold_cost,
-            lumber: ty.wood_cost,
-            food: ty.food_used,
+            gold: scale(ty.gold_cost),
+            lumber: scale(ty.wood_cost),
+            food: if revive.is_some() { 0 } else { ty.food_used },
             food_exempt: false,
             build_seconds: seconds,
         };
@@ -803,6 +838,20 @@ impl Game {
         (x, y - half - 48.0)
     }
 
+    /// The hero returns at the altar with full life and no mana (UNSURE: the original restores by the Misc revive rules).
+    fn revive_unit(&mut self, h: ObjKey, x: f32, y: f32) {
+        if self.unit(h).removed {
+            return;
+        }
+        self.unit_mut(h).dead = false;
+        self.stats_set_dead(h, false);
+        let max = self.life_cells(h).max;
+        self.write_life(h, max);
+        self.write_mana(h, F32::ZERO);
+        self.store_unit_position(h, fl(x), fl(y));
+        self.production.events.push(ProdEvent::Revived { unit: h });
+    }
+
     fn on_train_finished(&mut self, building: ObjKey, type_id: u32) {
         let owner = self.unit(building).owner;
         let class = self.type_class(type_id);
@@ -813,6 +862,17 @@ impl Game {
             return;
         }
         let (x, y) = self.spawn_point(building);
+        let dead = self
+            .production
+            .reviving
+            .iter()
+            .copied()
+            .find(|&h| self.unit(h).owner == owner && self.unit(h).type_id == type_id);
+        if let Some(h) = dead {
+            self.production.reviving.remove(&h);
+            self.revive_unit(h, x, y);
+            return;
+        }
         let food = self.unit_types().get(type_id).map_or(0, |t| t.food_used);
         let face = F32::from_bits(0x4387_0000); // 270 degrees, facing away from the building
         if let Some((k, _)) = crate::natives::unit::build(self, owner, type_id, fl(x), fl(y), face, true) {

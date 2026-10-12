@@ -47,6 +47,9 @@ use crate::natives::game::{Game, ObjKey, Object};
 use crate::pathing::grid::scale_by_1_32;
 use crate::pathing::search::{Request, Search, POP_BUDGET};
 
+/// The pop budget of the one retry of a request that made no progress (model decision, see `plan_route`).
+const STUCK_POP_BUDGET: u32 = 20_000;
+
 /// Maximum number of orders a unit holds (CONFIRMED: refused when the count is above 500).
 pub const ORDER_LIMIT: u32 = 500;
 
@@ -570,7 +573,7 @@ impl Game {
             scale_by_1_32(arith::sub(goal.0, ox)),
             scale_by_1_32(arith::sub(goal.1, oy)),
         );
-        let req = Request {
+        let mut req = Request {
             path_type: 0,
             flag_on: false,
             start,
@@ -578,7 +581,16 @@ impl Game {
             budget: POP_BUDGET,
             size_class: 0,
         };
-        let Some(d) = map.search.dispatch(&req) else {
+        let mut found = map.search.dispatch(&req);
+        // A request that ends on its own start (code 0, one point) made no progress inside the pop budget: the unit sits at
+        // the nearest approach to an obstacle. The original re-plans from there forever; the model gives such a request
+        // a larger budget once (UNSURE: not seen in the original, but without it a captain's group stays stuck behind a
+        // wall for the rest of the game).
+        if found.as_ref().is_some_and(|d| d.code == 0 && d.points.len() < 2) {
+            req.budget = STUCK_POP_BUDGET;
+            found = map.search.dispatch(&req);
+        }
+        let Some(d) = found else {
             return straight;
         };
         let to_world = |p: (F32, F32)| {
@@ -600,6 +612,29 @@ impl Game {
         } else {
             Vec::new()
         }
+    }
+
+    /// Whether the pathing search (ground, size class 0) reaches the point `to` from `from` with a large pop budget.
+    /// `None` when the map has no pathing. A stand-in for the original's path cost (`0x6F4758D0`), whose
+    /// unreachable answer makes the AI skip a camp (UNSURE: the original's own search limit is 5000).
+    pub fn path_reachable(&mut self, from: (F32, F32), to: (F32, F32)) -> Option<bool> {
+        let map = self.orders.pathing.as_mut()?;
+        let (ox, oy) = map.origin;
+        let cell = |p: (F32, F32)| {
+            (
+                scale_by_1_32(arith::sub(p.0, ox)),
+                scale_by_1_32(arith::sub(p.1, oy)),
+            )
+        };
+        let req = Request {
+            path_type: 0,
+            flag_on: false,
+            start: cell(from),
+            goal: cell(to),
+            budget: 200_000,
+            size_class: 0,
+        };
+        map.search.dispatch(&req).map(|d| d.code == 1)
     }
 
     /// The active order of `unit` (the head of its list), or `None` when it has none.

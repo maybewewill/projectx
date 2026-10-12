@@ -685,3 +685,36 @@ expansions: p0 one; kills: p0 -> creeps 7, p1/p2/p3 -> creeps 2 each; again no b
 
 ## 11. S21: undead and night elf economy (2026-10-12)
 Haunted mine (acolytes gather beside it), entangled mine (wisps inside), ghoul and wisp lumber and the Graveyard drop-off are modelled; see docs/spec/economy-5.md (disassembly only, no Unicorn). Item 3 of 10.7 is closed: the four-race run on (4)TwistedMeadows now has every race gathering (0 aborted threads).
+## 12. S22: why the waves stopped (2026-10-12)
+
+Repro: `w3boot --computer 0:orc --computer 1:human`, (2)Circumvention. Three separate causes, found by logging the AI
+native calls (`--ai-log`) and the captain members' state; none of them was in a captain native.
+1. **Dead hero blocks the wave loop.** `setup_force` -> `AwaitMeleeHeroes` (common.ai) loops `Sleep(1)` until
+   `GetUnitCountDone(hero_id) > 0`. The orc's first hero died in the first fights and nothing revived it (the revive
+   path of `SetProduce`, `0x6F2D2D80`, only returned true), so the attack thread slept for the rest of the game
+   (`CaptainRetreating` was the last attack native called). Fix: `Game::revive_hero_at` / `dead_hero_of`
+   (`production.rs`): `SetProduce` of an own dead hero queues a revive at an altar that can train the type; the queue item
+   finishes by reviving (full life, 0 mana, at the altar). **UNSURE model**: cost and time = type cost / build time times
+   `0.4 + 0.1 * level` (level 1..10), no food; the original's formula and the restore rules are not decoded (IDA was not
+   reachable in this session).
+2. **Attacking an invulnerable neutral.** The human group acquired an owner-15 structure with 150000 life and the
+   invulnerable ability and swung at it for ever (`CaptainInCombat` true, `lowest hp 1.00`). The sim's attack
+   validation had no invulnerability check. Fix (`combat.rs`, from the cut-off S22 branch): `attackable` = valid and not
+   invulnerable, used for target retention, the swing gate and acquisition. UNSURE: the original matches the target's
+   classification against the weapon `targs` (`0x6F0CBD70` -> `0x6F0C93E0`), not read here.
+3. **Stuck group.** A group standing at the nearest approach to a wall got `code 0, one point` (path to its own start)
+   from the 400-pop request on every re-plan and never moved (790 units short of the camp, attack order, no route).
+   Fix (`orders.rs::plan_route`): such a request is retried once with a 20000-pop budget (UNSURE: the original has
+   no such retry that was seen). `GetCreepCamp` now also skips camps whose first living member the search cannot reach
+   (`Game::path_reachable`, 200000 pops; stand-in for the unreachable answer of the path cost `0x6F4758D0`).
+
+Other findings: a base attack in `SingleMeleeAttack` needs `has_siege` (orc: 2 catapults/raiders/batriders or level >= 40; human
+analogue) and, without air units, daytime 4..12; otherwise the script only goes for creeps and expansions. `CaptainInCombat`
+being false for the orc while its group sat idle was correct (no target); the "combat true forever" of the human was cause 2.
+
+Run (release `w3boot`, 18000 steps = 1800 s, SpecDamage): 0 aborted threads. Orc waves 3 (336 s, 1044 s, 1437 s; the last two
+target an enemy structure: first the camp, then the human town hall at (1472,-4288) with catapults); human waves 6 (288 ... 829 s).
+Kills: p0 -> p1 56, p1 -> p0 25, p0 -> creeps 5, p1 -> creeps 15, creeps -> p0 2 / p1 3. Both AIs attack each other's base area;
+no game ended (no player lost all buildings by 1800 s; the sim has no defeat check wired here).
+Open: the original revive formula; whether the human attacks the orc base (its last goal is the orc camp area); the
+`first 400-pop` stall may hide a pathing defect worth a Unicorn comparison of a stuck request; invulnerable-target rule.

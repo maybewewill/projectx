@@ -531,7 +531,7 @@ impl Game {
             return;
         }
         if let Some(t) = self.snap(unit).target {
-            if !self.target_valid(unit, t) {
+            if !self.attackable(unit, t) {
                 let st = self.st(unit);
                 st.target = None;
                 st.planned_for = None;
@@ -665,7 +665,7 @@ impl Game {
             return None;
         }
         let target = self.snap(unit).target?;
-        if !self.target_valid(unit, target) {
+        if !self.attackable(unit, target) {
             return None;
         }
         let ty = self.attack_type_of(unit);
@@ -751,7 +751,7 @@ impl Game {
                     return false;
                 }
                 let u = self.unit(c);
-                !u.dead && !u.removed && !u.hidden && self.is_enemy(owner, u.owner)
+                !u.dead && !u.removed && !u.hidden && self.is_enemy(owner, u.owner) && !self.unit_is_invulnerable(c)
             })
     }
 
@@ -1118,6 +1118,15 @@ impl Game {
     /// Whether unit `unit` may still act: alive and not removed.
     fn attacker_live(&self, unit: ObjKey) -> bool {
         matches!(self.object(unit), Object::Unit(u) if !u.dead && !u.removed && u.bonuses.stun == 0)
+    }
+
+    /// Whether `unit` may attack `target`: a live unit other than itself that is not invulnerable. The original's
+    /// attack validator (`0x6F0CBD70` -> `0x6F0C93E0`) matches the target's classification against the weapon's
+    /// `targs`; an invulnerable target (ability `Avul`, e.g. a neutral shop or mercenary camp) is only accepted by a
+    /// weapon whose targs name `invulnerable`, which no melee-map unit has (the sim has no targs check otherwise,
+    /// UNSURE for the other classes). Without this gate a captain's members attack an invulnerable camp forever.
+    fn attackable(&self, unit: ObjKey, target: ObjKey) -> bool {
+        self.target_valid(unit, target) && !self.unit_is_invulnerable(target)
     }
 
     /// Whether `target` is a live unit other than `unit`.
