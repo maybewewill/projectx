@@ -255,14 +255,15 @@ impl TerrainGpu {
             "fs_model_alpha",
             alpha,
             false,
-            wgpu::CompareFunction::Less,
+            // LessEqual: a blended layer lies on the same surface as the opaque layer under it.
+            wgpu::CompareFunction::LessEqual,
         );
         let props_additive = make(
             "terrain props additive",
             "fs_model_add",
             additive,
             false,
-            wgpu::CompareFunction::Less,
+            wgpu::CompareFunction::LessEqual,
         );
         let overlays = make(
             "terrain overlays",

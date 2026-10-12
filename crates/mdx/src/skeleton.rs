@@ -219,7 +219,23 @@ impl Skeleton {
         camera: Option<&BillboardCamera>,
     ) -> Option<Pose> {
         let seq = model.sequences.get(sequence)?;
-        Some(self.evaluate_at(model, Some(seq.time_at(elapsed_ms)), camera))
+        let time = seq.time_at(elapsed_ms);
+        let mut pose = self.evaluate_at(model, Some(time), camera);
+        // Geoset alpha/color: only keys inside this sequence's interval count.
+        let globals = &model.global_sequences;
+        for (g, p) in model.geoset_anims.iter().zip(pose.geoset_anims.iter_mut()) {
+            p.alpha = g
+                .alpha_track
+                .as_ref()
+                .and_then(|k| k.sample_in(time, seq.start, seq.end, globals))
+                .unwrap_or(g.alpha);
+            p.color = g
+                .color_track
+                .as_ref()
+                .and_then(|k| k.sample_in(time, seq.start, seq.end, globals))
+                .unwrap_or(g.color);
+        }
+        Some(pose)
     }
 
     /// Pose at an absolute time in milliseconds. `None` is the bind pose.

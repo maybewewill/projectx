@@ -168,21 +168,40 @@ impl<T: Keyable> Track<T> {
     /// Value of the track at `time` (absolute milliseconds). `None` if the track has no keys.
     /// `globals` are the GLBS lengths of the model.
     pub fn sample(&self, time: u32, globals: &[u32]) -> Option<T> {
-        let keys = &self.keys;
-        let first = keys.first()?;
         let t = track_time(self.global_sequence, time, globals);
-        // Number of keys at or before `t`. Keys are assumed sorted by time.
-        let i = keys.partition_point(|k| k.time <= t);
-        if i == 0 {
-            return Some(first.value);
-        }
-        if i == keys.len() {
-            return Some(keys[i - 1].value);
-        }
-        let (a, b) = (&keys[i - 1], &keys[i]);
-        let s = (t - a.time) as f32 / (b.time - a.time) as f32;
-        Some(T::blend(a, b, s, self.interpolation))
+        sample_keys(&self.keys, self.interpolation, t)
     }
+
+    /// Value at `time` inside the sequence interval `start..=end` (absolute milliseconds).
+    ///
+    /// Only the keys within the interval take part: keys of other sequences (a Death
+    /// sequence's fade-out, say) must not leak into this one. Before the first in-interval
+    /// key the first holds, after the last the last holds. `None` when the track has no key in
+    /// the interval, so the caller falls back to the static value. A track bound to a global
+    /// sequence ignores the interval.
+    pub fn sample_in(&self, time: u32, start: u32, end: u32, globals: &[u32]) -> Option<T> {
+        if self.global_sequence.is_some() {
+            return self.sample(time, globals);
+        }
+        let lo = self.keys.partition_point(|k| k.time < start);
+        let hi = self.keys.partition_point(|k| k.time <= end);
+        sample_keys(self.keys.get(lo..hi)?, self.interpolation, time)
+    }
+}
+
+fn sample_keys<T: Keyable>(keys: &[Key<T>], interp: Interpolation, t: u32) -> Option<T> {
+    let first = keys.first()?;
+    // Number of keys at or before `t`. Keys are assumed sorted by time.
+    let i = keys.partition_point(|k| k.time <= t);
+    if i == 0 {
+        return Some(first.value);
+    }
+    if i == keys.len() {
+        return Some(keys[i - 1].value);
+    }
+    let (a, b) = (&keys[i - 1], &keys[i]);
+    let s = (t - a.time) as f32 / (b.time - a.time) as f32;
+    Some(T::blend(a, b, s, interp))
 }
 
 /// Converts a sampled rotation to a unit quaternion.
