@@ -287,8 +287,8 @@ impl VisionGrid {
             return;
         }
         let (w, h) = (self.width, self.height);
-        let clip_x = !(cx >= k && cx + k <= w - 1);
-        let clip_y = !(cy >= k && cy + k <= h - 1);
+        let clip_x = !(cx >= k && cx + k < w);
+        let clip_y = !(cy >= k && cy + k < h);
         let shape = self.sight_shape(k);
         let pitch = 1i32 << self.shift;
         let c0 = ((cy as i64) << self.shift) + cx as i64;
@@ -303,7 +303,7 @@ impl VisionGrid {
         }
         if found {
             let centre = self.elevation_at(c0) as u16;
-            if !((ax as i16) > (centre as i16)) {
+            if (ax as i16) <= (centre as i16) {
                 ax = centre;
             }
         }
@@ -321,13 +321,12 @@ impl VisionGrid {
                 if top > bottom {
                     return;
                 }
-                let mut j = if cy - k < 0 { (k - cy) as usize } else { 0 };
-                for row in top..=bottom {
+                let j0 = if cy - k < 0 { (k - cy) as usize } else { 0 };
+                for (j, row) in (j0..).zip(top..=bottom) {
                     let (lo, hi) = shape.spans[j];
                     let x0 = (lo + cx).max(left);
                     let x1 = (hi + cx).min(right);
                     self.write_span(row, x0, x1, mask);
-                    j += 1;
                 }
                 return;
             }

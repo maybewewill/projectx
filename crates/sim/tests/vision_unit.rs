@@ -30,7 +30,7 @@ fn fnv64(words: impl Iterator<Item = u64>, width: usize) -> u64 {
     for v in words {
         for b in 0..width {
             h ^= (v >> (8 * b)) & 0xFF;
-            h = h.wrapping_mul(0x1_0000_0001_B3);
+            h = h.wrapping_mul(0x0100_0000_01B3);
         }
     }
     h
