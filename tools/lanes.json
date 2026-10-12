@@ -1,162 +1,36 @@
 {
- "wave": "3",
- "updated": "2026-10-13 05:20 (UTC+5)",
+ "wave": "4 (завершена)",
+ "updated": "2026-10-13",
  "lanes": [
   {
    "id": "S20",
    "model": "Sonnet",
-   "task": "Unit sight writer for radius ≥ 3 (span producer, cliffs block sight) — replace the circle stand-in",
-   "status": "running"
+   "task": "Зрение юнитов с учётом скал, туман войны на всю карту — влито",
+   "status": "done"
   },
   {
    "id": "H23",
    "model": "Haiku",
-   "task": "HUD: fill the console middle gap, button labels (NormalText), command card slots, portrait area",
-   "status": "running"
+   "task": "Нижняя панель без провалов, подписи кнопок, ячейки команд — влито",
+   "status": "done"
   },
   {
    "id": "S21",
    "model": "Sonnet",
-   "task": "Undead and night elf AI production stalls (acolyte lumber/haunted mine, wisp entangle), AI hero skills (SetHeroLevels)",
-   "status": "running"
+   "task": "ИИ нежити и эльфов, навыки героев ИИ — навыки влиты, остальное прервано концом сессии",
+   "status": "failed"
   },
   {
    "id": "S22",
    "model": "Sonnet",
-   "task": "Why AI waves stop after the second one (captain combat flag stuck); first base attack, game end",
-   "status": "running"
+   "task": "Почему ИИ перестаёт атаковать — прерван концом сессии, черновик в ветке",
+   "status": "failed"
   },
   {
    "id": "S23",
    "model": "Sonnet",
-   "task": "Other attack kinds: splash, bounce, line, artillery missiles; weapon 2; attack cooldown/dmgpt/backswing timing",
-   "status": "running"
-  },
-  {
-   "id": "S18",
-   "model": "Sonnet",
-   "task": "Missile homing/arc and impact; unit z (fly height + ground) for attacks and vision (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S17",
-   "model": "Sonnet",
-   "task": "Other agile classes: pulse/velocity modifiers → mana/life regen and ability cooldowns on the agile engine (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S19",
-   "model": "Sonnet",
-   "task": "AI: retreat/threat/readiness, expansions, last 9 AI natives; cliff level in the build-spot search (merged)",
-   "status": "done"
-  },
-  {
-   "id": "H22",
-   "model": "Haiku",
-   "task": "HUD layout: position the resource bar like the game, console centre art, minimap inset, portrait/command card frames (merged)",
-   "status": "done"
-  },
-  {
-   "id": "H21",
-   "model": "Haiku",
-   "task": "Minimap: render terrain + units into the ConsoleUI minimap frame of the live render (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S14",
-   "model": "Sonnet",
-   "task": "AI building placement: where the AI puts a new building (replace the stand-in spot finder) (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S15",
-   "model": "Sonnet",
-   "task": "AI captains and attack waves: bind the remaining AI natives (attack groups, targets, threat) (merged)",
-   "status": "done"
-  },
-  {
-   "id": "H20",
-   "model": "Haiku",
-   "task": "Terrain ground textures: smooth tile transitions (corner blend/quarter-tile variations), shadows off (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S13",
-   "model": "Sonnet",
-   "task": "Terrain level/height functions for the sim (uphill miss, ramps `0x6F0118C0`), missile mover cap (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S16",
-   "model": "Sonnet",
-   "task": "MDX geoset visibility: correct GEOA/KGAO per-sequence sampling, hide death-only geosets (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S11",
-   "model": "Sonnet",
-   "task": "Agile modifier evaluation (exact listener tick for countdowns, time of day, life ramps) (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S12",
-   "model": "Sonnet",
-   "task": "Heroes: ability learning (AHer), hero skill points, kill XP into the death path (merged)",
-   "status": "done"
-  },
-  {
-   "id": "H19",
-   "model": "Haiku",
-   "task": "Model render fixes: black slabs (geoset visibility/GEOA alpha, team glow), Stand pose — failed: GEOA sampling wrong; handed to S16",
+   "task": "Сплэш/отскок/линия, тайминг удара — прерван концом сессии, черновик в ветке",
    "status": "failed"
-  },
-  {
-   "id": "S9",
-   "model": "Sonnet",
-   "task": "Sync birth tag Y: which gameplay events create pathing objects (merged; Y still not exact: replay map missing)",
-   "status": "done"
-  },
-  {
-   "id": "H18",
-   "model": "Haiku",
-   "task": "Watch a game: render the running simulation (units from the engine) over the map to PNG frames (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S10",
-   "model": "Sonnet",
-   "task": "Missiles: ChanceToMiss stream-2 draw and flight arithmetic (merged)",
-   "status": "done"
-  },
-  {
-   "id": "H17",
-   "model": "Haiku",
-   "task": "Map render: missing doodad models (variations), team-colour textures, alpha blending (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S5",
-   "model": "Sonnet",
-   "task": "Push-apart neighbour gather (`0x6F495D60` chain), Unicorn proof, wire into the mover (merged)",
-   "status": "done"
-  },
-  {
-   "id": "H16",
-   "model": "Haiku",
-   "task": "Cliff tilesets + textures, doodads and pre-placed units in the map render (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S6",
-   "model": "Sonnet",
-   "task": "Construction/training progress = agile countdown (merged)",
-   "status": "done"
-  },
-  {
-   "id": "S7",
-   "model": "Sonnet",
-   "task": "Evasion wired into attacks (merged)",
-   "status": "done"
   }
  ]
 }
