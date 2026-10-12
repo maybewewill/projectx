@@ -299,6 +299,14 @@ impl Game {
         (!ab.is_removed()).then_some(base)
     }
 
+    /// The level record of ability `base` at the unit's current level, if both the ability and the table exist
+    /// (the evasion gate must tell "no data" from an all-zero record).
+    pub(crate) fn ability_level_record(&self, unit: ObjKey, base: u32) -> Option<SpellLevel> {
+        let ab = self.unit(unit).abilities.get(base)?;
+        let i = usize::try_from(ab.level_index).ok()?;
+        self.spells.levels.get(&base)?.get(i).copied()
+    }
+
     fn spell_level(&self, unit: ObjKey, base: u32) -> SpellLevel {
         let idx = self
             .unit(unit)

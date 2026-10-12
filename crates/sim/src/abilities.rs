@@ -53,6 +53,8 @@ pub const MOVE: u32 = code(b"Amov");
 pub const ATTACK: u32 = code(b"Aatk");
 /// `'Avul'`: invulnerability (factory leaf, the ability `SetUnitInvulnerable` adds and removes).
 pub const INVULNERABLE: u32 = code(b"Avul");
+/// `'AEev'`: the evasion ability (class `CAbilityEvasion`, vtable `0x6F89D62C`; its code getter returns this).
+pub const EVASION: u32 = code(b"AEev");
 /// `'Aloc'`: the locust ability.
 pub const LOCUST: u32 = code(b"Aloc");
 /// `'AHer'`: the hero ability (fixed field `+0x1F0`).

@@ -475,6 +475,27 @@ pub fn evades(chance: F32, draw: F32) -> bool {
     !matches!(order, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal))
 }
 
+/// The best-of selection of the target walk `0x6F077360` (CONFIRMED, `tools/emu/evasion_gate_emu.py`: 700 random lists
+/// through the real iterator and the real `CAbilityEvasion` vtable, 0 mismatches): over the target's ability list in
+/// order, each entry's score (slot `0x158` = `0x6F08BDA0`: `0.0` when the count `+0x3C` is above zero or the enabled
+/// slot `0x268` says no, else the chance of [`evasion_chance`]) is compared with the best so far, which starts at
+/// `0.0`; an entry replaces the best when `best < score` or the compare is unordered (NaN), so the first of equal
+/// scores wins and a score of `0.0` or less never selects. Returns the selected entry's score (its chance), or `None`
+/// when nothing was selected (no draw is made then).
+pub fn evasion_select(scores: impl IntoIterator<Item = F32>) -> Option<F32> {
+    let mut best = 0.0f32;
+    let mut picked = None;
+    for score in scores {
+        let s = f32::from_bits(score.to_bits());
+        // x87 `fcompp` + `test ah,1`: C0 is set for best < score and for unordered operands.
+        if !(best >= s) {
+            best = s;
+            picked = Some(score);
+        }
+    }
+    picked
+}
+
 /// The evasion chance of one level (`0x6F02E9E0`, CONFIRMED by Unicorn: 100 cases, 0 mismatches): the float stored at
 /// the level's record `+0x20` in the level table of the ability's definition, for `0 <= level < count`; `0.0` for a
 /// negative level, a level at or above the count, or a definition without its data flag. `table` is the level table
