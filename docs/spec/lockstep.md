@@ -1335,3 +1335,76 @@ is present for the whole game.
    fitting one record, then check the `Y` sequence is a non-decreasing counter (the XOR structure of the residuals allows this); not done.
 3. `0x21` block: its 2-byte reader `0x6F6516F0` and where the replay shows it (none in the DotA file).
 4. Whether the pump conditions hold (`+0x610`, `+0x15`) for a live game: irrelevant for replays.
+
+## 16. Pass 13 (2026-10-12): the world words X and Y, their writers, and what the replay can say about them
+
+Labels as in section 13. Tools: `tools/emu/pr_registry_emu.py` (Unicorn), `crates/engine/examples/syncdump.rs` (one TSV row per
+slot: increment, clock, net checksum, record, actions), `sim::sync::PrRegistry`, `w3boot --replay FILE --check-sync`. Real replay
+`2856263.w3g` (not committed).
+
+### 16.1 The registry (CONFIRMED, Unicorn)
+
+`0x6F4AEFF0` (thiscall on the object, one optional descriptor argument) registers a `CPrRgEntry`-derived object; `0x6F4AEF00`
+unregisters it (frees the slot, sets slot and tag to -1, then calls virtual slot 1). The world object `[0x6FAB7788]` holds two
+8-byte-entry tables (`world+0x00` and `world+0x20`; data +0xC, count +0x1C, free-list head `world+0x40` / `+0x44`, live count
+`+0x48` / `+0x4C`). Table allocator `0x6F4BC2B0` / `0x6F4BC240`: take the free-list head if any (the freed entry stores the next
+head), else append. Free `0x6F4BC1D0` pushes the entry as the new head. Descriptor `+0x24 == -1` or no descriptor: table 0 and the
+**birth tag** `Y = world+0x50++` (`0x6F4AEFC0`; `world+0x54++` for slots with bit 31 = table 1). `+0x24 == -2`: table 1 (tag from
+`+0x54`). Otherwise the descriptor gives the slot and tag.
+`X` printed by the dump (`0x6F5455A0`) = free-list head when not -1, else the table length. `Y` never decreases.
+Verification: 400 random sequences, 24,598 operations (register with and without descriptors, flagged, explicit slot, unregister),
+comparing counters, both tables and every object's slot/tag after every operation: **0 mismatches**; 10 short sequences embedded in
+`crates/sim/tests/pr_registry_vectors.rs`. The Rust `PrRegistry` follows it exactly.
+
+### 16.2 Who registers (CONFIRMED callers, meaning of each partly LIKELY)
+
+Callers of `0x6F4AEFF0` (12 sites) and their classes by RTTI (all in the slot-3 virtual of the class): `0x6F483080` (class not in a
+vtable), `0x6F487ED0` = `CBaseMap<CPaCell>` / `CAcceleratorMap`, `0x6F48ED30` = `CPrClusterGroup`, `0x6F48F0D0` = `CPrClusterGen`,
+`0x6F4924D0` = `CPrCluster` (the movement cluster of 12 unit records), `0x6F49A330` = `CLrPathingAcc`, `0x6F49B680` = `CLrPath`
+(a path request object), `0x6F49E0C0` = `CPmRegion`, `0x6F49F5D0` = `CBaseMap<CPmCell>`, `0x6F4A0710` = `CLrPathingSys`,
+`0x6F4A6070` = `CPrRelation`, `0x6F4AA340` = `CPrBehavior` / `CBhPoBehavior`. Unregister callers: `0x6F487FAB, 0x6F48ED97,
+0x6F48F137, 0x6F49318F, 0x6F49A630, 0x6F49DE82, 0x6F49E0D0, 0x6F49F6AB, 0x6F4A3978, 0x6F4A695E, 0x6F4AA55A`.
+Y advances for every cluster, path request, region, relation and behaviour object created (behaviour objects and relations are
+per-unit / per-pair and probably dominate). Only clusters and path requests are hooked in the sim (`Game::pr_unit_created`: one
+registration per 12 units, LIKELY; `Game::pr_path_request`: register + release, UNSURE lifetime). Creation sites of CPrBehavior,
+CPrRelation and CPmRegion objects are NOT located, so Y in the sim is a lower bound. `Engine::sync_time_slot` now takes X and Y from
+`Game::pr`.
+
+### 16.3 Replay evidence (numbers exact)
+
+Computed records: 71,308 (nonzero increment); pairs: 71,307. With clock and net checksum removed, per-pair residual `D`:
+
+| class | pairs |
+|---|---|
+| zero (nothing hidden changed) | 516 |
+| `rotr6(D) < 2^16` (birth-tag-like) | 16,268 |
+| `rotr9(D) < 2^16` (X-like) | 1,504 |
+| `rotr3(D) < 2^16` (R-like, small) | 19 |
+| other (several words) | 53,000 |
+
+Most frequent `rotr6(D)`: 2 (319), 5 (238), 3 (225), 7 (198), 6 (174), 1 (161). Minimal birth-tag step per tag-like pair (smallest d
+with `y ^ (y+d) = r` for some y; 3,764 pairs have one with d <= 300): d=1 786, d=2 700, d=3 504, d=4 57, d=5 197, d=6 86, then a long
+tail. Lower bound: the true step is only known modulo the unknown start.
+
+**dY vs actions** (3,764 compatible pairs; orders = actions 0x10..0x15 between the two records): 0 orders in the window: 3,337 pairs,
+mean minimal step 36.0; 1 order: 329, mean 105.0; 2: 82, mean 114.2; 3: 16, mean 123.8. Orders raise dY (about +70 for the first
+order) but the idle baseline (units walking, creeps, behaviours) is far larger, so a model dY = f(actions) explains **no pair
+exactly**. Exactly explained pairs: 516 before and 516 after this pass.
+
+**Chain test** (new in `--check-sync`): a run of consecutive birth-tag-only pairs must come from one monotone counter: start
+`y0 < 2^16`, `y_{i+1} = y_i ^ r_i`, increase <= 4096. Result: 2,511 runs of >= 2 pairs (cut at 12), 468 consistent (1,031 pairs);
+a random control of the same lengths gives 220 of 2,511. The birth-tag reading holds for a subset, weakly overall: many tag-like
+pairs are coincidences with X, R or data-slot changes.
+
+### 16.4 Status
+
+* CONFIRMED: registry algorithm and the X/Y definitions (Unicorn); the residual structure.
+* LIKELY: clusters register once per 12 units.
+* UNSURE: path-request lifetime; creation of behaviour/relation/region objects; absolute Y at slot 1 (the map script's units).
+* Explained pairs: 516 exact (unchanged); 1,031 further pairs are only chain-consistent, not exact.
+
+### 16.5 Open
+
+1. Locate creation/release of `CPrBehavior` and `CPrRelation` (they dominate Y), e.g. by Unicorn runs of the order start path.
+2. Start values of X and Y after the DotA map script (needs the full unit-creation order).
+3. R, data slots 5..9 and 12..19 remain unknown; an absolute match needs them all.

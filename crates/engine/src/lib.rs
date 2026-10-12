@@ -508,6 +508,8 @@ impl Engine {
             self.sync.rng_hash = sim::sync::rng_state_hash(&streams.global);
             self.sync.registry[sim::sync::slot::RAND] = Some(sim::sync::rand_data_hash(&streams));
         }
+        // X and Y come from the sim's pathing-object registry (docs/spec/lockstep.md section 16).
+        self.sync.world = self.host.game().pr.world_words();
         self.sync.time_slot(id, payload)
     }
 

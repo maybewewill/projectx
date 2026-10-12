@@ -87,6 +87,26 @@ pub fn cell_to_world(c: F32, origin: F32) -> F32 {
 }
 
 impl Game {
+    /// Sync-registry hook (docs/spec/lockstep.md section 16): a unit creation fills a 44-byte mover record; a new
+    /// `CPrCluster` (12 records, registered through `0x6F4AEFF0` from `0x6F4924D0`) is created when the previous
+    /// one is full. LIKELY: the cluster registers once, records never unregister it. The unit-to-record mapping
+    /// (who else registers at creation) is UNSURE.
+    pub(crate) fn pr_unit_created(&mut self) {
+        if self.pr_units % 12 == 0 {
+            let h = self.pr.register();
+            self.pr_clusters.push(h);
+        }
+        self.pr_units += 1;
+    }
+
+    /// Sync-registry hook: a path request creates a `CLrPath` object (`0x6F49B680`) that is released when the
+    /// request finishes. UNSURE: the real object lifetime (the request may be kept by the mover); modelled as a
+    /// register followed by an immediate unregister, which advances `Y` by one and leaves `X` unchanged.
+    pub(crate) fn pr_path_request(&mut self) {
+        let h = self.pr.register();
+        self.pr.unregister(h);
+    }
+
     /// The world origin of the cell storage: `(min x, min y)` of the playable area, or zero before a host sets one
     /// (the original's `W+0x6C` / `W+0x70`; the value is the playable minimum, see `docs/spec/unit-position.md` 2).
     pub fn world_origin(&self) -> (F32, F32) {
@@ -146,6 +166,7 @@ impl Game {
     /// the init reads the position back through the normaliser and writes it again (CONFIRMED structure of
     /// `0x6F2A0E30`).
     pub fn place_new_unit(&mut self, k: ObjKey, x: F32, y: F32) {
+        self.pr_unit_created();
         self.store_unit_position(k, x, y);
         let (x, y) = {
             let u = self.unit(k);
