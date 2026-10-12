@@ -353,6 +353,11 @@ pub fn launch_point(
     ]
 }
 
+/// A mover's position in cells at the cell term `term` (`0x6F38B0B0`): `add(x0, mul(vx, term))`.
+pub fn cell_position(x0: F32, vx: F32, term: F32) -> F32 {
+    arith::add(x0, arith::mul(vx, term))
+}
+
 /// The shortest completion timer the mover event accepts, `1e-4` s (`0x6F4AA630` replaces a smaller duration, a refused
 /// flight included, by the constant at `0x6FAAE478`; NaN is kept).
 pub const MIN_TIMER: F32 = F32::from_bits(0x38D1_B717);
@@ -379,15 +384,37 @@ pub fn flight_duration(
     tables: &Tables,
 ) -> F32 {
     use crate::pathing::scale_by_1_32 as cells;
-    let sx = cells(arith::sub(launch.0, origin.0));
-    let sy = cells(arith::sub(launch.1, origin.1));
     let tx = cells(arith::sub(target.0, origin.0));
     let ty = cells(arith::sub(target.1, origin.1));
+    flight_duration_cells(
+        (
+            cells(arith::sub(launch.0, origin.0)),
+            cells(arith::sub(launch.1, origin.1)),
+        ),
+        (tx, ty),
+        speed,
+        horizon,
+        tables,
+    )
+}
+
+/// [`flight_duration`] from cell coordinates: `start` is the launch point already in cells, `target` the point to fly to
+/// in cells. A **homing** missile (launch record `+0x64`) flies to the followed target's *current* cell position
+/// (`0x6F497260`: the target mover's `0x6F38B0B0` position, [`cell_position`], no origin subtraction, no lead); the
+/// completion timer is the same expression (CONFIRMED by Unicorn through `0x6F47A650`, `tests/missile_flight.rs`).
+pub fn flight_duration_cells(
+    start: (F32, F32),
+    target: (F32, F32),
+    speed: F32,
+    horizon: F32,
+    tables: &Tables,
+) -> F32 {
+    use crate::pathing::scale_by_1_32 as cells;
     // the stored start cell goes through the position object: x = add(x0, mul(step, term)) with a zero step
-    let sx = arith::add(sx, F32::ZERO);
-    let sy = arith::add(sy, F32::ZERO);
-    let dx = arith::sub(tx, sx);
-    let dy = arith::sub(ty, sy);
+    let sx = arith::add(start.0, F32::ZERO);
+    let sy = arith::add(start.1, F32::ZERO);
+    let dx = arith::sub(target.0, sx);
+    let dy = arith::sub(target.1, sy);
     let mut t = path_request(dx, dy, cells(speed), tables).time;
     let h = arith::sub(horizon, F32::ONE);
     if h.to_f32() < t.to_f32() {
