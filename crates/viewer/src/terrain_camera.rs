@@ -1,10 +1,10 @@
 //! WC3-like terrain camera: a target on the ground, a yaw around +Z, an angle from the vertical,
 //! and a distance. Left drag rotates, right drag pans, the wheel zooms.
 //!
-//! Defaults follow the editor's default view as far as known: yaw 304 degrees, 34 degrees from
-//! vertical, 70 degrees vertical field of view. The 34 degree value is the task's
-//! specification and is an assumption (the editor's own number may differ). GPU-free, unit
-//! tested.
+//! Defaults follow the game's default camera: it looks due north (rotation 90 degrees, so the
+//! eye sits south of the target, yaw 270 here), pitched down by the angle of attack 304 degrees
+//! (= 56 degrees below the horizon, 34 degrees from vertical), 70 degrees field of view.
+//! GPU-free, unit tested.
 
 use glam::{camera, Mat4, Vec3};
 
@@ -13,7 +13,7 @@ use crate::scene::Aabb;
 /// Vertical field of view in degrees.
 pub const FOV_Y_DEG: f32 = 70.0;
 /// Default yaw (rotation around +Z) in degrees.
-pub const DEFAULT_YAW_DEG: f32 = 304.0;
+pub const DEFAULT_YAW_DEG: f32 = 270.0;
 /// Default angle between the view direction and the vertical, in degrees.
 pub const DEFAULT_FROM_VERTICAL_DEG: f32 = 34.0;
 /// Smallest and largest allowed angle from vertical, in degrees.
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn defaults_are_the_wc3_angles() {
         let cam = TerrainCamera::fit(&map_bounds(), 16.0 / 9.0);
-        assert!((cam.yaw.to_degrees() - 304.0).abs() < 1e-3);
+        assert!((cam.yaw.to_degrees() - 270.0).abs() < 1e-3);
         assert!((cam.from_vertical.to_degrees() - 34.0).abs() < 1e-3);
         assert!((FOV_Y_DEG - 70.0).abs() < f32::EPSILON);
         // Looking down: the eye is above the target.

@@ -199,7 +199,9 @@ impl UiGpu {
                             [ndc_right, ndc_top],
                             [ndc_left, ndc_top],
                         ],
-                        [[uv[0], uv[2]], [uv[1], uv[2]], [uv[1], uv[3]], [uv[0], uv[3]]],
+                        // TexCoord is (left, right, top, bottom) and texture rows run top to bottom, so the
+                        // bottom corners take the bottom texcoord.
+                        [[uv[0], uv[3]], [uv[1], uv[3]], [uv[1], uv[2]], [uv[0], uv[2]]],
                         [1.0, 1.0, 1.0, 1.0],
                     );
                 }
