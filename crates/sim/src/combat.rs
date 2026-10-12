@@ -124,6 +124,21 @@ pub struct AttackType {
     pub damage_class: u32,
 }
 
+/// What a missile launch reads from the shooter's unit type besides the speed (`docs/spec/missiles.md` section 11):
+/// the launch offset in the unit's frame (`launchX/Y/Z` of the weapon row, rotated by the facing and added to the unit's
+/// position by `0x6F29E6A0`), the launch Z under water, the impact height added to the target's height
+/// (`impactZ`, vtable slot `0x118`), and whether the missile homes (`MissileHoming`, launch record `+0x64`). The arc only
+/// bends the flight visually.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MissileData {
+    pub launch: [F32; 3],
+    pub launch_swim_z: F32,
+    pub impact_z: F32,
+    pub impact_swim_z: F32,
+    pub arc: F32,
+    pub homing: bool,
+}
+
 /// The defense of a unit type: the armor value and the armor type column (spec section 4, `+0xE0` and `+0xE4`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Defense {
@@ -292,6 +307,7 @@ pub struct AttackView {
 #[derive(Debug, Default)]
 pub struct CombatSystem {
     types: BTreeMap<u32, AttackType>,
+    missile_data: BTreeMap<u32, MissileData>,
     defense: BTreeMap<u32, Defense>,
     states: BTreeMap<ObjKey, AttackObj>,
     misc: CombatMisc,
@@ -341,6 +357,20 @@ impl Game {
     /// Sets the attack data of unit type `type_id` (see [`AttackType`]).
     pub fn set_attack_type(&mut self, type_id: u32, ty: AttackType) {
         self.combat.types.insert(type_id, ty);
+    }
+
+    /// Sets the missile launch data of unit type `type_id` (see [`MissileData`]).
+    pub fn set_missile_data(&mut self, type_id: u32, data: MissileData) {
+        self.combat.missile_data.insert(type_id, data);
+    }
+
+    /// The missile launch data of unit type `type_id`; the all-zero value (no offset, not homing) when unregistered.
+    pub fn missile_data(&self, type_id: u32) -> MissileData {
+        self.combat
+            .missile_data
+            .get(&type_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// The attack data of unit type `type_id`; the all-zero value for an unregistered type.
@@ -966,7 +996,56 @@ impl Game {
             return F32::ZERO;
         };
         let (a, b) = (self.unit(attacker), self.unit(target));
-        missiles::flight_time(arith::sub(a.x, b.x), arith::sub(a.y, b.y), speed, tables)
+        let data = self.missile_data(a.type_id);
+        // The launch point `0x6F29E6A0`: the shooter's 3-D position plus the launch offset turned by its facing. Under
+        // water (movement type 32 with the swim flag, not modelled) the Z would be `launchSwimZ`.
+        let launch = missiles::launch_point(
+            (a.x, a.y),
+            self.unit_z(attacker),
+            a.facing,
+            data.launch,
+            None,
+            tables,
+        );
+        let origin = match self.world_bounds().or_else(|| self.playable()) {
+            Some(p) => (p.min_x, p.min_y),
+            None => (F32::ZERO, F32::ZERO),
+        };
+        let horizon = crate::movement::LAYER_HORIZON;
+        if data.homing {
+            // A homing missile (launch record `+0x64`) flies to the followed target's current cell position
+            // (`0x6F497260`), without lead.
+            let g = self.layer();
+            let target_cell = self.kin_of(target).position(&g);
+            let start = (
+                scale_by_1_32(arith::sub(launch[0], origin.0)),
+                scale_by_1_32(arith::sub(launch[1], origin.1)),
+            );
+            return missiles::flight_duration_cells(start, target_cell, speed, horizon, tables);
+        }
+        // The aimed point `0x6F2C3F70`: the target's position led by its step vector, at its height plus the impact offset.
+        let kin = self.kin_of(target);
+        // The target's own `impactZ` (its vtable slot `0x118`, `0x6F29E570`; the swimming variant is not modelled).
+        let impact = self.missile_data(b.type_id).impact_z;
+        let none = F32::from_bits(0xFF7F_FFFF);
+        let all = F32::from_bits(0x7F7F_FFFF);
+        let rect = match self.world_bounds() {
+            Some(w) => [w.min_y, w.min_x, w.max_y, w.max_x],
+            None => [none, none, all, all],
+        };
+        let aimed = missiles::launch_target(
+            (launch[0], launch[1]),
+            (b.x, b.y),
+            (kin.vx, kin.vy),
+            speed,
+            self.unit_z(target),
+            impact,
+            rect,
+            tables,
+        );
+        // The move issue `0x6F47A650` clamps the point into the playable area (`0x6F469490`).
+        let (tx, ty) = self.clamp_unit_move(aimed.x, aimed.y);
+        missiles::flight_duration((launch[0], launch[1]), (tx, ty), origin, speed, horizon, tables)
     }
 
     /// The arrival of a missile (slot 47, [`crate::missiles::arrival`]): the rolled damage goes through when the target

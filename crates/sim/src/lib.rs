@@ -51,6 +51,7 @@ pub mod timer;
 pub mod unit_counts;
 pub mod unitclass;
 pub mod unit_position;
+pub mod unitz;
 pub mod vision;
 
 mod pe;

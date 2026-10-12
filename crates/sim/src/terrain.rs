@@ -583,6 +583,12 @@ impl TerrainGrid {
         }
     }
 
+    /// The water surface height at the point (`0x6F00F5D0` -> `0x6F7527F0`), if any: the nearest corner has water above
+    /// its ground. Used by the unit height of swimming and floating units (`crate::unitz`).
+    pub fn water_at(&self, x: f32, y: f32) -> Option<f32> {
+        self.water_surface(x, y)
+    }
+
     /// `GetLocationZ`: the larger of the ground height and the water surface (`0x6F24F3E0`).
     pub fn location_z(&self, x: f32, y: f32) -> f32 {
         let g = self.ground_height(x, y);
