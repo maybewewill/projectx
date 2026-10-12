@@ -1,6 +1,6 @@
 {
  "wave": "3",
- "updated": "2026-10-12 23:10 (UTC+5)",
+ "updated": "2026-10-12 23:40 (UTC+5)",
  "lanes": [
   {
    "id": "S13",
@@ -21,16 +21,22 @@
    "status": "running"
   },
   {
-   "id": "S16",
-   "model": "Sonnet",
-   "task": "MDX geoset visibility: correct GEOA/KGAO per-sequence sampling, hide death-only geosets",
-   "status": "running"
-  },
-  {
    "id": "S17",
    "model": "Sonnet",
    "task": "Other agile classes: pulse/velocity modifiers → mana/life regen and ability cooldowns on the agile engine",
    "status": "running"
+  },
+  {
+   "id": "H20",
+   "model": "Haiku",
+   "task": "Terrain ground textures: smooth tile transitions (corner blend/quarter-tile variations), shadows off",
+   "status": "running"
+  },
+  {
+   "id": "S16",
+   "model": "Sonnet",
+   "task": "MDX geoset visibility: correct GEOA/KGAO per-sequence sampling, hide death-only geosets (merged)",
+   "status": "done"
   },
   {
    "id": "S11",
