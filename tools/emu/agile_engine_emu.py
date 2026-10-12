@@ -448,6 +448,183 @@ FLT_MAX = 0x7F7FFFFF
 NEG_FLT_MAX = 0xFF7FFFFF
 
 
+# ----------------------------------------------------------------------------------------------- function vectors
+def fn_state(rnd):
+    """A random property state: clock, t0, base, slope, limits."""
+    r = rnd.random()
+    if r < 0.4:
+        now, row = f2b(rnd.uniform(0.0, 299.0)), rnd.randrange(0, 3)
+    elif r < 0.7:
+        now, row = f2b(rnd.choice([0.0, 0.005, 0.1, 1.0, 100.0, 299.995, 299.9999])), rnd.randrange(0, 2)
+    else:
+        now, row = rnd.getrandbits(32) & 0x7FFFFFFF, rnd.randrange(0, 4)
+    t0row = row if rnd.random() < 0.6 else max(0, row - rnd.randrange(0, 3))
+    if t0row == row and rnd.random() < 0.5:
+        t0 = now if rnd.random() < 0.3 else f2b(max(0.0, b2f(now) - rnd.choice([0.00005, 0.0001, 0.005, 0.1, rnd.uniform(0, 30)])))
+    else:
+        t0 = f2b(rnd.uniform(0.0, 299.0))
+    base = f2b(rnd.choice([0.0, 60.0, 1.0, -3.0, rnd.uniform(-10, 200)]))
+    slope = f2b(rnd.choice([0.0, -1.0, 1.0, 0.5, -0.5, 1e-7, -2e-7, 8e-7, -9e-7, rnd.uniform(-3, 3), 24 / 240.0]))
+    if rnd.random() < 0.05:
+        slope = rnd.getrandbits(32)
+    lo, hi = rnd.choice([(NEG_FLT_MAX, FLT_MAX), (f2b(0.0), FLT_MAX), (f2b(0.0), f2b(100.0)), (f2b(-5.0), f2b(5.0)),
+                         (f2b(0.0), f2b(24.0))])
+    return now, row, t0, t0row, base, slope, lo, hi
+
+
+def fn_setup(now, row, t0, t0row, base, slope, lo, hi):
+    sc = Scn(now, row, base, lo, hi)
+    wr32(sc.prop + 0x7C, slope)
+    wr32(sc.prop + 0x70, t0)
+    wr32(sc.prop + 0x74, t0row)
+    return sc
+
+
+def fn_eval_vectors(rnd, n):
+    out = []
+    for _ in range(n):
+        st = fn_state(rnd)
+        sc = fn_setup(*st)
+        out.append("\t".join("%08x" % x if i != 1 and i != 3 else str(x) for i, x in enumerate(st)) + "\t%08x" % sc.value())
+    return out
+
+
+def fn_slope_vectors(rnd, n):
+    out = []
+    for _ in range(n):
+        st = fn_state(rnd)
+        delta = f2b(rnd.choice([0.0, -1.0, 1.0, 0.5, 1e-7, -8e-7, 24 / 240.0, rnd.uniform(-3, 3)]))
+        sc = fn_setup(*st)
+        wr32(TMP + 0x70, delta)
+        call(0x6F4A9320, ecx=sc.prop, stack_args=(TMP + 0x70,))
+        p = sc.prop
+        res = (rd32(p + 0x78), rd32(p + 0x7C), rd32(p + 0x70), rd32(p + 0x74))
+        out.append("\t".join("%08x" % x if i != 1 and i != 3 else str(x) for i, x in enumerate(st)) + "\t%08x" % delta +
+                   "\t%08x\t%08x\t%08x\t%d" % res)
+    return out
+
+
+def fn_listener_setup(rnd, with_timer):
+    st = fn_state(rnd)
+    sc = fn_setup(*st)
+    p = sc.prop
+    thr = f2b(rnd.choice([0.0, 0.0, 24.0, 10.0, rnd.uniform(-5, 30), -5.0, 500.0, b2f(st[4])]))
+    mode = rnd.choice([0, 0, 1, 1, 2])
+    l = alloc_obj(VT_LIS)
+    wr32(l + 0x2C, l)
+    wr32(l + 0x3C, l)
+    wr32(l + 0x40, p)
+    wr32(l + 0x30, REC_OBJ)
+    wr32(l + 0x4C, 0x90400)
+    wr32(l + 0x50, thr)
+    wr32(l + 0x54, mode)
+    dummy = OBJ_AREA + 62 * OBJ_SZ
+    mu.mem_write(dummy, bytes(0x40))
+    if with_timer:
+        wr32(l + 0x1C, dummy)
+    return st, sc, p, l, thr, mode, dummy
+
+
+def fn_listener_result(l, dummy):
+    fired = [e for e in LOG if e[0] == "sink"]
+    t = rd32(l + 0x1C)
+    if t and t != dummy:
+        timer = "%08x\t%d\t%x\t%08x" % (rd32(t + 4), rd32(t + 0x14), rd32(t + 0x10), rd32(t + 8))
+    else:
+        timer = "-\t-\t-\t-"
+    cancelled = 1 if rd32(dummy + 0x10) & 0x10000 else 0
+    return "%d\t%08x\t%s\t%d" % (len(fired), fired[0][6] if fired else 0, timer, cancelled)
+
+
+def fn_decide_vectors(rnd, n):
+    out = []
+    for _ in range(n):
+        st, sc, p, l, thr, mode, dummy = fn_listener_setup(rnd, rnd.random() < 0.5)
+        near = rnd.random() < 0.3
+        v = f2b(b2f(thr) + rnd.choice([0.0, 0.001, -0.004, 0.005, -0.005, 0.0049, 0.006])) if near else \
+            f2b(rnd.choice([0.0, 60.0, 24.0, -3.0, rnd.uniform(-5, 100)]))
+        wr32(TMP + 0x80, v)
+        has_timer = rd32(l + 0x1C) != 0
+        call(0x6F4A9C70, ecx=l, stack_args=(TMP + 0x80,))
+        out.append("\t".join("%08x" % x if i != 1 and i != 3 else str(x) for i, x in enumerate(st)) +
+                   "	%08x	%d	%08x	%d	" % (thr, mode, v, has_timer) + fn_listener_result(l, dummy))
+    return out
+
+
+def fn_jump_vectors(rnd, n):
+    out = []
+    for _ in range(n):
+        st, sc, p, l, thr, mode, dummy = fn_listener_setup(rnd, rnd.random() < 0.5)
+        t = b2f(thr)
+
+        def pick():
+            r = rnd.random()
+            if r < 0.3:
+                return f2b(t + rnd.choice([0.0, 0.001, -0.004, 0.005, -0.005, 0.0049, 0.006]))
+            if r < 0.6:
+                return f2b(t + rnd.choice([-1.0, 1.0, -10.0, 10.0, 0.1, -0.1]))
+            return f2b(rnd.uniform(-5, 100))
+        old, new = pick(), pick()
+        wr32(TMP + 0x80, new)
+        wr32(TMP + 0x84, old)
+        has_timer = rd32(l + 0x1C) != 0
+        call(0x6F4A9CF0, ecx=l, stack_args=(TMP + 0x80, TMP + 0x84))
+        out.append("\t".join("%08x" % x if i != 1 and i != 3 else str(x) for i, x in enumerate(st)) +
+                   "\t%08x\t%d\t%08x\t%08x\t%d\t" % (thr, mode, new, old, has_timer) + fn_listener_result(l, dummy))
+    return out
+
+
+def fn_cross_vectors(rnd, n):
+    out = []
+    for _ in range(n):
+        st, sc, p, l, thr, mode, dummy = fn_listener_setup(rnd, False)
+        wr32(TMP + 0x80, thr)
+        call(0x6F4A8FD0, ecx=p, stack_args=(TMP + 0x90, TMP + 0x80))
+        out.append("\t".join("%08x" % x if i != 1 and i != 3 else str(x) for i, x in enumerate(st)) +
+                   "\t%08x\t%08x" % (thr, rd32(TMP + 0x90)))
+    return out
+
+
+def fn_mod_vectors(rnd, n):
+    out = []
+    for _ in range(n):
+        st = fn_state(rnd)
+        sc = fn_setup(*st)
+        rate = f2b(rnd.choice([-1.0, 1.0, 0.5, -0.5, 1e-7, -1.9e-7, 2e-7, 0.0, 24 / 240.0, rnd.uniform(-3, 3)]))
+        hor = f2b(rnd.choice([0.0, 1e-7, 1.9e-7, 2e-7, 1e-4, 1.0, 61.0, 300.0, 1000.0, rnd.uniform(0.0, 120.0)]))
+        if rnd.random() < 0.05:
+            hor = FLT_MAX
+        sc.add_mod(rate, hor)
+        p = sc.prop
+        ents = sc.heap_entries()
+        live = [e for e in ents if not (e[2] & 0x10000)]
+        t = live[0] if live else None
+        ent = "%08x	%d	%x" % (t[0], t[1], t[2]) if t else "-	-	-"
+        # period of the entry
+        n_h = rd32(Q + 0x20)
+        per = "-"
+        if t:
+            arr = rd32(Q + 0x10)
+            for i in range(1, n_h):
+                e = rd32(arr + 4 * i)
+                if rd32(e + 0x14) == t[1]:
+                    per = "%08x" % rd32(e + 8)
+        out.append("	".join("%08x" % x if i != 1 and i != 3 else str(x) for i, x in enumerate(st)) +
+                   "	%08x	%08x	%08x	%08x	%08x	%d	%s	%s" % (rate, hor, rd32(p + 0x78), rd32(p + 0x7C), rd32(p + 0x70), rd32(p + 0x74), ent, per))
+    return out
+
+
+def fnvec(outdir, n, seed):
+    rnd = random.Random(seed)
+    for name, fn in (("eval", fn_eval_vectors), ("slope", fn_slope_vectors), ("decide", fn_decide_vectors),
+                     ("jump", fn_jump_vectors), ("cross", fn_cross_vectors), ("mod", fn_mod_vectors)):
+        lines = fn(rnd, n)
+        path = os.path.join(outdir, "agile_fn_%s.tsv" % name)
+        with open(path, "w", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
+        print(name, len(lines), path)
+
+
 def gen_scenario(rnd):
     """A random scenario description: start state, operations by tick, and the number of ticks to run."""
     r = rnd.random()
@@ -550,5 +727,7 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "probe"
     if cmd == "probe":
         probe()
+    elif cmd == "fnvec":
+        fnvec(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]) if len(sys.argv) > 4 else 1)
     elif cmd == "gen":
         gen(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]) if len(sys.argv) > 4 else 1)

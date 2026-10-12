@@ -86,7 +86,6 @@ struct Property {
 struct Modifier {
     prop: PropId,
     rate: F32,
-    horizon: F32,
     active: bool,
     timer: Option<usize>,
 }
@@ -99,6 +98,8 @@ struct Listener {
     message: u32,
     timer: Option<usize>,
     alive: bool,
+    /// A stand-in for "the listener has a timer" in raw tests ([`Agile::listener_raw`]).
+    raw_dummy: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -319,7 +320,7 @@ impl Agile {
             rate
         };
         let id = ModId(self.mods.len());
-        self.mods.push(Modifier { prop: p, rate: stored, horizon, active: true, timer: None });
+        self.mods.push(Modifier { prop: p, rate: stored, active: true, timer: None });
         // Linking sends "begin" to the modifier: the rate joins the slope, the lifetime timer starts.
         self.add_slope(p, stored, t);
         let slot = if fl(horizon) < f32::from_bits(FOREVER_BITS) {
@@ -354,7 +355,7 @@ impl Agile {
     /// [`Agile::take_events`]).
     pub fn add_listener(&mut self, p: PropId, mode: u32, threshold: F32, message: u32, t: &Tables) -> LisId {
         let id = LisId(self.lis.len());
-        self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true });
+        self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true, raw_dummy: None });
         // Creation arms the 0.1 s timer; linking arms (and cancels) the cleanup entry and subscribes at the head.
         let slot = self.arm(Owner::Listener(id), F32(FIRST_LISTENER_TIMER_BITS), true, None);
         self.lis[id.0].timer = Some(slot);
@@ -408,11 +409,10 @@ impl Agile {
         if lis.mode == 0 {
             let from = if near_old { has_timer } else { thr < fl(old) };
             from && (near_new || thr > fl(new))
-        } else if lis.mode == 1 {
+        } else {
+            // Any other mode takes the rising branch (`0x6F4A9A07`).
             let from = if near_old { has_timer } else { fl(old) < thr };
             from && (near_new || thr < fl(new))
-        } else {
-            false
         }
     }
 
@@ -463,6 +463,85 @@ impl Agile {
         }
         let slot = self.arm(Owner::Listener(l), dt, true, None);
         self.lis[l.0].timer = Some(slot);
+    }
+
+    // -------------------------------------------------------------------------------------- raw access (vectors)
+
+    /// A property with every field given (tests against the per-function vectors).
+    pub fn property_raw(&mut self, base: F32, slope: F32, lo: F32, hi: F32, t0: F32, t0_row: u32) -> PropId {
+        self.props.push(Property { base, slope, lo, hi, t0, t0_row, subs: Vec::new() });
+        PropId(self.props.len() - 1)
+    }
+
+    /// `(base, slope, t0, t0 row)` of a property.
+    pub fn property_state(&self, p: PropId) -> (F32, F32, F32, u32) {
+        let pr = &self.props[p.0];
+        (pr.base, pr.slope, pr.t0, pr.t0_row)
+    }
+
+    /// Adds `delta` to the slope of `p` (`0x6F4A9320`): the base is refreshed first.
+    pub fn apply_rate(&mut self, p: PropId, delta: F32, t: &Tables) {
+        self.add_slope(p, delta, t);
+    }
+
+    /// A listener that exists without creation side effects. `with_timer` gives it a stand-in timer (so that the
+    /// "has a timer" test of the crossing detector is true); the stand-in is cancelled by an evaluation.
+    pub fn listener_raw(&mut self, p: PropId, mode: u32, threshold: F32, message: u32, with_timer: bool) -> LisId {
+        let id = LisId(self.lis.len());
+        self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true, raw_dummy: None });
+        if with_timer {
+            self.slots.push(Some(Entry {
+                expiry: F32(FOREVER_BITS),
+                seq: 0,
+                owner: None,
+                periodic: false,
+                period: ZERO,
+                cancelled: false,
+            }));
+            let slot = self.slots.len() - 1;
+            self.lis[id.0].timer = Some(slot);
+            self.lis[id.0].raw_dummy = Some(slot);
+        }
+        id
+    }
+
+    /// `0x6F4A9C70` with the value `v`.
+    pub fn evaluate(&mut self, l: LisId, v: F32, t: &Tables) {
+        self.listener_value(l, v, t);
+    }
+
+    /// `0x6F4A9CF0`: the value jumped from `old` to `new`.
+    pub fn jump(&mut self, l: LisId, old: F32, new: F32, t: &Tables) {
+        self.listener_jump(l, old, new, t);
+    }
+
+    /// `0x6F4A8FD0`.
+    pub fn crossing_time(&self, p: PropId, thr: F32, t: &Tables) -> F32 {
+        self.time_to_cross(p, thr, t)
+    }
+
+    /// The live timer of a listener other than the raw stand-in: `(expiry, sequence, periodic, period)`.
+    pub fn listener_timer(&self, l: LisId) -> Option<(F32, u32, bool, F32)> {
+        let slot = self.lis[l.0].timer?;
+        if Some(slot) == self.lis[l.0].raw_dummy {
+            return None;
+        }
+        let e = self.slots[slot].as_ref()?;
+        Some((e.expiry, e.seq, e.periodic, e.period))
+    }
+
+    /// The lifetime timer of a modifier: `(expiry, sequence, periodic, period)`.
+    pub fn modifier_timer(&self, m: ModId) -> Option<(F32, u32, bool, F32)> {
+        let e = self.slots[self.mods[m.0].timer?].as_ref()?;
+        Some((e.expiry, e.seq, e.periodic, e.period))
+    }
+
+    /// Whether the raw stand-in timer of a listener was cancelled.
+    pub fn raw_timer_cancelled(&self, l: LisId) -> bool {
+        self.lis[l.0]
+            .raw_dummy
+            .and_then(|s| self.slots[s].as_ref())
+            .is_some_and(|e| e.cancelled)
     }
 
     // ----------------------------------------------------------------------------------------------------- tick
