@@ -1,13 +1,7 @@
 {
  "wave": "3",
- "updated": "2026-10-12 19:55 (UTC+5)",
+ "updated": "2026-10-12 20:30 (UTC+5)",
  "lanes": [
-  {
-   "id": "S5",
-   "model": "Sonnet",
-   "task": "Push-apart neighbour gather (`0x6F495D60` chain), Unicorn proof, wire into the mover",
-   "status": "running"
-  },
   {
    "id": "S9",
    "model": "Sonnet",
@@ -27,10 +21,28 @@
    "status": "running"
   },
   {
+   "id": "S12",
+   "model": "Sonnet",
+   "task": "Heroes: ability learning (AHer), hero skill points, kill XP into the death path",
+   "status": "running"
+  },
+  {
+   "id": "H17",
+   "model": "Haiku",
+   "task": "Map render: missing doodad models (variations), team-colour textures, alpha blending",
+   "status": "running"
+  },
+  {
+   "id": "S5",
+   "model": "Sonnet",
+   "task": "Push-apart neighbour gather (`0x6F495D60` chain), Unicorn proof, wire into the mover (merged)",
+   "status": "done"
+  },
+  {
    "id": "H16",
    "model": "Haiku",
-   "task": "Cliff tilesets + textures, doodads and pre-placed units in the map render",
-   "status": "running"
+   "task": "Cliff tilesets + textures, doodads and pre-placed units in the map render (merged)",
+   "status": "done"
   },
   {
    "id": "S6",
