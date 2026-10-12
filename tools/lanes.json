@@ -1,13 +1,7 @@
 {
  "wave": "3",
- "updated": "2026-10-13 03:20 (UTC+5)",
+ "updated": "2026-10-13 04:30 (UTC+5)",
  "lanes": [
-  {
-   "id": "S17",
-   "model": "Sonnet",
-   "task": "Other agile classes: pulse/velocity modifiers → mana/life regen and ability cooldowns on the agile engine",
-   "status": "running"
-  },
   {
    "id": "S18",
    "model": "Sonnet",
@@ -31,6 +25,18 @@
    "model": "Sonnet",
    "task": "Undead and night elf AI production stalls (acolyte lumber/haunted mine, wisp entangle), AI hero skills (SetHeroLevels)",
    "status": "running"
+  },
+  {
+   "id": "S22",
+   "model": "Sonnet",
+   "task": "Why AI waves stop after the second one (captain combat flag stuck); first base attack, game end",
+   "status": "running"
+  },
+  {
+   "id": "S17",
+   "model": "Sonnet",
+   "task": "Other agile classes: pulse/velocity modifiers → mana/life regen and ability cooldowns on the agile engine (merged)",
+   "status": "done"
   },
   {
    "id": "S19",
