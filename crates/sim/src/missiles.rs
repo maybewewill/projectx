@@ -484,6 +484,7 @@ pub struct LaunchTarget {
 /// `|d + v t| = speed t`; it is the larger root even when negative), clamped into the whole-map rectangle
 /// `rect = (y0, x0, y1, x1)` (`0x6F00F560`). With no solution the point is the target's position. `z` = `ground`
 /// plus `impact` (soft add) in both cases.
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn launch_target(
     launch: (F32, F32),
     pos: (F32, F32),
