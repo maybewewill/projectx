@@ -1358,6 +1358,10 @@ pub struct Game {
     pub(crate) day_cycle: crate::daynight::DayCycle,
     /// Training queues, constructions, research and worker cycles (see `production.rs`).
     pub(crate) production: crate::production::Production,
+    /// The agile property engine: countdowns of timed objects, building life, the time of day (`crate::agile`).
+    pub(crate) agile: crate::agile::Agile,
+    /// The time-of-day modifier and listener on top of the agile engine (`crate::daynight`).
+    pub(crate) tod: crate::daynight::TimeOfDay,
 }
 
 impl Default for Game {
@@ -1436,6 +1440,8 @@ impl Game {
             hero_attributes: BTreeMap::new(),
             day_cycle: crate::daynight::DayCycle::default(),
             production: crate::production::Production::default(),
+            agile: crate::agile::Agile::new(),
+            tod: crate::daynight::TimeOfDay::default(),
         }
     }
 

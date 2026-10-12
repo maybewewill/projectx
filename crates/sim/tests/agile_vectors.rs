@@ -36,7 +36,7 @@ struct Scenario {
     hi: u32,
     ticks: usize,
     ops: Vec<(usize, Op)>,
-    events: Vec<(usize, u32, u32, usize)>,
+    events: Vec<Event>,
     values: Vec<(usize, u32)>,
 }
 
@@ -83,7 +83,9 @@ fn parse() -> Vec<Scenario> {
     out
 }
 
-fn run(s: &Scenario, t: &Tables) -> (Vec<(usize, u32, u32, usize)>, Vec<(usize, u32)>) {
+type Event = (usize, u32, u32, usize);
+
+fn run(s: &Scenario, t: &Tables) -> (Vec<Event>, Vec<(usize, u32)>) {
     let mut w = Agile::new();
     w.set_clock(F32(s.now), s.row);
     let p = w.new_property(F32(s.base), F32(s.lo), F32(s.hi));

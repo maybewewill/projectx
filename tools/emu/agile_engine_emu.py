@@ -76,8 +76,13 @@ def f2b(v):
     return struct.unpack("<I", struct.pack("<f", v))[0]
 
 
+STACK2 = BASE + 0x1FF000
+_TOP = [emu.TOP]
+CHAIN = dict(handler=None, stop=False)
+
+
 def call(fn, ecx=None, edx=None, stack_args=()):
-    esp = emu.TOP
+    esp = _TOP[0]
     for a in reversed(stack_args):
         esp -= 4
         mu.mem_write(esp, struct.pack("<I", a & 0xFFFFFFFF))
@@ -179,6 +184,9 @@ def sink_hook(uc, address, size, user):
     LOG.append(("sink", rd32(msg), rd32(msg + 4), rd32(msg + 8), rd32(msg + 0xC), rd32(Q + 0x44), rd32(Q + 0x40)))
     uc.reg_write(UC_X86_REG_ESP, esp + 8)
     uc.reg_write(UC_X86_REG_EIP, ret)
+    if CHAIN["handler"] is not None:
+        CHAIN["stop"] = True
+        uc.emu_stop()
 
 
 def init_world():
@@ -339,7 +347,32 @@ def pump_to(target_bits):
 
 def advance(inc_bits):
     wr32(TMP + 0x30, inc_bits)
-    call(0x6F46E9E0, ecx=TMP + 0x30, edx=Q)
+    if CHAIN["handler"] is None:
+        call(0x6F46E9E0, ecx=TMP + 0x30, edx=Q)
+        return
+    # The handler runs while the pump is suspended inside the callback (the queue time is the firing time).
+    esp = _TOP[0] - 4
+    mu.mem_write(esp, struct.pack("<I", emu.SENT))
+    mu.reg_write(UC_X86_REG_ESP, esp)
+    mu.reg_write(UC_X86_REG_ECX, TMP + 0x30)
+    mu.reg_write(UC_X86_REG_EDX, Q)
+    start = 0x6F46E9E0
+    while True:
+        CHAIN["stop"] = False
+        mu.emu_start(start, emu.SENT, count=emu.MAX_INSNS)
+        if mu.reg_read(UC_X86_REG_EIP) == emu.SENT:
+            break
+        if not CHAIN["stop"]:
+            raise RuntimeError("advance stopped at %#x" % mu.reg_read(UC_X86_REG_EIP))
+        ctx = mu.context_save()
+        saved_top = _TOP[0]
+        _TOP[0] = STACK2
+        try:
+            CHAIN["handler"]()
+        finally:
+            _TOP[0] = saved_top
+        mu.context_restore(ctx)
+        start = mu.reg_read(UC_X86_REG_EIP)
 
 
 def dump_heap():
@@ -723,9 +756,127 @@ def gen(path, count, seed):
     print("wrote", path, "scenarios", count, "events", fired)
 
 
+def chainvec():
+    """Two countdowns in a row: the second starts inside the handler of the first (the pump is suspended there, the
+    queue time is the firing time). Prints `bldtm1 bldtm2 t_start steps1 steps2 clock2 queue_now2`; steps2 counts
+    the ticks after the first completion's tick."""
+    print("# bldtm1 bldtm2 t_start steps1 steps2 clock_bits2 queue_now2 (tools/emu/agile_engine_emu.py chainvec)")
+    for b1, b2 in ((1, 1), (5, 5), (5, 20), (15, 15), (15, 30), (30, 15), (20, 20), (60, 1), (45, 45), (100, 5)):
+        for t_start in (0, 7, 1234):
+            sc = Scn(0, 0, 0)
+            for _ in range(t_start):
+                sc.step()
+            one = f2b(1.0)
+
+            def start(b):
+                total = f2b(float(b))
+                horizon = sadd(sdiv(total, one), one)
+                sc.pw_new = make_prop(total, NEG_FLT_MAX, FLT_MAX)
+                sc.prop = sc.pw_new
+                sc.pw = wrapper(VT_W_FLOAT, sc.prop)
+                sc.add_mod(f2b(-1.0), horizon)
+                sc.add_lis(0, 0, 0xD01C4)
+
+            start(b1)
+            sc.events = []
+            sc.nlog = len(LOG)
+            done = []
+
+            def handler():
+                sc._collect()
+                if len(done) == 0:
+                    done.append(sc.tick)
+                    start(b2)
+                    sc.nlog = len(LOG)
+            CHAIN["handler"] = handler
+            steps = 0
+            second = None
+            first_step = None
+            while True:
+                sc.tick = steps
+                advance(TICK)
+                steps += 1
+                if done and first_step is None:
+                    first_step = steps
+                evs = [l for l in LOG if l[0] == "sink"]
+                if len(evs) >= 2:
+                    second = (steps, clock()[0], evs[1][6])
+                    break
+                if steps > 90000:
+                    raise RuntimeError("no completion")
+            CHAIN["handler"] = None
+            print(b1, b2, t_start, first_step, second[0] - first_step, "%08x" % second[1], "%08x" % second[2])
+
+
+def todvec():
+    """The time of day (`0x6F429770`): a forever modifier of rate DIV(MUL(scale, DayHours), DayLength), a rising listener at
+    DayHours and the wrap handler `0x6F42FC9F` (value := 0.0, run inside the callback). Prints
+    `length hours scale start ticks` then `W tick clock_bits` per wrap and `V tick value_bits` checkpoints."""
+    print("# length hours scale start ticks | W tick clock | V tick value (tools/emu/agile_engine_emu.py todvec)")
+    cases = ((240.0, 24.0, 1.0, 0.0), (240.0, 24.0, 1.0, 12.0), (240.0, 24.0, 1.0, 23.9), (120.0, 24.0, 2.0, 5.5),
+             (60.0, 12.0, 0.5, 3.0), (37.0, 9.0, 2.5, 0.0), (240.0, 24.0, 0.1, 8.0))
+    for length, hours, scale, start in cases:
+        ticks = 80000
+        sc = Scn(0, 0, f2b(start))
+        rate = sdiv(smul(f2b(scale), f2b(hours)), f2b(length))
+        sc.add_mod(rate, 0)
+        sc.add_lis(1, f2b(hours), 0x80262)
+        waves = []
+        vals = []
+
+        def handler():
+            sc._collect()
+            sc.set_value(f2b(0.0))
+            waves.append((sc.tick, rd32(Q + 0x40)))
+            sc.nlog = len(LOG)
+        CHAIN["handler"] = handler
+        print(length, hours, scale, start, ticks, "%08x" % rate)
+        for t in range(ticks):
+            sc.tick = t
+            advance(TICK)
+            if t % 4000 == 0 or t == ticks - 1:
+                vals.append((t, sc.value()))
+        CHAIN["handler"] = None
+        for (t, q) in waves:
+            print("W", t, "%08x" % q)
+        for (t, v) in vals:
+            print("V", t, "%08x" % v)
+        print("END")
+
+
+def cdvec():
+    """Completion tick of a countdown started `t_start` ticks into the game (what Agile::start_countdown models):
+    prints `bldtm t_start steps clock_after queue_now` where steps counts the ticks after the start (1-based)."""
+    print("# bldtm t_start steps clock_bits queue_now_bits (tools/emu/agile_engine_emu.py cdvec)")
+    for bldtm in (1, 5, 15, 20, 30, 45, 60, 75, 100, 150, 250, 301):
+        for t_start in (0, 7, 1234):
+            total = f2b(float(bldtm))
+            sc = Scn(0, 0, total)
+            for _ in range(t_start):
+                sc.step()
+            one = f2b(1.0)
+            horizon = sadd(sdiv(total, one), one)
+            sc.add_mod(f2b(-1.0), horizon)
+            sc.add_lis(0, 0, 0xD01C4)
+            steps = 0
+            sc.events = []
+            while not sc.events:
+                sc.step()
+                steps += 1
+                if steps > 80000:
+                    raise RuntimeError("no completion")
+            print(bldtm, t_start, steps, "%08x" % clock()[0], "%08x" % sc.events[0][1])
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "probe"
-    if cmd == "probe":
+    if cmd == "cdvec":
+        cdvec()
+    elif cmd == "todvec":
+        todvec()
+    elif cmd == "chainvec":
+        chainvec()
+    elif cmd == "probe":
         probe()
     elif cmd == "fnvec":
         fnvec(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]) if len(sys.argv) > 4 else 1)

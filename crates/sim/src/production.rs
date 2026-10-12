@@ -35,13 +35,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use softfloat::F32;
 
+use crate::agile::{Agile, Countdown, LisId};
 use crate::economy::{
     credit, Flags, Res, TrainError, TrainItem, TrainOutcome, TrainQueue,
-    TrainTimer, Worker,
+    TrainTimer, TrainTimers, Worker,
 };
 use crate::natives::game::{Game, ObjKey, Object};
 use crate::orders::{Order, OrderClass, ORDER_MOVE};
-use crate::timer::TimerQueue;
+use crate::timer::{TimerId, TimerQueue};
 use crate::unit_counts::{class_of, REGISTERED_COMPLETED, REGISTERED_IN_PROGRESS};
 
 /// Class bit of a town hall in the unit classification word (`UNIT_TYPE_TOWNHALL`).
@@ -294,6 +295,9 @@ struct Construction {
     /// The life modifier of the construction tick (`0x6F045600`): start life and rate per second, when the
     /// soft-float tables are loaded (`construction::life_ramp`).
     ramp: Option<(F32, F32)>,
+    /// The agile countdown that completes the building (with tables) and the life property it raises.
+    cd: Option<Countdown>,
+    life: Option<crate::agile::PropId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -302,6 +306,7 @@ struct Research {
     done_at: f32,
     gold: i32,
     lumber: i32,
+    cd: Option<Countdown>,
 }
 
 /// A unit that is turning into another type in place (a town hall upgrade).
@@ -309,6 +314,57 @@ struct Research {
 struct UnitUpgrade {
     to: u32,
     done_at: f32,
+    cd: Option<Countdown>,
+}
+
+/// What an agile countdown completes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Done {
+    Train(ObjKey),
+    Build(ObjKey),
+    Research(ObjKey),
+    Upgrade(ObjKey),
+}
+
+/// The agile countdowns in flight, by listener.
+pub(crate) type Countdowns = BTreeMap<LisId, (Done, Countdown)>;
+
+/// The training clock on the agile engine: a head's countdown is a property run down by a modifier, completed by a
+/// listener (CONFIRMED mechanism, docs/spec/agile.md).
+struct AgileTrain<'a> {
+    agile: &'a mut Agile,
+    countdowns: &'a mut Countdowns,
+    tables: &'a softfloat::Tables,
+}
+
+impl TrainTimers for AgileTrain<'_> {
+    fn start(&mut self, seconds: f32, _periodic: bool, payload: TrainTimer) -> TimerId {
+        let building = ObjKey(payload.building as u32);
+        let cd = self.agile.start_countdown(
+            F32::from_bits(seconds.to_bits()),
+            F32::ONE,
+            false,
+            crate::construction::COMPLETION_MESSAGE,
+            self.tables,
+        );
+        match cd.listener {
+            Some(l) => {
+                self.countdowns.insert(l, (Done::Train(building), cd));
+                TimerId(l.0 as u32)
+            }
+            None => TimerId(u32::MAX),
+        }
+    }
+
+    fn cancel(&mut self, id: TimerId) -> bool {
+        match self.countdowns.remove(&LisId(id.0 as usize)) {
+            Some((_, cd)) => {
+                self.agile.end_countdown(&cd, self.tables);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// The production state of a game.
@@ -322,6 +378,8 @@ pub struct Production {
     pub build_seconds: BTreeMap<u32, i32>,
     queues: BTreeMap<ObjKey, TrainQueue>,
     train_timers: TimerQueue<TrainTimer>,
+    /// The agile countdowns in flight (with Game.dll tables the plain timers above are not used).
+    countdowns: Countdowns,
     now: f32,
     harvesters: BTreeMap<ObjKey, Harvester>,
     ai_units: BTreeMap<ObjKey, AiUnit>,
@@ -417,16 +475,11 @@ fn fl(x: f32) -> F32 {
     F32::from_bits(x.to_bits())
 }
 
-/// Seconds until the countdown property of a timed object reaches 0: `R / D` with `R = I2R(bldtm)` stored by
-/// `0x6F023A30` and `D` the speed factor (1.0; the cheat constant of `0x6F281530` is not applied), both through
-/// the soft float (`0x6F030920` computes `R / D` for the modifier horizon, `construction::timed_start`). Without
-/// tables the plain integer is used. Whether the listener fires exactly at `R / D` is the agile engine's
-/// modifier evaluation, which is not decoded (UNSURE).
+/// The total time `R` of a countdown: `I2R(bldtm)` through the soft float when the tables are loaded (the agile
+/// engine then runs the countdown, `Agile::start_countdown`); the plain integer otherwise.
 fn countdown_seconds(tables: Option<&softfloat::Tables>, bldtm: i32) -> f32 {
     match tables {
-        Some(t) => {
-            softfloat::arith::div(softfloat::conv::i2r(bldtm), F32::ONE, t).to_f32()
-        }
+        Some(_) => softfloat::conv::i2r(bldtm).to_f32(),
         None => bldtm as f32,
     }
 }
@@ -585,9 +638,7 @@ impl Game {
         let result = queue.enqueue(&mut self.economy, owner as usize, item, used, cap);
         if result.is_ok() {
             // The head starts at once when nothing runs (the food is taken then).
-            let mut timers = std::mem::take(&mut self.production.train_timers);
-            let _ = queue.try_start(&mut timers, &mut used, cap, building.0 as usize);
-            self.production.train_timers = timers;
+            let _ = self.with_train_timers(|timers| queue.try_start(timers, &mut used, cap, building.0 as usize));
         }
         self.production.queues.insert(building, queue);
         if used != before {
@@ -791,7 +842,23 @@ impl Game {
         let race = self.player(owner).race;
         let consumed = race == 3 || race == 4;
         let start = self.production.now;
-        self.production.constructions.insert(k, Construction { builder, start, seconds, consumed, ramp });
+        // With tables the agile engine runs the building: the remaining-time property and its listener complete it,
+        // and the life is a property raised by the life modifier (`construction::life_ramp`).
+        let cd = self.start_countdown(seconds, Done::Build(k));
+        let life = match (cd, self.orders.tables.as_ref()) {
+            (Some(_), Some(t)) => {
+                let a = ty.max_life;
+                let total = softfloat::conv::i2r(bldtm);
+                let start_life = softfloat::arith::mul(a, F32::from_bits(0x3DCC_CCCD));
+                let lp = self.agile.new_property(start_life, F32::ZERO, a);
+                if let Some((rate, horizon)) = crate::construction::life_ramp(a, total, total, F32::ONE, t) {
+                    self.agile.add_modifier(lp, rate, horizon, t);
+                }
+                Some(lp)
+            }
+            _ => None,
+        };
+        self.production.constructions.insert(k, Construction { builder, start, seconds, consumed, ramp, cd, life });
         self.production.events.push(ProdEvent::BuildStarted { builder, building: k, type_id });
         Ok(k)
     }
@@ -871,7 +938,9 @@ impl Game {
         }
         self.pay(owner, gold, lumber);
         let done_at = self.production.now + up.seconds_for(level) as f32;
-        self.production.research.insert(building, Research { tech, done_at, gold, lumber });
+        let total = countdown_seconds(self.order_tables(), up.seconds_for(level));
+        let cd = self.start_countdown(total, Done::Research(building));
+        self.production.research.insert(building, Research { tech, done_at, gold, lumber, cd });
         self.production.events.push(ProdEvent::ResearchStarted { building, tech });
         Ok(())
     }
@@ -931,9 +1000,11 @@ impl Game {
         if let Some(p) = self.player_mut(owner) {
             p.counts.begin_in_progress(to, class, false);
         }
-        let seconds = self.production.build_seconds.get(&to).copied().unwrap_or(0) as f32;
+        let bldtm = self.production.build_seconds.get(&to).copied().unwrap_or(0);
+        let seconds = bldtm as f32;
         let done_at = self.production.now + seconds;
-        self.production.unit_upgrades.insert(unit, UnitUpgrade { to, done_at });
+        let cd = self.start_countdown(countdown_seconds(self.order_tables(), bldtm), Done::Upgrade(unit));
+        self.production.unit_upgrades.insert(unit, UnitUpgrade { to, done_at, cd });
         self.production.events.push(ProdEvent::UnitUpgradeStarted { unit, to });
         Ok(())
     }
@@ -1250,6 +1321,7 @@ impl Game {
     /// completions, research completions) in tick order. Cheap when nothing is queued.
     pub fn production_tick(&mut self, now: f32) {
         self.production.now = now;
+        self.agile_tick();
         if !self.production.train_timers.is_empty() {
             loop {
                 let fired = self.production.train_timers.pop_due(now);
@@ -1263,7 +1335,7 @@ impl Game {
                 .production
                 .constructions
                 .iter()
-                .filter(|(_, c)| now >= c.start + c.seconds)
+                .filter(|(_, c)| c.cd.is_none() && now >= c.start + c.seconds)
                 .map(|(&k, _)| k)
                 .collect();
             for k in done {
@@ -1275,7 +1347,7 @@ impl Game {
                 .production
                 .unit_upgrades
                 .iter()
-                .filter(|(_, u)| now >= u.done_at)
+                .filter(|(_, u)| u.cd.is_none() && now >= u.done_at)
                 .map(|(&k, _)| k)
                 .collect();
             for k in done {
@@ -1287,12 +1359,73 @@ impl Game {
                 .production
                 .research
                 .iter()
-                .filter(|(_, r)| now >= r.done_at)
+                .filter(|(_, r)| r.cd.is_none() && now >= r.done_at)
                 .map(|(&k, _)| k)
                 .collect();
             for k in done {
                 self.finish_research(k);
             }
+        }
+    }
+
+    /// One tick of the agile property engine (`0x6F46E9E0` on the world queue, after the timer queue): the clock
+    /// gains 0.005 s, due timers run, and the listeners that fired are dispatched (countdown completions, the
+    /// time-of-day wrap).
+    fn agile_tick(&mut self) {
+        let inc = F32::from_bits(crate::lockstep::TICK_INCREMENT_BITS);
+        self.agile.begin_tick(inc);
+        loop {
+            // The handlers run while the queue time is the firing time (they may start countdowns, which then begin
+            // at that time, as in the original where the handler runs inside the timer callback).
+            let fired = {
+                let tables = self.orders.tables.as_ref();
+                self.agile.next_fired(tables)
+            };
+            let Some(f) = fired else { break };
+            if self.tod.listener == Some(f.listener) {
+                self.time_of_day_wrap();
+                continue;
+            }
+            let Some((done, cd)) = self.production.countdowns.remove(&f.listener) else { continue };
+            if let Some(t) = self.orders.tables.as_ref() {
+                self.agile.end_countdown(&cd, t);
+            }
+            match done {
+                Done::Train(b) => self.train_head_done(b),
+                Done::Build(k) => self.finish_building(k),
+                Done::Research(b) => self.finish_research(b),
+                Done::Upgrade(u) => self.finish_unit_upgrade(u),
+            }
+        }
+    }
+
+    /// Starts the countdown of a timed object on the agile engine when the tables are loaded.
+    fn start_countdown(&mut self, total: f32, done: Done) -> Option<Countdown> {
+        let t = self.orders.tables.as_ref()?;
+        let cd = self.agile.start_countdown(
+            F32::from_bits(total.to_bits()),
+            F32::ONE,
+            false,
+            crate::construction::COMPLETION_MESSAGE,
+            t,
+        );
+        if let Some(l) = cd.listener {
+            self.production.countdowns.insert(l, (done, cd));
+        }
+        Some(cd)
+    }
+
+    /// Runs `f` with the training clock: the agile countdowns when the tables are loaded, the plain timer queue
+    /// otherwise.
+    fn with_train_timers<R>(&mut self, f: impl FnOnce(&mut dyn TrainTimers) -> R) -> R {
+        if let Some(tables) = self.orders.tables.as_ref() {
+            let mut a = AgileTrain { agile: &mut self.agile, countdowns: &mut self.production.countdowns, tables };
+            f(&mut a)
+        } else {
+            let mut timers = std::mem::take(&mut self.production.train_timers);
+            let r = f(&mut timers);
+            self.production.train_timers = timers;
+            r
         }
     }
 
@@ -1306,9 +1439,7 @@ impl Game {
         let cap = self.food_cap_of(owner);
         let mut used = self.food_used_of(owner);
         let before = used;
-        let mut timers = std::mem::take(&mut self.production.train_timers);
-        let outcomes = queue.complete(&mut timers, &mut used, cap, building.0 as usize);
-        self.production.train_timers = timers;
+        let outcomes = self.with_train_timers(|timers| queue.complete(timers, &mut used, cap, building.0 as usize));
         self.production.queues.insert(building, queue);
         if used != before {
             self.food_add_used(owner, used.wrapping_sub(before));
@@ -1334,6 +1465,7 @@ impl Game {
             let frac = if c.seconds <= 0.0 { 1.0 } else { ((now - c.start) / c.seconds).clamp(0.0, 1.0) };
             let max = self.unit(k).max_life.to_f32();
             let life = match c.ramp {
+                _ if c.life.is_some() => self.agile.value(c.life.unwrap()),
                 Some((start_life, rate)) => {
                     let elapsed = fl((now - c.start).clamp(0.0, c.seconds.max(0.0)));
                     let l = softfloat::arith::add(start_life, softfloat::arith::mul(rate, elapsed));
@@ -1372,9 +1504,7 @@ impl Game {
             let mut used = self.food_used_of(owner);
             let before = used;
             let mut queue = self.production.queues.remove(&b).unwrap_or_default();
-            let mut timers = std::mem::take(&mut self.production.train_timers);
-            let _ = queue.retry(&mut timers, &mut used, cap, b.0 as usize);
-            self.production.train_timers = timers;
+            let _ = self.with_train_timers(|timers| queue.retry(timers, &mut used, cap, b.0 as usize));
             self.production.queues.insert(b, queue);
             if used != before {
                 self.food_add_used(owner, used.wrapping_sub(before));

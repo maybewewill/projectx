@@ -18,6 +18,8 @@
 //! Everything here was run against the original in Unicorn (`tools/emu/agile_engine_emu.py`); see the CONFIRMED /
 //! LIKELY / UNSURE marks in docs/spec/agile.md.
 
+use std::collections::VecDeque;
+
 use softfloat::{arith, Tables, F32};
 
 const ZERO: F32 = F32(0);
@@ -126,10 +128,28 @@ pub struct Agile {
     seq: u32,
     /// Pending entries (cancelled ones stay until they pop, as in the original). Indexed by a stable slot id.
     slots: Vec<Option<Entry>>,
+    /// Slot indices that are free again.
+    free: Vec<usize>,
     props: Vec<Property>,
     mods: Vec<Modifier>,
     lis: Vec<Listener>,
-    events: Vec<Fired>,
+    events: VecDeque<Fired>,
+    /// The rest of the current tick (see [`Agile::begin_tick`]).
+    ops: VecDeque<Op>,
+    /// The clock value the running pump pops up to.
+    pump_target: Option<F32>,
+    /// The entry whose callback has run and whose re-arm decision is still to be made (the host handles the events it
+    /// produced first, as the original's handlers run inside the callback).
+    inflight: Option<(usize, Entry)>,
+}
+
+/// A step of a tick (`0x6F46E9E0`).
+#[derive(Debug, Clone, Copy)]
+enum Op {
+    SetNow(F32),
+    Pump,
+    Rebase,
+    NextRow,
 }
 
 impl Agile {
@@ -160,7 +180,7 @@ impl Agile {
 
     /// Takes the listener firings that happened outside a tick (creation, value changes).
     pub fn take_events(&mut self) -> Vec<Fired> {
-        std::mem::take(&mut self.events)
+        std::mem::take(&mut self.events).into()
     }
 
     // ------------------------------------------------------------------------------------------------ properties
@@ -276,8 +296,17 @@ impl Agile {
             period: period_override.unwrap_or(d),
             cancelled: false,
         };
-        self.slots.push(Some(e));
-        self.slots.len() - 1
+        self.put(e)
+    }
+
+    fn put(&mut self, e: Entry) -> usize {
+        if let Some(i) = self.free.pop() {
+            self.slots[i] = Some(e);
+            i
+        } else {
+            self.slots.push(Some(e));
+            self.slots.len() - 1
+        }
     }
 
     /// A timer that exists only to consume a sequence number (the 1e-4 cleanup entry the original arms when a
@@ -292,7 +321,7 @@ impl Agile {
             period: F32(MIN_TIMER_BITS),
             cancelled: true,
         };
-        self.slots.push(Some(e));
+        self.put(e);
     }
 
     fn cancel_timer(&mut self, slot: Option<usize>) {
@@ -384,7 +413,7 @@ impl Agile {
         let timer = self.lis[l.0].timer.take();
         self.cancel_timer(timer);
         let message = self.lis[l.0].message;
-        self.events.push(Fired { listener: l, message, at: F32(self.now), row: self.row });
+        self.events.push_back(Fired { listener: l, message, at: F32(self.now), row: self.row });
     }
 
     /// `0x6F4A9C70`: the value `v` is within the tolerance of the threshold: fire; otherwise look for the crossing.
@@ -441,6 +470,8 @@ impl Agile {
 
     /// `0x6F4A9B70`: cancel the timer and, when the slope heads for the threshold, arm one for the crossing (at most
     /// 4 seconds ahead).
+    // The negated comparisons keep the x87 behaviour for NaN (an unordered compare takes the "not" branch).
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn listener_arm(&mut self, l: LisId, t: &Tables) {
         let timer = self.lis[l.0].timer.take();
         self.cancel_timer(timer);
@@ -490,15 +521,14 @@ impl Agile {
         let id = LisId(self.lis.len());
         self.lis.push(Listener { prop: p, mode, threshold, message, timer: None, alive: true, raw_dummy: None });
         if with_timer {
-            self.slots.push(Some(Entry {
+            let slot = self.put(Entry {
                 expiry: F32(FOREVER_BITS),
                 seq: 0,
                 owner: None,
                 periodic: false,
                 period: ZERO,
                 cancelled: false,
-            }));
-            let slot = self.slots.len() - 1;
+            });
             self.lis[id.0].timer = Some(slot);
             self.lis[id.0].raw_dummy = Some(slot);
         }
@@ -547,12 +577,41 @@ impl Agile {
     // ----------------------------------------------------------------------------------------------------- tick
 
     /// One tick of the property queue (`0x6F46E9E0`): the clock gains `inc`, the due timers fire, and at 300 s the
-    /// clock restarts. Returns the listeners that fired in this tick.
+    /// clock restarts. Returns the listeners that fired in this tick. Hosts whose handlers must run inside the pump
+    /// (new countdowns then start at the firing time) use [`Agile::begin_tick`] and [`Agile::next_fired`] instead.
     pub fn tick(&mut self, inc: F32, t: &Tables) -> Vec<Fired> {
+        self.begin_tick(inc);
+        let mut out = Vec::new();
+        while let Some(f) = self.next_fired(Some(t)) {
+            out.push(f);
+        }
+        out
+    }
+
+    /// The same clock step when nothing is pending (no tables are needed): [`Agile::is_idle`] must hold.
+    pub fn tick_idle(&mut self, inc: F32) -> Vec<Fired> {
+        debug_assert!(self.is_idle());
+        self.begin_tick(inc);
+        let mut out = Vec::new();
+        while let Some(f) = self.next_fired(None) {
+            out.push(f);
+        }
+        out
+    }
+
+    /// Whether no timer is pending.
+    pub fn is_idle(&self) -> bool {
+        self.slots.len() == self.free.len()
+    }
+
+    /// Plans a tick: the clock gains `inc`; at the 300 s horizon the pump runs up to it, every pending expiry loses it,
+    /// the row counts and the pump runs again from the excess (`0x6F46E9E0`). The steps run inside
+    /// [`Agile::next_fired`].
+    pub fn begin_tick(&mut self, inc: F32) {
+        debug_assert!(self.ops.is_empty() && self.pump_target.is_none() && self.inflight.is_none());
         let tmp = arith::add(F32(self.now), inc);
         if fl(HORIZON) > fl(tmp) {
-            self.now = tmp.0;
-            self.pump(t);
+            self.ops.extend([Op::SetNow(tmp), Op::Pump]);
         } else {
             let excess = arith::sub(tmp, HORIZON);
             let excess = if f32::from_bits(arith::sub(excess, ZERO).0 & 0x7FFF_FFFF) < f32::from_bits(TINY_SLOPE_BITS) {
@@ -560,16 +619,71 @@ impl Agile {
             } else {
                 excess
             };
-            self.now = HORIZON.0;
-            self.pump(t);
-            for e in self.slots.iter_mut().flatten() {
-                e.expiry = arith::sub(e.expiry, HORIZON);
-            }
-            self.row += 1;
-            self.now = excess.0;
-            self.pump(t);
+            self.ops.extend([Op::SetNow(HORIZON), Op::Pump, Op::Rebase, Op::NextRow, Op::SetNow(excess), Op::Pump]);
         }
-        std::mem::take(&mut self.events)
+    }
+
+    /// Runs the planned tick until the next listener fires and returns it; `None` when the tick is complete. The queue
+    /// time is the firing time while the host handles the returned event (a countdown it starts then begins at that
+    /// time, as in the original where the handler runs inside the timer callback). Events made outside a tick (a
+    /// listener that fires when it is created, a value that was set) come first.
+    pub fn next_fired(&mut self, t: Option<&Tables>) -> Option<Fired> {
+        loop {
+            if let Some(f) = self.events.pop_front() {
+                return Some(f);
+            }
+            if let Some((i, e)) = self.inflight.take() {
+                self.finish_entry(i, e);
+                continue;
+            }
+            if let Some(target) = self.pump_target {
+                match self.next_due(target) {
+                    Some(i) => {
+                        let e = self.slots[i].take().unwrap();
+                        self.now = e.expiry.0;
+                        if e.cancelled {
+                            self.free.push(i);
+                            continue;
+                        }
+                        self.run_timer(i, &e, t.expect("a pending timer needs the tables"));
+                        self.inflight = Some((i, e));
+                    }
+                    None => {
+                        self.now = target.0;
+                        self.pump_target = None;
+                    }
+                }
+                continue;
+            }
+            match self.ops.pop_front() {
+                None => return None,
+                Some(Op::SetNow(x)) => self.now = x.0,
+                Some(Op::Pump) => self.pump_target = Some(F32(self.now)),
+                Some(Op::Rebase) => {
+                    for e in self.slots.iter_mut().flatten() {
+                        e.expiry = arith::sub(e.expiry, HORIZON);
+                    }
+                }
+                Some(Op::NextRow) => self.row += 1,
+            }
+        }
+    }
+
+    /// After the callback of entry `e` (slot `i`): periodic and not cancelled meanwhile -> re-armed at expiry + period
+    /// with the same sequence number; otherwise the slot is free.
+    fn finish_entry(&mut self, i: usize, e: Entry) {
+        let still_ours = match e.owner {
+            Some(Owner::Modifier(m)) => self.mods[m.0].timer == Some(i),
+            Some(Owner::Listener(l)) => self.lis[l.0].timer == Some(i),
+            None => false,
+        };
+        if e.periodic && still_ours {
+            let mut again = e.clone();
+            again.expiry = arith::add(F32(self.now), e.period);
+            self.slots[i] = Some(again);
+        } else {
+            self.free.push(i);
+        }
     }
 
     fn next_due(&self, target: F32) -> Option<usize> {
@@ -593,32 +707,6 @@ impl Agile {
         best
     }
 
-    /// `0x6F46E910`: pops every entry with expiry <= the clock; the clock is the entry's expiry while it runs.
-    fn pump(&mut self, t: &Tables) {
-        let target = F32(self.now);
-        // The earliest entry overall must pop first, so look at all entries (cancelled ones too).
-        while let Some(i) = self.next_due(target) {
-            let e = self.slots[i].take().unwrap();
-            self.now = e.expiry.0;
-            if e.cancelled {
-                continue;
-            }
-            self.run_timer(i, &e, t);
-            // Periodic and not cancelled meanwhile: re-arm at expiry + period, same sequence number.
-            let still_ours = match e.owner {
-                Some(Owner::Modifier(m)) => self.mods[m.0].timer == Some(i),
-                Some(Owner::Listener(l)) => self.lis[l.0].timer == Some(i),
-                None => false,
-            };
-            if e.periodic && still_ours {
-                let mut again = e.clone();
-                again.expiry = arith::add(F32(self.now), e.period);
-                self.slots[i] = Some(again);
-            }
-        }
-        self.now = target.0;
-    }
-
     fn run_timer(&mut self, slot: usize, e: &Entry, t: &Tables) {
         match e.owner {
             Some(Owner::Modifier(m)) => {
@@ -628,14 +716,63 @@ impl Agile {
                     self.end_modifier(m, t);
                 }
             }
-            Some(Owner::Listener(l)) => {
-                if self.lis[l.0].alive && self.lis[l.0].timer == Some(slot) {
-                    let p = self.lis[l.0].prop;
-                    let v = self.eval(&self.props[p.0]);
-                    self.listener_value(l, v, t);
-                }
+            Some(Owner::Listener(l)) if self.lis[l.0].alive && self.lis[l.0].timer == Some(slot) => {
+                let p = self.lis[l.0].prop;
+                let v = self.eval(&self.props[p.0]);
+                self.listener_value(l, v, t);
             }
-            None => {}
+            _ => {}
         }
+    }
+}
+
+/// The countdown of a timed object (build, train, research, revive, upgrade): the remaining-time property, the
+/// modifier that runs it down and the listener that posts the completion (`0x6F023A30` + `0x6F030920`,
+/// docs/spec/construction.md section 13.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Countdown {
+    pub prop: PropId,
+    /// `None` when nothing was started (a speed factor below 2e-7 or a paused object).
+    pub modifier: Option<ModId>,
+    pub listener: Option<LisId>,
+}
+
+impl Agile {
+    /// Starts the countdown of an object whose total time is `total` seconds and whose speed factor is `factor`
+    /// (1.0 normally). The listener's message is `message` (`construction::COMPLETION_MESSAGE`). `paused` is the
+    /// object's pause gate (`this+0x48 > 0`).
+    pub fn start_countdown(&mut self, total: F32, factor: F32, paused: bool, message: u32, t: &Tables) -> Countdown {
+        // `0x6F023A30`: the total is stored only when it is not tiny; the property starts at 0.0.
+        let base = if f32::from_bits(arith::sub(total, ZERO).0 & 0x7FFF_FFFF) < f32::from_bits(TINY_RATE_BITS) {
+            ZERO
+        } else {
+            total
+        };
+        let prop = self.new_property(base, F32(0xFF7F_FFFF), F32(FOREVER_BITS));
+        let remaining = self.value(prop);
+        let gate = i32::from(paused);
+        match crate::construction::timed_start(remaining, factor, gate, t) {
+            Some(ts) => {
+                let m = self.add_modifier(prop, ts.slope, ts.horizon, t);
+                let l = self.add_listener(prop, 0, ZERO, message, t);
+                Countdown { prop, modifier: Some(m), listener: Some(l) }
+            }
+            None => Countdown { prop, modifier: None, listener: None },
+        }
+    }
+
+    /// The owner is done with a countdown: the listener and the modifier go away.
+    pub fn end_countdown(&mut self, c: &Countdown, t: &Tables) {
+        if let Some(l) = c.listener {
+            self.remove_listener(l);
+        }
+        if let Some(m) = c.modifier {
+            self.remove_modifier(m, t);
+        }
+    }
+
+    /// Seconds left on a countdown now (the property's value).
+    pub fn remaining(&self, c: &Countdown) -> F32 {
+        self.value(c.prop)
     }
 }

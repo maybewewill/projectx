@@ -554,6 +554,26 @@ pub struct TrainTimer {
     pub building: usize,
 }
 
+/// What a [`TrainQueue`] needs from the clock: start the countdown of a head and cancel it. The plain timer queue is
+/// one implementation (tests, and games without Game.dll tables); the other is the agile countdown of
+/// `crate::production` (CONFIRMED mechanism, `docs/spec/agile.md`: the head completes when its property reaches 0).
+pub trait TrainTimers {
+    /// Starts a countdown of `seconds` for `payload`.
+    fn start(&mut self, seconds: f32, periodic: bool, payload: TrainTimer) -> TimerId;
+    /// Cancels it. Returns whether it was running.
+    fn cancel(&mut self, id: TimerId) -> bool;
+}
+
+impl TrainTimers for TimerQueue<TrainTimer> {
+    fn start(&mut self, seconds: f32, periodic: bool, payload: TrainTimer) -> TimerId {
+        TimerQueue::start(self, seconds, periodic, payload)
+    }
+
+    fn cancel(&mut self, id: TimerId) -> bool {
+        TimerQueue::cancel(self, id)
+    }
+}
+
 /// Why an enqueue is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrainError {
@@ -668,7 +688,7 @@ impl TrainQueue {
     /// (UNSURE). Otherwise the head is [`TrainOutcome::Blocked`]. `None` when the queue is empty or already running.
     pub fn try_start(
         &mut self,
-        timers: &mut TimerQueue<TrainTimer>,
+        timers: &mut (impl TrainTimers + ?Sized),
         food_used: &mut i32,
         food_cap: i32,
         building: usize,
@@ -689,7 +709,7 @@ impl TrainQueue {
     /// The retry on [`TRAIN_EVENT_RETRY`]: the same as [`TrainQueue::try_start`].
     pub fn retry(
         &mut self,
-        timers: &mut TimerQueue<TrainTimer>,
+        timers: &mut (impl TrainTimers + ?Sized),
         food_used: &mut i32,
         food_cap: i32,
         building: usize,
@@ -702,7 +722,7 @@ impl TrainQueue {
     /// removing slot 0). Returns `Finished`, then the next head's outcome if there is one. Ignored when nothing runs.
     pub fn complete(
         &mut self,
-        timers: &mut TimerQueue<TrainTimer>,
+        timers: &mut (impl TrainTimers + ?Sized),
         food_used: &mut i32,
         food_cap: i32,
         building: usize,
@@ -727,7 +747,7 @@ impl TrainQueue {
     #[allow(clippy::too_many_arguments)]
     pub fn cancel(
         &mut self,
-        timers: &mut TimerQueue<TrainTimer>,
+        timers: &mut (impl TrainTimers + ?Sized),
         players: &mut [PlayerEconomy],
         owner: usize,
         food_used: &mut i32,
