@@ -19,6 +19,7 @@
 - Work flow is "Ghidra → spec in plain words → our own Rust code from the spec" (as close to clean-room as possible).
 - At runtime, game data comes from the **user's own copy** of the game (the user's own MPQ files).
 - The simulation must stay deterministic: no `HashMap` with random seeding, no system time, no float ops whose result depends on the platform.
+- **Windows: run Python as `py` (e.g. `py tools/emu/x.py`), never `python`/`python3`** — on this machine those names can resolve to the Microsoft Store redirector, which opens the Store instead of running.
 - Work branch: `ccr-2af97213-0yojbn` (or the one set in the session).
 
 ## 3. Architecture (plan)
@@ -279,9 +280,9 @@ tools/
 
 ```bash
 pip install pefile capstone
-python3 -I tools/analysis/pe_info.py   path/to/Game.dll
-python3 -I tools/analysis/code_stats.py path/to/Game.dll
-python3 -I tools/analysis/fpu_usage.py path/to/Game.dll
+py -I tools/analysis/pe_info.py   path/to/Game.dll
+py -I tools/analysis/code_stats.py path/to/Game.dll
+py -I tools/analysis/fpu_usage.py path/to/Game.dll
 # Ghidra 11.4.2 (JDK 21):
 analyzeHeadless <projdir> war3 -import Game.dll -scriptPath tools/ghidra -postScript Survey.java <outdir>
 analyzeHeadless <projdir> war3 -process Game.dll -noanalysis \
