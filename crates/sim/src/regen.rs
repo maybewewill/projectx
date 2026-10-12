@@ -153,3 +153,15 @@ impl UnitStats {
         self.refresh_both(ag, t);
     }
 }
+
+/// The enum of the `regenType` name table at `0x6FA70F88` (CONFIRMED, read from the table): `always` 1, `blight` 2, `day` 3,
+/// `night` 4; anything else 0. The comparison is taken as case-insensitive (UNSURE: the compare routine was not read).
+pub fn regen_type_from_name(name: &str) -> u32 {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "always" => 1,
+        "blight" => 2,
+        "day" => 3,
+        "night" => 4,
+        _ => 0,
+    }
+}

@@ -473,6 +473,13 @@ pub struct UnitType {
     /// UnitBalance `repulse`, `repulseParam`, `repulseGroup`, `repulsePrio` (records `+0x224..+0x230`): enable flag,
     /// separation table row, group nibble, priority nibble of the push-apart record.
     pub repulse: [i32; 4],
+    /// UnitBalance `regenHP` (record `+0x7C`): life regenerated per second.
+    pub regen_hp: F32,
+    /// UnitBalance `regenMana` (record `+0x8C`): mana regenerated per second.
+    pub regen_mana: F32,
+    /// UnitBalance `regenType` as the enum of the name table at `0x6FA70F88` (record `+0x78`): 0 none, 1 always, 2 blight,
+    /// 3 day, 4 night (`crate::regen::regen_type_from_name`).
+    pub regen_type: u32,
 }
 
 /// The unit type registry, keyed by the raw type id (the four-character code as an integer).
@@ -701,6 +708,12 @@ pub struct UnitObj {
     pub bonuses: crate::auras::StatBonuses,
     /// Hero state, present for a hero type (see `natives/hero.rs`).
     pub hero: Option<HeroObj>,
+    /// Life and mana as agile properties with their base regeneration (`crate::regen`). Present when the softfloat tables
+    /// are loaded; `life`, `mana`, `max_life` and `max_mana` are then a cache of the properties, refreshed after every
+    /// agile tick and by every write path (`Game::write_life` ...).
+    pub stats: Option<crate::regen::UnitStats>,
+    /// The hero's own life regeneration modifier (`0x6F209090`: rebuilt when the strength bonus changes).
+    pub hero_regen_mod: Option<crate::agile::ModId>,
     /// Bit 2 of unit `+0x248` (summoned): the kill experience of the unit is scaled by `SummonedKillFactor`. Set by the
     /// host or a summon (no summon spell is modelled yet).
     pub summoned: bool,

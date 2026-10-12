@@ -132,7 +132,7 @@ fn armed() -> ScriptHost {
         .game()
         .unit_of_handle(global_handle(&host, "ub"))
         .expect("ub is a live unit");
-    host.game_mut().unit_mut(ub_key).life = F32::from_bits(0x4120_0000); // 10.0
+    host.game_mut().write_life(ub_key, F32::from_bits(0x4120_0000)); // 10.0
     host
 }
 

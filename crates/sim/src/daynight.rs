@@ -156,13 +156,15 @@ impl DayWatch {
 /// The time of day on the agile engine (`0x6F429770`, docs/spec/agile.md section 6): float game state 2 is a property
 /// with a forever modifier of rate `scale * DayHours / DayLength` and a rising listener at `DayHours`; the listener's
 /// message resets the value to 0.0 (`0x6F42FC9F`).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TimeOfDay {
     pub(crate) prop: Option<crate::agile::PropId>,
     pub(crate) modifier: Option<crate::agile::ModId>,
     pub(crate) listener: Option<crate::agile::LisId>,
     /// How many times the cycle wrapped.
     pub(crate) wraps: u32,
+    /// The day / night watch of the world (`0x6F429460`).
+    pub(crate) watch: DayWatch,
 }
 
 impl crate::natives::Game {
@@ -179,7 +181,22 @@ impl crate::natives::Game {
         let p = self.agile.new_property(start, F32(0xFF7F_FFFF), F32(crate::agile::FOREVER_BITS));
         let m = self.agile.add_modifier(p, rate, F32(0), tables);
         let l = self.agile.add_listener(p, 1, self.day_cycle.day_hours, WRAP_MESSAGE, tables);
-        self.tod = TimeOfDay { prop: Some(p), modifier: Some(m), listener: Some(l), wraps: 0 };
+        self.tod = TimeOfDay { prop: Some(p), modifier: Some(m), listener: Some(l), wraps: 0, watch: DayWatch::default() };
+        // `0x6F42C210`: the day flag first takes the day rule, then the watch evaluates (no message goes out: the flag is
+        // already right).
+        let now = self.agile.value(p);
+        self.tod.watch.day = self.day_cycle.is_day(now);
+        self.day_watch_run();
+    }
+
+    /// `0x6F429460` on the world's time of day; a changed flag is told to the units (`0x80264` / `0x80265`).
+    pub(crate) fn day_watch_run(&mut self) {
+        let (Some(p), Some(t)) = (self.tod.prop, self.orders.tables.as_ref()) else { return };
+        let cycle = self.day_cycle;
+        let changed = self.tod.watch.recompute(&mut self.agile, t, p, &cycle);
+        if let Some(day) = changed {
+            self.units_day_changed(day);
+        }
     }
 
     /// Float game state 2 (`GetFloatGameState(GAME_STATE_TIME_OF_DAY)`): the agile property's value once the time of day

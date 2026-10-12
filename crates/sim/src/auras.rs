@@ -369,6 +369,9 @@ pub struct AuraBuff {
     pub applied: [Option<F32>; 2],
     /// The damage bonus currently added (Command and Trueshot).
     pub applied_damage: Option<i32>,
+    /// The regeneration modifier the buff owns (Unholy life, Brilliance mana: `0x6F1AD810`, `0x6F1AC990`); a forever modifier on
+    /// the unit's life or mana property, released (delayed destroy) when the effect is taken off.
+    pub regen_mod: Option<crate::agile::ModId>,
 }
 
 /// What a buff does to its unit beyond being listed.
@@ -441,7 +444,8 @@ impl Game {
             .collect();
         for k in keys {
             let u = self.unit(k);
-            if u.dead || u.removed {
+            if u.dead || u.removed || u.stats.is_some() {
+                // Units with stats regenerate through the agile engine (`crate::regen`).
                 continue;
             }
             let (lr, mr) = (u.bonuses.life_regen, u.bonuses.mana_regen);
@@ -559,8 +563,14 @@ impl Game {
                 (AuraKind::Devotion, 0) => self.add_armor(unit, amount),
                 (AuraKind::Endurance, 0) | (AuraKind::Unholy, 0) => self.add_move(unit, amount),
                 (AuraKind::Endurance, 1) => self.add_attack_speed(unit, amount),
-                (AuraKind::Unholy, 1) => self.add_life_regen(unit, amount),
-                (AuraKind::Brilliance, 0) => self.add_mana_regen(unit, amount),
+                (AuraKind::Unholy, 1) => {
+                    self.add_life_regen(unit, amount);
+                    a.regen_mod = self.add_life_regen_modifier(unit, amount);
+                }
+                (AuraKind::Brilliance, 0) => {
+                    self.add_mana_regen(unit, amount);
+                    a.regen_mod = self.add_mana_regen_modifier(unit, amount);
+                }
                 _ => continue,
             }
             a.applied[i] = Some(amount);
@@ -592,6 +602,9 @@ impl Game {
         }
         if let Some(d) = a.applied_damage.take() {
             self.add_damage(unit, d.saturating_neg());
+        }
+        if let Some(m) = a.regen_mod.take() {
+            self.release_modifier(m);
         }
     }
 
@@ -756,6 +769,7 @@ impl Game {
                 values,
                 flags,
                 applied: [None; 2],
+                regen_mod: None,
                 applied_damage: None,
             })),
             expiry: None,

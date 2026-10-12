@@ -537,6 +537,8 @@ pub(crate) fn build(
         buffs: Vec::new(),
         bonuses: crate::auras::StatBonuses::default(),
         hero: is_hero_id(type_id).then(|| gm.new_hero(type_id)),
+        stats: None,
+        hero_regen_mod: None,
         summoned: false,
     };
     // The handle is allocated last, after the unit is built (CONFIRMED, spec section 7). The handle flag
@@ -562,6 +564,7 @@ pub(crate) fn build(
     count_add_completed(gm, key);
     gm.food_apply_creation(key);
     gm.combat_on_create(key);
+    gm.init_unit_stats(key);
     gm.sync_auras(key);
     Some((key, id))
 }
@@ -642,6 +645,8 @@ fn remove(gm: &mut Game, k: ObjKey) {
     gm.food_release(k);
     gm.pr_unit_removed(k);
     gm.unit_mut(k).removed = true;
+    // The removal path refreshes the regeneration modifiers like a death (they go away).
+    gm.stats_set_dead(k, true);
     gm.push_unit_event(UnitEvent::Removed(k));
     for id in REMOVE_SEQUENCE {
         gm.push_unit_event(UnitEvent::Notify { unit: k, id });
@@ -659,9 +664,10 @@ pub(crate) fn set_life(gm: &mut Game, k: ObjKey, value: F32) -> bool {
     } else {
         value
     };
+    // `vf73`: the life property moves to the value (the clamp to the limits is the property's).
+    gm.write_life(k, stored);
     let newly_dead = {
         let u = gm.unit_mut(k);
-        u.life = stored;
         if stored.to_bits() == 0 && !u.dead {
             u.dead = true;
             true
@@ -669,6 +675,10 @@ pub(crate) fn set_life(gm: &mut Game, k: ObjKey, value: F32) -> bool {
             false
         }
     };
+    if newly_dead {
+        // The death handler sets the dead flag and refreshes the regeneration modifiers (they go away).
+        gm.stats_set_dead(k, true);
+    }
     gm.push_unit_event(UnitEvent::Notify {
         unit: k,
         id: EVENT_LIFE_CHANGED,
@@ -685,7 +695,7 @@ fn set_state(gm: &mut Game, k: ObjKey, state: u32, value: F32) -> bool {
     match state {
         STATE_LIFE => set_life(gm, k, value),
         STATE_MANA => {
-            gm.unit_mut(k).mana = value;
+            gm.write_mana(k, value);
             false
         }
         _ => false,
