@@ -189,6 +189,11 @@ impl crate::natives::Game {
         self.day_watch_run();
     }
 
+    /// The day flag of the world (the integer at world `+0x80`, set by the watch; `false` until the time of day runs).
+    pub fn day_flag(&self) -> bool {
+        self.tod.watch.day
+    }
+
     /// `0x6F429460` on the world's time of day; a changed flag is told to the units (`0x80264` / `0x80265`).
     pub(crate) fn day_watch_run(&mut self) {
         let (Some(p), Some(t)) = (self.tod.prop, self.orders.tables.as_ref()) else { return };

@@ -55,6 +55,7 @@ fn parse() -> Vec<Case> {
                     steps: Vec::new(),
                 });
             }
+            "CREATE" => {}
             "OP" => pending_op = Some(rest.to_string()),
             "S" => cur.as_mut().unwrap().steps.push((pending_op.take().unwrap(), rest.to_string())),
             "END" => out.push(cur.take().unwrap()),
@@ -136,4 +137,33 @@ fn regeneration_matches_the_original() {
     for c in &all {
         run(c, &t);
     }
+}
+
+/// The creation of the two properties (`0x6F2A0E30` / `0x6F2ACDE0`): lower limit 0.0 (life only), upper limit, value; the
+/// life then regenerates nothing yet (no modifier). The state after the three setters must match the real setters.
+#[test]
+fn creation_matches_the_original() {
+    let Some(t) = tables() else { return };
+    let mut n = 0;
+    for line in DATA.lines().filter(|l| l.starts_with("CREATE ")) {
+        let f: Vec<&str> = line.split(' ').collect();
+        let (now, row) = (hex(f[1]), f[2].parse().unwrap());
+        let (life_max, life, mana_max, mana) = (F32(hex(f[3])), F32(hex(f[4])), F32(hex(f[5])), F32(hex(f[6])));
+        let mut ag = Agile::new();
+        ag.set_clock(F32(now), row);
+        let neg = F32(0xFF7F_FFFF);
+        let pos = F32(0x7F7F_FFFF);
+        let lp = ag.new_property(F32::ZERO, neg, pos);
+        let mp = ag.new_property(F32::ZERO, neg, pos);
+        ag.set_limits(lp, F32::ZERO, pos, &t);
+        ag.set_limits(lp, F32::ZERO, life_max, &t);
+        ag.set_value(lp, life, &t);
+        ag.set_limits(mp, neg, mana_max, &t);
+        ag.set_value(mp, mana, &t);
+        let st = UnitStats::new(lp, mp, F32::ZERO, F32::ZERO, 0, false);
+        let expect = f[7..].join(" ");
+        assert_eq!(snapshot(&ag, &st), expect, "creation case {n}: {line}");
+        n += 1;
+    }
+    assert!(n >= 150, "{n} creation cases");
 }

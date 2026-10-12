@@ -393,7 +393,6 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         regen_hp: soft(ty.regen_hp),
         regen_mana: soft(ty.regen_mana),
         regen_type: sim::regen::regen_type_from_name(&ty.regen_type),
-        ..UnitType::default()
     }
 }
 

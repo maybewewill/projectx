@@ -238,6 +238,30 @@ def run_case(n, d, ops):
     return out
 
 
+def create_case(rnd, n):
+    """The creation of the life and mana properties (`0x6F2A0E30`, `0x6F2ACDE0`): a fresh default property gets its lower limit
+    (life only, `0x6F477460` with 0.0), its upper limit (`0x6F477400`) and its value (`0x6F477350`)."""
+    d = dict(now=f2b(rnd.choice([0.0, 0.0, 1.5, 100.0, 299.0])), row=rnd.randrange(0, 2), lbase=0, llo=NEG_FLT_MAX, lhi=FLT_MAX,
+             mbase=0, mlo=NEG_FLT_MAX, mhi=FLT_MAX, lrate=0, mrate=0, f20=0, f5c=0)
+    lp, mp = setup(d)
+    life_max = rnd.choice([1.0, 55.0, 100.0, 450.0, 1483.2, 0.0, -5.0])
+    life = rnd.choice([life_max, life_max, life_max * 0.5, 0.0, 10.0, life_max + 7.0, -1.0, 1e-8])
+    mana_max = rnd.choice([0.0, 50.0, 100.0, 300.0, 1483.2])
+    mana = rnd.choice([0.0, 0.0, mana_max, mana_max * 0.3, 25.0, mana_max + 5.0, -3.0])
+    wr32(TMP + 0x50, f2b(0.0))
+    call(0x6F477460, ecx=U + 0x98, stack_args=(TMP + 0x50,))
+    wr32(TMP + 0x50, f2b(life_max))
+    call(0x6F477400, ecx=U + 0x98, stack_args=(TMP + 0x50,))
+    wr32(TMP + 0x50, f2b(life))
+    call(0x6F477350, ecx=U + 0x98, stack_args=(TMP + 0x50,))
+    wr32(TMP + 0x50, f2b(mana_max))
+    call(0x6F477400, ecx=U + 0xB8, stack_args=(TMP + 0x50,))
+    wr32(TMP + 0x50, f2b(mana))
+    call(0x6F477350, ecx=U + 0xB8, stack_args=(TMP + 0x50,))
+    return ["CREATE %08x %d %08x %08x %08x %08x %s" % (d["now"], d["row"], f2b(life_max), f2b(life), f2b(mana_max), f2b(mana),
+                                                       snapshot(lp, mp))]
+
+
 def long_case(rnd, n):
     """A 160 s run: the 150 s timer of the forever modifier fires and does nothing."""
     d, ops = gen_case(rnd)
@@ -266,6 +290,8 @@ def gen(path, count, seed):
         nops += len(ops)
         if n % 50 == 0:
             print("case", n, flush=True)
+    for n in range(150):
+        lines += create_case(rnd, n)
     for k in range(3):
         d, ops = long_case(rnd, count + k)
         lines += run_case(count + k, d, ops)

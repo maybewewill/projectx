@@ -186,6 +186,13 @@ impl Game {
     /// The unit died or was revived / removed: the regeneration modifiers go away or come back (`+0x5C & 0x100`).
     pub(crate) fn stats_set_dead(&mut self, k: ObjKey, dead: bool) {
         self.with_stats(k, |st, ag, t| st.set_dead(dead, ag, t));
+        if dead {
+            // UNSURE: the hero's own regeneration modifier (`0x6F209090`) is not tied to the dead flag in what was read; the
+            // model releases it with the death so that a corpse does not grow a positive life.
+            if let Some(m) = self.unit_mut(k).hero_regen_mod.take() {
+                self.release_modifier(m);
+            }
+        }
     }
 
     /// `0x6F28CB10` / `0x6F28CB20`: the construction (or an unsummon) disables / re-enables the life regeneration.
