@@ -209,6 +209,8 @@ pub struct TypeTech {
     pub harvest: HarvestSpec,
     /// The unit has the entangle ability (a Tree of Life).
     pub entangle: Option<EntangleSpec>,
+    /// The unit takes lumber deliveries (`Argl` or `Arlm` in its ability list: halls, Necropolis, Graveyard).
+    pub lumber_dropoff: bool,
 }
 
 /// One row of `UpgradeData.slk` (the columns the AI needs).
@@ -1390,13 +1392,14 @@ impl Game {
         }
     }
 
-    fn nearest_hall(&self, owner: u32, from: (f32, f32)) -> Option<(ObjKey, f32, f32)> {
+    fn nearest_hall(&self, owner: u32, from: (f32, f32), lumber: bool) -> Option<(ObjKey, f32, f32)> {
         self.unit_objects()
             .filter(|(k, u)| {
                 u.owner == owner
                     && !u.dead
                     && !u.removed
-                    && u.class_flags & CLASS_TOWNHALL != 0
+                    && (u.class_flags & CLASS_TOWNHALL != 0
+                        || (lumber && self.production.tech.get(&u.type_id).is_some_and(|t| t.lumber_dropoff)))
                     && u.count_state & REGISTERED_IN_PROGRESS == 0
                     && !self.mines.contains_key(k)
             })
@@ -1571,12 +1574,12 @@ impl Game {
                 hh.worker = worker;
                 hh.phase = Phase::ToHall;
                 hh.retries = 0;
-                if let Some((_, hx, hy)) = self.nearest_hall(owner, pos) {
+                if let Some((_, hx, hy)) = self.nearest_hall(owner, pos, h.resource == Res::Lumber) {
                     self.order_move(unit, hx, hy);
                 }
             }
             Phase::ToHall => {
-                let Some((_, hx, hy)) = self.nearest_hall(owner, pos) else { return };
+                let Some((_, hx, hy)) = self.nearest_hall(owner, pos, h.resource == Res::Lumber) else { return };
                 let d = ((pos.0 - hx).powi(2) + (pos.1 - hy).powi(2)).sqrt();
                 let arrived = d <= HALL_REACH;
                 if !arrived && self.order_idle(unit) {

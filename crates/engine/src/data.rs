@@ -166,6 +166,9 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         // `Awha` the wisp's lumber).
         game.production_mut().build_seconds.insert(id, ty.build_time);
         let has = |c: &str| ty.abil_list.iter().any(|a| a.eq_ignore_ascii_case(c));
+        if has("Argl") || has("Arlm") {
+            game.production_mut().tech.entry(id).or_default().lumber_dropoff = true;
+        }
         if has("Ahar") || has("Aaha") || has("Awha") || has("Ahrl") {
             let t = game.production_mut().tech.entry(id).or_default();
             t.harvest_gold = has("Ahar") || has("Aaha") || has("Awha");
