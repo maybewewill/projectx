@@ -305,6 +305,62 @@ impl Model {
     }
 }
 
+/// Geosets with a GEOA alpha below this are hidden in the idle pose.
+pub const GEOSET_VISIBLE_ALPHA: f32 = 0.75;
+
+impl Model {
+    /// The idle sequence: the first whose name starts with "Stand" (ignoring case).
+    ///
+    /// Plain variants win over special ones ("Stand Work", "Stand Upgrade First", "Stand
+    /// Ready Gold", ...): an exact "stand" first, then the first "Stand..." without such a
+    /// qualifier, then any "Stand...".
+    pub fn stand_sequence(&self) -> Option<usize> {
+        const SPECIAL: [&str; 7] = ["work", "upgrade", "ready", "gold", "lumber", "victory", "cinematic"];
+        let names: Vec<String> = self.sequences.iter().map(|s| s.name.to_ascii_lowercase()).collect();
+        names
+            .iter()
+            .position(|n| n.trim() == "stand")
+            .or_else(|| {
+                names
+                    .iter()
+                    .position(|n| n.starts_with("stand") && !SPECIAL.iter().any(|w| n.contains(w)))
+            })
+            .or_else(|| names.iter().position(|n| n.starts_with("stand")))
+    }
+
+    /// Alpha of GEOA entry `anim` in `sequence`: the KGAO value from keys inside the
+    /// sequence's interval only, or the static alpha when the track has no key there.
+    pub fn geoset_anim_alpha(&self, anim: &GeosetAnim, sequence: Option<usize>) -> f32 {
+        let seq = sequence.and_then(|i| self.sequences.get(i));
+        match (&anim.alpha_track, seq) {
+            (Some(track), Some(seq)) => track
+                .sample_in(seq.start, seq.start, seq.end, &self.global_sequences)
+                .unwrap_or(anim.alpha),
+            _ => anim.alpha,
+        }
+    }
+
+    /// Per-geoset visibility (indexed by geoset) in `sequence`: a geoset is hidden when a GEOA
+    /// entry drives it with alpha below [`GEOSET_VISIBLE_ALPHA`]. Death-only geosets (gore,
+    /// shockwave planes) are hidden in the idle pose this way.
+    pub fn geoset_visibility(&self, sequence: Option<usize>) -> Vec<bool> {
+        let mut vis = vec![true; self.geosets.len()];
+        for g in &self.geoset_anims {
+            let Ok(i) = usize::try_from(g.geoset_id) else { continue };
+            if i < vis.len() && self.geoset_anim_alpha(g, sequence) < GEOSET_VISIBLE_ALPHA {
+                vis[i] = false;
+            }
+        }
+        vis
+    }
+
+    /// Visibility in the idle pose (see [`Model::stand_sequence`]); everything visible when the
+    /// model has no Stand sequence.
+    pub fn idle_geoset_visibility(&self) -> Vec<bool> {
+        self.geoset_visibility(self.stand_sequence())
+    }
+}
+
 impl Extent {
     pub(crate) fn read(r: &mut Reader) -> Result<Extent, Error> {
         Ok(Extent {

@@ -553,3 +553,55 @@ fn parses_geoset_animation_chunk() {
     close(g.alpha_track.as_ref().unwrap().sample(250, &[]).unwrap(), 0.25);
     assert!(g.color_track.is_none());
 }
+
+// ---------- geoset visibility ----------
+
+fn geoa(geoset_id: i32, alpha: f32, keys: Option<Vec<Key<f32>>>) -> mdx::GeosetAnim {
+    mdx::GeosetAnim {
+        alpha,
+        flags: 0,
+        color: [1.0; 3],
+        geoset_id,
+        alpha_track: keys.map(|k| track(Interpolation::None, k)),
+        color_track: None,
+    }
+}
+
+#[test]
+fn track_sample_in_uses_only_keys_inside_the_interval() {
+    let t = track(Interpolation::None, vec![key(100, 0.0f32), key(500, 1.0), key(900, 0.0)]);
+    // Interval 400..=600 holds only the key at 500.
+    assert_eq!(t.sample_in(400, 400, 600, &[]), Some(1.0));
+    // Before the first in-interval key the first holds (the key at 100 does not leak in).
+    assert_eq!(t.sample_in(450, 450, 600, &[]), Some(1.0));
+    // Interval with no key at all: None, the caller uses the static value.
+    assert_eq!(t.sample_in(200, 150, 300, &[]), None);
+    // Plain sampling would have returned the earlier sequence's key.
+    assert_eq!(t.sample(200, &[]), Some(0.0));
+}
+
+#[test]
+fn death_only_geosets_are_hidden_in_the_stand_pose() {
+    let mut m = empty_model();
+    m.sequences = vec![
+        sequence("Birth", 0, 1000, 1),
+        sequence("Stand - 1", 2000, 3000, 0),
+        sequence("Death", 4000, 5000, 1),
+    ];
+    for _ in 0..4 {
+        m.geosets.push(geoset_with_groups());
+    }
+    m.geoset_anims = vec![
+        // Geoset 0: visible only during Death. Key at Stand start is 0 -> hidden.
+        geoa(0, 1.0, Some(vec![key(0, 0.0), key(2000, 0.0), key(4000, 1.0)])),
+        // Geoset 1: keys exist only for Death (alpha 0 there); Stand has none -> static 1.
+        geoa(1, 1.0, Some(vec![key(4000, 0.0)])),
+        // Geoset 2: no track, static alpha 0 -> hidden.
+        geoa(2, 0.0, None),
+        // Geoset 3 has no GEOA at all.
+    ];
+    assert_eq!(m.stand_sequence(), Some(1));
+    assert_eq!(m.idle_geoset_visibility(), vec![false, true, false, true]);
+    // During Death geoset 0 shows and geoset 1 is gone.
+    assert_eq!(m.geoset_visibility(Some(2)), vec![true, false, false, true]);
+}

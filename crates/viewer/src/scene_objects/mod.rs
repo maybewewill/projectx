@@ -412,10 +412,12 @@ const PLAYER_COLOURS: [[u8; 3]; 12] = [
 ];
 
 fn mesh_of(model: &Model, tint_base: Option<[u8; 3]>) -> Mesh {
+    let visible = model.idle_geoset_visibility();
     let parts = model
         .geosets
         .iter()
         .enumerate()
+        .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
         .map(|(i, g)| Part {
             verts: g.vertices.clone(),
             normals: if g.normals.len() == g.vertices.len() {
@@ -516,8 +518,26 @@ pub struct PlaceStats {
 }
 
 /// The first layer of a geoset's material: the texture and filter mode the geoset draws with.
-fn geoset_layer(model: &Model, geoset: &mdx::Geoset) -> Option<mdx::Layer> {
-    model.materials.get(geoset.material_id as usize)?.layers.first().cloned()
+/// All layers of a geoset's material that can show (static alpha 0 without a track is skipped);
+/// one empty entry when the geoset has no material, so it still draws flat.
+fn geoset_layers(model: &Model, geoset: &mdx::Geoset) -> Vec<Option<mdx::Layer>> {
+    let layers: Vec<Option<mdx::Layer>> = model
+        .materials
+        .get(geoset.material_id as usize)
+        .map(|m| {
+            m.layers
+                .iter()
+                .filter(|l| l.alpha > 0.0 || l.alpha_track.is_some())
+                .cloned()
+                .map(Some)
+                .collect()
+        })
+        .unwrap_or_default();
+    if layers.is_empty() {
+        vec![None]
+    } else {
+        layers
+    }
 }
 
 /// Texture path of a geoset's first layer. Replaceable ids: 1 is the team colour and 2 the team
@@ -562,14 +582,14 @@ pub fn place_on_terrain(
         lifted.position[2] += ground_at(terrain, inst.position[0], inst.position[1]);
         // The triangles of every geoset as (texture path, world-space triangles, tint).
         let geosets: Option<Vec<PlacedGeoset>> = props.model(&inst.model).map(|model| {
+            // Death-only and upgrade-only geosets are hidden by their GEOA alpha in the idle pose.
+            let visible = model.idle_geoset_visibility();
             model
                 .geosets
                 .iter()
                 .enumerate()
-                .map(|(i, g)| {
-                    let layer = geoset_layer(model, g);
-                    let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
-                    let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
+                .flat_map(|(i, g)| {
                     let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
                     let tris = g
                         .triangles()
@@ -586,7 +606,17 @@ pub fn place_on_terrain(
                         Kind::Unit => inst.player.map_or([200, 200, 200], |p| PLAYER_COLOURS[(p as usize) % PLAYER_COLOURS.len()]),
                     };
                     let tint = tint.map(|c| f32::from(c) / 255.0);
-                    (texture, blend, tris, tint)
+                    // Every layer is drawn in order (team colour base, then the texture on top).
+                    let layers = geoset_layers(model, g);
+                    let tris: Vec<PlacedTriangle> = tris;
+                    layers
+                        .into_iter()
+                        .map(|layer| {
+                            let blend = layer.as_ref().map_or(PropBlend::Opaque, |l| PropBlend::from_mode(BlendMode::from_raw(l.filter_mode)));
+                            let texture = layer.as_ref().and_then(|l| geoset_texture(model, l, inst));
+                            (texture, blend, tris.clone(), tint)
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect()
         });
