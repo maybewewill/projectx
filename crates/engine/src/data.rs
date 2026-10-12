@@ -230,6 +230,12 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
             dawn: data.misc.dawn,
             dusk: data.misc.dusk,
         });
+        // The time of day runs on the agile engine from the start of the game (`0x6F429770`, docs/spec/agile.md
+        // section 6): a modifier at DayHours / DayLength per second and the wrap listener. It needs the tables and a
+        // real cycle (a zero DayLength has no rate).
+        if tables.is_some() && data.misc.day_length.to_f32() > 0.0 {
+            game.start_time_of_day(softfloat::F32::ONE);
+        }
     }
 
     let mut missing = Vec::new();

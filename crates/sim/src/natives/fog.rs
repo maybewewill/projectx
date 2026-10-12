@@ -172,7 +172,7 @@ impl Game {
     /// `Dawn <= t < Dusk` with the Misc values (`crate::daynight`, `docs/spec/vision.md` section 13); the time is float
     /// game state 2, `GetFloatGameState(GAME_TIME_OF_DAY)`.
     pub fn is_night(&self) -> bool {
-        self.day_cycle.is_night(self.game_state.float_state)
+        self.day_cycle.is_night(self.time_of_day())
     }
 
     /// The sight sources of the unit pass: the position, the sight radius and the player mask of every live unit with

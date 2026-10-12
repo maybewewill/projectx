@@ -63,6 +63,84 @@ impl DayCycle {
     }
 }
 
+/// The message of the time-of-day listener (`0x80262`, `0x6F429770`): the cycle is complete.
+pub const WRAP_MESSAGE: u32 = 0x80262;
+
+/// The time of day on the agile engine (`0x6F429770`, docs/spec/agile.md section 6): float game state 2 is a property
+/// with a forever modifier of rate `scale * DayHours / DayLength` and a rising listener at `DayHours`; the listener's
+/// message resets the value to 0.0 (`0x6F42FC9F`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TimeOfDay {
+    pub(crate) prop: Option<crate::agile::PropId>,
+    pub(crate) modifier: Option<crate::agile::ModId>,
+    pub(crate) listener: Option<crate::agile::LisId>,
+    /// How many times the cycle wrapped.
+    pub(crate) wraps: u32,
+}
+
+impl crate::natives::Game {
+    /// Starts the time of day on the agile engine (what the game does when the time-of-day suspension ends at the start
+    /// of a map): needs the softfloat tables. The current game state 2 is the property's starting value. `scale` is the
+    /// time-of-day scale (1.0 by default).
+    pub fn start_time_of_day(&mut self, scale: F32) {
+        let Some(tables) = self.orders.tables.as_ref() else { return };
+        if self.tod.prop.is_some() {
+            return;
+        }
+        let rate = self.day_cycle.rate(scale, tables);
+        let start = self.game_state.float_state;
+        let p = self.agile.new_property(start, F32(0xFF7F_FFFF), F32(crate::agile::FOREVER_BITS));
+        let m = self.agile.add_modifier(p, rate, F32(0), tables);
+        let l = self.agile.add_listener(p, 1, self.day_cycle.day_hours, WRAP_MESSAGE, tables);
+        self.tod = TimeOfDay { prop: Some(p), modifier: Some(m), listener: Some(l), wraps: 0 };
+    }
+
+    /// Float game state 2 (`GetFloatGameState(GAME_STATE_TIME_OF_DAY)`): the agile property's value once the time of day
+    /// runs, the stored value before.
+    pub fn time_of_day(&self) -> F32 {
+        match self.tod.prop {
+            Some(p) => self.agile.value(p),
+            None => self.game_state.float_state,
+        }
+    }
+
+    /// `SetFloatGameState(GAME_STATE_TIME_OF_DAY, x)` (`0x6F429940`: the property is moved to `x`).
+    pub fn set_time_of_day(&mut self, x: F32) {
+        match (self.tod.prop, self.orders.tables.as_ref()) {
+            (Some(p), Some(t)) => self.agile.set_value(p, x, t),
+            _ => self.game_state.float_state = x,
+        }
+    }
+
+    /// `SuspendTimeOfDay(flag)`: suspending ends the modifier (the time stops); resuming creates it again
+    /// (`0x6F427E70`, `0x6F429920`; LIKELY the native maps to these).
+    pub fn suspend_time_of_day(&mut self, suspend: bool) {
+        let Some(t) = self.orders.tables.as_ref() else { return };
+        let Some(p) = self.tod.prop else { return };
+        if suspend {
+            if let Some(m) = self.tod.modifier.take() {
+                self.agile.remove_modifier(m, t);
+            }
+        } else if self.tod.modifier.is_none() {
+            let rate = self.day_cycle.rate(F32(0x3F80_0000), t);
+            self.tod.modifier = Some(self.agile.add_modifier(p, rate, F32(0), t));
+        }
+    }
+
+    /// The listener firing of the time of day: the cycle wraps to 0.0.
+    pub(crate) fn time_of_day_wrap(&mut self) {
+        if let (Some(p), Some(t)) = (self.tod.prop, self.orders.tables.as_ref()) {
+            self.agile.set_value(p, F32(0), t);
+            self.tod.wraps += 1;
+        }
+    }
+
+    /// How many times the time of day wrapped since it started.
+    pub fn time_of_day_wraps(&self) -> u32 {
+        self.tod.wraps
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

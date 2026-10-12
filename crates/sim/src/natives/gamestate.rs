@@ -366,7 +366,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     native(reg, game, "GetFloatGameState", |gm, _, a| {
         let i = enum_at(a, 0);
         let v = if i == FLOAT_STATE_INDEX {
-            gm.game_state.float_state
+            gm.time_of_day()
         } else {
             F32::ZERO
         };
@@ -374,7 +374,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
     native(reg, game, "SetFloatGameState", |gm, _, a| {
         if enum_at(a, 0) == FLOAT_STATE_INDEX {
-            gm.game_state.float_state = real_at(a, 1);
+            gm.set_time_of_day(real_at(a, 1));
         }
         Value::Null
     });
@@ -443,6 +443,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
     native(reg, game, "SuspendTimeOfDay", |gm, _, a| {
         gm.game_state.time_of_day_suspended = bool_at(a, 0);
+        gm.suspend_time_of_day(bool_at(a, 0));
         Value::Null
     });
     native(reg, game, "IsNoVictoryCheat", |gm, _, _| {

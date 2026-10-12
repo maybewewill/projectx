@@ -637,3 +637,6 @@ grid+0x1C / grid+0x20 are written by the harness, so they are NOT the original's
 - Conclusion: the k >= 3 row rule and the producer of `grid+0x1C/+0x20` are still open. `crates/sim/src/vision.rs` keeps the
   circle stand-in for units (it is known to differ from the original for k >= 3). Next: run `0x6f409d00` on its own
   (the shape records at `shape+0x30`, 20-byte stride) and trace which record each written cell reads.
+
+### 13.6 Update (agile.md)
+The per-tick evolution of the time-of-day modifier (13.4) is decoded: `docs/spec/agile.md` section 6. The property, the forever modifier of rate `scale * DayHours / DayLength`, the rising listener at `DayHours` and the wrap handler (value := 0.0 inside the callback) are CONFIRMED on 7 cycles of 80,000 ticks. `Game::time_of_day` is now the property's value; `GetFloatGameState(2)` and the night rule read it.
