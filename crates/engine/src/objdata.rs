@@ -103,9 +103,22 @@ pub const ART_KEYS: [&str; 7] = [
 /// The sound keys in sound-type order 0..=1.
 pub const SOUND_KEYS: [&str; 2] = ["effectSound", "effectSoundLooped"];
 
+/// The projectile columns of a unit's profile section, one entry per weapon.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MissileSpec {
+    /// `Missilespeed` (world units per second).
+    pub speed: Vec<f32>,
+    /// `Missilearc` (a fraction of the distance; visual).
+    pub arc: Vec<f32>,
+    /// `MissileHoming`.
+    pub homing: Vec<bool>,
+}
+
 /// What was read.
 #[derive(Debug, Clone, Default)]
 pub struct ObjectText {
+    /// The projectile columns by unit raw code.
+    pub missiles: BTreeMap<u32, MissileSpec>,
     /// The global string table (key lower-case).
     pub localized: BTreeMap<String, String>,
     /// Object names by raw code.
@@ -242,6 +255,24 @@ fn load_profiles(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> 
         }
         if tech != sim::production::TypeTech::default() {
             out.tech.insert(code, tech);
+        }
+        // The projectile of the unit's weapons: `Missilespeed`, `Missilearc` and `MissileHoming`, one entry per weapon
+        // (comma list, `docs/spec/missiles.md` section 11).
+        let reals = |key: &str| -> Vec<f32> {
+            merged
+                .get_list_ci(section, key)
+                .iter()
+                .filter_map(|v| v.trim().parse::<f32>().ok())
+                .collect()
+        };
+        let speed = reals("Missilespeed");
+        if !speed.is_empty() {
+            let homing = merged
+                .get_list_ci(section, "MissileHoming")
+                .iter()
+                .map(|v| v.trim().parse::<i32>().unwrap_or(0) != 0)
+                .collect();
+            out.missiles.insert(code, MissileSpec { speed, arc: reals("Missilearc"), homing });
         }
         for (kind, key) in ART_KEYS.iter().enumerate() {
             let list = merged.get_list_ci(section, key);
@@ -434,6 +465,24 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     }
     for (&code, &u) in &text.upgrades {
         game.production_mut().upgrades.insert(code, u);
+    }
+    // The first weapon's projectile. Only the plain missile type (`weapTp` 2, CONFIRMED launch path) gets a timed flight;
+    // the other flying kinds keep the instant hit (their launch routines are not decoded).
+    for (&code, spec) in &text.missiles {
+        let plain_missile = game
+            .unit_types()
+            .get(code)
+            .is_some_and(|t| sim::missiles::MissileType::from_weap_tp(t.weapon_kind[0])
+                == Some(sim::missiles::MissileType::Missile));
+        let mut md = game.missile_data(code);
+        md.arc = spec.arc.first().map_or(F32::ZERO, |&a| F32::from_bits(a.to_bits()));
+        md.homing = spec.homing.first().copied().unwrap_or(false);
+        game.set_missile_data(code, md);
+        if plain_missile {
+            let mut at = game.attack_type(code);
+            at.missile_speed = Some(F32::from_bits(spec.speed[0].to_bits()));
+            game.set_attack_type(code, at);
+        }
     }
     for (&code, levels) in &text.spell_levels {
         game.set_spell_levels(code, levels.clone());

@@ -517,6 +517,61 @@ fn missile_into_a_target_removed_in_flight_deals_nothing() {
     assert_eq!(life(&host, ub), 100.0, "a removed target takes no missile damage");
 }
 
+/// Runs the missile duel with the given launch data and returns the steps from the execute point to the impact.
+fn missile_flight_steps(data: sim::combat::MissileData) -> usize {
+    let mut host = host_for(DUEL);
+    host.start("setup", &[]).expect("setup");
+    host.step();
+    let (ua, ub) = (unit_key(&host, "ua"), unit_key(&host, "ub"));
+    host.game_mut().set_attack_type(
+        FOOTMAN,
+        AttackType {
+            missile_speed: Some(f(100.0)),
+            ..weapon()
+        },
+    );
+    host.game_mut().set_missile_data(FOOTMAN, data);
+    host.start("attack_one", &[]).expect("order");
+    let (mut execute_step, mut impact_step, mut was_pending) = (None, None, false);
+    for step in 1..=60 {
+        host.step();
+        let pending = host
+            .game()
+            .attack_view(ua)
+            .is_some_and(|v| v.execute_expiry.is_some());
+        if was_pending && !pending && execute_step.is_none() {
+            execute_step = Some(step);
+        }
+        was_pending = pending;
+        if impact_step.is_none() && life(&host, ub) < 100.0 {
+            impact_step = Some(step);
+        }
+    }
+    impact_step.expect("impact") - execute_step.expect("execute point")
+}
+
+/// The projectile starts at the shooter's position plus the launch offset turned by its facing (`0x6F29E6A0`): a
+/// 50-unit forward offset halves the 100-unit flight. A homing missile flies to the target's current cell position
+/// (`0x6F497260`), which for a standing target takes as long as the plain flight.
+#[test]
+fn the_launch_offset_shortens_the_flight_and_homing_flies_to_the_target() {
+    if tables().is_none() {
+        return;
+    }
+    use sim::combat::MissileData;
+    assert_eq!(missile_flight_steps(MissileData::default()), 10);
+    let forward = MissileData {
+        launch: [f(50.0), F32::ZERO, F32::ZERO],
+        ..Default::default()
+    };
+    assert_eq!(missile_flight_steps(forward), 5);
+    let homing = MissileData {
+        homing: true,
+        ..Default::default()
+    };
+    assert_eq!(missile_flight_steps(homing), 10);
+}
+
 /// An attack-move unit scans on its way and attacks the first enemy it finds (needs the tables for the walk).
 #[test]
 fn attack_move_takes_the_first_enemy_it_finds() {
