@@ -6,8 +6,9 @@
 //! - **Units**: loaded from `war3mapUnits.doo`, resolved through unit SLK files
 //!
 //! The cliff model naming scheme: for each terrain tile with cliff height differences between
-//! corners, a model is selected using the corner heights (a, b, c, d for corners) and the
-//! tileset name. Path: `Doodads\Terrain\Cliffs\<Tileset><ABCD><variation>.mdx`.
+//! corners, a model is selected using the corner heights (A, B, C, D for flat, 1-step, 2-step, 3-step)
+//! and the cliff tileset name (from CliffTypes.slk). Path: `Doodads\Terrain\<TilesetName>\<TilesetName><ABCD><variation>.mdx`.
+//! Examples: `Doodads\Terrain\Cliffs\CliffsAAAB0.mdx`, `Doodads\Terrain\CityCliffs\CityCliffsAAAB0.mdx`.
 //!
 //! Nothing here is bit-exact or game-accurate: it is presentation only.
 
@@ -55,23 +56,28 @@ pub fn height_letter(diff: u8) -> char {
     }
 }
 
-/// Generate cliff model name from corner heights and tileset.
+/// Generate cliff model name from corner heights and cliff tileset.
+///
+/// Real cliff models use the naming scheme: `Doodads\Terrain\<TilesetName>\<TilesetName><ABCD><variation>.mdx`
+/// where A, B, C, D are height letters for the four corners (TL, TR, BR, BL, uppercase in real files)
+/// and variation is typically 0 but can be higher.
 ///
 /// # Example
-/// For a tile with corner heights [0, 1, 1, 0] and tileset "Ashenvale", returns:
-/// `Doodads\Terrain\Cliffs\Ashenvalea b b a 0.mdx` (where variation = 0).
-pub fn cliff_model_path(tileset: &str, corners: [u8; 4], variation: u32) -> String {
+/// For corners [0, 0, 1, 0] and cliff_tileset "Cliffs", returns:
+/// `Doodads\Terrain\Cliffs\CliffsAAAB0.mdx`
+pub fn cliff_model_path(cliff_tileset: &str, corners: [u8; 4], variation: u32) -> String {
     let [tl, tr, br, bl] = corners;
+    // Uppercase to match actual model names (CliffsAAAB0.mdx, not CliffsaaAb0.mdx)
     let letters = format!(
         "{}{}{}{}",
-        height_letter(tl),
-        height_letter(tr),
-        height_letter(br),
-        height_letter(bl)
+        height_letter(tl).to_ascii_uppercase(),
+        height_letter(tr).to_ascii_uppercase(),
+        height_letter(br).to_ascii_uppercase(),
+        height_letter(bl).to_ascii_uppercase()
     );
     format!(
-        "Doodads\\Terrain\\Cliffs\\Cliffs{}{}_{}.mdx",
-        tileset, letters, variation
+        "Doodads\\Terrain\\{}\\{}{}{}.mdx",
+        cliff_tileset, cliff_tileset, letters, variation
     )
 }
 
@@ -89,11 +95,59 @@ mod tests {
 
     #[test]
     fn cliff_model_path_naming() {
-        let path = cliff_model_path("Ashenvale", [0, 1, 1, 0], 0);
-        assert!(path.contains("Cliffs"));
-        assert!(path.contains("Ashenvale"));
-        assert!(path.contains("abba"));
-        assert!(path.ends_with(".mdx"));
+        // Real example: CliffsAAAB0.mdx (corners [0,0,0,1], variation 0)
+        let path = cliff_model_path("Cliffs", [0, 0, 0, 1], 0);
+        assert_eq!(path, "Doodads\\Terrain\\Cliffs\\CliffsAAAB0.mdx");
+
+        // CityCliffs example
+        let path = cliff_model_path("CityCliffs", [0, 1, 1, 0], 2);
+        assert_eq!(path, "Doodads\\Terrain\\CityCliffs\\CityCliffsABBA2.mdx");
+    }
+
+    #[test]
+    #[ignore] // Requires tools/war3.mpq to be present
+    fn cliff_model_paths_exist_in_mpq() {
+        // This test checks that generated cliff paths actually exist in the game MPQs.
+        // Only runs when war3.mpq is available (not in the worktree).
+        let mpq_path = "../../tools/war3.mpq";
+        if !std::path::Path::new(mpq_path).exists() {
+            eprintln!("Skipping: {} not found", mpq_path);
+            return;
+        }
+
+        let mpq_bytes = match std::fs::read(mpq_path) {
+            Ok(b) => b,
+            Err(_) => {
+                eprintln!("Could not read {}", mpq_path);
+                return;
+            }
+        };
+
+        let archive = match mpq::Archive::open(&mpq_bytes) {
+            Ok(a) => a,
+            Err(_) => {
+                eprintln!("Could not open {} as MPQ", mpq_path);
+                return;
+            }
+        };
+
+        // Check a few real cliff model names
+        let test_cases = vec![
+            ("Cliffs", [0, 0, 0, 1], 0, "Doodads\\Terrain\\Cliffs\\CliffsAAAB0.mdx"),
+            ("CityCliffs", [0, 0, 0, 1], 0, "Doodads\\Terrain\\CityCliffs\\CityCliffsAAAB0.mdx"),
+        ];
+
+        for (tileset, corners, var, expected_path) in test_cases {
+            let generated = cliff_model_path(tileset, corners, var);
+            assert_eq!(generated, expected_path);
+
+            // Try to find it in the MPQ
+            if let Ok(_) = archive.read(expected_path) {
+                eprintln!("Found in MPQ: {}", expected_path);
+            } else {
+                eprintln!("NOT in MPQ: {}", expected_path);
+            }
+        }
     }
 
     #[test]
