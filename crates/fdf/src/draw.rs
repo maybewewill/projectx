@@ -206,6 +206,22 @@ fn emit_frame(
             tile,
         }));
     }
+    // A button's NormalTexture names a top-level Texture block (its File and TexCoord are the art).
+    if let Some(name) = props::text(p, "NormalTexture") {
+        if let Ok(template) = lib.block(&name) {
+            if let Some(file) = props::text(&template.props, "File") {
+                out.items.push(DrawItem::Quad(Quad {
+                    node: i,
+                    kind: QuadKind::Texture,
+                    rect,
+                    texture: lib.decorate(node.decorate, &file),
+                    uv: props::tex_coord(&template.props).map_err(|e| derr(&node.name, e))?,
+                    alpha: props::alpha_mode(&template.props).map_err(|e| derr(&node.name, e))?,
+                    tile: false,
+                }));
+            }
+        }
+    }
     if let Some(edge) = props::text(p, "BackdropEdgeFile") {
         out.items.push(DrawItem::Quad(Quad {
             node: i,
