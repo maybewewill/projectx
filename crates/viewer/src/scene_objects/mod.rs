@@ -623,10 +623,15 @@ fn geosets_animated(
     inst: &Instance,
     lifted: &Instance,
     seq_idx: Option<usize>,
-    _seq_time_ms: Option<u32>,
+    seq_time_ms: Option<u32>,
 ) -> Option<Vec<PlacedGeoset>> {
     // Use per-sequence geoset visibility (replaces idle visibility)
     let visible = model.geoset_visibility(seq_idx);
+    // Pose of the chosen sequence; without bones (or a sequence) the bind pose is drawn.
+    let pose = seq_idx.and_then(|s| {
+        let skeleton = mdx::Skeleton::new(model).ok()?;
+        skeleton.evaluate_sequence(model, s, seq_time_ms.unwrap_or(0) as f32, None)
+    });
 
     Some(model
         .geosets
@@ -635,13 +640,26 @@ fn geosets_animated(
         .filter(|(i, _)| visible.get(*i).copied().unwrap_or(true))
         .flat_map(|(i, g)| {
             let uvs = g.uv_sets.first().map(Vec::as_slice).unwrap_or(&[]);
+            let skinned: Vec<[f32; 3]> = match &pose {
+                Some(pose) => {
+                    let groups: Vec<_> = mdx::skin::matrix_groups(g)
+                        .iter()
+                        .map(|ids| {
+                            let ms: Vec<_> = ids.iter().filter_map(|&id| pose.skin_matrix(id as i32)).collect();
+                            mdx::skin::average(&ms)
+                        })
+                        .collect();
+                    mdx::skin::skin_geoset(g, &groups).into_iter().map(|(p, _)| p).collect()
+                }
+                None => g.vertices.clone(),
+            };
 
             let tris = g
                 .triangles()
                 .iter()
                 .filter_map(|t| {
                     let [a, b, c] = t.map(usize::from);
-                    let v = |vi: usize| g.vertices.get(vi).map(|p| to_world(lifted, *p));
+                    let v = |vi: usize| skinned.get(vi).map(|p| to_world(lifted, *p));
                     let uv = |vi: usize| uvs.get(vi).copied().unwrap_or([0.0, 0.0]);
                     Some(([v(a)?, v(b)?, v(c)?], [uv(a), uv(b), uv(c)]))
                 })
