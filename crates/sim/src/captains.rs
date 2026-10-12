@@ -398,31 +398,75 @@ pub fn group_size(gm: &Game, c: &Captain) -> i32 {
     c.members.iter().filter(|&&k| alive(gm, k)).count() as i32
 }
 
-/// `CaptainReadiness`, `CaptainReadinessHP`, `CaptainReadinessMa` (`0x6F2E91A0` with flags (1,1), (1,0), (0,1)):
-/// percentages of the group's life and mana (UNSURE: the original reads heroes and other units separately; this takes
-/// the totals). With both flags the smaller of the two. An empty group, or no unit with mana, gives 100.
-pub fn readiness(gm: &Game, c: &Captain, hp: bool, mana: bool) -> i32 {
-    let (mut life, mut max_life, mut mp, mut max_mp) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    for &k in &c.members {
-        if !alive(gm, k) {
-            continue;
+/// One group member as `0x6F2E91A0` reads it.
+#[derive(Debug, Clone, Copy)]
+pub struct ReadyUnit {
+    /// The unit type code; a type whose first letter is upper case (`'A'..='Z'`) is a hero.
+    pub type_id: u32,
+    /// Flag word `+0x5C`; bit `0x40000000` (illusion) makes a hero count as an ordinary unit.
+    pub flags: u32,
+    pub life: F32,
+    pub max_life: F32,
+    pub mana: F32,
+    pub max_mana: F32,
+}
+
+/// `CaptainReadiness*` (`0x6F2E91A0`, CONFIRMED by Unicorn: `tools/emu/captain_ready_emu.py`, 600 cases, 0 mismatches,
+/// replayed by `tests/captain_vectors.rs`). Only the life flag matters: with it the result is the smaller of the hero
+/// life percentage and the percentage of the other units; without it the mana percentage. Percentages are
+/// `div(mul(sum, 100.0), max_sum)` in soft float, every sum starts at 1.0, the others' maximum life starts at
+/// `1.0 + (captain+0xB8 - captain+0xBC) * 400` (`missing` = that difference), mana is pooled over all units. The
+/// result is the soft `f2i` (truncation). `div` is the soft-float division of the host (needs the reciprocal table).
+pub fn readiness_with(div: impl Fn(F32, F32) -> F32, missing: i32, units: &[ReadyUnit], life_flag: bool) -> i32 {
+    use softfloat::arith::{add, mul};
+    use softfloat::conv::{f2i, i2r};
+    let one = F32::ONE;
+    let (mut hero_life, mut hero_max) = (one, one);
+    let (mut other_life, mut other_max) = (one, add(one, i2r(missing.wrapping_mul(400))));
+    let (mut mana, mut max_mana) = (one, one);
+    for u in units {
+        let hero = (b'A'..=b'Z').contains(&((u.type_id >> 24) as u8)) && u.flags & 0x4000_0000 == 0;
+        if hero {
+            hero_life = add(hero_life, u.life);
+            hero_max = add(hero_max, u.max_life);
+        } else {
+            other_life = add(other_life, u.life);
+            other_max = add(other_max, u.max_life);
         }
-        let u = gm.unit(k);
-        life += u.life.to_f32();
-        max_life += u.max_life.to_f32();
-        if u.max_mana.to_f32() > 0.0 {
-            mp += u.mana.to_f32();
-            max_mp += u.max_mana.to_f32();
-        }
+        mana = add(mana, u.mana);
+        max_mana = add(max_mana, u.max_mana);
     }
-    let pct = |num: f32, den: f32| if den > 0.0 { (num * 100.0 / den).floor() as i32 } else { 100 };
-    let h = pct(life, max_life);
-    let m = pct(mp, max_mp);
-    match (hp, mana) {
-        (true, true) => h.min(m),
-        (true, false) => h,
-        (false, true) => m,
-        (false, false) => 100,
+    let hundred = F32::from_bits(100.0_f32.to_bits());
+    let pct = |num: F32, den: F32| div(mul(num, hundred), den);
+    if life_flag {
+        let h = pct(hero_life, hero_max);
+        let mut o = pct(other_life, other_max);
+        if !(o.to_f32() <= h.to_f32()) {
+            o = h;
+        }
+        f2i(o)
+    } else {
+        f2i(pct(mana, max_mana))
+    }
+}
+
+/// `CaptainReadiness`, `CaptainReadinessHP` (life flag) and `CaptainReadinessMa` (mana). The wrappers push the flags
+/// (1,1), (1,0), (0,1) but the routine reads only the first, so `CaptainReadiness` equals `CaptainReadinessHP`.
+/// The `+0xB8` field of the record (units the captain should hold) has no model: `missing` is 0 (UNSURE). Without the
+/// soft-float tables the division is plain f32 (not bit-exact).
+pub fn readiness(gm: &Game, c: &Captain, life_flag: bool) -> i32 {
+    let units: Vec<ReadyUnit> = c
+        .members
+        .iter()
+        .filter(|&&k| alive(gm, k))
+        .map(|&k| {
+            let u = gm.unit(k);
+            ReadyUnit { type_id: u.type_id, flags: 0, life: u.life, max_life: u.max_life, mana: u.mana, max_mana: u.max_mana }
+        })
+        .collect();
+    match gm.softfloat_tables() {
+        Some(t) => readiness_with(|a, b| softfloat::arith::div(a, b, t), 0, &units, life_flag),
+        None => readiness_with(|a, b| F32::from_bits((a.to_f32() / b.to_f32()).to_bits()), 0, &units, life_flag),
     }
 }
 

@@ -506,8 +506,8 @@ fn ai_call(
             ret(Value::Boolean(with_caps(env, |_, caps, _| caps[0].flags & captains::RETREATING != 0)))
         }
         "CaptainReadiness" | "CaptainReadinessHP" | "CaptainReadinessMa" => {
-            let (hp, ma) = (name != "CaptainReadinessMa", name != "CaptainReadinessHP");
-            ret(Value::Integer(with_caps(env, |gm, caps, _| captains::readiness(gm, &caps[0], hp, ma))))
+            let life = name != "CaptainReadinessMa";
+            ret(Value::Integer(with_caps(env, |gm, caps, _| captains::readiness(gm, &caps[0], life))))
         }
         "CaptainIsHome" => ret(Value::Boolean(with_caps(env, |gm, caps, _| captains::is_home(gm, &caps[0])))),
         "CaptainAtGoal" => ret(Value::Boolean(with_caps(env, |gm, caps, _| captains::at_goal(gm, &caps[0])))),
