@@ -53,6 +53,7 @@ use w3map::MapInfo;
 /// Name and signature of every native the game registers (`docs/spec/natives-1.26a.tsv`).
 const NATIVE_TABLE: &str = include_str!("../../../docs/spec/natives-1.26a.tsv");
 
+pub mod cli;
 pub mod data;
 pub mod game_start;
 pub mod map;

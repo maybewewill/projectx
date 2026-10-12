@@ -18,6 +18,8 @@ pub mod props;
 pub mod renderer;
 pub mod scene;
 pub mod scene_objects;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sim_view;
 pub mod terrain;
 pub mod terrain_camera;
 pub mod terrain_gpu;

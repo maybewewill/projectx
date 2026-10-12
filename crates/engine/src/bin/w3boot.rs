@@ -18,11 +18,12 @@
 //! `--ai-common` and `--ai-script NAME=PATH` give AI scripts as files; they override the archive ones.
 //! `--seed` is the raw game-start seed (decimal or `0x` hex). Without it, `--replay FILE.w3g` takes the
 //! seed from the replay's game-start record (link UNSURE, `docs/spec/game-start.md`); otherwise 0.
-//! See `engine::Inputs::rng_seed` and `engine::game_start`.
+//! See `engine::Inputs::rng_seed` and `engine::game_start`. The file reads and the boot itself are
+//! `engine::cli`, which `viewer --sim-seconds` shares.
 
 use std::process::ExitCode;
 
-use engine::{Engine, Inputs};
+use engine::cli::{self, BootArgs};
 
 const USAGE: &str = "usage: w3boot [--dll Game.dll] (--common common.j --blizzard blizzard.j | \
 --mpq War3.mpq [--mpq War3x.mpq]) [--ai-common common.ai] [--ai-script NAME=PATH]... \
@@ -30,24 +31,12 @@ const USAGE: &str = "usage: w3boot [--dll Game.dll] (--common common.j --blizzar
 
 #[derive(Debug, Default)]
 struct Args {
-    dll: Option<String>,
-    common: Option<String>,
-    blizzard: Option<String>,
-    mpqs: Vec<String>,
-    ai_common: Option<String>,
-    ai_scripts: Vec<(String, String)>,
-    seed: Option<u32>,
-    replay: Option<String>,
-    steps: u64,
-    /// `--computer SLOT[:RACE]`: make a slot a computer player (RACE human|orc|undead|nightelf, else the map's).
-    computers: Vec<(u32, Option<u32>)>,
+    boot: BootArgs,
     /// `--ai-log N`: print the first N entries of the AI command log (0: none).
     ai_log: usize,
-    /// `--check-natives`: reject `native` lines that the 1.26a native table does not have (like the game).
-    check_natives: bool,
     /// `--check-sync`: with `--replay`, compare the replay's 0x22 sync records with the model (no map needed).
     check_sync: bool,
-    map: Option<String>,
+    steps: u64,
 }
 
 /// A `NAME=PATH` argument of `--ai-script`.
@@ -99,25 +88,29 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .ok_or_else(|| format!("{flag} needs a value"))
         };
         match arg.as_str() {
-            "--dll" => args.dll = Some(value("--dll")?),
-            "--common" => args.common = Some(value("--common")?),
-            "--blizzard" => args.blizzard = Some(value("--blizzard")?),
-            "--mpq" => args.mpqs.push(value("--mpq")?),
-            "--ai-common" => args.ai_common = Some(value("--ai-common")?),
+            "--dll" => args.boot.dll = Some(value("--dll")?),
+            "--common" => args.boot.common = Some(value("--common")?),
+            "--blizzard" => args.boot.blizzard = Some(value("--blizzard")?),
+            "--mpq" => args.boot.mpqs.push(value("--mpq")?),
+            "--ai-common" => args.boot.ai_common = Some(value("--ai-common")?),
             "--ai-script" => args
+                .boot
                 .ai_scripts
                 .push(parse_ai_script(&value("--ai-script")?)?),
-            "--check-natives" => args.check_natives = true,
+            "--check-natives" => args.boot.check_natives = true,
             "--check-sync" => args.check_sync = true,
-            "--seed" => args.seed = Some(parse_seed(&value("--seed")?)?),
-            "--replay" => args.replay = Some(value("--replay")?),
+            "--seed" => args.boot.seed = Some(parse_seed(&value("--seed")?)?),
+            "--replay" => args.boot.replay = Some(value("--replay")?),
             "--ai-log" => {
                 let v = value("--ai-log")?;
                 args.ai_log = v
                     .parse()
                     .map_err(|_| format!("--ai-log: not a number: {v}"))?;
             }
-            "--computer" => args.computers.push(parse_computer(&value("--computer")?)?),
+            "--computer" => args
+                .boot
+                .computers
+                .push(parse_computer(&value("--computer")?)?),
             "--steps" => {
                 let v = value("--steps")?;
                 args.steps = v
@@ -127,109 +120,46 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-h" | "--help" => return Err(USAGE.to_string()),
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             path => {
-                if args.map.replace(path.to_string()).is_some() {
+                if args.boot.map.replace(path.to_string()).is_some() {
                     return Err("more than one map file given".to_string());
                 }
             }
         }
     }
     if args.check_sync {
-        if args.replay.is_none() {
+        if args.boot.replay.is_none() {
             return Err("--check-sync needs --replay FILE.w3g".to_string());
         }
         return Ok(args);
     }
-    if args.map.is_none() {
+    if args.boot.map.is_none() {
         return Err("no map file given".to_string());
     }
-    let have_paths = args.common.is_some() && args.blizzard.is_some();
-    if !have_paths && args.mpqs.is_empty() {
+    let have_paths = args.boot.common.is_some() && args.boot.blizzard.is_some();
+    if !have_paths && args.boot.mpqs.is_empty() {
         return Err("give --common and --blizzard, or --mpq".to_string());
     }
-    if args.common.is_some() != args.blizzard.is_some() {
+    if args.boot.common.is_some() != args.boot.blizzard.is_some() {
         return Err("--common and --blizzard go together".to_string());
     }
     Ok(args)
 }
 
-fn read(path: &str) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("{path}: {e}"))
-}
-
-fn inputs(args: &Args) -> Result<Inputs, String> {
-    let map = read(args.map.as_deref().unwrap_or_default())?;
-    let replay = match &args.replay {
-        Some(path) => Some(
-            w3g::Replay::parse(&read(path)?).map_err(|e| format!("--replay {path}: {e}"))?,
-        ),
-        None => None,
-    };
-    let start = engine::game_start::resolve(args.seed, replay.as_ref());
-    let game_dll = args.dll.as_deref().map(read).transpose()?;
-    let archives = args
-        .mpqs
-        .iter()
-        .map(|p| read(p))
-        .collect::<Result<Vec<_>, _>>()?;
-    let refs: Vec<&[u8]> = archives.iter().map(Vec::as_slice).collect();
-    let (common_j, blizzard_j) = match (&args.common, &args.blizzard) {
-        (Some(c), Some(b)) => (
-            String::from_utf8_lossy(&read(c)?).into_owned(),
-            String::from_utf8_lossy(&read(b)?).into_owned(),
-        ),
-        _ => engine::scripts_from_archives(&refs).map_err(|e| e.to_string())?,
-    };
-    // AI scripts: the archives first, then the explicit files, which replace them.
-    let mut ai = engine::ai_scripts_from_archives(&refs).map_err(|e| e.to_string())?;
-    if let Some(path) = &args.ai_common {
-        ai.common = Some(String::from_utf8_lossy(&read(path)?).into_owned());
-    }
-    for (name, path) in &args.ai_scripts {
-        ai.scripts.push((
-            name.clone(),
-            String::from_utf8_lossy(&read(path)?).into_owned(),
-        ));
-    }
-    Ok(Inputs {
-        map,
-        game_dll,
-        common_j,
-        blizzard_j,
-        rng_seed: start.seed,
-        ai_common: ai.common,
-        ai_scripts: ai.scripts,
-        game_archives: archives,
-        check_natives: args.check_natives,
-    })
-}
-
 fn run(argv: &[String]) -> Result<(), String> {
     let args = parse_args(argv)?;
     if args.check_sync {
-        let path = args.replay.as_deref().unwrap_or_default();
-        let replay =
-            w3g::Replay::parse(&read(path)?).map_err(|e| format!("--replay {path}: {e}"))?;
+        let path = args.boot.replay.as_deref().unwrap_or_default();
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let replay = w3g::Replay::parse(&bytes).map_err(|e| format!("--replay {path}: {e}"))?;
         print!("{}", engine::sync_check::check_replay(&replay).render());
         return Ok(());
     }
-    let mut engine = Engine::boot(inputs(&args)?).map_err(|e| e.to_string())?;
-    for &(slot, race) in &args.computers {
-        let host = engine.host();
-        let mut game = host.game_mut();
-        let p = game
-            .player_mut(slot)
-            .ok_or_else(|| format!("--computer: no slot {slot}"))?;
-        p.controller = engine::map::CONTROL_COMPUTER;
-        p.slot_state = 1;
-        if let Some(r) = race {
-            p.race = r;
-        }
-    }
+    let mut engine = cli::boot(&args.boot)?;
     for i in 0..args.steps {
         engine.step();
         // One status line per game minute for every computer slot.
         if (i + 1) % 600 == 0 {
-            for &(slot, _) in &args.computers {
+            for &(slot, _) in &args.boot.computers {
                 let line = engine.host().game().production_summary(slot);
                 println!("t={:4}s p{slot}: {line}", (i + 1) / 10);
             }
