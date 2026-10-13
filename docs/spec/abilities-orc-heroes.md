@@ -494,3 +494,36 @@ agile multiplier cell snapped to 1.0 within 0.001; attack ability re-arm in prop
   `BLADESTORM_TARGS_DEFAULT` / `Game::set_orc_targs`.
 * **Debris.** The word names `debris`, so destructable debris (trees are not named) in the ring is damaged by the same body
   (the destructable-aware builder collects them). The model has no destructable damage; NOT modelled.
+
+## 20. S39: Earthquake (`AOeq`, `CAbilityEarthquake`, vtable `0x6F8A8154`; effect `CEffectEarthquake` vtable `0x6F88F86C`)
+
+Order id 852121 (section 10). Data (shipped): `Dur` 25 (level 1) / 20, `HeroDur` 20, `Cool` 90, `Cost` 150, `Area` 250 / 400, `Rng` 1000,
+`DataA` 0.5, `DataB` 50 / 40, `DataC` 0.75, `DataD` 250 / 400, buffs `BOeq,BOea`, effect `XOeq`, `targs`
+`ground,structure,debris,tree`.
+
+* **Cast (point slot `0x418` = `0x6F08AE40`, CONFIRMED by reading).** Stores the target x and y into agile cells of the
+  ability (`+0x150`, `+0x158`), reads `DataA` (`0x6F02E9E0`) and starts the ability timer (message `0xD01C1`, cell `+0x13C`) for
+  `DataA` seconds, and clears the caster's earlier buffs of three channel-bookkeeping types (as Big Bad Voodoo does). The duration
+  cell `+0x90` of the ability is `Dur + ability+0x9C` (slot `0x42C` = `0x6F08ADE0`; no hero branch).
+* **Effect start (`0x6F0C4420`, the handler of `0xD01C1`; Unicorn, `tools/emu/quake_emu.py`, 400 cases, 0 mismatches; real
+  handler + initialiser `0x6F0C4230` on a fake ability with real level getters and recording cell setters;
+  `tests/data/orc/quake.txt`, `tests/orc_quake.rs`).** The effect object takes: centre = the stored point (cells `+0x24`,
+  `+0x2C`), **cell `+0x38` = `DataB`** (damage per tick), **cell `+0x40` = `Area`** (radius), **cell `+0x64` = `DataC`**,
+  **tick counter `+0x34` = `F2I(Dur + ability+0x9C)`**; `DataD` is not read; cell `+0x48` is a presentation value derived from the
+  centre. The initialiser ends by running the first tick at once. Rust: `orc::quake_plan`.
+* **Tick `0x6F0C3780` (CONFIRMED by reading).** Counter -= 1; the units and destructables in the circle (destructable-aware
+  builder `0x6F2AE9E0`, predicate `0x6F25D6F0` with the ability's `targs` word UNMODIFIED: it names no relation, so ALL
+  relations are accepted and the caster's own buildings and allies are affected) run the callback `0x6F0B72C0`; then, while the
+  counter is positive, the next tick is armed with 1.0 s (`0x6FAAE4F4`), else the effect destroys itself. So `ticks` ticks at
+  `t0, t0 + 1, ...`.
+* **Per candidate `0x6F0B72C0`.** The zero path as in War Stomp (unit slot `0x11C` or spell immunity `0x6F28D750`). A target whose
+  `targType` (slot `0x114`) has bit 8 (structure): make sure it carries the marker buff `BOea` (`0x424F6561`, factory `0x6F0B4AC0`)
+  and send a damage record of `DataB` (cell value `+0x3C` of the effect), class **`0x4000000`**, flags `0x40` (`0x50` on the zero
+  path) to its damage slot. Any other unit (not on the zero path): the slow buff `BOeq` (`0x424F6571`) with the NEGATED `DataC`
+  (`xor 0x80000000` of the cell value `+0x68`), duration 2.0 s (`[0x6FAAE504]`), created through `0x6F0B4B90` or refreshed through
+  the buff's slot `0x358` when the unit already carries one.
+* Model: `orc::earthquake` / `quake_tick` (timer kind `0x86`): structures take `DataB` per tick (damage type 26), other units get
+  `Slow { move_delta: -DataC }` for 2.0 s each tick. UNSURE: how the slow's `-DataC` enters the unit's speed in the original (the
+  buff's stat apply was not decoded; the model's slow machinery treats it as a delta, `0.75` then means 75 % slower), the debris and
+  tree damage (destructables are not modelled), the channel end (interruption ends the effect in the original: shared channel
+  code, other agent), the marker `BOea`.

@@ -244,6 +244,7 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_504, SERPENT_WARD);
     ids.insert(852_502, HEX);
     ids.insert(852_503, VOODOO);
+    ids.insert(852_121, EARTHQUAKE);
     ids.insert(852_501, HEALING_WAVE);
     ids.insert(852_128, BLADESTORM);
 }
@@ -255,7 +256,7 @@ pub fn takes_no_target(base: u32) -> bool {
 
 /// Abilities cast on a point.
 pub fn takes_point(base: u32) -> bool {
-    matches!(base, SHOCKWAVE | FAR_SIGHT | SERPENT_WARD)
+    matches!(base, SHOCKWAVE | FAR_SIGHT | SERPENT_WARD | EARTHQUAKE)
 }
 
 /// Per-game state of the orc abilities.
@@ -294,6 +295,9 @@ pub struct OrcState {
     voodoos: BTreeMap<u32, VoodooState>,
     voodoo_serial: u32,
     voodoo_buffs: BTreeMap<u32, ObjKey>,
+    /// Earthquakes in progress, by serial.
+    quakes: BTreeMap<u32, QuakeState>,
+    quake_serial: u32,
 }
 
 impl OrcState {
@@ -316,6 +320,7 @@ impl Game {
                 WAR_STOMP => STOMP_TARGS_DEFAULT,
                 VOODOO => VOODOO_TARGS_DEFAULT,
                 BLADESTORM => BLADESTORM_TARGS_DEFAULT,
+                EARTHQUAKE => QUAKE_TARGS_DEFAULT,
                 _ => 0,
             },
         }
@@ -437,6 +442,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         SERPENT_WARD => serpent_ward(game, rec),
         HEX => hex_cast(game, rt, rec),
         VOODOO => voodoo(game, rec),
+        EARTHQUAKE => earthquake(game, rec),
         FAR_SIGHT => far_sight(game, rec),
         _ => return false,
     }
@@ -1177,6 +1183,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_WW_END => game.borrow_mut().drop_spell_buff(aux),
         TICK_BLADE => blade_tick(game, rt, aux),
         TICK_VOODOO => voodoo_tick(game, aux),
+        TICK_QUAKE => quake_tick(game, rt, aux),
         _ => {}
     }
 }
@@ -1575,6 +1582,129 @@ pub fn command_base_damage(count: i32, sides: i32, bonus: i32) -> F32 {
     let half = F32::from_bits(0x3F00_0000);
     let per_die = arith::add(arith::mul(conv::i2r(sides), half), half);
     arith::add(conv::i2r(bonus), arith::mul(conv::i2r(count), per_die))
+}
+
+// ---- Earthquake (`AOeq`, `CAbilityEarthquake`, vtable `0x6F8A8154`; effect `CEffectEarthquake`, vtable `0x6F88F86C`) ----
+
+/// Earthquake's ability id.
+pub const EARTHQUAKE: u32 = code(b"AOeq");
+/// The slow buff on the units in the quake (`BOeq`, id `0x424F6571` at `0x6F0B736E`; the structure marker buff is `BOea`).
+pub const BUFF_QUAKE: u32 = code(b"BOeq");
+/// The timer kind of the quake (`SpellMsg::HeroSpell`): the start after `DataA`, then the 1.0 s ticks.
+pub const TICK_QUAKE: u8 = 0x86;
+/// The shipped `targs` of Earthquake (`ground,structure,debris,tree`): ground 2, structure 8, debris `0x100`, tree `0x40`.
+/// No relation word: the predicate accepts any relation, so the quake also hurts the caster's own buildings.
+pub const QUAKE_TARGS_DEFAULT: u32 = 0x0000_014A;
+/// The damage class of the per-structure damage record: `0x4000000` (damage type index 26).
+pub const QUAKE_DAMAGE_TYPE: u32 = 26;
+
+/// What the effect initialiser `0x6F0C4230` keeps (CONFIRMED by Unicorn, `tools/emu/quake_emu.py`, 400 runs of the real
+/// timer handler `0x6F0C4420` + initialiser on a fake ability): the centre cells `+0x24` / `+0x2C` are the ability's stored
+/// point, cell `+0x38` is `DataB` (the damage per tick on structures), cell `+0x40` is `Area` (the radius), cell `+0x64` is
+/// `DataC` (the factor of the slow), and the tick counter `+0x34` is `F2I(Dur + ability+0x9C)` (soft add; no `HeroDur`).
+/// Cell `+0x48` (a soft-float value that depends on the centre) is presentation. `DataD` is not read by the effect; `DataA`
+/// is the delay of the timer message `0xD01C1` that starts the effect (0x6F08AE40 starts it with `DataA` seconds).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuakePlan {
+    pub ticks: i32,
+    pub damage: F32,
+    pub radius: F32,
+    pub slow: F32,
+}
+
+pub fn quake_plan(dur: F32, plus_9c: F32, data_b: F32, data_c: F32, area: F32) -> QuakePlan {
+    QuakePlan { ticks: conv::f2i(arith::add(dur, plus_9c)), damage: data_b, radius: area, slow: data_c }
+}
+
+/// A running earthquake.
+#[derive(Debug, Clone)]
+pub(crate) struct QuakeState {
+    caster: ObjKey,
+    x: F32,
+    y: F32,
+    plan: QuakePlan,
+    word: u32,
+    started: bool,
+    left: i32,
+}
+
+/// Earthquake cast (point order 852121): the cast point is stored (cells `+0x150`/`+0x158` of the ability), the effect timer
+/// runs `DataA` seconds (`0x6F08AE40`: `DataA` read by `0x6F02E9E0`, timer message `0xD01C1` at `+0x13C`), then
+/// [`quake_start`] creates the effect. CONFIRMED by reading (cast) and Unicorn (effect numbers).
+fn earthquake(game: &RefCell<Game>, rec: &CastRec) {
+    let CastTarget::Point(px, py) = rec.target else {
+        return;
+    };
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let level_index =
+        usize::try_from(gm.unit(rec.caster).abilities.get(EARTHQUAKE).map_or(0, |a| a.level_index)).unwrap_or(0);
+    let word = gm.orc_targs(EARTHQUAKE, level_index);
+    let plan = quake_plan(rec.level.dur, F32::ZERO, rec.level.data[1], rec.level.data[2], rec.level.area);
+    gm.orc.quake_serial = gm.orc.quake_serial.wrapping_add(1);
+    let serial = gm.orc.quake_serial;
+    gm.orc.quakes.insert(
+        serial,
+        QuakeState { caster: rec.caster, x: px, y: py, plan, word, started: false, left: plan.ticks },
+    );
+    gm.timers_start_hero(rec.level.data[0].to_f32(), TICK_QUAKE, rec.caster, serial);
+}
+
+fn quake_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
+    let mut killed = Vec::new();
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(st) = gm.orc.quakes.get_mut(&serial) else {
+            return;
+        };
+        st.started = true;
+        caster = st.caster;
+        let (x, y, plan, word) = (st.x, st.y, st.plan, st.word);
+        // The tick (`0x6F0C3780`): the counter drops first, the group is collected and visited, then the next tick is armed
+        // (1.0 s, `0x6FAAE4F4`) while the counter is positive, else the effect is destroyed.
+        st.left -= 1;
+        let left = st.left;
+        if left > 0 {
+            gm.timers_start_hero(1.0, TICK_QUAKE, caster, serial);
+        } else {
+            gm.orc.quakes.remove(&serial);
+        }
+        for k in crate::natives::group::circle_candidates(&gm, x, y, plan.radius) {
+            {
+                let u = gm.unit(k);
+                if u.removed || u.hidden {
+                    continue;
+                }
+            }
+            if !area_predicate(&gm, caster, k, word) {
+                continue;
+            }
+            // `0x6F0B72C0`: the zero path (invulnerable slot or spell immunity) skips both effects.
+            let zero = gm.unit_is_invulnerable(k) || is_unit_type(&gm, gm.unit(k), ty::MAGIC_IMMUNE);
+            if gm.target_flag_word(k) & 8 != 0 {
+                // A structure: the damage record (class `0x4000000`, flags `0x40`, `0x50` on the zero path).
+                let amount = if zero { F32::ZERO } else { plan.damage };
+                if let Some(t) = gm.unit_damage_target(caster, k, amount, false, false, 0, QUAKE_DAMAGE_TYPE) {
+                    killed.push(t);
+                }
+            } else if !zero {
+                // Any other unit: the slow buff `BOeq` with `-DataC` movement for 2.0 s (`[0x6FAAE504]`), refreshed per tick.
+                let neg = F32::from_bits(plan.slow.to_bits() ^ 0x8000_0000);
+                gm.add_spell_buff(
+                    k,
+                    BUFF_QUAKE,
+                    BuffEffect::Slow { move_delta: neg, attack_delta: F32::ZERO },
+                    F32::from_bits(0x4000_0000),
+                );
+            }
+        }
+    }
+    for t in killed {
+        dispatch_unit_death_by(game, rt, t, Some(caster));
+    }
 }
 
 /// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for `Dur`.
