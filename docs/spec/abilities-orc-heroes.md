@@ -290,3 +290,30 @@ Order id `0xD00A1` = 852129 (slot `0x308`). Atlas: `BOwk` descends from `CBuffIn
 * **Cancel on cast:** the buff's slot `0x178` (`0x6F15A270`, six arguments) forwards to the removal `0x6F079CC0(owner, buff)`:
   LIKELY the "ability cast by the owner" notification (not run; the model does not end the buff on casting).
 * Not modelled: the invisibility itself (`Binv` base, fade `DataA`), which belongs to the vision / detection system.
+
+## 12. S34: Bladestorm (`AOww`, `CAbilityWhirlwind`, vtable `0x6F8F2144`)
+
+Order id `0xD00A0` = 852128. Atlas: a direct child of `CAbilitySpell`; class slots: message `0xC` = `0x6F191350`, level
+initialiser `0x3E8` = `0x6F163570` (also called from the init slot `0x80`), cast effect `0x3C0` = `0x6F1712D0`, end
+`0x6F171450`, damage handler `0x134` = `0x6F163650` (category `0x130` = 0x0B), timer message `0xD01C1`.
+
+* **Set-up, Unicorn (CONFIRMED, `tools/emu/bs_emu.py`, `tests/data/orc/bladestorm.txt`, `tests/orc_bladestorm.rs`; the real
+  initialiser on a fake ability with a real level record, 400 cases, 0 mismatches):** `total = Dur + ability+0x9C`
+  (soft add; `HeroDur` is NOT used, there is no hero branch), `ticks = f2i(total * [0x6FAB1F4C])` with
+  `[0x6FAB1F4C]` = 5.0, at least 1, stored at `+0xF8` (and copied to the countdown `+0xFC` by the cast effect); the damage
+  per tick (agile cell `+0x100`, read at `+0x104`) = `div(mul(DataA, total), I2R(ticks))` (so the total damage is
+  `DataA * total`, spread evenly over the tick count; DataA is a damage PER SECOND); the radius cell `+0x108` = `Area`.
+* **Cast effect (CONFIRMED structure):** sets ability flag `0x10000`, starts a periodic timer (message `0xD01C1`,
+  period = soft reciprocal of 5.0 = 0.2 s), disables the attack ability (`0x6F0CCB00(.., 1, 0)`), posts the owner event
+  0x12, applies the movement state through unit slot `0x8C` (4, 0, 1), and toggles the Mirror Image / Detect abilities
+  (`Amim`, `Adet`); flag `0x8000` marks the spin. The end (`0x6F171450`) undoes all of it.
+* **Tick `0x6F1912A0` (CONFIRMED by reading):** `+0xFC -= 1`; when it reaches 0 the end routine runs; then, when the
+  pause counter `+0x3C` is not positive, the area damage body `0x6F2C31D0` is called with the caster, the ring
+  (`+0x10C` radius, `+0x104` amount), the ability's target word `+0x4C`, damage class **`0x20`** (= `1 << 5`, damage type
+  ENHANCED) and the eye-candy callback `0x6F18C930`. The final tick therefore still deals its damage: exactly `ticks` damage
+  ticks at 0.2 s, 0.4 s, ... (see `natives-damage-items.md` section 2 for the area body).
+* **Damage handler `0x134`:** while the spin is on (`+0xFC > 0`) and the target filter `0x6F26D590(owner, target, +0x4C)`
+  is zero, the unit's own attack record is zeroed (`damage = damage * 0.0`, `bonus = bonus * 0.0`, record flag `0x10`).
+* Model: `orc::bladestorm` / `blade_tick` with the three pure functions above; the target filter is UNSURE (living enemy
+  ground non-structure units), the re-armed one-shot timer replaces the repeating timer, a marker buff `BOww` lasts
+  `total`.

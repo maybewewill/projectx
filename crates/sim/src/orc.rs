@@ -126,6 +126,34 @@ pub fn ww_arm(has_target: bool, buff_flags: u32, filter_answer: u32) -> (u32, bo
 pub const WW_END_DELAY_BITS: u32 = 0x3C23_D70A;
 /// Timer kind that ends the buff after the first strike.
 pub const TICK_WW_END: u8 = 0x83;
+/// Timer kind of the Bladestorm damage tick (message `0xD01C1`).
+pub const TICK_BLADE: u8 = 0x84;
+
+// ---- Bladestorm set-up (CONFIRMED in Unicorn: `tools/emu/bs_emu.py`, `tests/data/orc/bladestorm.txt`) ----
+
+/// The tick rate constant `[0x6FAB1F4C]` = 5.0 (ticks per second); the tick period is its soft reciprocal, 0.2 s.
+pub const BLADESTORM_TICK_RATE_BITS: u32 = 0x40A0_0000;
+
+/// The total duration of a Bladestorm: `Dur + ability+0x9C` (soft add); the class initialiser `0x6F163570` uses `Dur` for
+/// heroes too (no `HeroDur`).
+pub fn bladestorm_total(dur: F32, bonus: F32) -> F32 {
+    arith::add(dur, bonus)
+}
+
+/// The tick count `0x6F163570` stores at `+0xF8`: `f2i(total * 5.0)`, at least 1.
+pub fn bladestorm_ticks(total: F32) -> i32 {
+    let n = conv::f2i(arith::mul(total, F32::from_bits(BLADESTORM_TICK_RATE_BITS)));
+    if n > 0 {
+        n
+    } else {
+        1
+    }
+}
+
+/// The damage of one tick (the value `+0x104` of the agile cell `+0x100`): `DataA * total / I2R(ticks)`.
+pub fn bladestorm_tick_damage(data_a: F32, total: F32, ticks: i32, t: &softfloat::Tables) -> F32 {
+    arith::div(arith::mul(data_a, total), conv::i2r(ticks), t)
+}
 
 // ---- Mirror Image numeric cores (CONFIRMED in Unicorn: `tools/emu/mirror_emu.py`, `tests/data/orc/mirror.txt`) ----
 
@@ -185,6 +213,8 @@ pub const CHAIN_LIGHTNING: u32 = code(b"AOcl");
 pub const FAR_SIGHT: u32 = code(b"AOfs");
 pub const FERAL_SPIRIT: u32 = code(b"AOsf");
 pub const HEALING_WAVE: u32 = code(b"AOhw");
+pub const BLADESTORM: u32 = code(b"AOww");
+pub const BUFF_BLADESTORM: u32 = code(b"BOww");
 /// Buff codes.
 pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
 pub const BUFF_FAR_SIGHT: u32 = code(b"BOfs");
@@ -210,11 +240,12 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_122, FAR_SIGHT);
     ids.insert(852_126, FERAL_SPIRIT);
     ids.insert(852_501, HEALING_WAVE);
+    ids.insert(852_128, BLADESTORM);
 }
 
 /// Abilities cast without a target (`targs` empty or area around the caster).
 pub fn takes_no_target(base: u32) -> bool {
-    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT)
+    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT | BLADESTORM)
 }
 
 /// Abilities cast on a point.
@@ -245,6 +276,9 @@ pub struct OrcState {
     chain_serial: u32,
     /// Units whose Wind Walk buff is armed for the coming execute (buff flag `0x200`).
     ww_armed: BTreeSet<ObjKey>,
+    /// Bladestorms in progress, by serial.
+    blades: BTreeMap<u32, BladeState>,
+    blade_serial: u32,
 }
 
 impl OrcState {
@@ -362,6 +396,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         WAR_STOMP => war_stomp(game, rt, rec),
         CHAIN_LIGHTNING => chain_lightning(game, rt, rec, false),
         HEALING_WAVE => chain_lightning(game, rt, rec, true),
+        BLADESTORM => bladestorm(game, rt, rec),
         SHOCKWAVE => shockwave(game, rt, rec),
         WIND_WALK => wind_walk(game, rec),
         MIRROR_IMAGE => mirror_image(game, rt, rec),
@@ -913,12 +948,103 @@ fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey,
     gm.orc.mirror_images.insert(caster, images);
 }
 
+// ---- Bladestorm model ----
+
+/// A Bladestorm in progress (ability fields `+0xFC` ticks left, cells `+0x100` damage and `+0x108` radius).
+#[derive(Debug, Clone)]
+pub(crate) struct BladeState {
+    caster: ObjKey,
+    left: i32,
+    damage: F32,
+    radius: F32,
+    buff: u32,
+}
+
+/// Bladestorm (class `0x6F8F2144`, order 852128): the effect `0x6F1712D0` starts a repeating timer (message `0xD01C1`,
+/// period = soft reciprocal of 5.0 = 0.2 s), disables the caster's attack and orders; the level initialiser (Unicorn,
+/// `bladestorm_*`) fixes the tick count `f2i((Dur + x) * 5)` (min 1) and the damage per tick `DataA * total / ticks`. Every
+/// tick (`0x6F1912A0`) decrements the counter, ends the spin when it reaches 0 and STILL deals that tick's damage
+/// (the ring `(Area, damage)` around the caster through the area damage body `0x6F2C31D0`, damage class `0x20`).
+/// UNSURE: the target filter (here: living enemy ground non-structure units), the 0.2 s tick being a repeating timer
+/// (modelled as a re-armed one-shot), the missing softfloat tables fallback (0.2 s, no damage rounding).
+fn bladestorm(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let total = bladestorm_total(rec.level.dur, F32::ZERO);
+    let ticks = bladestorm_ticks(total);
+    let damage = match gm.softfloat_tables() {
+        Some(t) => bladestorm_tick_damage(rec.level.data[0], total, ticks, t),
+        None => rec.level.data[0],
+    };
+    let buff = gm.add_spell_buff(rec.caster, BUFF_BLADESTORM, BuffEffect::Marker, total);
+    gm.orc.blade_serial = gm.orc.blade_serial.wrapping_add(1);
+    let serial = gm.orc.blade_serial;
+    gm.orc.blades.insert(serial, BladeState { caster: rec.caster, left: ticks, damage, radius: rec.level.area, buff });
+    let period = f32::from_bits(blade_period_bits(&gm));
+    gm.timers_start_hero(period, TICK_BLADE, rec.caster, serial);
+}
+
+fn blade_period_bits(gm: &Game) -> u32 {
+    match gm.softfloat_tables() {
+        Some(t) => arith::recip(F32::from_bits(BLADESTORM_TICK_RATE_BITS), t).to_bits(),
+        None => 0x3E4C_CCCD,
+    }
+}
+
+fn blade_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
+    let mut killed = Vec::new();
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(st) = gm.orc.blades.get_mut(&serial) else {
+            return;
+        };
+        caster = st.caster;
+        st.left -= 1;
+        let (left, damage, radius, buff) = (st.left, st.damage, st.radius, st.buff);
+        if !gm.alive(caster) {
+            gm.orc.blades.remove(&serial);
+            return;
+        }
+        if left <= 0 {
+            gm.orc.blades.remove(&serial);
+            gm.drop_spell_buff(buff);
+        } else {
+            let period = f32::from_bits(blade_period_bits(&gm));
+            gm.timers_start_hero(period, TICK_BLADE, caster, serial);
+        }
+        let (cx, cy, owner) = {
+            let u = gm.unit(caster);
+            (u.x, u.y, u.owner)
+        };
+        for k in crate::natives::group::circle_candidates(&gm, cx, cy, radius) {
+            if k == caster || !spell_target_ok(&gm, owner, k) {
+                continue;
+            }
+            let u = gm.unit(k);
+            if !is_unit_type(&gm, u, ty::GROUND) || is_unit_type(&gm, u, ty::STRUCTURE) {
+                continue;
+            }
+            // Damage class 0x20 = 1 << 5 (damage type ENHANCED).
+            if let Some(t) = gm.unit_damage_target(caster, k, damage, false, false, 0, 5) {
+                killed.push(t);
+            }
+        }
+    }
+    for t in killed {
+        dispatch_unit_death_by(game, rt, t, Some(caster));
+    }
+}
+
 /// Timer dispatch of the orc spells (`SpellMsg::HeroSpell` kinds from `0x80`).
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, aux: u32) {
     match kind {
         TICK_MIRROR => mirror_fire(game, rt, unit, aux),
         TICK_CHAIN => chain_next(game, rt, aux),
         TICK_WW_END => game.borrow_mut().drop_spell_buff(aux),
+        TICK_BLADE => blade_tick(game, rt, aux),
         _ => {}
     }
 }
