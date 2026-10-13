@@ -75,6 +75,7 @@ pub const ITEM_INVIS: u32 = code(b"AIvi");
 pub const ITEM_INVUL: u32 = code(b"AIvu");
 pub const ITEM_RAISE_DEAD: u32 = code(b"AIrd");
 pub const ITEM_RESURRECTION: u32 = code(b"AIrs");
+pub const ITEM_DISPEL: u32 = code(b"AIdi");
 /// The buffs of the invisibility and invulnerability potions (the codes the effect bodies hand to the buff finder:
 /// `0x6F10F580` returns `'Binv'`, `0x6F10F990` returns `'Bvul'`).
 pub const BUFF_INVIS: u32 = code(b"Binv");
@@ -419,7 +420,8 @@ pub(crate) fn takes_no_target(gm: &Game, base: u32) -> bool {
 /// the unit spell's effect runs with the item's level record. CONFIRMED for `AIrs` (only the code and order getters
 /// of `CAbilityResurrection` are overridden) and `AIrd` (the same effect slot `0x424` = `0x6F0E6AA0` as `Arai`; the
 /// child only changes the autocast gate `0x380`); LIKELY for the others (same class).
-const DELEGATED: [u32; 14] = [
+const DELEGATED: [u32; 15] = [
+    crate::unit_spells::DISPEL_MAGIC,
     crate::undead_ne::BLINK,
     crate::human_heroes::DIVINE_SHIELD,
     crate::cast::HOLY_LIGHT,
@@ -442,6 +444,9 @@ pub(crate) fn effect_base(gm: &Game, alias: u32) -> u32 {
     match gm.spells.item.base_of(alias) {
         ITEM_RESURRECTION => crate::human_heroes::RESURRECTION,
         ITEM_RAISE_DEAD => crate::unit_spells::RAISE_DEAD,
+        // `AIdi` (CAbilityItemDispelAoe) overrides only the code and order getters of `CAbilityDispelMagic`; the area
+        // effect slot `0x418` is `0x6F0EF320` in both.
+        ITEM_DISPEL => crate::unit_spells::DISPEL_MAGIC,
         b => b,
     }
 }
@@ -727,6 +732,7 @@ pub struct LifeStealInput {
 /// The life steal handler of `AIva`: `(effect shown, heal)`. The heal is `DataA * damage` (soft multiply) for a damage
 /// above 0.0, unless an illusion on either side blocks it while the Misc switch is off; the effect routine
 /// (`0x6F053040`) is called whenever the gates up to the damage compare pass.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn life_steal_outcome(i: &LifeStealInput, damage: F32, data_a: F32) -> (bool, Option<F32>) {
     // The compare is an x87 `fcompp` + `test ah, 1`: C0 is set for 0.0 < damage and for an unordered pair, so a NaN
     // damage passes the gate (Unicorn `VA` rows).
