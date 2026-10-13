@@ -161,6 +161,8 @@ pub enum SpellMsg {
     HeroSpell { kind: u8, unit: ObjKey, aux: u32 },
     /// A timer of the Human hero spells in `human_heroes.rs` (`kind` is its `TICK_*`, `id` the effect).
     Human { kind: u8, id: u32 },
+    /// A timer of the unit spells in `unit_spells.rs` (autocast scans).
+    UnitSpell { kind: u8, unit: ObjKey, base: u32, aux: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -220,6 +222,8 @@ pub struct SpellSystem {
     pub hero: crate::undead_ne::State,
     /// State of the Blizzard and Mass Teleport effects (`human_heroes.rs`).
     pub human: crate::human_heroes::State,
+    /// State of the unit spells (`unit_spells.rs`).
+    pub unit: crate::unit_spells::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -282,6 +286,7 @@ impl SpellSystem {
         s.order_ids.insert(852_092, HOLY_LIGHT);
         s.order_ids.insert(852_075, SLOW);
         crate::orc::register_orders(&mut s.order_ids);
+        crate::unit_spells::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
             s.order_ids.insert(id, base);
         }
@@ -435,6 +440,11 @@ impl Game {
             return Err(CastError::Cooling);
         }
         Ok(())
+    }
+
+    /// The cast timing of a unit type, if installed.
+    pub(crate) fn spell_cast_timing(&self, type_id: u32) -> Option<CastTiming> {
+        self.spells.timings.get(&type_id).copied()
     }
 
     pub(crate) fn spells_hero_state_mut(&mut self) -> &mut crate::undead_ne::State {
@@ -642,6 +652,9 @@ pub fn begin_cast(
                 if !gm.alive(t) {
                     return Err(CastError::BadTarget);
                 }
+                if let Some(e) = crate::unit_spells::target_error(&gm, caster, base, t) {
+                    return Err(e);
+                }
                 if arith::lt(F32::ZERO, level.rng) {
                     let (a, b) = (gm.unit(caster), gm.unit(t));
                     let dx = arith::sub(b.x, a.x);
@@ -664,9 +677,15 @@ pub fn begin_cast(
                 }
             }
             CastTarget::None => {
-                if !crate::orc::takes_no_target(base) && !crate::human_heroes::is_immediate_spell(base)
-                    && !crate::undead_ne::is_immediate(base) {
+                if !crate::orc::takes_no_target(base)
+                    && !crate::unit_spells::takes_no_target(base)
+                    && !crate::human_heroes::is_immediate_spell(base)
+                    && !crate::undead_ne::is_immediate(base)
+                {
                     return Err(CastError::BadTarget);
+                }
+                if let Some(e) = crate::unit_spells::untargeted_error(&gm, caster, base, &level) {
+                    return Err(e);
                 }
             }
         }
@@ -818,6 +837,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
         return;
     }
     if crate::undead_ne::run_effect(game, rt, rec.caster, rec.base, &rec.level, rec.target) {
+        return;
+    }
+    if crate::unit_spells::run_effect(game, rt, rec) {
         return;
     }
     let CastTarget::Unit(target) = rec.target else {
@@ -991,5 +1013,6 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
         SpellMsg::HeroSpell { kind, unit, aux } if kind >= 0x80 => crate::orc::on_timer(game, rt, kind, unit, aux),
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
         SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
+        SpellMsg::UnitSpell { kind, unit, base, aux } => crate::unit_spells::on_timer(game, rt, kind, unit, base, aux),
     }
 }

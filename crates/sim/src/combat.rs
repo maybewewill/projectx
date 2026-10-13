@@ -1181,7 +1181,7 @@ impl Game {
     }
 
     /// Whether the swing predicate holds for `unit` and `target` with the attacker's weapon `ty`.
-    fn in_attack_range(&self, unit: ObjKey, target: ObjKey, ty: &AttackType) -> bool {
+    pub(crate) fn in_attack_range(&self, unit: ObjKey, target: ObjKey, ty: &AttackType) -> bool {
         let a = self.unit(unit);
         let b = self.unit(target);
         let other = self.attack_type(b.type_id).collision;

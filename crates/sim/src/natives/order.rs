@@ -649,6 +649,9 @@ fn issue(g: &Rc<RefCell<Game>>, rt: &mut dyn ScriptRuntime, unit: ObjKey, order:
         }
     }
     if order.class == OrderClass::Immediate {
+        if let Some(ok) = crate::unit_spells::immediate_order(g, unit, order.id) {
+            return ok;
+        }
         if let Some(ok) = crate::human_heroes::immediate_order(g, rt, unit, order.id) {
             return ok;
         }

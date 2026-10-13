@@ -564,7 +564,15 @@ impl SpecDamage {
             weapon.sides,
             bonus,
         )?;
-        Some(conv::i2r(total.max(0)))
+        let raw = conv::i2r(total.max(0));
+        // Percentage modifiers of buffs (Inner Fire, Cripple): `unit_spells.rs`.
+        let pct = game.unit(attacker).bonuses.damage_pct;
+        if pct.to_bits() & 0x7FFF_FFFF != 0 {
+            let factor = arith::add(F32::ONE, pct);
+            let factor = if arith::lt(factor, F32::ZERO) { F32::ZERO } else { factor };
+            return Some(arith::mul(raw, factor));
+        }
+        Some(raw)
     }
 }
 
