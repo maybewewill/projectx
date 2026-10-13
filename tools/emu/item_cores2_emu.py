@@ -14,6 +14,10 @@ Row kinds (hex unless noted, `|` separates input from output):
                                                           gets the ability value unless an illusion owner is blocked
   RM  typeregen x v88              | rate              AIrm rate 0x6F0E64E0: mul(add(type regenMana, hero int term), DataA)
   RH  misc inttotal                | x                 hero int regen term 0x6F2082C0: mul(Misc IntRegenBonus, I2R(int))
+  SR  recflags rec20 illusion dataB null | called factor     AIsr damage handler 0x6F0F5730: scales a Spells-type record by 1 - DataB
+  RS  a b factor                   | a' b'             the record scale 0x6F255800: both amounts times the factor
+  VA  armed filt immune vict ownill victill misc amount v88 | healed heal fx
+                                                        AIva post-damage handler 0x6F0F53A0: life adder gets DataA * damage
 
 Usage: GAME_DLL=/path/Game.dll py tools/emu/item_cores2_emu.py OUT.txt [CASES] [SEED]
 """
@@ -169,7 +173,91 @@ def case_rh(r):
     return 'RH %x %x | %x' % (misc, inttotal & 0xffffffff, r32(OUTP))
 
 
-GENS = [('GR', case_gr), ('VI', case_vi), ('RL', case_rl), ('RM', case_rm), ('RH', case_rh)]
+# ---------------------------------------------------------------- SR / RS / VA: damage handlers of the items
+VT_AISR = 0x6F8BC4CC
+VT_AIVA = 0x6F8BBE44
+RECORD = D + 0x9000
+VICTIM = D + 0x9400
+AMOUNT = D + 0x9800
+
+
+def case_sr(r):
+    flags = r.choice([0, 0x10, 0x100, 0x80, r.getrandbits(8)])
+    row = r.choice([0, 0, 0, 1, 2, 7, r.getrandbits(3)])
+    illusion = r.choice([0, 1])
+    datab = rand_real(r)
+    null = r.random() < 0.05
+    T.setup(VT_AISR)
+    rec = bytearray(bytes(mu.mem_read(T.REC, 0x68)))
+    struct.pack_into('<I', rec, 0x24, datab)
+    mu.mem_write(T.REC, bytes(rec))
+    w32(T.UNIT + 0x5C, 0x40000000 if illusion else 0)
+    mu.mem_write(RECORD, bytes(0x40))
+    w32(RECORD + 0x0C, flags)
+    w32(RECORD + 0x20, row)
+    got = {}
+
+    def scale(uc, c, d, st):
+        got['factor'] = r32(st[0])
+        return 0
+
+    T.trace_call(0x6F0F5730, T.ABIL, (0 if null else RECORD,), stub_fn={0x6F255800: scale}, span=0x100,
+                 cleanup={0x6F255800: 4})
+    if 'factor' in got:
+        return 'SR %x %x %x %x %x | 1 %x' % (flags, row, illusion, datab, int(null), got['factor'])
+    return 'SR %x %x %x %x %x | 0 0' % (flags, row, illusion, datab, int(null))
+
+
+def case_rs(r):
+    a, b, factor = rand_real(r), rand_real(r), rand_real(r)
+    T.setup(VT_AISR)
+    mu.mem_write(RECORD, bytes(0x40))
+    w32(RECORD + 0x10, a)
+    w32(RECORD + 0x18, b)
+    w32(AMOUNT, factor)
+    emu_call = T.emu.call
+    emu_call(0x6F255800, ecx=RECORD, stack_args=(AMOUNT,))
+    return 'RS %x %x %x | %x %x' % (a, b, factor, r32(RECORD + 0x10), r32(RECORD + 0x18))
+
+
+def case_va(r):
+    armed = r.choice([0, 1, 1, 1])
+    filt = r.choice([0, 0, 0, 1])
+    immune = r.choice([0, 0, 0, 1])
+    vict = r.choice([0, 1, 1, 1])
+    ownill = r.choice([0, 0, 1])
+    victill = r.choice([0, 0, 1])
+    misc = r.choice([0, 1])
+    amount = rand_real(r)
+    v88 = rand_real(r)
+    T.setup(VT_AIVA, flags=0x80 if armed else 0)
+    w32(T.ABIL + 0x88, v88)
+    w32(T.UNIT + 0x5C, 0x40000000 if ownill else 0)
+    mu.mem_write(VICTIM, bytes(0x100))
+    w32(VICTIM, T.UVT)
+    w32(VICTIM + 0x5C, 0x40000000 if victill else 0)
+    w32(AMOUNT, amount)
+    mu.mem_write(RECORD, bytes(0x40))
+    got = {}
+
+    def life(uc, c, d, st):
+        got['heal'] = r32(st[1])
+        return 0
+
+    def fx(uc, c, d, st):
+        got['fx'] = 1
+        return 0
+
+    T.trace_call(0x6F0F53A0, T.ABIL, (RECORD, 0, AMOUNT),
+                 stub_fn={0x6F26D590: lambda *x: filt, 0x6F282F60: lambda *x: VICTIM if vict else 0,
+                          0x6F28D750: lambda *x: immune, 0x6F009F90: lambda *x: misc, 0x6F277C20: life, 0x6F053040: fx},
+                 span=0x200, cleanup={0x6F277C20: 8, 0x6F053040: 4, 0x6F28D750: 8, 0x6F26D590: 8, 0x6F009F90: 4})
+    return 'VA %x %x %x %x %x %x %x %x %x | %d %x %d' % (armed, filt, immune, vict, ownill, victill, misc, amount, v88,
+                                                          1 if 'heal' in got else 0, got.get('heal', 0), got.get('fx', 0))
+
+
+GENS = [('GR', case_gr), ('VI', case_vi), ('RL', case_rl), ('RM', case_rm), ('RH', case_rh), ('SR', case_sr),
+        ('RS', case_rs), ('VA', case_va)]
 
 
 def main():

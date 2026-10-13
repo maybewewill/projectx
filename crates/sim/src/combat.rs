@@ -1147,6 +1147,8 @@ impl Game {
             return None;
         }
         let rec = crate::damage::native_record(attack, ranged, attack_type, damage_type, 0)?;
+        // `AIsr` bracers on the target scale a Spells-type record (`item_abilities::spell_reduction`).
+        let raw = crate::item_abilities::spell_reduction(self, target, rec.row, rec.flags, raw);
         let s_owner = self.unit(source).owner;
         let hit = NativeHit {
             source,
@@ -1225,6 +1227,8 @@ impl Game {
         let killed = self.apply_damage(target, damage);
         // Vampiric Aura's life steal of the attacker (`undead_ne.rs`).
         self.apply_lifesteal(attacker, target, damage);
+        // The item abilities that act on a hit (`item_abilities`: the life steal of `AIva`).
+        crate::item_abilities::on_hit(self, attacker, target, damage);
         if killed.is_none() {
             // Passive on-hit buffs of `unit_spells.rs` (Frost Attack, Slow Poison).
             self.spell_on_hit(attacker, target);

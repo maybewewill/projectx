@@ -96,3 +96,61 @@ fn hero_int_regen_term_matches_the_original() {
         assert_eq!(got, h(r[4]), "row {r:?}");
     }
 }
+
+#[test]
+fn spell_reduction_handler_matches_the_original() {
+    let rs = rows("SR");
+    assert!(rs.len() >= 300);
+    let mut hit = 0;
+    for r in &rs {
+        let (flags, row, illusion, data_b, null) = (h(r[1]), h(r[2]), h(r[3]) != 0, h(r[4]), h(r[5]) != 0);
+        assert_eq!(r[6], "|");
+        let got = spell_reduction_factor(!null, illusion, flags, row, f(data_b));
+        let want = (r[7] == "1").then(|| h(r[8]));
+        assert_eq!(got.map(|x| x.to_bits()), want, "row {r:?}");
+        hit += usize::from(want.is_some());
+    }
+    assert!(hit > 30, "the rows reach the scale call");
+}
+
+#[test]
+fn record_scale_matches_the_original() {
+    let rs = rows("RS");
+    assert!(rs.len() >= 300);
+    for r in &rs {
+        let (a, b, factor) = (h(r[1]), h(r[2]), h(r[3]));
+        assert_eq!(r[4], "|");
+        let (na, nb) = scale_record(f(a), f(b), f(factor));
+        assert_eq!((na.to_bits(), nb.to_bits()), (h(r[5]), h(r[6])), "row {r:?}");
+    }
+}
+
+#[test]
+fn life_steal_handler_matches_the_original() {
+    let rs = rows("VA");
+    assert!(rs.len() >= 300);
+    let (mut healed, mut shown) = (0, 0);
+    for r in &rs {
+        let b = |i: usize| h(r[i]) != 0;
+        let input = LifeStealInput {
+            armed: b(1),
+            filter_refused: b(2),
+            immune: b(3),
+            victim: b(4),
+            owner_illusion: b(5),
+            victim_illusion: b(6),
+            misc: b(7),
+        };
+        let (amount, v88) = (h(r[8]), h(r[9]));
+        assert_eq!(r[10], "|");
+        let (fx, heal) = life_steal_outcome(&input, f(amount), f(v88));
+        assert_eq!(u32::from(fx), h(r[13]), "effect, row {r:?}");
+        assert_eq!(heal.is_some(), r[11] == "1", "heal, row {r:?}");
+        if let Some(x) = heal {
+            assert_eq!(x.to_bits(), h(r[12]), "heal amount, row {r:?}");
+            healed += 1;
+        }
+        shown += usize::from(fx);
+    }
+    assert!(healed > 20 && shown > healed, "the rows reach the heal and the blocked-heal paths");
+}

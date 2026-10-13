@@ -61,6 +61,8 @@ pub const TOWN_PORTAL: u32 = code(b"AItp");
 pub const ITEM_REGEN: u32 = code(b"AIrg");
 pub const BONUS_LIFE_REGEN: u32 = code(b"Arel");
 pub const BONUS_MANA_REGEN: u32 = code(b"AIrm");
+pub const BONUS_SPELL_REDUCTION: u32 = code(b"AIsr");
+pub const BONUS_VAMPIRE: u32 = code(b"AIva");
 pub const ITEM_INVIS: u32 = code(b"AIvi");
 pub const ITEM_INVUL: u32 = code(b"AIvu");
 pub const ITEM_RAISE_DEAD: u32 = code(b"AIrd");
@@ -120,6 +122,10 @@ pub enum Family {
     /// `CAbilityItemRegenMana` (`AIrm`, persistent, heroes only): a mana regeneration modifier of `DataA` times the hero's
     /// base mana regeneration.
     BonusManaRegen,
+    /// `CAbilityItemSpellReduction` (`AIsr`): Spells-type damage taken is scaled by `1 - DataB`.
+    BonusSpellReduction,
+    /// `CAbilityVampireBonus` (`AIva`): the carrier heals `DataA` times the damage its attacks deal.
+    BonusVampire,
     /// `CAbilityItemInvis` (`AIvi`): the buff `Binv` for the hero-rule duration.
     Invis,
     /// `CAbilityItemInvul` (`AIvu`): the buff `Bvul` for the hero-rule duration; the holder is invulnerable meanwhile.
@@ -141,6 +147,8 @@ impl Family {
                 | Family::BonusAttrs
                 | Family::BonusLifeRegen
                 | Family::BonusManaRegen
+                | Family::BonusSpellReduction
+                | Family::BonusVampire
         )
     }
 
@@ -175,6 +183,8 @@ impl Family {
             ITEM_REGEN => Family::Regen,
             BONUS_LIFE_REGEN => Family::BonusLifeRegen,
             BONUS_MANA_REGEN => Family::BonusManaRegen,
+            BONUS_SPELL_REDUCTION => Family::BonusSpellReduction,
+            BONUS_VAMPIRE => Family::BonusVampire,
             ITEM_INVIS => Family::Invis,
             ITEM_INVUL => Family::Invul,
             _ => return None,
@@ -630,6 +640,54 @@ pub fn regen_item_gate(illusion: bool, misc: bool) -> bool {
     !illusion || misc
 }
 
+/// The damage handler of `AIsr` (`0x6F0F5730`, Unicorn `SR` rows): the factor `1 - DataB` (soft subtract from `1.0`) that
+/// `0x6F255800` applies to the record, or `None` when the handler leaves the record alone: no record, an illusion
+/// carrier, record flag `0x10`, or a record type row other than 0 (Spells).
+pub fn spell_reduction_factor(has_record: bool, carrier_illusion: bool, record_flags: u32, record_row: u32, data_b: F32) -> Option<F32> {
+    if !has_record || carrier_illusion || record_flags & 0x10 != 0 || record_row != 0 {
+        None
+    } else {
+        Some(arith::sub(F32::ONE, data_b))
+    }
+}
+
+/// The record scale `0x6F255800` (Unicorn `RS` rows): the two amounts of the record times the factor.
+pub fn scale_record(a: F32, b: F32, factor: F32) -> (F32, F32) {
+    (arith::mul(a, factor), arith::mul(b, factor))
+}
+
+/// The inputs of the life steal handler of `AIva` (`0x6F0F53A0`, Unicorn `VA` rows).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LifeStealInput {
+    /// The pre-damage handler armed the ability (flag `0x80`).
+    pub armed: bool,
+    /// The target filter (`0x6F26D590`) refused the victim.
+    pub filter_refused: bool,
+    /// The victim answers the immunity query (`0x6F28D750`).
+    pub immune: bool,
+    /// The victim resolved (`0x6F282F60`).
+    pub victim: bool,
+    pub owner_illusion: bool,
+    pub victim_illusion: bool,
+    /// Misc `IllusionsCanRestoreLife`.
+    pub misc: bool,
+}
+
+/// The life steal handler of `AIva`: `(effect shown, heal)`. The heal is `DataA * damage` (soft multiply) for a damage
+/// above 0.0, unless an illusion on either side blocks it while the Misc switch is off; the effect routine
+/// (`0x6F053040`) is called whenever the gates up to the damage compare pass.
+pub fn life_steal_outcome(i: &LifeStealInput, damage: F32, data_a: F32) -> (bool, Option<F32>) {
+    // The compare is an x87 `fcompp` + `test ah, 1`: C0 is set for 0.0 < damage and for an unordered pair, so a NaN
+    // damage passes the gate (Unicorn `VA` rows).
+    let positive = !(0.0f32 >= f32::from_bits(damage.to_bits()));
+    if !i.armed || i.filter_refused || (i.victim && i.immune) || !positive {
+        return (false, None);
+    }
+    let heal = arith::mul(data_a, damage);
+    let blocked = !i.misc && (i.owner_illusion || (i.victim && i.victim_illusion));
+    (true, (!blocked).then_some(heal))
+}
+
 /// The hero term of the mana regeneration item (`0x6F2082C0`, Unicorn `RH` rows): `Misc IntRegenBonus * I2R(int)`.
 pub fn hero_int_regen_term(misc: F32, int_total: i32) -> F32 {
     arith::mul(misc, conv::i2r(int_total))
@@ -685,6 +743,59 @@ pub fn charge_outcome(flags: u32, charges: i32, holder_live: bool) -> Option<(i3
     let (_, new) = charge_step(flags, charges);
     let new = new?;
     Some((new, holder_live, destroys(flags, new)))
+}
+
+// ---- damage hooks ----
+
+/// The levels of the passive item abilities of family `fam` that `unit` holds.
+fn passive_levels(gm: &Game, unit: ObjKey, fam: Family) -> Vec<SpellLevel> {
+    gm.unit(unit)
+        .abilities
+        .iter()
+        .filter(|a| !a.is_removed() && gm.spells.item.family(a.base) == Some(fam))
+        .map(|a| level_of(gm, a.base))
+        .collect()
+}
+
+/// `AIsr` on a damage record about to be delivered to `target` (the handler runs in the target side before armor,
+/// `0x6F0F5730`): the raw amount of a Spells-type record is scaled by `1 - DataB` for every bracer carried.
+pub(crate) fn spell_reduction(gm: &Game, target: ObjKey, row: u32, flags: u32, raw: F32) -> F32 {
+    let illusion = gm.unit(target).illusion;
+    let mut amount = raw;
+    for level in passive_levels(gm, target, Family::BonusSpellReduction) {
+        if let Some(factor) = spell_reduction_factor(true, illusion, flags, row, level.data[1]) {
+            amount = scale_record(amount, F32::ZERO, factor).0;
+        }
+    }
+    amount
+}
+
+/// The on-hit hook of a basic attack that dealt `damage` to `victim` (called by the attack arrival after the damage):
+/// the life steal of `AIva`. The pre-damage arming of the original (`0x6F0F54A0`: the carrier is enabled and not
+/// paused, the target filter `air,ground,enemy` accepts the victim) is modelled by the enemy test.
+pub fn on_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32) {
+    if !gm.alive(attacker) {
+        return;
+    }
+    let levels = passive_levels(gm, attacker, Family::BonusVampire);
+    if levels.is_empty() {
+        return;
+    }
+    let (a_owner, v_owner) = (gm.unit(attacker).owner, gm.unit(victim).owner);
+    let input = LifeStealInput {
+        armed: true,
+        filter_refused: !gm.is_enemy(a_owner, v_owner),
+        immune: false,
+        victim: true,
+        owner_illusion: gm.unit(attacker).illusion,
+        victim_illusion: gm.unit(victim).illusion,
+        misc: gm.spells.item.illusions_heal,
+    };
+    for level in levels {
+        if let (_, Some(heal)) = life_steal_outcome(&input, damage, level.data[0]) {
+            add_life(gm, attacker, heal);
+        }
+    }
 }
 
 // ---- the effects ----

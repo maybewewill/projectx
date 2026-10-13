@@ -31,6 +31,7 @@ native GetUnitX takes unit whichUnit returns real
 const SRC: &str = r#"
 globals
     unit u = null
+    unit foe = null
     item a = null
     item b = null
     item ring = null
@@ -66,6 +67,15 @@ endfunction
 function read_x takes nothing returns nothing
     set x = GetUnitX(u)
 endfunction
+function setup_duel takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set foe = CreateUnit(Player(1), 'hpk2', 100.0, 0.0, 0.0)
+    set a = CreateItem('mdth', 0.0, 0.0)
+    set b = CreateItem('brac', 0.0, 0.0)
+    call UnitAddItem(u, a)
+    call UnitAddItem(foe, b)
+    call SetWidgetLife(u, 100.0)
+endfunction
 function setup_ring takes nothing returns nothing
     set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
     set ring = CreateItem('rlif', 0.0, 0.0)
@@ -89,6 +99,10 @@ const A_Q2: u32 = 0x4149_7132; // 'AIq2'
 const A_VUL: u32 = 0x4149_7675; // 'AIvu'
 const A_BLINK: u32 = 0x4149_626B; // 'AIbk'
 const A_REL: u32 = 0x4172_656C; // 'Arel'
+const MDTH: u32 = 0x6D64_7468; // 'mdth' Mask of Death
+const BRAC: u32 = 0x6272_6163; // 'brac' Runed Bracers
+const A_VAMP: u32 = 0x4149_7661; // 'AIva'
+const A_SR: u32 = 0x4149_7372; // 'AIsr'
 
 fn f(v: f32) -> F32 {
     F32::from_bits(v.to_bits())
@@ -162,7 +176,15 @@ fn host() -> ScriptHost {
         add(PVUL, A_VUL, ITEM_INVUL, level(45.0, 15.0, 0.0), &|s| s.perishable = true);
         add(DAGG, A_BLINK, sim::undead_ne::BLINK, level(0.0, 0.0, 1000.0), &|_| {});
         add(RLIF, A_REL, BONUS_LIFE_REGEN, level(0.0, 0.0, 2.0), &|_| {});
+        let mut vamp = level(0.0, 0.0, 0.5);
+        vamp.data[0] = f(0.5);
+        add(MDTH, A_VAMP, BONUS_VAMPIRE, vamp, &|_| {});
+        let mut bracers = level(0.0, 0.0, 0.0);
+        bracers.data[1] = f(0.33);
+        add(BRAC, A_SR, BONUS_SPELL_REDUCTION, bracers, &|_| {});
         g.install_item_abilities(&data);
+        g.item_types_mut().insert(MDTH, item_type(0, false));
+        g.item_types_mut().insert(BRAC, item_type(0, false));
         g.item_types_mut().insert(CDQ1, item_type(0, false));
         g.item_types_mut().insert(CDQ2, item_type(0, false));
         g.item_types_mut().insert(PVUL, item_type(1, true));
@@ -263,4 +285,36 @@ fn life_regeneration_ring_adds_its_rate_while_carried() {
     assert_eq!(h.game().unit(u).bonuses.life_regen.to_f32(), 2.0);
     call(&mut h, "drop_ring");
     assert_eq!(h.game().unit(u).bonuses.life_regen.to_f32(), 0.0, "taken off with the item");
+}
+
+#[test]
+fn mask_of_death_heals_half_of_the_damage_dealt() {
+    let h = started("setup_duel");
+    let (u, foe) = (global_unit(&h, "u"), global_unit(&h, "foe"));
+    {
+        let mut g = h.game_mut();
+        assert_eq!(g.unit(u).life.to_f32(), 100.0);
+        on_hit(&mut g, u, foe, f(60.0));
+        assert_eq!(g.unit(u).life.to_f32(), 130.0, "DataA 0.5 of 60 damage");
+        // An ally is not a target of `air,ground,enemy`.
+        on_hit(&mut g, u, u, f(60.0));
+        assert_eq!(g.unit(u).life.to_f32(), 130.0);
+    }
+}
+
+#[test]
+fn runed_bracers_scale_spells_damage_only() {
+    let h = started("setup_duel");
+    let (u, foe) = (global_unit(&h, "u"), global_unit(&h, "foe"));
+    let mut g = h.game_mut();
+    let before = g.unit(foe).life.to_f32();
+    // Attack type argument 0 is the Spells row: scaled by 1 - 0.33.
+    g.unit_damage_target(u, foe, f(100.0), false, false, 0, 5);
+    let lost = before - g.unit(foe).life.to_f32();
+    assert!((lost - 67.0).abs() < 0.01, "spells damage reduced to 67, lost {lost}");
+    let before = g.unit(foe).life.to_f32();
+    // A Normal-row record (attack type 1) is untouched by the bracers.
+    g.unit_damage_target(u, foe, f(100.0), false, false, 1, 5);
+    let lost = before - g.unit(foe).life.to_f32();
+    assert!(lost > 67.5, "a Normal record is not reduced, lost {lost}");
 }
