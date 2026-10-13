@@ -1,0 +1,266 @@
+//! Behaviour tests of the item abilities added by S41 (`item_abilities.rs`, spec `docs/spec/abilities-items.md`): the
+//! cooldown group, the potions of invisibility and invulnerability, the item copies of unit spells, the regeneration
+//! items. The level data are pinned values of the tests (the editor's numbers of the 1.26a items).
+
+use jass::compile::compile;
+use jass::vm::NativeRegistry;
+use sim::cast::SpellLevel;
+use sim::item_abilities::*;
+use sim::natives::game::{item_flags, ItemType, ObjKey, UnitType};
+use sim::ScriptHost;
+use softfloat::F32;
+
+const PRELUDE: &str = r#"
+type player extends handle
+type widget extends handle
+type unit extends widget
+type item extends handle
+
+native Player takes integer i returns player
+native CreateUnit takes player id, integer unitid, real x, real y, real face returns unit
+native CreateItem takes integer itemid, real x, real y returns item
+native SetWidgetLife takes widget wid, real newLife returns nothing
+native UnitAddItem takes unit whichUnit, item whichItem returns boolean
+native UnitRemoveItem takes unit whichUnit, item whichItem returns nothing
+native UnitUseItem takes unit whichUnit, item whichItem returns boolean
+native UnitUseItemPoint takes unit whichUnit, item whichItem, real x, real y returns boolean
+native GetItemCharges takes item whichItem returns integer
+native GetUnitX takes unit whichUnit returns real
+"#;
+
+const SRC: &str = r#"
+globals
+    unit u = null
+    item a = null
+    item b = null
+    item ring = null
+    boolean accepted = false
+    real x = 0.0
+endglobals
+function setup takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set a = CreateItem('cdq1', 0.0, 0.0)
+    set b = CreateItem('cdq2', 0.0, 0.0)
+    call UnitAddItem(u, a)
+    call UnitAddItem(u, b)
+endfunction
+function use_a takes nothing returns nothing
+    set accepted = UnitUseItem(u, a)
+endfunction
+function use_b takes nothing returns nothing
+    set accepted = UnitUseItem(u, b)
+endfunction
+function setup_pot takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set a = CreateItem('pvul', 0.0, 0.0)
+    call UnitAddItem(u, a)
+endfunction
+function setup_blink takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set a = CreateItem('dagg', 0.0, 0.0)
+    call UnitAddItem(u, a)
+endfunction
+function blink takes nothing returns nothing
+    set accepted = UnitUseItemPoint(u, a, 300.0, 0.0)
+endfunction
+function read_x takes nothing returns nothing
+    set x = GetUnitX(u)
+endfunction
+function setup_ring takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set ring = CreateItem('rlif', 0.0, 0.0)
+endfunction
+function pick_ring takes nothing returns nothing
+    call UnitAddItem(u, ring)
+endfunction
+function drop_ring takes nothing returns nothing
+    call UnitRemoveItem(u, ring)
+endfunction
+"#;
+
+const PACK2: u32 = 0x6870_6B32; // 'hpk2'
+const CDQ1: u32 = 0x6364_7131; // 'cdq1'
+const CDQ2: u32 = 0x6364_7132; // 'cdq2'
+const PVUL: u32 = 0x7076_756C; // 'pvul'
+const DAGG: u32 = 0x6461_6767; // 'dagg'
+const RLIF: u32 = 0x726C_6966; // 'rlif'
+const A_Q1: u32 = 0x4149_7131; // 'AIq1'
+const A_Q2: u32 = 0x4149_7132; // 'AIq2'
+const A_VUL: u32 = 0x4149_7675; // 'AIvu'
+const A_BLINK: u32 = 0x4149_626B; // 'AIbk'
+const A_REL: u32 = 0x4172_656C; // 'Arel'
+
+fn f(v: f32) -> F32 {
+    F32::from_bits(v.to_bits())
+}
+
+fn level(cool: f32, dur: f32, a: f32) -> SpellLevel {
+    let mut data = [F32::ZERO; 9];
+    data[0] = f(a);
+    SpellLevel {
+        cool: f(cool),
+        dur: f(dur),
+        hero_dur: f(dur),
+        data,
+        rng: f(99999.0),
+        ..Default::default()
+    }
+}
+
+fn item_type(charges: i32, perishable: bool) -> ItemType {
+    ItemType {
+        class: 0,
+        level_ex: 0,
+        level_plain: 0,
+        flag_48: 0,
+        charges,
+        powerup: false,
+        sellable: true,
+        pawnable: true,
+        flags: if perishable { item_flags::PERISHABLE } else { 0 },
+    }
+}
+
+fn host() -> ScriptHost {
+    let full = format!("{PRELUDE}\n{SRC}");
+    let prog = jass::parse(&full).expect("parse");
+    let module = compile(&[prog]).expect("compile");
+    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), None).expect("vm");
+    {
+        let mut g = h.game_mut();
+        g.unit_types_mut().insert(
+            PACK2,
+            UnitType {
+                name: "Courier".to_string(),
+                max_life: f(500.0),
+                max_mana: f(300.0),
+                move_speed: f(270.0),
+                inventory_size: 2,
+                sight: f(1400.0),
+                night_sight: f(800.0),
+                ..Default::default()
+            },
+        );
+        let mut data = ItemAbilityData::default();
+        let mut add = |item: u32, ability: u32, base: u32, lv: SpellLevel, tweak: &dyn Fn(&mut ItemSpec)| {
+            let mut spec = ItemSpec {
+                abilities: vec![ability],
+                usable: true,
+                ..Default::default()
+            };
+            tweak(&mut spec);
+            data.specs.insert(item, spec);
+            data.bases.insert(ability, base);
+            data.levels.insert(ability, vec![lv]);
+        };
+        // Two healing items of one cooldown group `AIhe`; the second ignores the group's start (`ignoreCD`).
+        add(CDQ1, A_Q1, ITEM_HEAL, level(10.0, 0.0, 10.0), &|s| s.cooldown_id = ITEM_HEAL);
+        add(CDQ2, A_Q2, ITEM_HEAL, level(10.0, 0.0, 10.0), &|s| {
+            s.cooldown_id = ITEM_HEAL;
+            s.ignore_cooldown = true;
+        });
+        add(PVUL, A_VUL, ITEM_INVUL, level(45.0, 15.0, 0.0), &|s| s.perishable = true);
+        add(DAGG, A_BLINK, sim::undead_ne::BLINK, level(0.0, 0.0, 1000.0), &|_| {});
+        add(RLIF, A_REL, BONUS_LIFE_REGEN, level(0.0, 0.0, 2.0), &|_| {});
+        g.install_item_abilities(&data);
+        g.item_types_mut().insert(CDQ1, item_type(0, false));
+        g.item_types_mut().insert(CDQ2, item_type(0, false));
+        g.item_types_mut().insert(PVUL, item_type(1, true));
+        g.item_types_mut().insert(DAGG, item_type(0, false));
+        g.item_types_mut().insert(RLIF, item_type(0, false));
+    }
+    h
+}
+
+fn started(name: &str) -> ScriptHost {
+    let mut h = host();
+    h.start(name, &[]).expect("setup");
+    h.step();
+    h
+}
+
+fn call(h: &mut ScriptHost, name: &str) {
+    h.start(name, &[]).expect("start");
+    for _ in 0..2 {
+        h.step();
+    }
+    assert!(h.misfires().is_empty());
+}
+
+fn accepted(h: &ScriptHost) -> bool {
+    h.vm().global("accepted").and_then(|v| v.as_boolean()).expect("boolean global")
+}
+
+fn global_unit(h: &ScriptHost, name: &str) -> ObjKey {
+    let id = h.vm().global(name).and_then(|v| v.as_handle()).expect("handle global");
+    h.game().unit_of_handle(id).expect("live unit")
+}
+
+#[test]
+fn ignore_cd_item_does_not_start_the_group_but_is_blocked_by_it() {
+    let mut h = started("setup");
+    // `cdq2` has ignoreCD: using it starts no group cooldown.
+    call(&mut h, "use_b");
+    assert!(accepted(&h));
+    call(&mut h, "use_a");
+    assert!(accepted(&h), "the group was not started by the ignoreCD item");
+    // `cdq1` started the group `AIhe`: `cdq2` (same group) is blocked although its own cooldown ended.
+    for _ in 0..20 {
+        h.step();
+    }
+    let u = global_unit(&h, "u");
+    assert!(h.game().is_cooling(u, ITEM_HEAL), "the group of cdq1's cast is cooling");
+    call(&mut h, "use_b");
+    assert!(!accepted(&h), "the group cools: cdq2 cannot be used");
+}
+
+#[test]
+fn group_cooldown_is_keyed_by_the_item_type_not_the_ability() {
+    let mut h = started("setup");
+    let u = global_unit(&h, "u");
+    call(&mut h, "use_a");
+    assert!(accepted(&h));
+    assert!(h.game().is_cooling(u, ITEM_HEAL));
+    assert!(!h.game().is_cooling(u, 0), "no group 0");
+}
+
+#[test]
+fn invulnerability_potion_makes_the_holder_invulnerable_for_its_duration() {
+    let mut h = started("setup_pot");
+    let u = global_unit(&h, "u");
+    assert!(!h.game().unit_is_invulnerable(u));
+    call(&mut h, "use_a");
+    assert!(accepted(&h));
+    assert!(h.game().unit_is_invulnerable(u), "Bvul: invulnerable");
+    assert!(h.game().unit(u).buffs.iter().any(|b| b.base == BUFF_INVUL));
+    // 15 s of game time: 150 steps of 0.1 s... the steps of the host are 0.1 s batches.
+    for _ in 0..170 {
+        h.step();
+    }
+    assert!(!h.game().unit_is_invulnerable(u), "the buff ended");
+}
+
+#[test]
+fn dagger_of_escape_blinks_through_the_borrowed_spell_class() {
+    let mut h = started("setup_blink");
+    call(&mut h, "blink");
+    assert!(accepted(&h), "the item copy of Blink is castable");
+    for _ in 0..10 {
+        h.step();
+    }
+    call(&mut h, "read_x");
+    let x = h.vm().global("x").and_then(|v| v.as_real()).expect("real");
+    assert_eq!(x.to_f32(), 300.0, "the caster blinked to the point");
+}
+
+#[test]
+fn life_regeneration_ring_adds_its_rate_while_carried() {
+    let mut h = started("setup_ring");
+    let u = global_unit(&h, "u");
+    assert_eq!(h.game().unit(u).bonuses.life_regen.to_f32(), 0.0);
+    call(&mut h, "pick_ring");
+    // Without the softfloat tables the unit has no agile life property: the aura bonus is the fallback.
+    assert_eq!(h.game().unit(u).bonuses.life_regen.to_f32(), 2.0);
+    call(&mut h, "drop_ring");
+    assert_eq!(h.game().unit(u).bonuses.life_regen.to_f32(), 0.0, "taken off with the item");
+}

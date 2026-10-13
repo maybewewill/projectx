@@ -344,7 +344,8 @@ pub struct ReviveMisc {
 /// through the real reader `0x6F009EE0` with default `0.0`, so an absent key contributes nothing (CONFIRMED reader
 /// rule). The keys are the ones the Game.dll readers `0x6F208060`, `0x6F2080F0`, `0x6F207F40`, `0x6F207FB0`,
 /// `0x6F208170`, `0x6F2081F0` and `0x6F208270` read. `StrAttackBonus` is the only attack key: it multiplies the
-/// hero's primary attribute (`sim::heroes::primary_total`), and the game reads no `AgiAttackBonus` or `IntRegenBonus`.
+/// hero's primary attribute (`sim::heroes::primary_total`), and the game reads no `AgiAttackBonus`. `IntRegenBonus` is
+/// read by the mana regeneration item (`0x6F2082C0`, `sim::item_abilities`), not by the hero attribute setters.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AttrBonusMisc {
     /// `StrHitPointBonus`: maximum life per point of strength (multiplies the strength total and a factor).
@@ -363,6 +364,12 @@ pub struct AttrBonusMisc {
     pub agi_attack_speed_bonus: F32,
     /// `IntManaBonus`: maximum mana per point of intelligence.
     pub int_mana_bonus: F32,
+    /// `IntRegenBonus`: mana regeneration per point of intelligence (only the item `AIrm` reads it).
+    pub int_regen_bonus: F32,
+    /// `IllusionsCanRestoreLife` / `IllusionsCanRestoreMana` (integer flags, default 0): illusions take part in the
+    /// healing and regeneration item effects.
+    pub illusions_can_restore_life: bool,
+    pub illusions_can_restore_mana: bool,
 }
 
 impl AttrBonusMisc {
@@ -376,6 +383,9 @@ impl AttrBonusMisc {
             agi_move_bonus: reader.real_or_zero("AgiMoveBonus"),
             agi_attack_speed_bonus: reader.real_or_zero("AgiAttackSpeedBonus"),
             int_mana_bonus: reader.real_or_zero("IntManaBonus"),
+            int_regen_bonus: reader.real_or_zero("IntRegenBonus"),
+            illusions_can_restore_life: reader.int_element("IllusionsCanRestoreLife") != 0,
+            illusions_can_restore_mana: reader.int_element("IllusionsCanRestoreMana") != 0,
         }
     }
 }
