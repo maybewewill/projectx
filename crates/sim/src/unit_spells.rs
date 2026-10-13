@@ -82,6 +82,18 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+pub const FROST_ATTACK: u32 = code(b"Afra");
+pub const BUFF_FROST: u32 = code(b"Bfro");
+pub const SLOW_POISON: u32 = code(b"Aspo");
+pub const BUFF_SLOW_POISON: u32 = code(b"Bspo");
+pub const FEEDBACK: u32 = code(b"Afbk");
+/// The damage type of Slow Poison's ticks: the class word `0x800000` of `CBuffSlowPoison` slot `0x374` is bit 23,
+/// `DAMAGE_TYPE_SLOW_POISON`.
+const DAMAGE_TYPE_SLOW_POISON: u32 = 23;
+/// The values of Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` in the 1.26a `MiscData.txt` (the keys the
+/// frost buff reads, `0x6F199EA0`); used when the host did not load a Misc layer.
+const FROST_MOVE_DEFAULT: f32 = 0.5;
+const FROST_ATTACK_DEFAULT: f32 = 0.25;
 pub const HEALING_WARD: u32 = code(b"Ahwd");
 pub const BUFF_HEALING_WARD: u32 = code(b"Bhwd");
 pub const STASIS_TRAP: u32 = code(b"Asta");
@@ -405,6 +417,9 @@ pub struct State {
     morphs: BTreeMap<ObjKey, MorphRec>,
     /// The sheep types by movement class (0 = [`SHEEP`]).
     pub sheep: [u32; 4],
+    /// Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (None = the 1.26a data values 0.5 / 0.25).
+    pub frost_move_decrease: Option<F32>,
+    pub frost_attack_decrease: Option<F32>,
     /// Root counts (Ensnare, Web) by unit: a rooted unit's mover is halted.
     rooted: BTreeMap<ObjKey, u32>,
     /// Nets in flight by id (the timer's `aux`): (caster, target, base, the level record at the cast).
@@ -1270,6 +1285,121 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     };
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+impl Game {
+    /// Mutable access to the unit spell state (the host's Misc values: `ethereal_heal_bonus`, the frost decreases, ...).
+    pub fn unit_spell_state_mut(&mut self) -> &mut State {
+        &mut self.spells.unit
+    }
+
+    /// The pre-damage hook of the passive attack modifiers (called by the attack execute after the dice): Feedback
+    /// (`Afbk`, `CAbilityFeedback` `0x6F8F365C`, slot `0x154` = `0x6F1721C0`, CONFIRMED structure): against a target that
+    /// passes `air,ground,enemy,neutral`, `burn = min(a, target mana)` with `a` = `DataC` for a hero target and `DataA`
+    /// otherwise (the hero rule `0x6F1D2660`), the target loses `burn` mana through the dispel worker's mana step
+    /// (so an invulnerable target or one with `Bams` loses none: the step's conditions, CONFIRMED, see
+    /// [`dispel_worker`]), and the attack's damage grows by `burn * ratio` (soft multiply, soft add), the ratio being
+    /// `DataD` for a hero and `DataB` otherwise. The burn happens even for an attack that the target later evades
+    /// (the hook runs when the damage is built: UNSURE order against the miss gate).
+    pub(crate) fn spell_attack_bonus(&mut self, attacker: ObjKey, target: ObjKey, damage: F32) -> F32 {
+        if !self.unit(attacker).abilities.contains(FEEDBACK) {
+            return damage;
+        }
+        let Some(level) = self.ability_level_record(attacker, FEEDBACK) else {
+            return damage;
+        };
+        let w = targs_word("air,ground,enemy,neutral");
+        if !self.alive(target) || !targs_ok(self, attacker, target, w) {
+            return damage;
+        }
+        let hero = self.target_hero(target);
+        let a = if hero { level.data[2] } else { level.data[0] };
+        let ratio = if hero { level.data[3] } else { level.data[1] };
+        let mana = self.unit(target).mana;
+        let burned = if arith::lt(mana, a) { mana } else { a };
+        let bams = self.buff_position(target, BUFF_ANTI_MAGIC_SHELL).is_some();
+        if !self.unit_is_invulnerable(target) && !bams && burned.to_f32() != 0.0 {
+            let next = if arith::lt(mana, burned) { F32::ZERO } else { arith::sub(mana, burned) };
+            self.write_mana(target, next);
+        }
+        arith::add(damage, arith::mul(ratio, burned))
+    }
+
+    /// The post-hit hook of the passive on-hit buffs (called by the attack arrival for a target that survived): Frost
+    /// Attack (`Afra`, `Bfro`) slows the target by the Misc decreases for `HeroDur` / `Dur`; Slow Poison (`Aspo`, `Bspo`)
+    /// poisons an organic target: damage `DataA` per second (class 23), movement `-DataB`, attack speed `-DataC`.
+    pub(crate) fn spell_on_hit(&mut self, attacker: ObjKey, target: ObjKey) {
+        if !self.alive(target) {
+            return;
+        }
+        if self.unit(attacker).abilities.contains(FROST_ATTACK) {
+            self.frost_hit(attacker, target);
+        }
+        if self.unit(attacker).abilities.contains(SLOW_POISON) {
+            self.poison_hit(attacker, target);
+        }
+    }
+
+    /// Frost Attack (CONFIRMED structure: `0x6F1837C0` creates the effect from the ability's `Dur` / `HeroDur`; the buff
+    /// reads the Misc keys `FrostMoveSpeedDecrease` and `FrostAttackSpeedDecrease`, `0x6F199EA0`, and applies them
+    /// negated to the movement and attack speed sinks). The buff is negative and not magic (slots `0x1D8` = 0,
+    /// `0x1E0` = 1), so it is not dispellable. targs `air,ground`.
+    fn frost_hit(&mut self, attacker: ObjKey, target: ObjKey) {
+        let Some(level) = self.ability_level_record(attacker, FROST_ATTACK) else {
+            return;
+        };
+        if !targs_ok(self, attacker, target, targs_word("air,ground")) {
+            return;
+        }
+        let hero = self.target_hero(target);
+        let dur = if hero { level.hero_dur } else { level.dur };
+        if !arith::lt(F32::ZERO, dur) {
+            return;
+        }
+        let mv = self.spells.unit.frost_move_decrease.unwrap_or(F32::from_bits(FROST_MOVE_DEFAULT.to_bits()));
+        let at = self.spells.unit.frost_attack_decrease.unwrap_or(F32::from_bits(FROST_ATTACK_DEFAULT.to_bits()));
+        let mods = UnitMods {
+            move_delta: arith::neg(mv),
+            attack_delta: arith::neg(at),
+            ..UnitMods::default()
+        };
+        let preds = crate::abilities::BuffPredicates {
+            negative: true,
+            ..buff_predicates(BUFF_FROST)
+        };
+        self.apply_mods_buff(target, BUFF_FROST, preds, mods, dur);
+    }
+
+    /// Slow Poison (`CBuffSlowPoison` `0x6F8D5E94` over `CBuffPoisonAttack` / `CBuffLifeDoT` / `CBuffDoT`): the damage
+    /// over time of `CBuffDoT` (first tick 0.01 s, then every 1.0 s) with the class word `0x800000`; the apply `0x6F128C20`
+    /// takes `-DataB` off the movement sink and `-DataC` off the attack speed sink; the buff is negative and physical,
+    /// not magic (slots `0x1D8` = 0, `0x1DC` = 1, `0x1E0` = 1). Stacking (`DataD`, the `Bssd` variant) is not modelled.
+    /// targs `air,ground,organic`.
+    fn poison_hit(&mut self, attacker: ObjKey, target: ObjKey) {
+        let Some(level) = self.ability_level_record(attacker, SLOW_POISON) else {
+            return;
+        };
+        if !targs_ok(self, attacker, target, targs_word("air,ground,organic")) {
+            return;
+        }
+        let hero = self.target_hero(target);
+        let dur = if hero { level.hero_dur } else { level.dur };
+        if !arith::lt(F32::ZERO, dur) {
+            return;
+        }
+        let preds = crate::abilities::BuffPredicates {
+            negative: true,
+            physical: true,
+            ..buff_predicates(BUFF_SLOW_POISON)
+        };
+        let mods = UnitMods {
+            move_delta: arith::neg(level.data[1]),
+            attack_delta: arith::neg(level.data[2]),
+            ..UnitMods::default()
+        };
+        let serial = self.apply_mods_buff(target, BUFF_SLOW_POISON, preds, mods, dur);
+        self.register_tick(target, serial, attacker, level.data[0], false, DAMAGE_TYPE_SLOW_POISON, true);
     }
 }
 

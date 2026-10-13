@@ -916,6 +916,8 @@ impl Game {
         let (damage, raw) = self.roll_split(unit, target, &ty);
         let raw = raw.unwrap_or(damage);
         let damage = self.bash_modify_damage(unit, damage);
+        // Passive attack modifiers of `unit_spells.rs` (Feedback's mana burn and its bonus damage).
+        let damage = self.spell_attack_bonus(unit, target, damage);
         // Order CONFIRMED (execute `0x6F0CF660`): the dice first, then the miss gate; an evaded attack stops before
         // the target routine. For missiles the gate runs at launch too (`0x6F2C3F70` calls it before the flight);
         // that an evaded missile deals no direct damage is UNSURE (the original scales the flight's damage by
@@ -1223,6 +1225,10 @@ impl Game {
         let killed = self.apply_damage(target, damage);
         // Vampiric Aura's life steal of the attacker (`undead_ne.rs`).
         self.apply_lifesteal(attacker, target, damage);
+        if killed.is_none() {
+            // Passive on-hit buffs of `unit_spells.rs` (Frost Attack, Slow Poison).
+            self.spell_on_hit(attacker, target);
+        }
         let bash = if killed.is_none() {
             self.bash_on_hit(attacker, target)
         } else {

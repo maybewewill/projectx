@@ -319,6 +319,77 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
 }
 
+// ---- Passive attack modifiers: Frost Attack, Slow Poison, Feedback ----
+
+fn give_passive(h: &ScriptHost, name: &str, base: u32, level: SpellLevel) {
+    let k = {
+        let id = h.vm().global(name).and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    g.ability_types_mut().insert(base, AbilityType { max_level: Some(1) });
+    g.set_spell_levels(base, vec![level]);
+    g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(base, None));
+}
+
+#[test]
+fn frost_attack_slows_the_target_by_the_misc_decreases_when_it_hits() {
+    let mut h = started();
+    // Frost Attack: Dur 5 / HeroDur 5.
+    give_passive(&h, "grunt", FROST_ATTACK, SpellLevel { dur: f(5.0), hero_dur: f(5.0), ..Default::default() });
+    let foe = unit(&h, "foe");
+    let before = h.game().unit(foe).bonuses.move_mult.to_f32();
+    call(&mut h, "grunt_attacks");
+    run(&mut h, 40);
+    assert!(has_buff(&h, foe, BUFF_FROST), "the hit applies Bfro");
+    assert!((before - h.game().unit(foe).bonuses.move_mult.to_f32() - 0.5).abs() < 1e-6, "FrostMoveSpeedDecrease 0.5");
+    assert!((1.0 - h.game().unit(foe).bonuses.attack_mult.to_f32() - 0.25).abs() < 1e-6, "FrostAttackSpeedDecrease 0.25");
+    // Not magic: Dispel Magic does not remove it.
+    assert!(!h.game().buffs(foe).iter().find(|b| b.base == BUFF_FROST).unwrap().predicates.magic);
+}
+
+#[test]
+fn slow_poison_slows_and_poisons_an_organic_target() {
+    let mut h = started();
+    // Slow Poison: Dur 5 / HeroDur 1, DataA 4 per second, DataB 0.5, DataC 0.25.
+    give_passive(
+        &h,
+        "grunt",
+        SLOW_POISON,
+        SpellLevel { dur: f(5.0), hero_dur: f(1.0), data: data(&[(0, 4.0), (1, 0.5), (2, 0.25), (3, 1.0)]), ..Default::default() },
+    );
+    let foe = unit(&h, "foe");
+    call(&mut h, "grunt_attacks");
+    run(&mut h, 10);
+    assert!(has_buff(&h, foe, BUFF_SLOW_POISON));
+    assert!(life(&h, foe) < 500.0);
+    let l0 = life(&h, foe);
+    // The poison alone (the attack keeps hitting every 1.0 s: compare with a unit that is not poisoned).
+    assert!((1.0 - h.game().unit(foe).bonuses.move_mult.to_f32() - 0.5).abs() < 1e-6);
+    run(&mut h, 40);
+    assert!(life(&h, foe) < l0 - 30.0, "ticks of 4 plus hits of 10 add up: {} -> {}", l0, life(&h, foe));
+    assert!(!h.game().buffs(foe).iter().find(|b| b.base == BUFF_SLOW_POISON).unwrap().predicates.magic, "poison is not dispellable magic");
+}
+
+#[test]
+fn feedback_burns_mana_and_adds_burned_mana_times_data_b_to_the_hit() {
+    let mut h = started();
+    // Feedback: DataA 20 (mana burned), DataB 1 (damage per mana), DataC 4 and DataD 1 for heroes.
+    give_passive(&h, "grunt", FEEDBACK, SpellLevel { data: data(&[(0, 20.0), (1, 1.0), (2, 4.0), (3, 1.0)]), ..Default::default() });
+    let foe = unit(&h, "foe");
+    h.game_mut().write_mana(foe, f(100.0));
+    call(&mut h, "grunt_attacks");
+    run(&mut h, 12);
+    let mana = h.game().unit(foe).mana.to_f32();
+    assert_eq!(mana, 80.0, "one hit burned 20");
+    assert_eq!(life(&h, foe), 470.0, "10 attack damage + 20 burned x 1");
+    // Burns at most what the target has.
+    h.game_mut().write_mana(foe, f(5.0));
+    run(&mut h, 10);
+    assert_eq!(h.game().unit(foe).mana.to_f32(), 0.0);
+    assert_eq!(life(&h, foe), 470.0 - 15.0, "10 + 5 burned");
+}
+
 // ---- Wards ----
 
 const WARD_UNIT: u32 = 0x6F68_7764; // 'ohwd'
