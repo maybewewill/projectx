@@ -317,3 +317,39 @@ initialiser `0x3E8` = `0x6F163570` (also called from the init slot `0x80`), cast
 * Model: `orc::bladestorm` / `blade_tick` with the three pure functions above; the target filter is UNSURE (living enemy
   ground non-structure units), the re-armed one-shot timer replaces the repeating timer, a marker buff `BOww` lasts
   `total`.
+
+## 13. S39: War Stomp (`AOws`, `CAbilityStomp`) - the area filter and the per-unit body (Unicorn)
+
+All numbers CONFIRMED by reading and by the Unicorn run `tools/emu/stomp_emu.py` (the real per-unit callback `0x6F1607B0`
+on a fake ability with real level getters and a fake victim; 400 cases, 0 mismatches; `tests/data/orc/stomp.txt`,
+`tests/orc_stomp.rs`).
+
+* **Area filter (corrects section 3 / 3.1, which left it UNSURE).** The instant slot `0x428` (`0x6F1608B0`) calls the
+  shared area slot `0x434` = `0x6F176CD0` with the third argument 1. That slot forms the flag word
+  `W = (targs & 0xFFFF0FFF) | 0x10000`, plus `0x8000` because the argument is non-zero, and calls the builder `0x6F2A3270`
+  with the tags `0xB` (circle: area, x, y of the CASTER), `0x1D` (`W`, caster, -1), `0xF` and `0x1F`. Tag `0x1D` sets
+  builder bit `0x20000000`, which appends the per-candidate predicate `0x6F26E510` (it is
+  `0x6F25D6F0(unit, W, caster, -1) == 0`) and ORs the coarse category mask of `0x6F25D830` into the iterator's mask. So
+  the filter is exactly the splash candidate filter of `weapon-splash.md` (relation, alive, vulnerable, kind, organic /
+  mechanical, hero, sapper, ancient) with the word `W`: the relation bits are **enemy and neutral only** (self, player,
+  ally cleared). A unit that is passively allied but does not share spells counts as "neutral" and is hit; the caster
+  itself, own units and shared-control allies are not. With the shipped `targs` `ground,organic` (word `0x4000002`) the
+  word is `0x4018002`, so air units, structures that are not "ground" and mechanical units are refused; a dead unit and
+  an invulnerable (vulnerable-only default) unit are refused by the expanded word. Rust: `orc::stomp_word`,
+  `orc::area_predicate`, `Game::set_orc_targs` (host-supplied words, default `STOMP_TARGS_DEFAULT`).
+* **Per-unit body `0x6F1607B0`.** The unit's slot `0x11C` (`CUnit` returns 0) and the spell-immunity test `0x6F28D750`
+  (walks the unit's ability lists and asks each immunity ability, slot `0x26C`) select the ZERO path. Normal path: damage
+  record amount `DataA`, class from slot `0x42C` (**`0x8000`**, CONFIRMED in the run), flags **`0x40`**; zero path: amount
+  `0.0`, flags **`0x50`** (the `0x10` bit is set on exactly this path; this corrects section 3.1, which said it was never
+  set). The record goes to the victim's damage slot `0x120` in both cases (a zero amount does nothing in the model).
+  Afterwards `0x6F282F60` resolves the victim (valid handle, not removed, dead bit `0x100` of `unit+0x5C` clear); a resolved
+  victim is stored in the ability's hit array at `[owner index + 1]` (`vf 0xEC` = `unit+0x58`; last one per owner wins),
+  and the stun slot `0x430` (`0x6F18ABF0`, `HeroDur` for a hero by `0x6F1D2660`, else `Dur + ability+0x9C`; nothing for a
+  zero duration; an existing `BPSE` buff is refreshed through its slot `0x360`) runs only when the unit slot `0x114`
+  (`unit+0x24C`, the `targType` word) has **bit 8 (structure) clear**, the unit is resolved and the zero path was not
+  taken. Rust: `orc::stomp_unit`, `orc::stomp_record_flags`.
+* Enumeration order: the area query's cell walk around the caster (x-major cells), as before; the damage of each unit is
+  applied before the next unit is visited (the callback runs per candidate), deaths are dispatched after the loop
+  (model).
+* Not found: the "building factor" of the task text. Nothing in the stomp body scales damage for structures; the only
+  structure-dependent branch is the stun skip above.
