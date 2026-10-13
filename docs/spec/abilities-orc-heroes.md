@@ -544,3 +544,26 @@ unit-target slot `0x424` is an empty `ret 4`: Far Sight is a point ability only.
   by that watcher / effect through the vision system. Not decoded: the watcher's radius use and the per-cell visibility writes.
 * Model: `orc::far_sight_plan`, and `far_sight` keeps a visible-state fog modifier for the plan's lifetime (marker buff on the
   caster; the original has no such buff). UNSURE: the cadence at which the original refreshes the revealed cells.
+
+## 22. S39: Reincarnation (`AOre`, `CAbilityReincarnation`, vtable `0x6F9199C4`; effect `CEffectReincarnation` vtable `0x6F916934`) - reading only
+
+Data: `Cast` 3, `Dur`/`HeroDur` 0, `Cool` 240, `Cost` empty, `DataA` 7, effect `XOre`. A passive: no order id (the cast getters at
+`0x308`/`0x30C` exist for the order tables). Class slots: `0xCC` = `0x6F1F43E0` (0), `0x280` = `0x6F1F43F0` (2), `0x284` = `0x6F1E5E30`
+(the death handler), `0x3E4` = `0x6F1D2F20` forwarder, `0x3E8` = `0x6F1F1C10` (the revival start).
+
+* **Death handler `0x6F1E5E30` (CONFIRMED by reading).** Runs for the dying unit when ALL hold: the ability pause counter
+  `+0x3C` is not positive; slot `0x268` (enabled) answers non-zero; the unit is not an illusion (`unit+0x5C & 0x40000000`) and has
+  `unit+0x20` bit 0 clear; `0x6F1DB6E0(unit)` is zero; slot `0x370(0)` (ready: mana, cooldown) is non-zero and the ability's flag `0x200`
+  is clear; and the death point passes the pathing probe `0x6F468F90(point, 2)` (non-zero blocks it). Then a positive `Cool` (slot
+  `0x2EC`) starts the cooldown (slot `0x3A4`) and slot `0x3E8` starts the revival.
+* **Revival start `0x6F1F1C10`.** Creates the effect object (factory `0x6F1D89B0`, class `CEffectReincarnation`), reads `DataA`
+  (`0x6F02E9E0`) and stores it into the effect's agile cell `+0xB8` (`0x6F4773E0`), registers the effect with the unit (virtual
+  `+0x78` of the effect with the unit, the ability owner id and `unit slot 0x130`), and sets the unit flag `unit+0x5C |= 0x1000`
+  (`0x6F2964E0(unit)`).
+* **Revival `0x6F1EBE30`** (run by the effect's handler `0x6F1EBF80` on message `0xD01C4`, the expiry of the effect): the unit
+  must still resolve and have the dead bit `0x100`; it is moved to its own point (virtual `0x180`), revived by `0x6F2A64A0` with the
+  flag word `0x500`, and its food use is corrected (`0x6F29BAF0` / `0x6F2834E0`). The life and mana the revive leaves were not decoded
+  (the shared revive path `0x6F2A64A0`).
+* **Model (UNSURE).** `Game::orc_on_unit_died` (called from `dispatch_unit_death_by`) starts the cooldown and a timer of `DataA`
+  seconds (LIKELY the effect delay: DataA 7 matches the known 7-second delay of the hero ability), then `resurrect_unit` (full life at the
+  death point). The pathing probe, the pause counter and the readiness slot are not modelled; the death events fire as for any death.

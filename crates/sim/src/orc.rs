@@ -298,6 +298,9 @@ pub struct OrcState {
     /// Earthquakes in progress, by serial.
     quakes: BTreeMap<u32, QuakeState>,
     quake_serial: u32,
+    /// Pending Reincarnations: unit -> serial of the revival timer.
+    reincarnating: BTreeMap<ObjKey, u32>,
+    reincarnate_serial: u32,
 }
 
 impl OrcState {
@@ -1184,6 +1187,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_BLADE => blade_tick(game, rt, aux),
         TICK_VOODOO => voodoo_tick(game, aux),
         TICK_QUAKE => quake_tick(game, rt, aux),
+        TICK_REINCARNATE => reincarnate(game, unit, aux),
         _ => {}
     }
 }
@@ -1728,6 +1732,71 @@ pub fn far_sight_plan(dur: F32, plus_9c: F32, data_a: F32, area: F32) -> FarSigh
         radius: area,
         count: conv::f2i(data_a),
     }
+}
+
+// ---- Reincarnation (`AOre`, `CAbilityReincarnation`, vtable `0x6F9199C4`; effect `CEffectReincarnation`, vtable `0x6F916934`) ----
+
+/// Reincarnation's ability id.
+pub const REINCARNATION: u32 = code(b"AOre");
+/// The timer kind of the revival (`SpellMsg::HeroSpell`).
+pub const TICK_REINCARNATE: u8 = 0x87;
+
+/// The conditions of the death handler (slot `0x284` = `0x6F1E5E30`, CONFIRMED by reading): the ability's pause counter
+/// (`+0x3C`) is not positive, the ability is enabled (slot `0x268`), the dying unit is not an illusion (`unit+0x5C` bit
+/// `0x40000000`) and has bit 0 of `unit+0x20` clear, the unit passes `0x6F1DB6E0`, the ability is ready (slot `0x370`) and not on
+/// its cooldown flag (`+0x20` bit `0x200`), and the death point passes the pathing probe `0x6F468F90(point, 2)` (a non-zero
+/// answer blocks the revival). A positive `Cool` (`0x6F02E9F0`-style getter through slot `0x2EC`) then starts the cooldown
+/// (slot `0x3A4`), and the revival effect starts (slot `0x3E8` = `0x6F1F1C10`).
+pub fn reincarnation_allowed(illusion: bool, cooling: bool, blocked_by_pathing: bool) -> bool {
+    !illusion && !cooling && !blocked_by_pathing
+}
+
+impl Game {
+    /// Called by the unit death dispatch for every dying unit: starts the Reincarnation of a unit that carries a ready
+    /// ability. UNSURE (see the spec): the delay is `DataA` seconds (the effect `0x6F1F1C10` stores `DataA` into the effect's
+    /// agile cell `+0xB8`; the effect's expiry message `0xD01C4` runs the revival `0x6F1EBE30`), the pathing probe is not
+    /// modelled, the revival gives full life (`resurrect_unit`) at the death point and leaves the mana alone.
+    pub(crate) fn orc_on_unit_died(&mut self, unit: ObjKey) {
+        if self.unit(unit).abilities.get(REINCARNATION).is_none_or(|a| a.is_removed()) {
+            return;
+        }
+        let illusion = self.unit(unit).illusion;
+        let cooling = self.is_cooling(unit, REINCARNATION);
+        if !reincarnation_allowed(illusion, cooling, false) {
+            return;
+        }
+        let Some(level) = self.ability_level_record(unit, REINCARNATION) else {
+            return;
+        };
+        if level.cool.to_f32() > 0.0 {
+            self.start_cooldown(unit, REINCARNATION, level.cool);
+        }
+        self.orc.reincarnate_serial = self.orc.reincarnate_serial.wrapping_add(1);
+        let serial = self.orc.reincarnate_serial;
+        self.orc.reincarnating.insert(unit, serial);
+        self.timers_start_hero(level.data[0].to_f32(), TICK_REINCARNATE, unit, serial);
+    }
+
+    /// Whether a Reincarnation of `unit` is pending (for tests and hosts).
+    pub fn reincarnation_pending(&self, unit: ObjKey) -> bool {
+        self.orc.reincarnating.contains_key(&unit)
+    }
+}
+
+/// The expiry of the revival effect (`0x6F1EBF80` on message `0xD01C4` -> slot `0x80` = `0x6F1EBE30`): the unit must still
+/// resolve and be dead (`unit+0x5C` bit `0x100`); it is moved to its own point (slot `0x180`), revived (`0x6F2A64A0` with the
+/// flags `0x500`) and its food is corrected (the dead unit's food use was released).
+fn reincarnate(game: &RefCell<Game>, unit: ObjKey, serial: u32) {
+    let mut gm = game.borrow_mut();
+    if gm.orc.reincarnating.get(&unit) != Some(&serial) {
+        return;
+    }
+    gm.orc.reincarnating.remove(&unit);
+    let u = gm.unit(unit);
+    if u.removed || !u.dead {
+        return;
+    }
+    gm.resurrect_unit(unit);
 }
 
 /// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for [`far_sight_plan`]'s

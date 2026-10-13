@@ -23,6 +23,7 @@ native UnitAddAbility takes unit whichUnit, integer abilityId returns boolean
 native SetUnitState takes unit whichUnit, integer whichState, real newVal returns nothing
 native IssueTargetOrderById takes unit whichUnit, integer order, widget target returns boolean
 native IssueImmediateOrderById takes unit whichUnit, integer order returns boolean
+native KillUnit takes unit whichUnit returns boolean
 native IssuePointOrderById takes unit whichUnit, integer order, real x, real y returns boolean
 "#;
 
@@ -49,6 +50,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(caster, 'AOvd')
     call UnitAddAbility(caster, 'AOww')
     call UnitAddAbility(caster, 'AOeq')
+    call UnitAddAbility(caster, 'AOre')
     call SetUnitState(caster, 2, 1000.0)
 endfunction
 function stomp takes nothing returns nothing
@@ -59,6 +61,10 @@ function ward takes nothing returns nothing
 endfunction
 function storm takes nothing returns nothing
     set accepted = IssueImmediateOrderById(caster, 852128)
+endfunction
+function slay takes nothing returns nothing
+    call KillUnit(caster)
+    set accepted = true
 endfunction
 function quake takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852121, 0.0, 0.0)
@@ -133,7 +139,7 @@ fn host(with_tables: bool) -> Option<ScriptHost> {
                 },
             );
         }
-        for code in [WAR_STOMP, SERPENT_WARD, HEX, VOODOO, BLADESTORM, EARTHQUAKE] {
+        for code in [WAR_STOMP, SERPENT_WARD, HEX, VOODOO, BLADESTORM, EARTHQUAKE, REINCARNATION] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         g.set_spell_levels(WAR_STOMP, vec![lvl(90, 6.0, 3.0, 2.0, 250.0, 0.0, [25.0, 0.0, 0.0])]);
@@ -143,6 +149,7 @@ fn host(with_tables: bool) -> Option<ScriptHost> {
         g.set_spell_levels(VOODOO, vec![lvl(200, 180.0, 3.0, 3.0, 800.0, 0.0, [0.0, 0.0, 0.0])]);
         g.set_spell_levels(BLADESTORM, vec![lvl(130, 0.0, 5.0, 5.0, 200.0, 0.0, [110.0, 0.0, 0.0])]);
         g.set_spell_levels(EARTHQUAKE, vec![lvl(150, 90.0, 5.0, 20.0, 250.0, 1000.0, [0.5, 50.0, 0.75])]);
+        g.set_spell_levels(REINCARNATION, vec![lvl(0, 240.0, 0.0, 0.0, 0.0, 0.0, [7.0, 0.0, 0.0])]);
         g.set_orc_lists(HEX, vec![["nrat".into(), "nalb".into(), "nsha".into(), "nshw".into()]]);
         g.production_mut().building_angle = f(270.0);
     }
@@ -277,4 +284,23 @@ fn earthquake_hurts_structures_each_second_and_slows_other_units() {
     run(&mut h, 60);
     assert_eq!(life(&h, tower), 250.0, "five ticks in all (Dur 5)");
     assert!(life(&h, ground) == 500.0, "units take no damage");
+}
+
+#[test]
+fn reincarnation_revives_after_data_a_seconds_and_goes_on_cooldown() {
+    let mut h = host(false).unwrap();
+    let c = unit(&h, "caster");
+    cast(&mut h, "slay");
+    assert!(h.game().unit(c).dead, "the hero dies first");
+    assert!(h.game().reincarnation_pending(c));
+    run(&mut h, 60);
+    assert!(h.game().unit(c).dead, "DataA = 7 s");
+    run(&mut h, 15);
+    assert!(!h.game().unit(c).dead, "revived");
+    assert_eq!(life(&h, c), 600.0, "full life");
+    // Killed again inside the 240 s cooldown: no second revival.
+    cast(&mut h, "slay");
+    run(&mut h, 100);
+    assert!(h.game().unit(c).dead);
+    assert!(!h.game().reincarnation_pending(c));
 }
