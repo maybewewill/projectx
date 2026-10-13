@@ -51,6 +51,7 @@ pub mod rng;
 pub mod script;
 pub mod shop;
 pub mod sync;
+pub mod splash;
 pub mod target_accept;
 pub mod terrain;
 pub mod timer;
