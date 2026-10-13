@@ -159,6 +159,8 @@ pub enum SpellMsg {
     BuffEnd { unit: ObjKey, serial: u32 },
     /// A timer of the hero spells in `undead_ne.rs` (`kind` is its `TICK_*`).
     HeroSpell { kind: u8, unit: ObjKey, aux: u32 },
+    /// A timer of the Human hero spells in `human_heroes.rs` (`kind` is its `TICK_*`, `id` the effect).
+    Human { kind: u8, id: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -216,6 +218,8 @@ pub struct SpellSystem {
     pub log: Vec<(ObjKey, u32, u32)>,
     /// State of the Undead / Night Elf hero spells (`undead_ne.rs`).
     pub hero: crate::undead_ne::State,
+    /// State of the Blizzard and Mass Teleport effects (`human_heroes.rs`).
+    pub human: crate::human_heroes::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -806,6 +810,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
         crate::human_heroes::run_immediate_effect(game, rt, rec);
         return;
     }
+    if crate::human_heroes::run_target_effect(game, rec) {
+        return;
+    }
     if crate::orc::run_effect(game, rt, rec) {
         return;
     }
@@ -982,5 +989,6 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
         }
         SpellMsg::HeroSpell { kind, unit, aux } if kind >= 0x80 => crate::orc::on_timer(game, rt, kind, unit, aux),
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
+        SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
     }
 }

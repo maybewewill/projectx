@@ -397,12 +397,13 @@ fn resurrection_revives_allied_corpses_in_the_area_up_to_data_a() {
     call(&mut h, "resurrect");
     run(&mut h, 1);
     assert!(accepted(&h));
-    // DataA = 2: the first two corpses in walk order, at full life; the third and the enemy's stay dead.
-    assert!(!h.game().unit(a).dead);
+    // DataA = 2: all keys tie, so the sort (0x6F19EA20, CONFIRMED) puts the larger agent ids first: C and B come back
+    // at full life; A and the enemy's corpse stay dead.
+    assert!(!h.game().unit(c).dead);
     assert!(!h.game().unit(b).dead);
-    assert_eq!(life(&h, a), 500.0);
+    assert_eq!(life(&h, c), 500.0);
     assert_eq!(life(&h, b), 500.0);
-    assert!(h.game().unit(c).dead);
+    assert!(h.game().unit(a).dead);
     assert!(h.game().unit(foe_corpse).dead);
     assert!(h.game().is_cooling(unit(&h, "pal"), RESURRECTION));
 }
