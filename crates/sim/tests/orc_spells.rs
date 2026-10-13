@@ -284,7 +284,10 @@ fn mirror_image_makes_illusions_that_expire() {
     let before = unit_count(&h);
     cast(&mut h, "mirror");
     assert_eq!(unit_count(&h), before, "the images appear after DataD (0.5 s)");
+    let caster = unit(&h, "caster");
+    assert!(h.game().unit_is_invulnerable(caster), "the caster is invulnerable during the delay (0x6F0796F0)");
     run(&mut h, 6);
+    assert!(!h.game().unit_is_invulnerable(caster), "and vulnerable again after the hero slot is resolved");
     assert_eq!(unit_count(&h), before + 2);
     let images: Vec<ObjKey> = h.game().unit_objects().filter(|(_, u)| u.illusion).map(|(k, _)| k).collect();
     assert_eq!(images.len(), 2);

@@ -488,6 +488,7 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
         ("AOcl", sim::orc::CHAIN_LIGHTNING),
         ("AOfs", sim::orc::FAR_SIGHT),
         ("AOsf", sim::orc::FERAL_SPIRIT),
+        ("AOsw", sim::orc::SERPENT_WARD),
         ("AHtc", sim::human_heroes::THUNDER_CLAP),
         ("AHbh", sim::human_heroes::BASH),
         ("AHav", sim::human_heroes::AVATAR),
@@ -685,7 +686,7 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
         game.set_spell_levels(code, levels.clone());
     }
     for (&code, units) in &text.summon_units {
-        if code == sim::orc::FERAL_SPIRIT {
+        if code == sim::orc::FERAL_SPIRIT || code == sim::orc::SERPENT_WARD {
             game.set_summon_units(code, units.clone());
         }
     }
