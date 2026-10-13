@@ -138,6 +138,7 @@ pub const WAR_STOMP: u32 = code(b"AOws");
 pub const CHAIN_LIGHTNING: u32 = code(b"AOcl");
 pub const FAR_SIGHT: u32 = code(b"AOfs");
 pub const FERAL_SPIRIT: u32 = code(b"AOsf");
+pub const HEALING_WAVE: u32 = code(b"AOhw");
 /// Buff codes.
 pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
 pub const BUFF_FAR_SIGHT: u32 = code(b"BOfs");
@@ -152,15 +153,18 @@ pub const TICK_MIRROR: u8 = 0x81;
 /// The next-hop timer of Chain Lightning.
 pub const TICK_CHAIN: u8 = 0x82;
 
-/// Order ids (UNSURE: the public order-id list, like the three spells of `cast.rs`).
+/// Order ids. CONFIRMED (S34, slot `0x308` of each class = `mov eax, 0xD0000 + n; ret`, public id = 851968 + n):
+/// stomp `0xD009F`, shockwave `0xD009D`, chain lightning `0xD0097`, wind walk `0xD00A1`, mirror image `0xD009B`
+/// (852123, NOT 852093), far sight `0xD009A`, feral spirit `0xD009E` (852126, NOT 852120), healing wave `0xD0215`.
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_127, WAR_STOMP);
     ids.insert(852_125, SHOCKWAVE);
     ids.insert(852_119, CHAIN_LIGHTNING);
     ids.insert(852_129, WIND_WALK);
-    ids.insert(852_093, MIRROR_IMAGE);
+    ids.insert(852_123, MIRROR_IMAGE);
     ids.insert(852_122, FAR_SIGHT);
-    ids.insert(852_120, FERAL_SPIRIT);
+    ids.insert(852_126, FERAL_SPIRIT);
+    ids.insert(852_501, HEALING_WAVE);
 }
 
 /// Abilities cast without a target (`targs` empty or area around the caster).
@@ -288,7 +292,8 @@ fn spell_target_ok(gm: &Game, owner: u32, k: ObjKey) -> bool {
 pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
     match rec.base {
         WAR_STOMP => war_stomp(game, rt, rec),
-        CHAIN_LIGHTNING => chain_lightning(game, rt, rec),
+        CHAIN_LIGHTNING => chain_lightning(game, rt, rec, false),
+        HEALING_WAVE => chain_lightning(game, rt, rec, true),
         SHOCKWAVE => shockwave(game, rt, rec),
         WIND_WALK => wind_walk(game, rec),
         MIRROR_IMAGE => mirror_image(game, rt, rec),
@@ -377,10 +382,139 @@ pub fn chain_next_flags(targs: u32, ability_flags: u32) -> u32 {
     w
 }
 
+/// The flag word of the next-target search for a class whose slot `0x42C` is `heals` (`0x6F1C3253`..`0x6F1C327E`):
+/// the base is `0x10000` for Chain Lightning and `0x7000` for Healing Wave (`neg; sbb; and 0xFFFF7000; add 0x10000`).
+/// Unicorn: `HG` rows of `tests/data/orc/heal.txt` (400 cases, 0 mismatches).
+pub fn chain_next_flags_for(heals: bool, targs: u32, ability_flags: u32) -> u32 {
+    let base = if heals { 0x7000 } else { 0x1_0000 };
+    let mut w = (targs & 0xFFFE_0FFF) | base;
+    if ability_flags & 0x8_0000 != 0 {
+        w |= 0x8000;
+    }
+    w
+}
+
+/// The record amount of a hop: Healing Wave (slot `0x42C` non-zero) negates it (sign bit flipped, `0x6F1C30C8`..), the
+/// record then heals. Unicorn `HH` rows of `heal.txt`.
+pub fn chain_hop_record_amount(heals: bool, data_a: F32, factor: F32) -> F32 {
+    let a = chain_hop_amount(data_a, factor);
+    if heals {
+        F32::from_bits(a.to_bits() ^ 0x8000_0000)
+    } else {
+        a
+    }
+}
+
+/// The destroy delay of the bolt effect: the float at `0x6FAAE4F4` (1.0) for Chain Lightning, at `0x6FAAE504` (2.0) for
+/// Healing Wave (`0x6F1C3144`..`0x6F1C314B`). Unicorn `HH` rows.
+pub fn chain_destroy_delay_bits(heals: bool) -> u32 {
+    if heals {
+        0x4000_0000
+    } else {
+        0x3F80_0000
+    }
+}
+
+/// `0x6F01FE40`: `|a - b| < 2e-7` (soft subtract, sign cleared, an x87 compare against `[0x6FAAE614]`; NaN is false).
+pub fn approx_equal_tiny(a: F32, b: F32) -> bool {
+    let d = F32::from_bits(arith::sub(a, b).to_bits() & 0x7FFF_FFFF);
+    f32::from_bits(0x3456_BF95) > d.to_f32()
+}
+
+/// The class parameters read by the candidate collector `0x6F1B0780`: slot `0x42C` (`heals`), `0x434` (score mode) and
+/// `0x438` (distance mode). Chain Lightning: (false, false, true); Healing Wave: (true, true, false).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainClass {
+    pub heals: bool,
+    pub score_mode: bool,
+    pub dist_mode: bool,
+}
+
+pub const CHAIN_CLASS: ChainClass = ChainClass { heals: false, score_mode: false, dist_mode: true };
+pub const HEAL_CLASS: ChainClass = ChainClass { heals: true, score_mode: true, dist_mode: false };
+
+/// One candidate as the collector sees it. `dist` is the squared distance `0x6F476860` returns (the model supplies it).
+#[derive(Debug, Clone, Copy)]
+pub struct ChainCandidate {
+    pub life: F32,
+    pub max_life: F32,
+    pub dist: F32,
+    /// `unit+0x5C`; bit `0x40000000` = illusion.
+    pub flags_5c: u32,
+    /// `unit+0xEC` (signed).
+    pub field_ec: i32,
+    /// `0x6F284EE0`: the owner's player can see the unit.
+    pub visible: bool,
+    /// `0x6F28D750` (immunity vs. the ability's slot `0x348` word).
+    pub immune: bool,
+    /// `0x6F1A2110`: already in the hit list.
+    pub already_hit: bool,
+    /// Misc `IllusionsCanRestoreLife`.
+    pub illusions_restore: bool,
+}
+
+/// The search record the collector updates (`S+0x14` best distance, `S+0x18` best score).
+#[derive(Debug, Clone, Copy)]
+pub struct ChainBest {
+    pub dist: F32,
+    pub score: F32,
+}
+
+/// The validity chain `0x6F1B06F0` + slot `0x3F0` (`0x6F1B0650`). Unicorn `CB` rows (800 cases).
+pub fn chain_candidate_valid(class: ChainClass, ability_flags: u32, c: &ChainCandidate) -> bool {
+    if !c.visible {
+        return false;
+    }
+    if class.heals {
+        // slot 0x3F0: a unit at full life (|life - max| < 2e-7) is refused; an illusion is refused unless Misc allows.
+        if approx_equal_tiny(c.life, c.max_life) {
+            return false;
+        }
+        if !c.illusions_restore && c.flags_5c & 0x4000_0000 != 0 {
+            return false;
+        }
+    }
+    if c.immune || c.already_hit {
+        return false;
+    }
+    // flag 0x100000 clear, slot 0x42C zero: a candidate with `+0xEC > 0` is refused.
+    if ability_flags & 0x10_0000 == 0 && !class.heals && c.field_ec > 0 {
+        return false;
+    }
+    true
+}
+
+/// The collector `0x6F1B0780` for one candidate: returns whether it became the new best and updates `best`.
+/// Distance mode (Chain Lightning): strictly nearer wins (soft `lt`). Score mode (Healing Wave): the score is
+/// `max - life` (soft sub) for a healer, the life alone otherwise; strictly greater (soft `gt`) wins. Unicorn
+/// `tests/data/orc/heal.txt` `CB` rows: 800 cases (hits and misses of both classes), 0 mismatches.
+pub fn chain_candidate_update(class: ChainClass, ability_flags: u32, c: &ChainCandidate, best: &mut ChainBest) -> bool {
+    if !chain_candidate_valid(class, ability_flags, c) {
+        return false;
+    }
+    if class.dist_mode {
+        if arith::lt(c.dist, best.dist) {
+            best.dist = c.dist;
+            return true;
+        }
+        return false;
+    }
+    if class.score_mode {
+        let score = if class.heals { arith::sub(c.max_life, c.life) } else { c.life };
+        if arith::gt(score, best.score) {
+            best.score = score;
+            return true;
+        }
+    }
+    false
+}
+
 /// The state of one running Chain Lightning (the ability's factor cell `+0x128/+0x12C`, hit count `+0x124`, hit list
 /// `+0x134`).
 #[derive(Debug, Clone)]
 pub(crate) struct ChainState {
+    /// Healing Wave (class slot `0x42C` non-zero): the hop heals instead of hurting.
+    heals: bool,
     caster: ObjKey,
     level: SpellLevel,
     factor: F32,
@@ -402,7 +536,7 @@ pub(crate) struct ChainState {
 /// here the centre distance), the relation filter (`0x6F1B06F0`: `0x6F284EE0(owner, unit, 0, 4)`; here enemy, not magic
 /// immune, not structure or mechanical), the damage class, the vanishing of the chain when the last target is removed
 /// (modelled: it ends).
-fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, heals: bool) {
     let CastTarget::Unit(first) = rec.target else {
         return;
     };
@@ -412,7 +546,7 @@ fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastR
         let serial = gm.orc.chain_serial;
         gm.orc.chains.insert(
             serial,
-            ChainState { caster: rec.caster, level: rec.level, factor: F32::ONE, hits: Vec::new() },
+            ChainState { heals, caster: rec.caster, level: rec.level, factor: F32::ONE, hits: Vec::new() },
         );
         serial
     };
@@ -430,8 +564,20 @@ fn chain_hop(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32, targ
         st.factor = chain_next_factor(st.factor, st.level.data[2]);
         st.hits.push(target);
         let caster = st.caster;
+        let heals = st.heals;
         gm.timers_start_hero(f32::from_bits(CHAIN_HOP_DELAY_BITS), TICK_CHAIN, caster, serial);
-        gm.unit_damage_target(caster, target, amount, false, false, 0, SPELL_DAMAGE_TYPE)
+        if heals {
+            // The record carries the negated amount; the model adds the life, clamped to the maximum (as Holy Light).
+            if gm.alive(target) {
+                let u = gm.unit(target);
+                let sum = arith::add(u.life, amount);
+                let next = if arith::lt(u.max_life, sum) { u.max_life } else { sum };
+                crate::natives::unit::set_life(&mut gm, target, next);
+            }
+            None
+        } else {
+            gm.unit_damage_target(caster, target, amount, false, false, 0, SPELL_DAMAGE_TYPE)
+        }
     };
     if let Some(t) = killed {
         let caster = game.borrow().orc.chains.get(&serial).map(|s| s.caster);
@@ -458,21 +604,47 @@ fn chain_next(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
                 let u = gm.unit(last);
                 (u.x, u.y)
             };
-            let mut best: Option<(ObjKey, F32)> = None;
+            let class = if st.heals { HEAL_CLASS } else { CHAIN_CLASS };
+            let mut best_unit: Option<ObjKey> = None;
+            let mut best = ChainBest { dist: F32::from_bits(0x7F7F_FFFF), score: F32::ZERO };
             for k in crate::natives::group::circle_candidates(&gm, cx, cy, st.level.area) {
-                if st.hits.contains(&k) || k == st.caster || !spell_target_ok(&gm, owner, k) {
+                if st.hits.contains(&k) || k == st.caster {
                     continue;
                 }
                 let u = gm.unit(k);
-                if is_unit_type(&gm, u, ty::STRUCTURE) || is_unit_type(&gm, u, ty::MECHANICAL) {
+                if u.dead || u.removed || u.hidden {
                     continue;
                 }
-                let d = arith::dist2(cx, cy, u.x, u.y);
-                if best.is_none_or(|(_, bd)| arith::lt(d, bd)) {
-                    best = Some((k, d));
+                let enemy = gm.is_enemy(owner, u.owner);
+                if st.heals == enemy {
+                    continue;
+                }
+                if st.heals {
+                    if is_unit_type(&gm, u, ty::STRUCTURE) || is_unit_type(&gm, u, ty::MECHANICAL) {
+                        continue;
+                    }
+                } else if is_unit_type(&gm, u, ty::MAGIC_IMMUNE)
+                    || is_unit_type(&gm, u, ty::STRUCTURE)
+                    || is_unit_type(&gm, u, ty::MECHANICAL)
+                {
+                    continue;
+                }
+                let cand = ChainCandidate {
+                    life: u.life,
+                    max_life: u.max_life,
+                    dist: arith::dist2(cx, cy, u.x, u.y),
+                    flags_5c: 0,
+                    field_ec: 0,
+                    visible: true,
+                    immune: false,
+                    already_hit: false,
+                    illusions_restore: false,
+                };
+                if chain_candidate_update(class, 0x10_0000, &cand, &mut best) {
+                    best_unit = Some(k);
                 }
             }
-            best.map(|(k, _)| k)
+            best_unit
         }
     };
     match next {
