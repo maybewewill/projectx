@@ -546,6 +546,9 @@ impl Game {
 
 /// The immediate orders of this module: the autocast toggles. `None` when `id` is not one of them.
 pub(crate) fn immediate_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Option<bool> {
+    if let Some(r) = crate::neutral_spells::toggle_order(game, unit, id) {
+        return Some(r);
+    }
     for (on, off, base) in TOGGLES {
         if id == on || id == off {
             let mut gm = game.borrow_mut();
@@ -1411,6 +1414,7 @@ impl Game {
         if self.unit(attacker).abilities.contains(SLOW_POISON) {
             self.poison_hit(attacker, target);
         }
+        self.neutral_on_hit(attacker, target);
     }
 
     /// Frost Attack (CONFIRMED structure: `0x6F1837C0` creates the effect from the ability's `Dur` / `HeroDur`; the buff
@@ -2011,7 +2015,7 @@ fn rejuvenation(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
 impl Game {
     /// Registers (or updates) the over-time effect of buff `serial`: a new one arms the first tick.
     #[allow(clippy::too_many_arguments)]
-    fn register_tick(&mut self, target: ObjKey, serial: u32, source: ObjKey, amount: F32, hot: bool, damage_type: u32, first_delay: bool) {
+    pub(crate) fn register_tick(&mut self, target: ObjKey, serial: u32, source: ObjKey, amount: F32, hot: bool, damage_type: u32, first_delay: bool) {
         if let Some(t) = self.spells.unit.ticks.get_mut(&serial) {
             t.source = source;
             t.amount = amount;

@@ -755,6 +755,7 @@ impl Game {
     fn start_swing(&mut self, unit: ObjKey, ty: &AttackType) {
         // Critical Strike arms at the swing start (`orc.rs`).
         self.orc_swing_start(unit);
+        self.neutral_swing_start(unit);
         let cmds = match self.order_tables() {
             Some(t) => {
                 let speed = self.attack_speed_of(unit);
@@ -872,7 +873,12 @@ impl Game {
                 self.combat_tick(unit);
                 Vec::new()
             }
-            AttackMsg::Execute => self.fire_execute(unit),
+            AttackMsg::Execute => {
+                // Pulverize (`neutral_spells.rs`) acts on the same execute message.
+                let mut killed = self.neutral_execute(unit);
+                killed.extend(self.fire_execute(unit));
+                killed
+            }
             AttackMsg::Impact { target, damage, raw, weapon } => {
                 self.pr_missile_impact();
                 self.missile_arrive(unit, target, damage, raw, weapon as usize)

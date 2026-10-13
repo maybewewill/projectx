@@ -153,6 +153,8 @@ pub struct ObjectText {
     /// The item abilities: item specs, the base code of each ability alias an item names and their level records
     /// (`sim::item_abilities`, `docs/spec/abilities-items.md`).
     pub item_abilities: sim::item_abilities::ItemAbilityData,
+    /// Creep / neutral alias rows of `AbilityData.slk`: `alias row -> modelled code` (`sim::neutral_spells`).
+    pub spell_aliases: BTreeMap<u32, u32>,
     /// Missing or malformed files, one line each.
     pub notes: Vec<String>,
 }
@@ -185,7 +187,77 @@ pub fn load(archives: &[&[u8]]) -> Result<ObjectText, Error> {
     load_gold_mine(archives, &mut out)?;
     load_upgrades(archives, &mut out)?;
     load_item_abilities(archives, &mut out)?;
+    load_neutral_aliases(archives, &mut out)?;
     Ok(out)
+}
+
+/// Reads the creep / neutral alias rows: every `AbilityData.slk` row whose `code` column names a modelled ability (or a
+/// class derived from one, `sim::neutral_spells::STATIC_PARENTS`) while the row itself is another id. The alias gets its
+/// own level records; the modelled row's records are read too when no earlier pass loaded them.
+fn load_neutral_aliases(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
+    let Some(bytes) = read_last(archives, ABILITY_DATA_FILE)? else {
+        return Ok(());
+    };
+    let Ok(slk) = Slk::parse_bytes(&bytes) else {
+        return Ok(());
+    };
+    let mut groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for row in slk.rows() {
+        let Some(id) = raw_code(row.key()) else { continue };
+        let code_col = slk
+            .raw(row.key(), "code")
+            .map(|t| t.trim().trim_matches('"'))
+            .and_then(raw_code)
+            .unwrap_or(id);
+        groups.entry(code_col).or_default().push(id);
+    }
+    let level_of = |id: u32| -> Option<Vec<sim::cast::SpellLevel>> {
+        let name = String::from_utf8_lossy(&id.to_be_bytes()).into_owned();
+        let def = gamedata::abilitytype::read_ability(&slk, &name)?;
+        let f = |v: f32| F32::from_bits(v.to_bits());
+        Some(
+            def.levels
+                .iter()
+                .map(|l| {
+                    let mut data = [F32::ZERO; 9];
+                    for (d, v) in data.iter_mut().zip(l.data.iter()) {
+                        *d = f(*v);
+                    }
+                    sim::cast::SpellLevel {
+                        cast: f(l.cast),
+                        dur: f(l.dur),
+                        hero_dur: f(l.hero_dur),
+                        cost: l.cost,
+                        cool: f(l.cool),
+                        area: f(l.area),
+                        rng: f(l.rng),
+                        data,
+                        unit_id: l.unit_id,
+                    }
+                })
+                .collect(),
+        )
+    };
+    for (code_col, ids) in groups {
+        let Some(std) = sim::neutral_spells::standard_for_group(code_col, &ids) else {
+            continue;
+        };
+        if !out.spell_levels.contains_key(&std) {
+            if let Some(levels) = level_of(std) {
+                out.spell_levels.insert(std, levels);
+            }
+        }
+        for id in ids {
+            if id == std || sim::neutral_spells::is_item_row(id) {
+                continue;
+            }
+            if let Some(levels) = level_of(id) {
+                out.spell_levels.insert(id, levels);
+                out.spell_aliases.insert(id, std);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn load_global_strings(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
@@ -693,6 +765,9 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     install_harvest(game, text);
     for (&code, levels) in &text.spell_levels {
         game.set_spell_levels(code, levels.clone());
+    }
+    for (&alias, &base) in &text.spell_aliases {
+        game.set_spell_alias(alias, base);
     }
     for (&base, words) in &text.orc_targs {
         if matches!(base, sim::orc::WAR_STOMP | sim::orc::VOODOO | sim::orc::EARTHQUAKE | sim::orc::BLADESTORM) {

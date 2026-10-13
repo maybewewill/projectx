@@ -189,6 +189,9 @@ pub struct Ability {
     /// Per-player bit mask at `+0x6C`. Only the rescue ability `Arsc` uses it: bit `p` set means player `p` can
     /// rescue the unit (CONFIRMED by disassembly of `0x6F07B3E0`).
     pub mask: u32,
+    /// The ability table row the level records are read from: `base` itself, or the creep / neutral alias row this
+    /// ability was attached as (`neutral_spells.rs`).
+    pub source: u32,
 }
 
 /// The rescue ability's base code `'Arsc'` (`0x6F07B3E9` pushes it).
@@ -205,6 +208,15 @@ impl Ability {
             level_index: 0,
             definition,
             mask: 0,
+            source: base,
+        }
+    }
+
+    /// An ability attached as the alias row `source` of the modelled ability `base` (`neutral_spells.rs`).
+    pub fn aliased(base: u32, source: u32, definition: Option<AbilityType>) -> Self {
+        Ability {
+            source,
+            ..Ability::new(base, definition)
         }
     }
 

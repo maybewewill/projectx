@@ -1027,7 +1027,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
     reg.register("GetUnitAbilityLevel", move |_, a| {
         let gm = g.borrow();
-        let id = raw_at(a, 1) as u32;
+        let id = gm.spell_alias_base(raw_at(a, 1) as u32);
         let v = unit_at(&gm, a, 0)
             .and_then(|k| gm.unit(k).abilities.get(id))
             .map_or(0, Ability::level);
@@ -1071,9 +1071,10 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
     reg.register("UnitAddAbility", move |_, a| {
         let mut gm = g.borrow_mut();
-        let id = raw_at(a, 1) as u32;
-        // The factory needs a definition record, and `Amov` / `Aatk` have no factory leaf (see `crate::abilities`).
-        let definition = gm.ability_types().get(id).copied();
+        let row = raw_at(a, 1) as u32;
+        // A creep / neutral alias row is attached as the modelled ability it stands for (`neutral_spells.rs`).
+        let id = gm.spell_alias_base(row);
+        let definition = gm.ability_types().get(row).copied();
         let added = match unit_at(&gm, a, 0) {
             Some(k)
                 if definition.is_some()
@@ -1082,7 +1083,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
             {
                 gm.unit_mut(k)
                     .abilities
-                    .attach(Ability::new(id, definition));
+                    .attach(Ability::aliased(id, row, definition));
                 gm.sync_auras(k);
                 true
             }
@@ -1094,7 +1095,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     let g = Rc::clone(game);
     reg.register("UnitRemoveAbility", move |_, a| {
         let mut gm = g.borrow_mut();
-        let id = raw_at(a, 1) as u32;
+        let id = gm.spell_alias_base(raw_at(a, 1) as u32);
         let removed = match unit_at(&gm, a, 0) {
             Some(k) => {
                 let removed = gm.unit_mut(k).abilities.remove(id).is_some();
