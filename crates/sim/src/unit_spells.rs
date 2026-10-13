@@ -49,7 +49,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use softfloat::{arith, F32};
+use softfloat::{arith, conv, F32};
 
 use crate::abilities::{buff_predicates, code, Buff};
 use crate::cast::{begin_cast, effect_duration, CastError, CastRec, CastTarget, SpellMsg};
@@ -72,6 +72,10 @@ pub const BUFF_UNHOLY_FRENZY: u32 = code(b"BUhf");
 pub const REJUVENATION: u32 = code(b"Arej");
 pub const BUFF_REJUVENATION: u32 = code(b"Brej");
 pub const DISPEL_MAGIC: u32 = code(b"Adis");
+pub const RAISE_DEAD: u32 = code(b"Arai");
+pub const BUFF_RAISE_DEAD: u32 = code(b"Brai");
+/// The default second summon of Raise Dead's second level (`DataD` of the data, the skeletal mage).
+pub const SKELETAL_MAGE: u32 = code(b"uskm");
 pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 
@@ -103,7 +107,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 8] = [
+pub const SPELL_ORDERS: [(u32, u32); 9] = [
+    (852_197, RAISE_DEAD),
     (852_057, DISPEL_MAGIC),
     (852_160, REJUVENATION),
     (852_209, UNHOLY_FRENZY),
@@ -115,7 +120,8 @@ pub const SPELL_ORDERS: [(u32, u32); 8] = [
 ];
 
 /// `(autocast on order, autocast off order, ability)`.
-const TOGGLES: [(u32, u32, u32); 3] = [
+const TOGGLES: [(u32, u32, u32); 4] = [
+    (852_198, 852_199, RAISE_DEAD),
     (ORDER_HEAL_ON, ORDER_HEAL_OFF, HEAL),
     (852_067, 852_068, INNER_FIRE),
     (852_102, 852_103, BLOODLUST),
@@ -128,8 +134,8 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 }
 
 /// Abilities cast without a target.
-pub fn takes_no_target(_base: u32) -> bool {
-    false
+pub fn takes_no_target(base: u32) -> bool {
+    base == RAISE_DEAD
 }
 
 /// Whether `base` is an autocast ability of this module.
@@ -275,6 +281,8 @@ pub struct State {
     marks: BTreeMap<u32, ObjKey>,
     /// Damage / heal over time buffs by buff serial.
     ticks: BTreeMap<u32, TickRec>,
+    /// The second unit type of Raise Dead (0 = the skeletal mage).
+    pub raise_dead_second: u32,
     /// Misc `EtherealHealBonus` (a missing key reads 0.0).
     pub ethereal_heal_bonus: F32,
     /// Misc `IllusionsCanRestoreLife` / `IllusionsGetAutocast` (missing = off).
@@ -420,6 +428,41 @@ fn heal_needs(gm: &Game, target: ObjKey) -> bool {
     !arith::lt(deficit, F32::ONE)
 }
 
+/// The corpses `unit` could raise: dead, not removed, within `Area` of the caster, not structures or mechanical units,
+/// in the order of the circle query (the original's group builder `0x6F2A3270` with the callback `0x6F0FBA50`; the
+/// per-unit filters `0x6F0E6CC0` / `0x6F0E6D20` are not decoded, the model's list is LIKELY).
+fn corpses_near(gm: &Game, caster: ObjKey, area: F32) -> Vec<ObjKey> {
+    let (cx, cy) = (gm.unit(caster).x, gm.unit(caster).y);
+    let area2 = arith::mul(area, area);
+    let mut out = Vec::new();
+    for i in 0..gm.object_count() {
+        let k = ObjKey(i as u32);
+        if !matches!(gm.object(k), crate::natives::game::Object::Unit(_)) || k == caster {
+            continue;
+        }
+        let u = gm.unit(k);
+        if !u.dead || u.removed || u.illusion {
+            continue;
+        }
+        if is_unit_type(gm, u, ty::STRUCTURE) || is_unit_type(gm, u, ty::MECHANICAL) {
+            continue;
+        }
+        let (dx, dy) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
+        if arith::le(arith::add(arith::mul(dx, dx), arith::mul(dy, dy)), area2) {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// Errors of a cast without a target (the readiness error "no corpse" of Raise Dead).
+pub(crate) fn untargeted_error(gm: &Game, caster: ObjKey, base: u32, level: &crate::cast::SpellLevel) -> Option<CastError> {
+    match base {
+        RAISE_DEAD if corpses_near(gm, caster, level.area).is_empty() => Some(CastError::BadTarget),
+        _ => None,
+    }
+}
+
 /// Target validity beyond the range test (`0x6F04F7A0` + class slot `0x3F0`).
 pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
     match base {
@@ -522,6 +565,10 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             dispel_magic(game, rt, rec);
             true
         }
+        RAISE_DEAD => {
+            raise_dead(game, rec);
+            true
+        }
         INNER_FIRE | BLOODLUST | CRIPPLE | FAERIE_FIRE => {
             if let CastTarget::Unit(t) = rec.target {
                 buff_spell(game, rec, t);
@@ -561,6 +608,44 @@ fn unholy_frenzy(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     };
     let serial = gm.apply_mods_buff(target, BUFF_UNHOLY_FRENZY, preds, mods, dur);
     gm.register_tick(target, serial, rec.caster, d[1], false, DAMAGE_TYPE_DEATH, true);
+}
+
+/// Raise Dead (`Arai`, `CAbilityRaiseDead` vtable `0x6F8CB89C`; effect `0x6F0E6AA0`, corpse group `0x6F0FBB30`):
+/// `DataA` units of the first type (`UnitID`) and `DataB` of the second (`DataD`, the skeletal mage) are made from
+/// the corpses within `Area` of the caster, first corpses first (circle query order, LIKELY); each unit gets the
+/// caster's owner, the summoned class bit, the corpse's position and a timed life buff `Brai` of `HeroDur` / `Dur`
+/// (hero rule on the caster, CONFIRMED order of the reads), and the corpse is removed. Fewer corpses than units
+/// raise fewer units.
+fn raise_dead(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    let corpses = corpses_near(&gm, rec.caster, rec.level.area);
+    let a = conv::f2i(rec.level.data[0]).max(0) as usize;
+    let b = conv::f2i(rec.level.data[1]).max(0) as usize;
+    let hero = gm.target_hero(rec.caster);
+    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    let owner = gm.unit(rec.caster).owner;
+    let first = rec.level.unit_id;
+    let second = if gm.spells.unit.raise_dead_second != 0 { gm.spells.unit.raise_dead_second } else { SKELETAL_MAGE };
+    let mut it = corpses.into_iter();
+    for (n, ty_id) in [(a, first), (b, second)] {
+        for _ in 0..n {
+            let Some(c) = it.next() else {
+                return;
+            };
+            let (x, y, facing) = {
+                let u = gm.unit(c);
+                (u.x, u.y, u.facing)
+            };
+            if ty_id == 0 {
+                continue;
+            }
+            crate::natives::unit::remove_unit(&mut gm, c);
+            if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty_id, x, y, facing, true) {
+                gm.unit_mut(k).summoned = true;
+                gm.apply_timed_life(k, BUFF_RAISE_DEAD, dur);
+            }
+        }
+    }
 }
 
 /// Damage type of Dispel Magic's summoned-unit damage: the class word `0x4000` of the worker `0x6F0EEF00` is bit 14,
@@ -868,6 +953,20 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
 
 /// One autocast scan of `base` for `unit`; returns the delay to the next one.
 fn scan(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, base: u32) -> f32 {
+    if base == RAISE_DEAD {
+        // No target: the scan looks for corpses (`0x6F0E6CC0`); with some in reach the cast is ordered.
+        let ready = {
+            let gm = game.borrow();
+            !gm.is_stunned(unit) && order_allows_autocast(&gm, unit)
+        };
+        if ready && begin_cast(game, rt, unit, base, CastTarget::None).is_ok() {
+            let gm = game.borrow();
+            let level = gm.ability_level_record(unit, base).unwrap_or_default();
+            let total = arith::add(level.cast, gm.cast_point_of(unit));
+            return if arith::lt(total, F32::ONE) { 1.0 } else { total.to_f32() };
+        }
+        return SCAN_PERIOD;
+    }
     let target = {
         let gm = game.borrow();
         if gm.is_stunned(unit) || !order_allows_autocast(&gm, unit) {

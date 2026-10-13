@@ -174,3 +174,22 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   dispellable buffs, anyone else negative ones; an enemy summoned unit or illusion takes `DataB` magic damage (type 14)
   from the caster. All of that is LIKELY/UNSURE (the worker's flow is not fully decoded); `DataA` mana loss and the
   timed-life kill path (`buffs.md`) are NOT DONE for the spell.
+
+## 9. Raise Dead (`Arai`, `CAbilityRaiseDead` vtable `0x6F8CB89C`, an AutoTargetSpell with 292 slots)
+
+* Data (2 levels): cost 75, cooldown 8, Dur 40 / HeroDur 40, Area 900, range 600, targets `dead`; level 1: `DataA` 2
+  units of `uske`; level 2: `DataA` 1 and `DataB` 1 (type two `uskm` from `DataD`); buff `Brai`; editor labels
+  RAI1/RAI2 units summoned (type one / two), RAI3/RAI4 the unit types.
+* Effect `0x6F0E6AA0` (CONFIRMED structure): reads `DataA` and `DataB` (integers by `f2i`), the unit types
+  (`0x6F0E69E0`, `0x6F0E6A40`), the hero-rule duration, then makes the units from corpses: two loops (type one, type
+  two) each using the corpse list of the group builder `0x6F0FBB30` / callback `0x6F0FBA50` (slot `0x488`) around the
+  caster within `Area`; event `0xD015A` and the removal of the corpse (`0x6F29ED60`).
+* The autocast target (slots `0x47C` = `0x6F0E6CC0`, `0x480` = `0x6F0E6D20`: corpse filters, not decoded) is a corpse
+  in reach: the cast has no target and refuses when there is none (the readiness error "no corpse").
+* Model: `raise_dead` takes the first `DataA` corpses (dead, not removed, not structure/mechanical/illusion, within
+  `Area`, circle query order) for type one (`UnitID`) and the next `DataB` for type two (`State::raise_dead_second`,
+  default the skeletal mage), removes the corpse, builds the unit at its position for the caster's owner with the
+  summoned bit and a `Brai` timed life of the hero-rule duration. Autocast: a scan (shared lifecycle, off by default)
+  that casts when corpses are in reach and the caster is idle or attacking. UNSURE: the corpse list order and filters,
+  the unit placement (the original searches a free spot), the second level's `DataD` type from the data (model:
+  default `uskm`), the default autocast flag.

@@ -61,6 +61,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(shaman, 'Auhf')
     call UnitAddAbility(shaman, 'Arej')
     call UnitAddAbility(shaman, 'Adis')
+    call UnitAddAbility(shaman, 'Arai')
     call SetUnitState(shaman, 2, 300.0)
     set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
     set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
@@ -90,6 +91,16 @@ function rejuv_grunt takes nothing returns nothing
 endfunction
 function dispel_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852057, foe2)
+endfunction
+function raise takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shaman, 852197)
+endfunction
+function raise_on takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shaman, 852198)
+endfunction
+function kill_grunts takes nothing returns nothing
+    call SetWidgetLife(grunt, 0.0)
+    call SetWidgetLife(grunt2, 0.0)
 endfunction
 function lust_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852101, grunt)
@@ -131,6 +142,7 @@ endfunction
 
 const PRIEST: u32 = 0x6870_7274; // 'hprt'
 const FOOT: u32 = 0x6866_6F6F; // 'hfoo'
+const SKELETON: u32 = 0x7573_6B65; // 'uske'
 
 fn f(v: f32) -> F32 {
     F32::from_bits(v.to_bits())
@@ -241,6 +253,35 @@ fn host() -> ScriptHost {
                     d[1] = f(200.0);
                     d
                 },
+                ..Default::default()
+            }],
+        );
+        g.ability_types_mut().insert(RAISE_DEAD, AbilityType { max_level: Some(1) });
+        g.unit_types_mut().insert(
+            SKELETON,
+            UnitType {
+                name: "Skeleton".to_string(),
+                max_life: f(125.0),
+                max_mana: f(0.0),
+                move_speed: f(270.0),
+                ..Default::default()
+            },
+        );
+        g.set_spell_levels(
+            RAISE_DEAD,
+            vec![SpellLevel {
+                cost: 75,
+                cool: f(1.0),
+                dur: f(5.0),
+                hero_dur: f(5.0),
+                area: f(900.0),
+                rng: f(600.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(2.0);
+                    d
+                },
+                unit_id: SKELETON,
                 ..Default::default()
             }],
         );
@@ -730,4 +771,40 @@ fn dispel_magic_hurts_enemy_summons_for_data_b() {
     call(&mut h, "dispel_foe");
     run(&mut h, 1);
     assert_eq!(life(&h, foe2), 300.0, "500 - 200 (placeholder armor-free damage model)");
+}
+
+fn count_units(h: &ScriptHost, ty: u32, alive_only: bool) -> usize {
+    let g = h.game();
+    (0..g.object_count())
+        .map(|i| ObjKey(i as u32))
+        .filter(|&k| matches!(g.object(k), sim::natives::game::Object::Unit(u) if u.type_id == ty && !u.removed && (!alive_only || !u.dead)))
+        .count()
+}
+
+#[test]
+fn raise_dead_makes_skeletons_from_corpses_in_reach_and_they_expire() {
+    let mut h = started_manual();
+    let shaman = unit(&h, "shaman");
+    call(&mut h, "raise");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "no corpse in reach: refused");
+    call(&mut h, "kill_grunts");
+    run(&mut h, 1);
+    call(&mut h, "raise");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 225.0);
+    assert_eq!(count_units(&h, SKELETON, true), 2);
+    assert_eq!(count_units(&h, FOOT, false), 6, "of 8 footmen two corpses were consumed (removed)");
+    run(&mut h, 55);
+    assert_eq!(count_units(&h, SKELETON, true), 0, "timed life ended");
+}
+
+#[test]
+fn raise_dead_autocast_raises_when_corpses_are_in_reach() {
+    let mut h = started_manual();
+    call(&mut h, "kill_grunts");
+    call(&mut h, "raise_on");
+    run(&mut h, 5);
+    assert_eq!(count_units(&h, SKELETON, true), 2);
 }

@@ -679,6 +679,9 @@ pub fn begin_cast(
                 {
                     return Err(CastError::BadTarget);
                 }
+                if let Some(e) = crate::unit_spells::untargeted_error(&gm, caster, base, &level) {
+                    return Err(e);
+                }
             }
         }
         CastRec {
