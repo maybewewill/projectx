@@ -82,6 +82,12 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+pub const HEALING_WARD: u32 = code(b"Ahwd");
+pub const BUFF_HEALING_WARD: u32 = code(b"Bhwd");
+pub const STASIS_TRAP: u32 = code(b"Asta");
+pub const BUFF_STASIS_TRAP: u32 = code(b"Bsta");
+pub const SENTRY_WARD: u32 = code(b"Aeye");
+pub const BUFF_SENTRY_WARD: u32 = code(b"Beye");
 pub const POLYMORPH: u32 = code(b"Aply");
 pub const BUFF_POLYMORPH: u32 = code(b"Bply");
 /// The default sheep types of Polymorph's data fields `DataB..DataE` (land, flying, amphibious, water).
@@ -137,7 +143,10 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 17] = [
+pub const SPELL_ORDERS: [(u32, u32); 20] = [
+    (852_109, HEALING_WARD),
+    (852_114, STASIS_TRAP),
+    (852_105, SENTRY_WARD),
     (852_074, POLYMORPH),
     (852_132, ABOLISH_MAGIC),
     (852_106, ENSNARE),
@@ -859,6 +868,18 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             }
             true
         }
+        HEALING_WARD => {
+            ward(game, rec, BUFF_HEALING_WARD);
+            true
+        }
+        STASIS_TRAP => {
+            ward(game, rec, BUFF_STASIS_TRAP);
+            true
+        }
+        SENTRY_WARD => {
+            ward(game, rec, BUFF_SENTRY_WARD);
+            true
+        }
         ABOLISH_MAGIC => {
             if let CastTarget::Unit(t) = rec.target {
                 abolish_magic(game, rt, rec, t);
@@ -1249,6 +1270,39 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     };
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+/// The ward spells (`Ahwd` `CAbilityHealingWard` `0x6F8B0A44`, `Asta` `CAbilityStasisTrap` `0x6F929174`, `Aeye`
+/// `CAbilityEvilEye` `0x6F8A9B0C`; the point effect slot `0x418` = `0x6F0BABB0` / `0x6F1FD180` / `0x6F0B8510`).
+/// CONFIRMED structure of the healing ward effect: the ability's `UnitID` is created at the target point for the
+/// caster's player with the creation flags `0x2` when the duration `Dur + ability[+0x9C]` is nonzero (`0x502` when it
+/// is zero, which adds the food bits: a ward does not use food), the facing is a constant fraction (`0x6F020D30` times
+/// `0x6FAAE5E8` = pi / 180; its input was not decoded, the model keeps the caster's facing), and the timed life buff
+/// of the ward type (`0x6F07AF00`, `Bhwd`) is given the duration `Dur` through its slots `0x324` / `0x31C`. The ward's
+/// own aura or trap ability comes from the unit type's ability list (the unit builder adds it): not part of the spell.
+/// Level fields used here: `UnitID`, `Dur`. Stasis Trap's `HeroDur` (2.5) and `DataA..D` and the sentry's data belong to
+/// the ward unit's abilities.
+fn ward(game: &RefCell<Game>, rec: &CastRec, buff: u32) {
+    let mut gm = game.borrow_mut();
+    let (x, y) = match rec.target {
+        CastTarget::Point(x, y) => (x, y),
+        CastTarget::Unit(t) => (gm.unit(t).x, gm.unit(t).y),
+        CastTarget::None => (gm.unit(rec.caster).x, gm.unit(rec.caster).y),
+    };
+    let ty = rec.level.unit_id;
+    if ty == 0 {
+        return;
+    }
+    let (owner, facing) = {
+        let c = gm.unit(rec.caster);
+        (c.owner, c.facing)
+    };
+    if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty, x, y, facing, true) {
+        gm.unit_mut(k).summoned = true;
+        if arith::lt(F32::ZERO, rec.level.dur) {
+            gm.apply_timed_life(k, buff, rec.level.dur);
+        }
     }
 }
 

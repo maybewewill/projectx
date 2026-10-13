@@ -63,6 +63,9 @@ endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
 endfunction
+function ward_here takes nothing returns nothing
+    set accepted = IssuePointOrderById(shaman, 852109, 5000.0, 300.0)
+endfunction
 function polymorph_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852074, foe)
 endfunction
@@ -314,6 +317,64 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     call(&mut h2, "foe_attacks");
     run(&mut h2, 80);
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
+}
+
+// ---- Wards ----
+
+const WARD_UNIT: u32 = 0x6F68_7764; // 'ohwd'
+
+fn wards_alive(h: &ScriptHost) -> Vec<ObjKey> {
+    let g = h.game();
+    (0..g.object_count())
+        .map(|i| ObjKey(i as u32))
+        .filter(|&k| matches!(g.object(k), sim::natives::game::Object::Unit(u) if u.type_id == WARD_UNIT && !u.dead && !u.removed))
+        .collect()
+}
+
+#[test]
+fn healing_ward_creates_the_ward_unit_at_the_point_with_a_timed_life() {
+    let mut h = started();
+    {
+        let k = unit(&h, "shaman");
+        let mut g = h.game_mut();
+        g.unit_types_mut().insert(
+            WARD_UNIT,
+            UnitType {
+                name: "Healing Ward".to_string(),
+                max_life: f(150.0),
+                ..Default::default()
+            },
+        );
+        g.ability_types_mut().insert(HEALING_WARD, AbilityType { max_level: Some(1) });
+        // Healing Ward: cost 200, range 500, UnitID ohwd, Dur 30 (shortened to 5).
+        g.set_spell_levels(
+            HEALING_WARD,
+            vec![SpellLevel {
+                cost: 200,
+                cool: f(1.0),
+                dur: f(5.0),
+                hero_dur: f(5.0),
+                rng: f(500.0),
+                unit_id: WARD_UNIT,
+                ..Default::default()
+            }],
+        );
+        g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(HEALING_WARD, None));
+    }
+    call(&mut h, "ward_here");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    let wards = wards_alive(&h);
+    assert_eq!(wards.len(), 1);
+    let w = wards[0];
+    assert_eq!(h.game().unit(w).owner, 0);
+    assert!(h.game().unit(w).summoned);
+    assert_eq!(h.game().unit(w).x.to_f32(), 5000.0);
+    assert_eq!(h.game().unit(w).y.to_f32(), 300.0);
+    assert!(has_buff(&h, w, BUFF_HEALING_WARD));
+    assert_eq!(h.game().unit(unit(&h, "shaman")).mana.to_f32(), 100.0);
+    run(&mut h, 60);
+    assert!(wards_alive(&h).is_empty(), "the ward dies when its timed life ends");
 }
 
 // ---- Polymorph ----
