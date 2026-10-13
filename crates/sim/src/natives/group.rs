@@ -708,6 +708,28 @@ pub(crate) fn in_range(x: F32, y: F32, cx: F32, cy: F32, radius: F32, origin: (F
     arith::le(d, arith::mul(s, s))
 }
 
+/// The ring membership test of the splash and bounce code (`0x6F476C40` with flag 1, `docs/spec/weapon-splash.md`): the
+/// same squared cell distance `D` as [`in_range`] against `V = (r / 32)^2`, accepted when `V > D` or the two differ by
+/// less than 0.001. UNSURE: which of the two compared values is `D` (the order of the two loads is read, the roles are
+/// inferred), and that the unit position is the stored cell position (the original predicts the position at the
+/// current time, `0x6F38B0B0`).
+pub(crate) fn in_ring(x: F32, y: F32, cx: F32, cy: F32, radius: F32, origin: (F32, F32)) -> bool {
+    let d = arith::dist2(
+        cell_float(x, origin.0),
+        cell_float(y, origin.1),
+        cell_float(cx, origin.0),
+        cell_float(cy, origin.1),
+    );
+    let s = scale_by_1_32(radius);
+    let v = arith::mul(s, s);
+    arith::lt(d, v) || arith::approx_eq(d, v)
+}
+
+/// The group grid origin for code outside this module.
+pub(crate) fn group_origin(gm: &Game) -> (F32, F32) {
+    grid_origin(gm)
+}
+
 /// The bounds test of the rect query. UNVERIFIED (spec 3.7): the edges are inclusive here, and the
 /// original may test only the cells of the box (its rect path is the box mode, not decoded).
 pub(super) fn in_rect(x: F32, y: F32, r: &RectObj) -> bool {

@@ -8,8 +8,7 @@
 //! - Weapon 1 is read from the record's weapon slot 1 (`dice1`, `sides1`, `dmgplus1`, `cool1`, `dmgpt1`, `backSw1`,
 //!   `rangeN1`, `atkType1`). A unit without a `UnitWeapons` row has no weapon.
 //! - Defense is read from the balance record (`def`, `defType`). A unit without a `UnitBalance` row has no defense.
-//! - Weapon 2 is in the record but not here: the simulation's attack record holds one weapon per unit type (UNSURE
-//!   how the original picks between two weapons; see `sim::combat`).
+//! - Weapon 2 is read the same way when `weapsOn` bit 1 is set (the weapon chooser is `sim::target_accept`).
 //!
 //! Notes are kept for the two names the binary's readers do not know: an unknown `atkType` takes Spells (0) and an
 //! unknown `defType` takes Normal (4), as the binary does (`0x6F262B00` / `0x6F262C10`, CONFIRMED by the disassembly,
@@ -120,6 +119,23 @@ pub struct Weapon {
     pub range: F32,
     /// Attack type (`atkType1`).
     pub damage_type: DamageType,
+    /// The weapon kind enum of `weapTp` (1 normal, 2 missile, 3 artillery, 4 instant, 5 msplash, 6 mbounce, 7 mline,
+    /// 8 aline; 0 unknown).
+    pub kind: u32,
+    /// The target flag word of `targs` (`0x6F255250`).
+    pub targs: u32,
+    /// The splash target flag word of `splashTargs`.
+    pub splash_targs: u32,
+    /// `Farea`, `Harea`, `Qarea`: full, half and quarter damage radii of a splash (world units).
+    pub area: [F32; 3],
+    /// `Hfact`, `Qfact`: the half and quarter damage factors.
+    pub factor: [F32; 2],
+    /// `targCount`: number of targets (bounce).
+    pub targ_count: i32,
+    /// `damageLoss`: the fraction lost per bounce.
+    pub damage_loss: F32,
+    /// `spillDist` / `spillRadius`: the line length and half width of a line attack.
+    pub spill: [F32; 2],
 }
 
 /// The defense of a unit type.
@@ -136,6 +152,8 @@ pub struct Defense {
 pub struct UnitCombat {
     /// Weapon 1, or `None` when the type has no weapon row.
     pub weapon: Option<Weapon>,
+    /// Weapon 2: present when the type has a weapon row and `weapsOn` bit 1 is set.
+    pub weapon2: Option<Weapon>,
     /// The defense, or `None` when the type has no balance row.
     pub defense: Option<Defense>,
 }
@@ -184,10 +202,11 @@ pub fn rawcode(code: &str) -> Option<u32> {
 pub fn from_units(units: &BTreeMap<String, UnitTypeData>) -> UnitCombatData {
     let mut out = UnitCombatData::default();
     for (code, ty) in units {
-        let weapon = weapon_of(code, ty, &mut out.notes);
+        let weapon = weapon_of(code, ty, 0, &mut out.notes);
+        let weapon2 = if ty.weapons_on & 2 != 0 { weapon_of(code, ty, 1, &mut out.notes) } else { None };
         let defense = defense_of(code, ty, &mut out.notes);
         if weapon.is_some() || defense.is_some() {
-            out.units.insert(code.clone(), UnitCombat { weapon, defense });
+            out.units.insert(code.clone(), UnitCombat { weapon, weapon2, defense });
         }
     }
     out
@@ -198,11 +217,11 @@ fn soft(x: f32) -> F32 {
     F32::from_bits(x.to_bits())
 }
 
-fn weapon_of(code: &str, ty: &UnitTypeData, notes: &mut Vec<String>) -> Option<Weapon> {
+fn weapon_of(code: &str, ty: &UnitTypeData, w: usize, notes: &mut Vec<String>) -> Option<Weapon> {
     if !ty.has_weapons_row {
         return None;
     }
-    let slot = &ty.weapons[0];
+    let slot = &ty.weapons[w];
     if slot.dice < 0 || slot.sides < 0 {
         notes.push(format!("{code}: negative dice or sides; 0 used"));
     }
@@ -226,6 +245,14 @@ fn weapon_of(code: &str, ty: &UnitTypeData, notes: &mut Vec<String>) -> Option<W
         backswing: soft(slot.back_swing),
         range: soft(slot.range),
         damage_type,
+        kind: ty.weapon_kind[w],
+        targs: ty.weapon_targs[w],
+        splash_targs: crate::unitclass::parse_target_flags(crate::unittype::unquote(&slot.splash_targs)),
+        area: [soft(slot.farea), soft(slot.harea), soft(slot.qarea)],
+        factor: [soft(slot.hfact), soft(slot.qfact)],
+        targ_count: slot.targ_count,
+        damage_loss: soft(slot.damage_loss),
+        spill: [soft(slot.spill_dist), soft(slot.spill_radius)],
     })
 }
 

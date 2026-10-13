@@ -267,6 +267,11 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         };
         if let Some(w) = row.weapon {
             game.set_attack_type(id, attack_type(&w));
+            game.set_weapon_extra(id, 0, weapon_extra(&w));
+        }
+        if let Some(w) = row.weapon2 {
+            game.set_attack_type2(id, attack_type(&w));
+            game.set_weapon_extra(id, 1, weapon_extra(&w));
         }
         if let Some(d) = row.defense {
             game.set_unit_defense(
@@ -282,6 +287,7 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
         attack_half_angle: data.misc.attack_half_angle,
         reaction_delay: data.misc.reaction_delay,
         chance_to_miss: data.misc.chance_to_miss,
+        magic_immunes_resist: data.misc.magic_immunes_resist_damage,
     });
 
     // The day cycle of the map's Misc data (`docs/spec/vision.md`, section 13). Without any [Misc] layer the usual
@@ -452,6 +458,7 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
         weapons_on: ty.weapons_on as u32,
         weapon_kind: ty.weapon_kind,
         weapon_targs: ty.weapon_targs,
+        targ_type: ty.targ_type,
         // UnitBalance `regenHP`, `regenMana` (reals through the atof model) and `regenType` (the name table at `0x6FA70F88`).
         regen_hp: soft(ty.regen_hp),
         regen_mana: soft(ty.regen_mana),
@@ -492,6 +499,21 @@ fn attack_type(w: &combat::Weapon) -> AttackType {
         dice_bonus: w.dmg_plus,
         damage_type: w.damage_type.row() as u8,
         damage_class: sim::damage::ATTACK_DAMAGE_CLASS,
+    }
+}
+
+/// The per-weapon data of a weapon row beyond [`attack_type`]: the target flags the weapon chooser matches, the weapon
+/// kind and the splash and bounce parameters (`docs/spec/weapon-target.md`, `docs/spec/weapon-splash.md`).
+fn weapon_extra(w: &combat::Weapon) -> sim::combat::WeaponExtra {
+    sim::combat::WeaponExtra {
+        targs: w.targs,
+        kind: w.kind,
+        splash_targs: w.splash_targs,
+        area: w.area,
+        hfact: w.factor[0],
+        qfact: w.factor[1],
+        targ_count: w.targ_count,
+        damage_loss: w.damage_loss,
     }
 }
 

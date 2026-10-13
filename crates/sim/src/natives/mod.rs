@@ -55,7 +55,7 @@ pub use game::{
     Ctx, Game, HandleKind, ObjKey, Payload, PickRecord, Playable, ScriptRuntime, UnitEvent, UnitObj, UnitType,
     UnitTypes,
 };
-pub(crate) use group::circle_candidates;
+pub(crate) use group::{circle_candidates, group_origin, in_ring};
 pub use presentation::{PresentationEvent, PresentationLog, PresentationState};
 pub use timer::expire as expire_timer;
 pub use trigger::fire as fire_trigger;

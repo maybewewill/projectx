@@ -23,7 +23,9 @@ it is the cooldown end, the swing end is `0xD01B2`.
   remaining / (new M / old M) when the ratio differs from 1 by >= 2e-7.
 Constants (runtime values): 0.01 `0x6FAAE480`, 0.02 `0x6FAAE484`, 0.001 `0x6FAAE47C`, 2e-7 `0x6FAAE614`, 0.2 / 5.0 `0x6FAB0078/74`.
 
-## Weapon choice (decoded, NOT ported)
+## Weapon choice (ported: see weapon-target.md)
+
+Superseded: the predicate, the weapon chooser and the target flag word are decoded and Unicorn-checked in `weapon-target.md`; splash, bounce and line in `weapon-splash.md`. The text below is the earlier partial reading.
 `0x6F0C95D0(target_info, out_index)` (and the variant `0x6F0C93E0` with extra target checks) choose the weapon: for each
 weapon w in 0..2 enabled by bit `0x80000 << w` of A+0x20, skipping modes the same way as the multiplier, the weapon target
 word `A+0x218+4w` is tested against the target's flag word (`[t+4]`) with `0x6F25D560`; the first weapon that returns 0
@@ -31,7 +33,7 @@ is stored in `*out`; if none matches the lowest error code is returned (0xDD = c
 used without the test. `0x6F25D560` -> `0x6F2552F0` (expands targs groups) -> `0x6F2553C0` (error code) and calls
 `0x6F25D390`, `0x6F0766A0`: not ported, so the sim still has one attack record per type.
 
-## weapTp launch paths (decoded structure, damage application NOT decoded)
+## weapTp launch paths (area damage: see weapon-splash.md)
 Execute `0x6F0CF660` jump table `0x6F0D0228`: 1 normal `0x6F0CF889`, 2 missile `0x6F0CF9FE`, 3 artillery `0x6F0CFEF2`,
 4 instant `0x6F0CF881`, 5 msplash `0x6F0CFB14` (launch `0x6F276600`, missile class setup `0x6F0CDF40`), 6 mbounce
 `0x6F0CFC22` (helper `0x6F040900`, launch `0x6F2766A0`, `0x6F0CDFC0`), 7 mline `0x6F0CFDAC` (`0x6F040950`, launch

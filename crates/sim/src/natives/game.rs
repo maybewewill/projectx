@@ -467,6 +467,10 @@ pub struct UnitType {
     pub weapon_kind: [u32; 2],
     /// Target flag word per weapon (record `+0xA0`).
     pub weapon_targs: [u32; 2],
+    /// The unit's own target flags (`UnitData` `targType`, record `+0x1B4`, masked to `0x1E`; unit `+0x24C`): ground
+    /// `2`, air `4`, structure `8`, ward `0x10`. Zero means the host did not fill it (the weapon choosers then derive
+    /// ground, air or structure from the movement type and the building flag, [`Game::target_flag_word`]).
+    pub targ_type: u32,
     /// UnitBalance `collision` (world units; record `+0x19C`). The push-apart footprint radius is this value in cells
     /// (UNSURE: the conversion; `docs/spec/movement-7.md` section 8).
     pub collision: F32,
