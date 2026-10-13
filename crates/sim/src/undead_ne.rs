@@ -138,6 +138,9 @@ pub struct State {
     /// Running swath missiles (Carrion Swarm, S37): id -> record.
     swarms: BTreeMap<u32, Swarm>,
     next_swarm: u32,
+    /// Inferno landings waiting for their impact delay (S37).
+    infernos: BTreeMap<u32, Inferno>,
+    next_inferno: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -189,6 +192,8 @@ pub const TICK_STRIKE_DOT: u8 = 4;
 pub const TICK_SWARM: u8 = 5;
 /// The 1.0 s slow update of a Shadow Strike buff (`aux` = the buff serial), S37.
 pub const TICK_STRIKE_SLOW: u8 = 7;
+/// The impact of an Inferno (`aux` = the landing id), S37.
+pub const TICK_INFERNO: u8 = 8;
 /// A swath missile arrives (`aux` = the swarm id), S37.
 pub const TICK_SWARM_ARRIVE: u8 = 6;
 
@@ -223,10 +228,11 @@ pub(crate) fn run_effect(
         (SHADOW_STRIKE, CastTarget::Unit(t)) => shadow_strike(game, rt, caster, level, t),
         (BLINK, CastTarget::Point(x, y)) => blink(game, caster, level, x, y),
         (CARRION_SWARM, CastTarget::Point(x, y)) => carrion_swarm(game, rt, caster, level, x, y),
+        (INFERNO, CastTarget::Point(x, y)) => inferno(game, rt, caster, level, x, y),
         (IMMOLATION | IMMOLATION_UNDEAD, CastTarget::None) => immolation(game, caster, base, level),
         (
             DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | DARK_RITUAL | SLEEP | SHADOW_STRIKE | BLINK
-            | CARRION_SWARM | IMMOLATION | IMMOLATION_UNDEAD,
+            | CARRION_SWARM | IMMOLATION | IMMOLATION_UNDEAD | INFERNO,
             _,
         ) => {}
         _ => return false,
@@ -915,6 +921,123 @@ fn swarm_arrive(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Inferno (S37)
+
+pub const INFERNO: u32 = code(b"AUin");
+
+/// Cast-order ids of the S37 abilities (the original getters, `tools/analysis/ability_orders.py --verify`: AUin
+/// 852224, AUdd 852221, AEsf 852183, AEtq 852184, AEme 852180).
+pub const S37_ORDERS: &[(u32, u32)] = &[(852_224, INFERNO)];
+/// The Infernal's timed-life buff id (`'BNin'`, the level's BuffID).
+pub const BUFF_INFERNAL: u32 = code(b"BNin");
+/// `targs` of `AUin`: ground, structure (+ debris, enemy, neutral): the relation is the enemy test.
+pub const INFERNO_TARGS: u32 = 0x2 | 0x8;
+/// The damage record class of the landing (`0x20000`, set in the landing function `0x6F142E60`): bit 17.
+pub const INFERNO_DAMAGE_TYPE: u32 = 17;
+
+/// The landing context of `CAbilityInferno` (`0x6F13BC60` -> `0x6F117B40`, CONFIRMED by Unicorn, 320 cases): the level
+/// record fields the Infernal's buff `CBuffInfernal` keeps. Roles: Area = the circle of the landing, DataA = damage,
+/// DataB = the Infernal's lifetime (a timed life), DataC = the impact delay (the buff arms `0xD01C1` with it), Dur /
+/// HeroDur = the stun durations (a hero takes HeroDur, `0x6F1D2660`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InfernoCtx {
+    pub area: F32,
+    pub damage: F32,
+    pub life: F32,
+    pub delay: F32,
+    pub dur: F32,
+    pub hero_dur: F32,
+    pub unit_id: u32,
+}
+
+pub fn inferno_ctx(level: &SpellLevel) -> InfernoCtx {
+    InfernoCtx {
+        area: level.area,
+        damage: level.data[0],
+        life: level.data[1],
+        delay: level.data[2],
+        dur: level.dur,
+        hero_dur: level.hero_dur,
+        unit_id: level.unit_id,
+    }
+}
+
+/// A landing in progress.
+#[derive(Debug, Clone, Copy)]
+struct Inferno {
+    caster: ObjKey,
+    infernal: Option<ObjKey>,
+    point: (F32, F32),
+    ctx: InfernoCtx,
+}
+
+/// `CAbilityInferno` effect: creates the Infernal at the point (`0x6F13BB20`, with the timed life and the buff
+/// `'BNin'`) and, after the impact delay, runs the landing: every enemy unit passing the ability's `targs` within
+/// Area of the Infernal takes DataA (record class `0x20000`) and a stun of Dur (HeroDur for a hero) through the
+/// stun buff. UNSURE: the unit is created at once (the original creates it in the effect, the fall is the buff's
+/// progress bar), the debris query of the landing is not modelled, and the stun is the sim's generic stun buff.
+fn inferno(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey, level: &SpellLevel, x: F32, y: F32) {
+    let _ = rt;
+    let mut gm = game.borrow_mut();
+    if !gm.object_is_live_unit(caster) {
+        return;
+    }
+    let ctx = inferno_ctx(level);
+    let unit_type = if ctx.unit_id != 0 {
+        Some(ctx.unit_id)
+    } else {
+        gm.spells_hero_state_mut().summon_unit.get(&INFERNO).copied()
+    };
+    let owner = gm.unit(caster).owner;
+    let mut infernal = None;
+    if let Some(ty) = unit_type {
+        if let Some((u, _)) = crate::natives::unit::build(&mut gm, owner, ty, x, y, F32::ZERO, true) {
+            gm.apply_timed_life(u, BUFF_INFERNAL, ctx.life);
+            infernal = Some(u);
+        }
+    }
+    let st = gm.spells_hero_state_mut();
+    st.next_inferno += 1;
+    let id = st.next_inferno;
+    st.infernos.insert(id, Inferno { caster, infernal, point: (x, y), ctx });
+    gm.timers_start_hero(ctx.delay.to_f32(), TICK_INFERNO, caster, id);
+}
+
+fn inferno_land(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
+    let mut deaths = Vec::new();
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(inf) = gm.spells_hero_state_mut().infernos.remove(&id) else {
+            return;
+        };
+        caster = inf.caster;
+        let center = match inf.infernal {
+            Some(u) if gm.object_is_live_unit(u) => (gm.unit(u).x, gm.unit(u).y),
+            _ => inf.point,
+        };
+        let owner = gm.unit(caster).owner;
+        let victims: Vec<ObjKey> = circle_candidates(&gm, center.0, center.1, inf.ctx.area)
+            .into_iter()
+            .filter(|&k| Some(k) != inf.infernal && gm.object_is_live_unit(k) && gm.is_enemy(owner, gm.unit(k).owner))
+            .filter(|&k| crate::target_accept::predicate(gm.target_flag_word(k), INFERNO_TARGS) == 0)
+            .collect();
+        for k in victims {
+            if let Some(d) = gm.unit_damage_target(caster, k, inf.ctx.damage, false, false, 0, INFERNO_DAMAGE_TYPE) {
+                deaths.push(d);
+                continue;
+            }
+            let hero = gm.unit(k).hero.is_some() || is_hero_id(gm.unit(k).type_id);
+            let dur = if hero { inf.ctx.hero_dur } else { inf.ctx.dur };
+            gm.add_spell_buff(k, crate::cast::BUFF_STUN, BuffEffect::Stun, dur);
+        }
+    }
+    for d in deaths {
+        dispatch_unit_death_by(game, rt, d, Some(caster));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Sleep
 
 /// `CAbilitySleep` effect (`0x6F1FBA80`): the target gets the Sleep buff `'BUsl'` for HeroDur (hero) or Dur and is
@@ -1230,6 +1353,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_STRIKE_DOT => strike_dot(game, rt, unit, aux),
         TICK_SWARM => swarm_tick(game, rt, aux),
         TICK_STRIKE_SLOW => strike_slow_tick(game, unit, aux),
+        TICK_INFERNO => inferno_land(game, rt, aux),
         TICK_SWARM_ARRIVE => swarm_arrive(game, rt, aux),
         _ => {}
     }

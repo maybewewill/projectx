@@ -450,6 +450,46 @@ def run_strike_apply(cases, r):
     return rows
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Inferno: the level record -> landing context builder 0x6F117B40 (`CAbilityInferno` effect 0x6F13BC60)
+
+def run_inferno_ctx(cases, r):
+    A.setup_stubs()
+    d = DATA + 0x3000
+    recs = DATA + 0x3400
+    lst = DATA + 0x3A00
+    out = DATA + 0x3F00
+    rows = []
+    for i in range(cases):
+        nlev = r.choice((1, 3, 4))
+        mu.mem_write(d, bytes(0x100))
+        mu.mem_write(recs, bytes(0x68 * 4))
+        wr(d + 0x3C, nlev)
+        wr(d + 0x54, recs)
+        words = {}
+        for lv in range(nlev):
+            base = recs + 0x68 * lv
+            vals = {
+                0x00: r.getrandbits(32), 0x08: f2u(rand_f(r, 0, 10)), 0x0C: f2u(rand_f(r, 0, 10)), 0x18: f2u(rand_f(r, 0, 500)),
+                0x20: f2u(rand_f(r, 0, 300)), 0x24: f2u(rand_f(r, 0, 300)), 0x28: f2u(rand_f(r, 0, 5)), 0x44: r.getrandbits(32),
+            }
+            for off, v in vals.items():
+                wr(base + off, v)
+            wr(lst + 4 * lv, r.getrandbits(32))
+            wr(base + 0x50, lst + 4 * lv)
+            words[lv] = (vals, rd(lst + 4 * lv))
+        level = r.choice((0, 1, 2, 3, 5, 99))
+        mu.mem_write(out, bytes(0x40))
+        emu.call(0x6F117B40, ecx=out, edx=level, stack_args=(d,))
+        eff = level if level < nlev else nlev - 1
+        res = [rd(out + 4 * k) for k in range(1, 13)]
+        if eff < 0:
+            res = None
+        vals, buff = words[eff] if eff >= 0 else ({}, 0)
+        rows.append((level, nlev, [vals[o] for o in (0x00, 0x18, 0x20, 0x24, 0x28, 0x44)] + [buff, vals[0x08], vals[0x0C]], res))
+    return rows
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -494,6 +534,13 @@ def main():
             with open(os.path.join(dump, "strike_apply.txt"), "w") as fh:
                 for v, m, a, f, flags, rec in rows:
                     fh.write("%s %s %s %s %s | %s\n" % (hexf(v), hexf(m), hexf(a), hexf(f), hexf(flags), " ".join("%s:%s" % (x[0], ":".join(hexf(y) for y in x[1:])) for x in rec)))
+    if which == "inferno":
+        rows = run_inferno_ctx(cases, r)
+        print("inferno: %d cases run" % len(rows), rows[0])
+        if dump:
+            with open(os.path.join(dump, "inferno_ctx.txt"), "w") as fh:
+                for level, nlev, rec, res in rows:
+                    fh.write("%d %d | %s | %s\n" % (level, nlev, " ".join(hexf(x) for x in rec), " ".join(hexf(x) for x in res)))
     if which == "tick":
         rows = run_swarm_tick(cases, r)
         for head, lives, out in rows[:4]:

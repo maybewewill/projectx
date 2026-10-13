@@ -306,6 +306,9 @@ impl SpellSystem {
         ] {
             s.order_ids.insert(id, base);
         }
+        for &(id, base) in crate::undead_ne::S37_ORDERS {
+            s.order_ids.insert(id, base);
+        }
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).
         s.missile_speed.insert(STORM_BOLT, F32::from_bits(1000.0f32.to_bits()));
         s
