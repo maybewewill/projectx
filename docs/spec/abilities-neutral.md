@@ -100,8 +100,8 @@ effect (see the table; the "extra overrides" column counts class overrides beyon
 | `ANbf` | CAbilityBreathOfFire | CAbilityCarrionSwarm | 2 | alias of AUcs (852580) |
 | `ANbr` | CAbilityBattleRoar | CAbilitySimpleSpell | 5 | NOT DONE |
 | `ANbs` | CAbilityBlackArrowSpell | CAbilitySimpleSpell | 2 | NOT DONE |
-| `ANca` | CAbilityCleavingAttack | CAbilityPassive | 9 | NOT DONE |
-| `ANch` | CAbilityCharm | CAbilitySimpleSpell | 3 | NOT DONE |
+| `ANca` | CAbilityCleavingAttack | CAbilityPassive | 9 | Cleaving Attack (S43) |
+| `ANch` | CAbilityCharm | CAbilitySimpleSpell | 3 | Charm (S43) |
 | `ANcl` | CAbilityChannel | CAbilitySimpleSpell | 21 | NOT DONE |
 | `ANcr` | CAbilityChemicalRage | CAbilityMorph | 8 | NOT DONE |
 | `ANcs` | CAbilityClusterRockets | CAbilitySimpleSpell | 16 | NOT DONE |
@@ -119,25 +119,25 @@ effect (see the table; the "extra overrides" column counts class overrides beyon
 | `ANfy` | CAbilityFactory | CAbilityPassive | 8 | NOT DONE |
 | `ANgl` | CAbilityNeutralG2L | CAbilityNeutralSpell | 4 | NOT DONE |
 | `ANhs` | CAbilityHealingSpray | CAbilityClusterRockets | 7 | NOT DONE |
-| `ANht` | CAbilityHowlOfTerror | CAbilityRoar | 3 | NOT DONE |
+| `ANht` | CAbilityHowlOfTerror | CAbilityRoar | 3 | Howl of Terror (S43) |
 | `ANia` | CAbilityIncinerateArrow | CAbilityRangerArrow | 10 | NOT DONE |
 | `ANic` | CAbilityIncinerate | CAbilityCleavingAttack | 8 | NOT DONE |
 | `ANin` | CAbilityInferno | CAbilitySimpleSpell | 10 | NOT DONE |
 | `ANlm` | CAbilityLavaMonster | CAbilityWaterElemental | 1 | NOT DONE |
 | `ANmo` | CAbilityMonsoon | CAbilitySimpleSpell | 13 | NOT DONE |
 | `ANmr` | CAbilityMindRot | CAbilitySimpleSpell | 2 | NOT DONE |
-| `ANms` | CAbilityManaShield | CAbilitySimpleSpell | 14 | NOT DONE |
+| `ANms` | CAbilityManaShield | CAbilitySimpleSpell | 14 | Mana Shield (S43) |
 | `ANpa` | CAbilityParasite | CAbilityAutoTargetSpell | 6 | NOT DONE |
 | `ANpi` | CAbilityPermImmolation | CAbilityPassive | 10 | NOT DONE |
 | `ANpr` | CAbilityPreservation | CAbilitySimpleSpell | 4 | NOT DONE |
 | `ANrc` | CAbilityRainOfChaos | CAbilitySimpleSpell | 13 | NOT DONE |
 | `ANre` | CAbilityNeutralRegen | CAbility | 5 | NOT DONE |
-| `ANrf` | CAbilityRainOfFire | CAbilityBlizzard | 1 | NOT DONE |
+| `ANrf` | CAbilityRainOfFire | CAbilityBlizzard | 1 | alias of AHbz (852238, S43) |
 | `ANrg` | CAbilityRoboGoblin | CAbilityMorph | 18 | NOT DONE |
 | `ANsa` | CAbilitySanctuary | CAbilityPreservation | 2 | NOT DONE |
 | `ANse` | CAbilitySpellShieldAoe | CAbilitySpellShield | 5 | NOT DONE |
 | `ANsg` | CAbilitySummonGrizzly | CAbilityWaterElemental | 1 | NOT DONE |
-| `ANsi` | CAbilitySilence | CAbilitySimpleSpell | 12 | NOT DONE |
+| `ANsi` | CAbilitySilence | CAbilitySimpleSpell | 12 | Silence (S43) |
 | `ANsl` | CAbilitySoulPreservation | CAbilitySimpleSpell | 13 | NOT DONE |
 | `ANso` | CAbilitySoulBurn | CAbilitySimpleSpell | 2 | NOT DONE |
 | `ANsp` | CAbilityNeutralSpies | CAbilityNeutralSpell | 4 | NOT DONE |
@@ -166,14 +166,42 @@ effect (see the table; the "extra overrides" column counts class overrides beyon
 | `Acpf` | CAbilityCorporealForm | CAbilityMorph | 13 | NOT DONE |
 | `Acri` | CAbilityCripple | CAbilitySimpleSpell | 2 | NOT DONE |
 | `Acrs` | CAbilityCurse | CAbilityAutoTargetSpell | 5 | NOT DONE |
-| `Acyc` | CAbilityCyclone | CAbilitySimpleSpell | 8 | NOT DONE |
+| `Acyc` | CAbilityCyclone | CAbilitySimpleSpell | 8 | Cyclone (S43) |
 | `Adev` | CAbilityDevour | CAbilityCargoLoad | 7 | NOT DONE |
 | `Advc` | CAbilityDevourCargo | CAbilityCargoHold | 8 | NOT DONE |
 | `Alit` | CAbilityLightningAttack | CAbility | 15 | NOT DONE |
 | `Amim` | CAbilityMagicImmunity | CAbilityPassive | 5 | magic immunity count (new) |
 | `Anhe` | CAbilityNeutralHeal | CAbilityHeal | 2 | alias of Ahea (852248/49/50) |
 | `Apig` | CAbilityPandaImmolation | CAbilityPermImmolation | 1 | NOT DONE |
-| `Arsk` | CAbilityResistantSkin | CAbilityPassive | 2 | NOT DONE |
+| `Arsk` | CAbilityResistantSkin | CAbilityPassive | 2 | marker, no behaviour (S43) |
 | `Ashm` | CAbilityShadowMeld | CAbilityButton | 21 | NOT DONE |
 | `Aven` | CAbilityVenomSpear | CAbilityPoisonAttack | 0 | on-hit poison (new) |
 | `Awar` | CAbilityWarStomp | CAbilityPassive | 9 | Pulverize (new) |
+
+## 6. S43: more creep abilities (no Unicorn run; every number below is a decompiled structure or the editor data)
+
+Tests: `crates/sim/tests/neutral_spells.rs` (the `*_s43` fixtures). Order ids from `tools/analysis/ability_orders.py`
+(slot `0x348`): Mana Shield on 852589 / off 852590 (slot `0x318`), Charm 852581, Cyclone 852144, Silence 852592, Howl of
+Terror 852588, Rain of Fire 852238. Level data from the user's `AbilityData.slk` and the editor meta table
+(`AbilityMetaData.slk`). Rule for all of them: the model adds only the override, the rest is an existing module.
+
+| code | class (parent) | what is modelled | confidence |
+|---|---|---|---|
+| `ANca` / `ACce` | `CAbilityCleavingAttack` (`Passive`) | swing start `0x6F1B1440` arms the flag `0x200` unless the target test `0x6F26D590` refuses; execute slot `0x154` `0x6F1B7310` calls the area body `0x6F2C31D0` (class `0x20`, circle `Area`) with `DataA` times the attack's damage. Model: after the main hit, every enemy ground unit within `Area` of the target except the target takes `DataA * damage` (damage type 5, like Pulverize). `ACce` is an alias row of `ANca` (`code` column), so it resolves like the other aliases. Open: whether the callback `0x6F1B14F0` really skips the main target, whether `damage` is the pre- or post-armor value of the record (the hit amount is used), ranged attackers | LIKELY |
+| `ANms` | `CAbilityManaShield` (`SimpleSpell`), buff `CBuffManaShield` | cast puts `BNms` on the caster without a duration; the apply slot `0x354` stores `DataA` and `DataB` in two property cells (CONFIRMED). Damage hook `0x6F126DD0` (structure read): the share `DataB * d` of a hit goes to the mana at `DataA` damage per mana point (`need = share / DataA`); if the mana cannot pay it pays all it has, mana becomes 0 and the buff is destroyed. Off order 852590 destroys the buff. The roles of `DataA` / `DataB` (1, 1.5, 2 and 1.0 in the data) come from the editor labels (`NMS1`/`NMS2`) and the shape of the code, not from a run. The record-flag test `& 0x10` (damage that skips the shield) is not modelled. The hook sits in the two life sinks `unit_damage_target` and `apply_damage` | LIKELY (structure CONFIRMED, role of the two numbers UNSURE) |
+| `Acyc` / `ACcy` | `CAbilityCyclone`, buffs `CBuffCyclone` / `CBuffCycloneTwo` (`Bcyc`, `Bcy2`) | unit target (ground, enemy, neutral, organic); hero-rule duration (`Dur` / `HeroDur`); target stunned (`Bcyc`) and invulnerable (`Bcy2`) for that time. The effect slot `0x6F1CCC70` reads the Misc key `CycloneStasis` only to pick the effect object, so it has no simulation effect here. The split of stun / invulnerability between the two buffs is a guess | LIKELY |
+| `ANsi` | `CAbilitySilence`, buff `CBuffSilence < CBuffSpeed` (`BNsi`) | point (or unit) target; every enemy air / ground organic or neutral unit within `Area` of the point, not spell immune, gets `BNsi` for the hero-rule duration; a silenced unit cannot start a spell (`begin_cast` and the stage rechecks refuse it with the stunned error, `Game::is_silenced`). A running channel is not interrupted (as in `cast.rs`). `DataA` (`silenceFlags`, 8) is not decoded: all spells are blocked; the `CBuffSpeed` speed fields are zero in 1.26a | LIKELY / UNSURE (flags) |
+| `ANch` | `CAbilityCharm` (`SimpleSpell`) | unit target (air, ground, nonhero, enemy, neutral, organic) whose type level is at most `DataA` (editor `NCH1` "max creep level"); the target changes owner for good (food and counters move, owner events fire, orders are stopped). The only extra overrides are the target rule `0x6F14F350` (AI hint) and the effect spawn | LIKELY |
+| `ANht` | `CAbilityHowlOfTerror < CAbilityRoar` (`BNht`) | the mirror of Roar (`unit_spells::roar`): enemy air / ground units within `Area` of the caster lose `DataA` of their damage for the hero-rule duration. The buff base is the Roar one (damage fraction sink) | LIKELY |
+| `ANrf` | `CAbilityRainOfFire < CAbilityBlizzard` | static parent `AHbz` with order 852238; the editor fields are the Blizzard `HBZ1..6` set, so the wave engine of `human_heroes.rs` runs unchanged. `DataE` (5/10/15, only in the creep row) is not read | LIKELY |
+| `Arsk` / `ACrk` | `CAbilityResistantSkin < CAbilityPassive` | no behaviour of its own: its slots return constants (`0xCC` -> 0, `0x1A0` = the base "can act" test), so the ability is a marker that other code reads (Misc armor / spell resistance keys); attached through the alias layer only | CONFIRMED (overrides trivial) |
+
+Not done (reasons):
+
+* `Advc` / `ACdv` Devour: `CAbilityDevour < CargoLoad`, needs the cargo and digestion model (units inside a unit).
+* `Ashm` Shadow Meld: `CAbilityShadowMeld < CAbilityButton`, 21 overrides (button, order and night-time invisibility); the model has no invisibility state.
+* `Alit` Lightning Attack: `CAbility` (not Passive), the data are two fractions (0.25) and the effect slot only builds a lightning effect object (`0x6F134E40`); the damage rule is not decoded.
+* `ACad` creep Animate Dead: parent `AUan` is not modelled.
+* `ANto` Tornado (14 overrides, a summoned moving unit), `ANvc` Volcano (13 overrides, a building-like effect): each needs its own effect.
+* Hurl Boulder: no factory class carries that name (it is an attack / unit weapon, not a spell class).
+* Neutral heroes: Naga Sea Witch has Mana Shield (here), Tornado, Forked Lightning (`ANfl`, 2 overrides, not decoded) and Frost Arrows; Dark Ranger has Silence and Charm (here), Black Arrow (`ANba < FlamingArrows`) and Life Drain; Pit Lord has Rain of Fire, Howl of Terror, Cleaving Attack (here) and Doom (`ANdo`); Brewmaster, Beastmaster (summons `ANsg`/`ANsq`/`ANsw`, Stampede), Firelord (Incinerate `ANic < CleavingAttack`, Soul Burn, Lava Spawn, Volcano), Alchemist (Acid Bomb, Chemical Rage, Healing Spray, Transmute) and Tinker (Cluster Rockets, Robo-Goblin, Engineering Upgrade, Pocket Factory) remain NOT DONE.

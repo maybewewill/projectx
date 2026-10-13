@@ -1173,6 +1173,8 @@ impl Game {
             .unwrap_or_else(|| Box::new(PlaceholderDamage));
         let amount = model.native_hit(self, &hit);
         self.combat.damage = Some(model);
+        // Mana Shield (`neutral_spells.rs`) takes its share before the life.
+        let amount = self.neutral_absorb(target, amount);
         if arith::eq(amount, F32::ZERO) {
             return None;
         }
@@ -1247,6 +1249,8 @@ impl Game {
         };
         self.bash_clear(attacker);
         let mut all: Vec<ObjKey> = killed.into_iter().collect();
+        // Cleaving Attack (`neutral_spells.rs`): the area share of the hit.
+        all.extend(self.neutral_cleave(attacker, target, damage));
         all.extend(bash);
         all.append(&mut died);
         all
@@ -1262,6 +1266,7 @@ impl Game {
         if dead || removed || self.unit_is_invulnerable(target) {
             return None;
         }
+        let amount = self.neutral_absorb(target, amount);
         if arith::gt(amount, F32::ZERO) {
             self.wake_sleeping(target);
         }

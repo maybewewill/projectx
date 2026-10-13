@@ -644,6 +644,20 @@ fn count_move_owner(gm: &mut Game, k: ObjKey, to: u32) {
     gm.unit_mut(k).owner = to;
 }
 
+/// The owner change of `SetUnitOwner` for other systems (Charm): moves food and counters and queues the owner event.
+/// Returns the previous owner, `None` when the owner is already `to`. The caller fires the listeners
+/// ([`super::event::fire_owner_change`]).
+pub(crate) fn change_owner(gm: &mut Game, k: ObjKey, to: u32) -> Option<u32> {
+    let from = gm.unit(k).owner;
+    if from == to {
+        return None;
+    }
+    gm.food_move_owner(k, to);
+    count_move_owner(gm, k, to);
+    gm.push_unit_event(UnitEvent::OwnerChanged { unit: k, from, to });
+    Some(from)
+}
+
 /// Removes the unit for another system (the production model consumes a builder this way).
 pub(crate) fn remove_unit(gm: &mut Game, k: ObjKey) {
     remove(gm, k);

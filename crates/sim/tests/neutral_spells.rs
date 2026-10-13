@@ -26,6 +26,7 @@ native SetUnitState takes unit whichUnit, integer whichState, real newVal return
 native IssueTargetOrderById takes unit whichUnit, integer order, widget target returns boolean
 native IssueImmediateOrderById takes unit whichUnit, integer order returns boolean
 native IssueTargetOrder takes unit whichUnit, string order, widget target returns boolean
+native IssuePointOrderById takes unit whichUnit, integer order, real x, real y returns boolean
 "#;
 
 const SRC: &str = r#"
@@ -44,6 +45,22 @@ globals
     unit mid = null
     unit far = null
     unit ally = null
+    unit cleaver = null
+    unit cl_victim = null
+    unit cl_next = null
+    unit cl_far = null
+    unit cl_ally = null
+    unit shielded = null
+    unit attacker = null
+    unit cyc = null
+    unit cyc_tgt = null
+    unit silencer = null
+    unit charmer = null
+    unit charm_tgt = null
+    unit charm_big = null
+    unit howler = null
+    unit howl_tgt = null
+    unit rain = null
     boolean accepted = false
 endglobals
 function setup takes nothing returns nothing
@@ -90,6 +107,51 @@ endfunction
 function bash_it takes nothing returns nothing
     call IssueTargetOrder(pulv, "attack", near)
 endfunction
+function setup_s43 takes nothing returns nothing
+    set cleaver = CreateUnit(Player(0), 'ncle', 20000.0, 0.0, 0.0)
+    set cl_victim = CreateUnit(Player(1), 'ndmy', 20050.0, 0.0, 0.0)
+    set cl_next = CreateUnit(Player(1), 'ndmy', 20050.0, 120.0, 0.0)
+    set cl_far = CreateUnit(Player(1), 'ndmy', 20050.0, 600.0, 0.0)
+    set cl_ally = CreateUnit(Player(0), 'ndmy', 20050.0, -100.0, 0.0)
+    set shielded = CreateUnit(Player(0), 'nshl', 22000.0, 0.0, 0.0)
+    set attacker = CreateUnit(Player(1), 'natk', 22050.0, 0.0, 180.0)
+    set cyc = CreateUnit(Player(0), 'ncyc', 24000.0, 0.0, 0.0)
+    set cyc_tgt = CreateUnit(Player(1), 'ndmy', 24300.0, 0.0, 0.0)
+    set silencer = CreateUnit(Player(1), 'nsil', 500.0, 0.0, 0.0)
+    set charmer = CreateUnit(Player(0), 'nchr', 28000.0, 0.0, 0.0)
+    set charm_tgt = CreateUnit(Player(1), 'nlow', 28300.0, 0.0, 0.0)
+    set charm_big = CreateUnit(Player(1), 'nbig', 28300.0, 100.0, 0.0)
+    set howler = CreateUnit(Player(0), 'nhwl', 30000.0, 0.0, 0.0)
+    set howl_tgt = CreateUnit(Player(1), 'ndmy', 30200.0, 0.0, 0.0)
+    set rain = CreateUnit(Player(0), 'nrfp', 32000.0, 0.0, 0.0)
+endfunction
+function cleave_it takes nothing returns nothing
+    call IssueTargetOrder(cleaver, "attack", cl_victim)
+endfunction
+function shield_on takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shielded, 852589)
+endfunction
+function shield_off takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shielded, 852590)
+endfunction
+function hit_shielded takes nothing returns nothing
+    call IssueTargetOrder(attacker, "attack", shielded)
+endfunction
+function cyclone_it takes nothing returns nothing
+    set accepted = IssueTargetOrderById(cyc, 852144, cyc_tgt)
+endfunction
+function silence_it takes nothing returns nothing
+    set accepted = IssuePointOrderById(silencer, 852592, 0.0, 0.0)
+endfunction
+function charm_it takes nothing returns nothing
+    set accepted = IssueTargetOrderById(charmer, 852581, charm_tgt)
+endfunction
+function charm_big_it takes nothing returns nothing
+    set accepted = IssueTargetOrderById(charmer, 852581, charm_big)
+endfunction
+function howl_it takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(howler, 852588)
+endfunction
 "#;
 
 const FOOT: u32 = 0x6866_6F6F; // 'hfoo'
@@ -105,6 +167,18 @@ const CREEP_IMMUNITY: u32 = u32::from_be_bytes(*b"ACmi");
 const CREEP_VENOM: u32 = u32::from_be_bytes(*b"ACvs");
 const CREEP_PULVERIZE: u32 = u32::from_be_bytes(*b"ACpv");
 const CREEP_THUNDER_BOLT: u32 = u32::from_be_bytes(*b"ACtb");
+const CREEP_RAIN: u32 = u32::from_be_bytes(*b"ANrf");
+const DUMMY: u32 = u32::from_be_bytes(*b"ndmy");
+const CLEAVER: u32 = u32::from_be_bytes(*b"ncle");
+const SHIELDED: u32 = u32::from_be_bytes(*b"nshl");
+const ATTACKER: u32 = u32::from_be_bytes(*b"natk");
+const CYCLONER: u32 = u32::from_be_bytes(*b"ncyc");
+const SILENCER: u32 = u32::from_be_bytes(*b"nsil");
+const CHARMER: u32 = u32::from_be_bytes(*b"nchr");
+const HOWLER: u32 = u32::from_be_bytes(*b"nhwl");
+const RAINER: u32 = u32::from_be_bytes(*b"nrfp");
+const LOW: u32 = u32::from_be_bytes(*b"nlow");
+const BIG: u32 = u32::from_be_bytes(*b"nbig");
 
 fn f(v: f32) -> F32 {
     F32::from_bits(v.to_bits())
@@ -148,7 +222,25 @@ fn host() -> ScriptHost {
         ] {
             g.unit_types_mut().insert(id, ut("unit", 500.0, ab));
         }
-        for id in [FOOT, SPEAR, PULV] {
+        for (id, ab, life) in [
+            (DUMMY, vec![], 500.0),
+            (CLEAVER, vec![sim::neutral_spells::CLEAVE], 500.0),
+            (SHIELDED, vec![sim::neutral_spells::MANA_SHIELD], 500.0),
+            (ATTACKER, vec![], 500.0),
+            (CYCLONER, vec![sim::neutral_spells::CYCLONE], 500.0),
+            (SILENCER, vec![sim::neutral_spells::SILENCE], 500.0),
+            (CHARMER, vec![sim::neutral_spells::CHARM], 500.0),
+            (HOWLER, vec![sim::neutral_spells::HOWL], 500.0),
+            (RAINER, vec![CREEP_RAIN], 500.0),
+        ] {
+            g.unit_types_mut().insert(id, ut("unit", life, ab));
+        }
+        for (id, level) in [(LOW, 2), (BIG, 9)] {
+            let mut t = ut("unit", 500.0, vec![]);
+            t.level = level;
+            g.unit_types_mut().insert(id, t);
+        }
+        for id in [FOOT, SPEAR, PULV, CLEAVER, ATTACKER] {
             g.set_type_orders(id, TypeOrderData { abilities: vec![AbilityKind::Move, AbilityKind::Attack] });
             g.set_attack_type(
                 id,
@@ -197,7 +289,46 @@ fn host() -> ScriptHost {
             CREEP_PULVERIZE,
             vec![SpellLevel { data: data(&[100.0, 40.0, 150.0, 250.0]), ..Default::default() }],
         );
-        for id in [CREEP_BLOODLUST, NEUTRAL_HEAL, CREEP_IMMUNITY, CREEP_THUNDER_BOLT, CREEP_VENOM, CREEP_PULVERIZE] {
+        g.set_spell_alias(CREEP_RAIN, sim::human_heroes::BLIZZARD);
+        g.set_spell_levels(
+            sim::neutral_spells::CLEAVE,
+            vec![SpellLevel { area: f(200.0), data: data(&[0.5]), ..Default::default() }],
+        );
+        g.set_spell_levels(
+            sim::neutral_spells::MANA_SHIELD,
+            vec![SpellLevel { cost: 25, cool: f(1.0), data: data(&[2.0, 1.0]), ..Default::default() }],
+        );
+        g.set_spell_levels(
+            sim::neutral_spells::CYCLONE,
+            vec![SpellLevel { cost: 50, cool: f(1.0), dur: f(5.0), hero_dur: f(3.0), rng: f(600.0), ..Default::default() }],
+        );
+        g.set_spell_levels(
+            sim::neutral_spells::SILENCE,
+            vec![SpellLevel { cost: 50, cool: f(1.0), dur: f(10.0), hero_dur: f(5.0), area: f(300.0), rng: f(900.0), ..Default::default() }],
+        );
+        g.set_spell_levels(
+            sim::neutral_spells::CHARM,
+            vec![SpellLevel { cost: 50, cool: f(1.0), rng: f(700.0), data: data(&[5.0]), ..Default::default() }],
+        );
+        g.set_spell_levels(
+            sim::neutral_spells::HOWL,
+            vec![SpellLevel { cost: 50, cool: f(1.0), dur: f(15.0), hero_dur: f(15.0), area: f(500.0), data: data(&[0.4]), ..Default::default() }],
+        );
+        for id in [
+            CREEP_BLOODLUST,
+            NEUTRAL_HEAL,
+            CREEP_IMMUNITY,
+            CREEP_THUNDER_BOLT,
+            CREEP_VENOM,
+            CREEP_PULVERIZE,
+            sim::neutral_spells::CLEAVE,
+            sim::neutral_spells::MANA_SHIELD,
+            sim::neutral_spells::CYCLONE,
+            sim::neutral_spells::SILENCE,
+            sim::neutral_spells::CHARM,
+            sim::neutral_spells::HOWL,
+            CREEP_RAIN,
+        ] {
             g.ability_types_mut().insert(id, AbilityType { max_level: Some(1) });
         }
     }
@@ -374,4 +505,111 @@ fn the_static_parents_name_modelled_abilities() {
     assert_eq!(standard_for_group(u32::from_be_bytes(*b"Zzzz"), &[u32::from_be_bytes(*b"Zzzz")]), None);
     assert!(is_item_row(u32::from_be_bytes(*b"AIcl")));
     assert!(!is_item_row(u32::from_be_bytes(*b"ACcl")));
+}
+
+fn started_s43() -> ScriptHost {
+    let mut h = started();
+    h.start("setup_s43", &[]).expect("setup_s43");
+    h.step();
+    h
+}
+
+#[test]
+fn cleaving_attack_hits_the_enemies_around_the_target_with_a_share_of_the_damage() {
+    let mut h = started_s43();
+    let (victim, next, far, ally, cleaver) =
+        (unit(&h, "cl_victim"), unit(&h, "cl_next"), unit(&h, "cl_far"), unit(&h, "cl_ally"), unit(&h, "cleaver"));
+    h.start("cleave_it", &[]).expect("attack");
+    run(&mut h, 14);
+    let hit = 500.0 - life(&h, victim);
+    assert!(hit > 0.0, "the main target was hit");
+    let side = 500.0 - life(&h, next);
+    assert!(side > 0.0, "the unit beside the target took the cleave");
+    assert!((side - 0.5 * hit).abs() < 1e-3, "DataA 0.5 of the damage: {side} vs {hit}");
+    assert_eq!(life(&h, far), 500.0, "outside the area");
+    assert_eq!(life(&h, ally), 500.0, "allies are not cleaved");
+    assert_eq!(life(&h, cleaver), 500.0);
+}
+
+#[test]
+fn mana_shield_pays_damage_with_mana_until_it_is_switched_off() {
+    let mut h = started_s43();
+    let (shielded, _attacker) = (unit(&h, "shielded"), unit(&h, "attacker"));
+    h.start("shield_on", &[]).expect("on");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, shielded, sim::neutral_spells::BUFF_MANA_SHIELD));
+    assert_eq!(h.game().unit(shielded).mana.to_f32(), 275.0, "cost 25");
+    h.start("hit_shielded", &[]).expect("hit");
+    run(&mut h, 12);
+    assert_eq!(life(&h, shielded), 500.0, "the shield takes all the damage");
+    let mana = h.game().unit(shielded).mana.to_f32();
+    assert!(mana < 275.0, "damage 10 per hit costs 5 mana at 2 damage per mana point: {mana}");
+    h.start("shield_off", &[]).expect("off");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(!has_buff(&h, shielded, sim::neutral_spells::BUFF_MANA_SHIELD));
+    run(&mut h, 20);
+    assert!(life(&h, shielded) < 500.0, "without the shield the damage reaches the life");
+}
+
+#[test]
+fn cyclone_disables_and_protects_the_target_for_the_duration() {
+    let mut h = started_s43();
+    let target = unit(&h, "cyc_tgt");
+    h.start("cyclone_it", &[]).expect("cyclone");
+    run(&mut h, 20);
+    assert!(accepted(&h));
+    assert!(h.game().is_stunned(target), "cannot act");
+    assert!(h.game().unit_is_invulnerable(target), "cannot be hurt");
+    run(&mut h, 60);
+    assert!(!h.game().is_stunned(target));
+    assert!(!h.game().unit_is_invulnerable(target));
+}
+
+#[test]
+fn silence_stops_spell_casting_in_the_area() {
+    let mut h = started_s43();
+    let shaman = unit(&h, "shaman");
+    h.start("silence_it", &[]).expect("silence");
+    run(&mut h, 10);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, shaman, sim::neutral_spells::BUFF_SILENCE));
+    assert!(h.game().is_silenced(shaman));
+    h.start("lust", &[]).expect("lust");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "a silenced caster cannot start a spell");
+    run(&mut h, 120);
+    assert!(!h.game().is_silenced(shaman), "Dur 10 s");
+}
+
+#[test]
+fn charm_takes_a_creep_of_a_low_enough_level() {
+    let mut h = started_s43();
+    let (low, big) = (unit(&h, "charm_tgt"), unit(&h, "charm_big"));
+    h.start("charm_big_it", &[]).expect("charm big");
+    run(&mut h, 5);
+    assert!(!accepted(&h), "level 9 is above DataA 5");
+    assert_eq!(h.game().unit(big).owner, 1);
+    h.start("charm_it", &[]).expect("charm");
+    run(&mut h, 20);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(low).owner, 0, "changed owner");
+}
+
+#[test]
+fn howl_of_terror_weakens_the_enemies_around_the_caster() {
+    let mut h = started_s43();
+    let tgt = unit(&h, "howl_tgt");
+    h.start("howl_it", &[]).expect("howl");
+    run(&mut h, 2);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, tgt, sim::neutral_spells::BUFF_HOWL));
+}
+
+#[test]
+fn rain_of_fire_is_blizzard_with_the_pit_lord_order() {
+    let h = started_s43();
+    let rain = unit(&h, "rain");
+    assert_eq!(h.game().spell_for_order(rain, 852_238), Some(sim::human_heroes::BLIZZARD));
 }
