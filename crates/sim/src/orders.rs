@@ -74,28 +74,14 @@ pub const NOTE_QUEUED: u32 = 0x000D_02A5;
 /// Internal notification: started or cleared (`0xD02A6`).
 pub const NOTE_STARTED_OR_CLEARED: u32 = 0x000D_02A6;
 
-/// Named order ids (CONFIRMED names in the registration table, orders.md section 1; the other ids of
-/// that table are not named in the spec and are left out).
-pub const NAMED_ORDERS: &[(&str, u32)] = &[
-    ("stop", 0x000D_0004),
-    ("smart", 0x000D_0003),
-    ("move", 0x000D_0012),
-    ("attack", 0x000D_000F),
-    ("AImove", 0x000D_0014),
-    ("patrol", 0x000D_0016),
-    ("holdposition", 0x000D_0019),
-    ("setrally", 0x000D_000C),
-    ("getitem", 0x000D_000D),
-    ("attackground", 0x000D_0010),
-    ("attackonce", 0x000D_0011),
-    ("harvest", 0x000D_0032),
-];
+mod names;
+pub use names::NAMED_ORDERS;
 
-/// The id of an order name (exact, case-sensitive: UNVERIFIED against the original's matching).
+/// Original ASCII names match without case: Storm hash ordinal 590 folds case and ordinal 509 calls `_strnicmp`.
 pub fn order_id_by_name(name: &str) -> Option<u32> {
     NAMED_ORDERS
         .iter()
-        .find(|(n, _)| *n == name)
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
         .map(|&(_, id)| id)
 }
 

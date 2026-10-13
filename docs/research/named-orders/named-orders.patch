@@ -1,0 +1,458 @@
+diff --git a/crates/sim/src/orders.rs b/crates/sim/src/orders.rs
+index 159d308..f8b781d 100644
+--- a/crates/sim/src/orders.rs
++++ b/crates/sim/src/orders.rs
+@@ -74,28 +74,14 @@ pub const NOTE_QUEUED: u32 = 0x000D_02A5;
+ /// Internal notification: started or cleared (`0xD02A6`).
+ pub const NOTE_STARTED_OR_CLEARED: u32 = 0x000D_02A6;
+ 
+-/// Named order ids (CONFIRMED names in the registration table, orders.md section 1; the other ids of
+-/// that table are not named in the spec and are left out).
+-pub const NAMED_ORDERS: &[(&str, u32)] = &[
+-    ("stop", 0x000D_0004),
+-    ("smart", 0x000D_0003),
+-    ("move", 0x000D_0012),
+-    ("attack", 0x000D_000F),
+-    ("AImove", 0x000D_0014),
+-    ("patrol", 0x000D_0016),
+-    ("holdposition", 0x000D_0019),
+-    ("setrally", 0x000D_000C),
+-    ("getitem", 0x000D_000D),
+-    ("attackground", 0x000D_0010),
+-    ("attackonce", 0x000D_0011),
+-    ("harvest", 0x000D_0032),
+-];
+-
+-/// The id of an order name (exact, case-sensitive: UNVERIFIED against the original's matching).
++mod names;
++pub use names::NAMED_ORDERS;
++
++/// Original ASCII names match without case: Storm hash ordinal 590 folds case and ordinal 509 calls `_strnicmp`.
+ pub fn order_id_by_name(name: &str) -> Option<u32> {
+     NAMED_ORDERS
+         .iter()
+-        .find(|(n, _)| *n == name)
++        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+         .map(|&(_, id)| id)
+ }
+ 
+diff --git a/crates/sim/src/orders/names.rs b/crates/sim/src/orders/names.rs
+new file mode 100644
+index 0000000..7c6f6c1
+--- /dev/null
++++ b/crates/sim/src/orders/names.rs
+@@ -0,0 +1,353 @@
++//! Derived order name/id registrations from the user's Game.dll 1.26a.
++//! Regenerate with tools/analysis/named_orders.py; original initializer executed in Unicorn.
++
++pub const NAMED_ORDERS: &[(&str, u32)] = &[
++    ("smart", 851_971),
++    ("stop", 851_972),
++    ("setrally", 851_980),
++    ("getitem", 851_981),
++    ("attack", 851_983),
++    ("attackground", 851_984),
++    ("attackonce", 851_985),
++    ("move", 851_986),
++    ("AImove", 851_988),
++    ("patrol", 851_990),
++    ("holdposition", 851_993),
++    ("build", 851_994),
++    ("humanbuild", 851_995),
++    ("orcbuild", 851_996),
++    ("nightelfbuild", 851_997),
++    ("undeadbuild", 851_998),
++    ("resumebuild", 851_999),
++    ("dropitem", 852_001),
++    ("detectaoe", 852_015),
++    ("resumeharvesting", 852_017),
++    ("harvest", 852_018),
++    ("returnresources", 852_020),
++    ("autoharvestgold", 852_021),
++    ("autoharvestlumber", 852_022),
++    ("neutraldetectaoe", 852_023),
++    ("repair", 852_024),
++    ("repairon", 852_025),
++    ("repairoff", 852_026),
++    ("revive", 852_039),
++    ("selfdestruct", 852_040),
++    ("selfdestructon", 852_041),
++    ("selfdestructoff", 852_042),
++    ("board", 852_043),
++    ("forceboard", 852_044),
++    ("load", 852_046),
++    ("unload", 852_047),
++    ("unloadall", 852_048),
++    ("unloadallinstant", 852_049),
++    ("loadcorpse", 852_050),
++    ("loadcorpseinstant", 852_053),
++    ("unloadallcorpses", 852_054),
++    ("defend", 852_055),
++    ("undefend", 852_056),
++    ("dispel", 852_057),
++    ("flare", 852_060),
++    ("heal", 852_063),
++    ("healon", 852_064),
++    ("healoff", 852_065),
++    ("innerfire", 852_066),
++    ("innerfireon", 852_067),
++    ("innerfireoff", 852_068),
++    ("invisibility", 852_069),
++    ("militiaconvert", 852_071),
++    ("militia", 852_072),
++    ("militiaoff", 852_073),
++    ("polymorph", 852_074),
++    ("slow", 852_075),
++    ("slowon", 852_076),
++    ("slowoff", 852_077),
++    ("tankdroppilot", 852_079),
++    ("tankloadpilot", 852_080),
++    ("tankpilot", 852_081),
++    ("townbellon", 852_082),
++    ("townbelloff", 852_083),
++    ("avatar", 852_086),
++    ("unavatar", 852_087),
++    ("blizzard", 852_089),
++    ("divineshield", 852_090),
++    ("undivineshield", 852_091),
++    ("holybolt", 852_092),
++    ("massteleport", 852_093),
++    ("resurrection", 852_094),
++    ("thunderbolt", 852_095),
++    ("thunderclap", 852_096),
++    ("waterelemental", 852_097),
++    ("battlestations", 852_099),
++    ("berserk", 852_100),
++    ("bloodlust", 852_101),
++    ("bloodluston", 852_102),
++    ("bloodlustoff", 852_103),
++    ("devour", 852_104),
++    ("evileye", 852_105),
++    ("ensnare", 852_106),
++    ("ensnareon", 852_107),
++    ("ensnareoff", 852_108),
++    ("healingward", 852_109),
++    ("lightningshield", 852_110),
++    ("purge", 852_111),
++    ("standdown", 852_113),
++    ("stasistrap", 852_114),
++    ("chainlightning", 852_119),
++    ("earthquake", 852_121),
++    ("farsight", 852_122),
++    ("mirrorimage", 852_123),
++    ("shockwave", 852_125),
++    ("spiritwolf", 852_126),
++    ("stomp", 852_127),
++    ("whirlwind", 852_128),
++    ("windwalk", 852_129),
++    ("unwindwalk", 852_130),
++    ("ambush", 852_131),
++    ("autodispel", 852_132),
++    ("autodispelon", 852_133),
++    ("autodispeloff", 852_134),
++    ("barkskin", 852_135),
++    ("barkskinon", 852_136),
++    ("barkskinoff", 852_137),
++    ("bearform", 852_138),
++    ("unbearform", 852_139),
++    ("corrosivebreath", 852_140),
++    ("loadarcher", 852_142),
++    ("mounthippogryph", 852_143),
++    ("cyclone", 852_144),
++    ("detonate", 852_145),
++    ("eattree", 852_146),
++    ("entangle", 852_147),
++    ("entangleinstant", 852_148),
++    ("faeriefire", 852_149),
++    ("faeriefireon", 852_150),
++    ("faeriefireoff", 852_151),
++    ("ravenform", 852_155),
++    ("unravenform", 852_156),
++    ("recharge", 852_157),
++    ("rechargeon", 852_158),
++    ("rechargeoff", 852_159),
++    ("rejuvination", 852_160),
++    ("renew", 852_161),
++    ("renewon", 852_162),
++    ("renewoff", 852_163),
++    ("roar", 852_164),
++    ("root", 852_165),
++    ("unroot", 852_166),
++    ("entanglingroots", 852_171),
++    ("flamingarrowstarg", 852_173),
++    ("flamingarrows", 852_174),
++    ("unflamingarrows", 852_175),
++    ("forceofnature", 852_176),
++    ("immolation", 852_177),
++    ("unimmolation", 852_178),
++    ("manaburn", 852_179),
++    ("metamorphosis", 852_180),
++    ("scout", 852_181),
++    ("sentinel", 852_182),
++    ("starfall", 852_183),
++    ("tranquility", 852_184),
++    ("acolyteharvest", 852_185),
++    ("antimagicshell", 852_186),
++    ("blight", 852_187),
++    ("cannibalize", 852_188),
++    ("cripple", 852_189),
++    ("curse", 852_190),
++    ("curseon", 852_191),
++    ("curseoff", 852_192),
++    ("freezingbreath", 852_195),
++    ("possession", 852_196),
++    ("raisedead", 852_197),
++    ("raisedeadon", 852_198),
++    ("raisedeadoff", 852_199),
++    ("instant", 852_200),
++    ("requestsacrifice", 852_201),
++    ("restoration", 852_202),
++    ("restorationon", 852_203),
++    ("restorationoff", 852_204),
++    ("sacrifice", 852_205),
++    ("stoneform", 852_206),
++    ("unstoneform", 852_207),
++    ("unholyfrenzy", 852_209),
++    ("unsummon", 852_210),
++    ("web", 852_211),
++    ("webon", 852_212),
++    ("weboff", 852_213),
++    ("wispharvest", 852_214),
++    ("auraunholy", 852_215),
++    ("auravampiric", 852_216),
++    ("animatedead", 852_217),
++    ("carrionswarm", 852_218),
++    ("darkritual", 852_219),
++    ("darksummoning", 852_220),
++    ("deathanddecay", 852_221),
++    ("deathcoil", 852_222),
++    ("deathpact", 852_223),
++    ("dreadlordinferno", 852_224),
++    ("frostarmor", 852_225),
++    ("frostnova", 852_226),
++    ("sleep", 852_227),
++    ("darkconversion", 852_228),
++    ("darkportal", 852_229),
++    ("fingerofdeath", 852_230),
++    ("firebolt", 852_231),
++    ("inferno", 852_232),
++    ("gold2lumber", 852_233),
++    ("lumber2gold", 852_234),
++    ("spies", 852_235),
++    ("rainofchaos", 852_237),
++    ("rainoffire", 852_238),
++    ("request_hero", 852_239),
++    ("disassociate", 852_240),
++    ("revenge", 852_241),
++    ("soulpreservation", 852_242),
++    ("coldarrowstarg", 852_243),
++    ("coldarrows", 852_244),
++    ("uncoldarrows", 852_245),
++    ("creepanimatedead", 852_246),
++    ("creepdevour", 852_247),
++    ("creepheal", 852_248),
++    ("creephealon", 852_249),
++    ("creephealoff", 852_250),
++    ("creepthunderbolt", 852_252),
++    ("creepthunderclap", 852_253),
++    ("poisonarrowstarg", 852_254),
++    ("poisonarrows", 852_255),
++    ("unpoisonarrows", 852_256),
++    ("frostarmoron", 852_458),
++    ("frostarmoroff", 852_459),
++    ("awaken", 852_466),
++    ("nagabuild", 852_467),
++    ("mount", 852_469),
++    ("dismount", 852_470),
++    ("cloudoffog", 852_473),
++    ("controlmagic", 852_474),
++    ("magicdefense", 852_478),
++    ("magicundefense", 852_479),
++    ("magicleash", 852_480),
++    ("phoenixfire", 852_481),
++    ("phoenixmorph", 852_482),
++    ("spellsteal", 852_483),
++    ("spellstealon", 852_484),
++    ("spellstealoff", 852_485),
++    ("banish", 852_486),
++    ("drain", 852_487),
++    ("flamestrike", 852_488),
++    ("summonphoenix", 852_489),
++    ("ancestralspirit", 852_490),
++    ("ancestralspirittarget", 852_491),
++    ("corporealform", 852_493),
++    ("uncorporealform", 852_494),
++    ("disenchant", 852_495),
++    ("etherealform", 852_496),
++    ("unetherealform", 852_497),
++    ("spiritlink", 852_499),
++    ("unstableconcoction", 852_500),
++    ("healingwave", 852_501),
++    ("hex", 852_502),
++    ("voodoo", 852_503),
++    ("ward", 852_504),
++    ("autoentangle", 852_505),
++    ("autoentangleinstant", 852_506),
++    ("coupletarget", 852_507),
++    ("coupleinstant", 852_508),
++    ("decouple", 852_509),
++    ("grabtree", 852_511),
++    ("manaflareon", 852_512),
++    ("manaflareoff", 852_513),
++    ("phaseshift", 852_514),
++    ("phaseshifton", 852_515),
++    ("phaseshiftoff", 852_516),
++    ("phaseshiftinstant", 852_517),
++    ("taunt", 852_520),
++    ("vengeance", 852_521),
++    ("vengeanceon", 852_522),
++    ("vengeanceoff", 852_523),
++    ("vengeanceinstant", 852_524),
++    ("blink", 852_525),
++    ("fanofknives", 852_526),
++    ("shadowstrike", 852_527),
++    ("spiritofvengeance", 852_528),
++    ("absorb", 852_529),
++    ("avengerform", 852_531),
++    ("unavengerform", 852_532),
++    ("burrow", 852_533),
++    ("unburrow", 852_534),
++    ("devourmagic", 852_536),
++    ("flamingattacktarg", 852_539),
++    ("flamingattack", 852_540),
++    ("unflamingattack", 852_541),
++    ("replenish", 852_542),
++    ("replenishon", 852_543),
++    ("replenishoff", 852_544),
++    ("replenishlife", 852_545),
++    ("replenishlifeon", 852_546),
++    ("replenishlifeoff", 852_547),
++    ("replenishmana", 852_548),
++    ("replenishmanaon", 852_549),
++    ("replenishmanaoff", 852_550),
++    ("carrionscarabs", 852_551),
++    ("carrionscarabson", 852_552),
++    ("carrionscarabsoff", 852_553),
++    ("carrionscarabsinstant", 852_554),
++    ("impale", 852_555),
++    ("locustswarm", 852_556),
++    ("breathoffrost", 852_560),
++    ("frenzy", 852_561),
++    ("frenzyon", 852_562),
++    ("frenzyoff", 852_563),
++    ("mechanicalcritter", 852_564),
++    ("mindrot", 852_565),
++    ("neutralinteract", 852_566),
++    ("preservation", 852_568),
++    ("sanctuary", 852_569),
++    ("shadowsight", 852_570),
++    ("spellshield", 852_571),
++    ("spellshieldaoe", 852_572),
++    ("spirittroll", 852_573),
++    ("steal", 852_574),
++    ("attributemodskill", 852_576),
++    ("blackarrow", 852_577),
++    ("blackarrowon", 852_578),
++    ("blackarrowoff", 852_579),
++    ("breathoffire", 852_580),
++    ("charm", 852_581),
++    ("doom", 852_583),
++    ("drunkenhaze", 852_585),
++    ("elementalfury", 852_586),
++    ("forkedlightning", 852_587),
++    ("howlofterror", 852_588),
++    ("manashieldon", 852_589),
++    ("manashieldoff", 852_590),
++    ("monsoon", 852_591),
++    ("silence", 852_592),
++    ("stampede", 852_593),
++    ("summongrizzly", 852_594),
++    ("summonquillbeast", 852_595),
++    ("summonwareagle", 852_596),
++    ("tornado", 852_597),
++    ("wateryminion", 852_598),
++    ("battleroar", 852_599),
++    ("channel", 852_600),
++    ("parasite", 852_601),
++    ("parasiteon", 852_602),
++    ("parasiteoff", 852_603),
++    ("submerge", 852_604),
++    ("unsubmerge", 852_605),
++    ("neutralspell", 852_630),
++    ("militiaunconvert", 852_651),
++    ("clusterrockets", 852_652),
++    ("robogoblin", 852_656),
++    ("unrobogoblin", 852_657),
++    ("summonfactory", 852_658),
++    ("acidbomb", 852_662),
++    ("chemicalrage", 852_663),
++    ("healingspray", 852_664),
++    ("transmute", 852_665),
++    ("lavamonster", 852_667),
++    ("soulburn", 852_668),
++    ("volcano", 852_669),
++    ("incineratearrow", 852_670),
++    ("incineratearrowon", 852_671),
++    ("incineratearrowoff", 852_672),
++];
+diff --git a/crates/sim/tests/order_natives.rs b/crates/sim/tests/order_natives.rs
+index 7bb67eb..70a5813 100644
+--- a/crates/sim/tests/order_natives.rs
++++ b/crates/sim/tests/order_natives.rs
+@@ -210,9 +210,14 @@ function Main takes nothing returns nothing
+   set gOk = OrderId("move") == $D0012 and OrderId("attack") == $D000F and OrderId("stop") == $D0004
+   set gOk = gOk and OrderId("smart") == $D0003 and OrderId("AImove") == $D0014
+   set gOk = gOk and OrderId("patrol") == $D0016 and OrderId("holdposition") == $D0019
++  set gOk = gOk and OrderId("holybolt") == 852092 and OrderId("thunderbolt") == 852095
++  set gOk = gOk and OrderId("HolyBolt") == 852092 and OrderId("AIMOVE") == $D0014
++  set gOk = gOk and OrderId("heal") == 852063 and OrderId("bloodlust") == 852101
++  set gOk = gOk and OrderId("holy bolt") == 0 and OrderId(" holybolt") == 0
+   set gOk = gOk and OrderId("nosuchorder") == 0
+   set gOk = gOk and OrderId2String($D0003) == "smart" and OrderId2String($D0012) == "move"
+   set gOk = gOk and OrderId2String($D0014) == "AImove" and OrderId2String(12345) == ""
++  set gOk = gOk and OrderId2String(852092) == "holybolt" and OrderId2String(852091) == "undivineshield"
+ endfunction
+ "#;
+     let mut host = host_for(src);
+diff --git a/crates/sim/tests/spell_cast.rs b/crates/sim/tests/spell_cast.rs
+index 0986316..8e3633f 100644
+--- a/crates/sim/tests/spell_cast.rs
++++ b/crates/sim/tests/spell_cast.rs
+@@ -30,6 +30,7 @@ native UnitAddAbility takes unit whichUnit, integer abilityId returns boolean
+ native SetUnitState takes unit whichUnit, integer whichState, real newVal returns nothing
+ native SetWidgetLife takes widget wid, real newLife returns nothing
+ native IssueTargetOrderById takes unit whichUnit, integer order, widget target returns boolean
++native IssueTargetOrder takes unit whichUnit, string order, widget target returns boolean
+ native UnitResetCooldown takes unit whichUnit returns nothing
+ native CreateTrigger takes nothing returns trigger
+ native TriggerAddAction takes trigger t, code c returns triggeraction
+@@ -109,6 +110,9 @@ endfunction
+ function holy_ally takes nothing returns nothing
+     set accepted = IssueTargetOrderById(caster, 852092, ally)
+ endfunction
++function holy_ally_by_name takes nothing returns nothing
++    set accepted = IssueTargetOrder(caster, "holybolt", ally)
++endfunction
+ function holy_tgt takes nothing returns nothing
+     set accepted = IssueTargetOrderById(caster, 852092, tgt)
+ endfunction
+@@ -339,6 +343,19 @@ fn holy_light_heals_an_ally_and_clamps_at_max_life() {
+     assert!(h.game().is_cooling(c, HOLY_LIGHT));
+ }
+ 
++#[test]
++fn holy_light_casts_through_the_string_order_native() {
++    let mut h = host();
++    let (c, a) = (unit(&h, "caster"), unit(&h, "ally"));
++    h.game_mut().write_life(a, f(400.0));
++    call(&mut h, "holy_ally_by_name");
++    run(&mut h, 1);
++    assert!(accepted(&h));
++    assert_eq!(life(&h, a), 500.0);
++    assert_eq!(mana(&h, c), 135.0);
++    assert!(h.game().is_cooling(c, HOLY_LIGHT));
++}
++
+ #[test]
+ fn holy_light_hurts_enemy_undead_for_half_and_ignores_living_enemies() {
+     let mut h = host();

@@ -30,6 +30,7 @@ native UnitAddAbility takes unit whichUnit, integer abilityId returns boolean
 native SetUnitState takes unit whichUnit, integer whichState, real newVal returns nothing
 native SetWidgetLife takes widget wid, real newLife returns nothing
 native IssueTargetOrderById takes unit whichUnit, integer order, widget target returns boolean
+native IssueTargetOrder takes unit whichUnit, string order, widget target returns boolean
 native UnitResetCooldown takes unit whichUnit returns nothing
 native CreateTrigger takes nothing returns trigger
 native TriggerAddAction takes trigger t, code c returns triggeraction
@@ -108,6 +109,9 @@ function bolt_ally takes nothing returns nothing
 endfunction
 function holy_ally takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852092, ally)
+endfunction
+function holy_ally_by_name takes nothing returns nothing
+    set accepted = IssueTargetOrder(caster, "holybolt", ally)
 endfunction
 function holy_tgt takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852092, tgt)
@@ -335,6 +339,19 @@ fn holy_light_heals_an_ally_and_clamps_at_max_life() {
     run(&mut h, 1);
     assert!(accepted(&h));
     assert_eq!(life(&h, a), 500.0, "400 + 200 clamped to the 500 maximum");
+    assert_eq!(mana(&h, c), 135.0);
+    assert!(h.game().is_cooling(c, HOLY_LIGHT));
+}
+
+#[test]
+fn holy_light_casts_through_the_string_order_native() {
+    let mut h = host();
+    let (c, a) = (unit(&h, "caster"), unit(&h, "ally"));
+    h.game_mut().write_life(a, f(400.0));
+    call(&mut h, "holy_ally_by_name");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(life(&h, a), 500.0);
     assert_eq!(mana(&h, c), 135.0);
     assert!(h.game().is_cooling(c, HOLY_LIGHT));
 }

@@ -210,9 +210,14 @@ function Main takes nothing returns nothing
   set gOk = OrderId("move") == $D0012 and OrderId("attack") == $D000F and OrderId("stop") == $D0004
   set gOk = gOk and OrderId("smart") == $D0003 and OrderId("AImove") == $D0014
   set gOk = gOk and OrderId("patrol") == $D0016 and OrderId("holdposition") == $D0019
+  set gOk = gOk and OrderId("holybolt") == 852092 and OrderId("thunderbolt") == 852095
+  set gOk = gOk and OrderId("HolyBolt") == 852092 and OrderId("AIMOVE") == $D0014
+  set gOk = gOk and OrderId("heal") == 852063 and OrderId("bloodlust") == 852101
+  set gOk = gOk and OrderId("holy bolt") == 0 and OrderId(" holybolt") == 0
   set gOk = gOk and OrderId("nosuchorder") == 0
   set gOk = gOk and OrderId2String($D0003) == "smart" and OrderId2String($D0012) == "move"
   set gOk = gOk and OrderId2String($D0014) == "AImove" and OrderId2String(12345) == ""
+  set gOk = gOk and OrderId2String(852092) == "holybolt" and OrderId2String(852091) == "undivineshield"
 endfunction
 "#;
     let mut host = host_for(src);

@@ -1,0 +1,4194 @@
+{
+  "dll_sha256": "6d21bd9a0f9fbc8446f455c9e89ac994fed68174426fe608fcb9baefd4dec53c",
+  "summary": {
+    "captured_registrations": 349,
+    "unique_names_and_ids": 348,
+    "identical_duplicate_registrations": 1
+  },
+  "orders": [
+    {
+      "name": "smart",
+      "id": 851971,
+      "call_site": "0x6f3b07b7",
+      "string_address": "0x6f932b50"
+    },
+    {
+      "name": "stop",
+      "id": 851972,
+      "call_site": "0x6f229cff",
+      "string_address": "0x6f92b9b0"
+    },
+    {
+      "name": "setrally",
+      "id": 851980,
+      "call_site": "0x6f229cee",
+      "string_address": "0x6f92b9b8"
+    },
+    {
+      "name": "getitem",
+      "id": 851981,
+      "call_site": "0x6f229b45",
+      "string_address": "0x6f92bb10"
+    },
+    {
+      "name": "attack",
+      "id": 851983,
+      "call_site": "0x6f229a13",
+      "string_address": "0x6f92bbd8"
+    },
+    {
+      "name": "attackground",
+      "id": 851984,
+      "call_site": "0x6f229a24",
+      "string_address": "0x6f92bbc8"
+    },
+    {
+      "name": "attackonce",
+      "id": 851985,
+      "call_site": "0x6f229a35",
+      "string_address": "0x6f92bbbc"
+    },
+    {
+      "name": "move",
+      "id": 851986,
+      "call_site": "0x6f229a57",
+      "string_address": "0x6f92bbac"
+    },
+    {
+      "name": "AImove",
+      "id": 851988,
+      "call_site": "0x6f229a68",
+      "string_address": "0x6f92bba4"
+    },
+    {
+      "name": "patrol",
+      "id": 851990,
+      "call_site": "0x6f229a79",
+      "string_address": "0x6f92bb9c"
+    },
+    {
+      "name": "holdposition",
+      "id": 851993,
+      "call_site": "0x6f229a8a",
+      "string_address": "0x6f92bb8c"
+    },
+    {
+      "name": "build",
+      "id": 851994,
+      "call_site": "0x6f229a9b",
+      "string_address": "0x6f92bb84"
+    },
+    {
+      "name": "humanbuild",
+      "id": 851995,
+      "call_site": "0x6f229aac",
+      "string_address": "0x6f92bb78"
+    },
+    {
+      "name": "orcbuild",
+      "id": 851996,
+      "call_site": "0x6f229abd",
+      "string_address": "0x6f92bb6c"
+    },
+    {
+      "name": "nightelfbuild",
+      "id": 851997,
+      "call_site": "0x6f229ace",
+      "string_address": "0x6f92bb5c"
+    },
+    {
+      "name": "undeadbuild",
+      "id": 851998,
+      "call_site": "0x6f229adf",
+      "string_address": "0x6f92bb50"
+    },
+    {
+      "name": "resumebuild",
+      "id": 851999,
+      "call_site": "0x6f229b01",
+      "string_address": "0x6f92bb38"
+    },
+    {
+      "name": "dropitem",
+      "id": 852001,
+      "call_site": "0x6f229b12",
+      "string_address": "0x6f92bb2c"
+    },
+    {
+      "name": "detectaoe",
+      "id": 852015,
+      "call_site": "0x6f229b34",
+      "string_address": "0x6f92bb18"
+    },
+    {
+      "name": "resumeharvesting",
+      "id": 852017,
+      "call_site": "0x6f229b89",
+      "string_address": "0x6f92bad0"
+    },
+    {
+      "name": "harvest",
+      "id": 852018,
+      "call_site": "0x6f229b56",
+      "string_address": "0x6f92bb08"
+    },
+    {
+      "name": "returnresources",
+      "id": 852020,
+      "call_site": "0x6f229b9a",
+      "string_address": "0x6f92bac0"
+    },
+    {
+      "name": "autoharvestgold",
+      "id": 852021,
+      "call_site": "0x6f229b67",
+      "string_address": "0x6f92baf8"
+    },
+    {
+      "name": "autoharvestlumber",
+      "id": 852022,
+      "call_site": "0x6f229b78",
+      "string_address": "0x6f92bae4"
+    },
+    {
+      "name": "neutraldetectaoe",
+      "id": 852023,
+      "call_site": "0x6f229c55",
+      "string_address": "0x6f92ba28"
+    },
+    {
+      "name": "repair",
+      "id": 852024,
+      "call_site": "0x6f229c77",
+      "string_address": "0x6f92ba14"
+    },
+    {
+      "name": "repairon",
+      "id": 852025,
+      "call_site": "0x6f229c88",
+      "string_address": "0x6f92ba08"
+    },
+    {
+      "name": "repairoff",
+      "id": 852026,
+      "call_site": "0x6f229c99",
+      "string_address": "0x6f92b9fc"
+    },
+    {
+      "name": "revive",
+      "id": 852039,
+      "call_site": "0x6f229caa",
+      "string_address": "0x6f92b9f4"
+    },
+    {
+      "name": "selfdestruct",
+      "id": 852040,
+      "call_site": "0x6f229cbb",
+      "string_address": "0x6f92b9e4"
+    },
+    {
+      "name": "selfdestructon",
+      "id": 852041,
+      "call_site": "0x6f229ccc",
+      "string_address": "0x6f92b9d4"
+    },
+    {
+      "name": "selfdestructoff",
+      "id": 852042,
+      "call_site": "0x6f229cdd",
+      "string_address": "0x6f92b9c4"
+    },
+    {
+      "name": "board",
+      "id": 852043,
+      "call_site": "0x6f229b23",
+      "string_address": "0x6f92bb24"
+    },
+    {
+      "name": "forceboard",
+      "id": 852044,
+      "call_site": "0x6f229bab",
+      "string_address": "0x6f92bab4"
+    },
+    {
+      "name": "load",
+      "id": 852046,
+      "call_site": "0x6f229bbc",
+      "string_address": "0x6f92baac"
+    },
+    {
+      "name": "unload",
+      "id": 852047,
+      "call_site": "0x6f229bcd",
+      "string_address": "0x6f92baa4"
+    },
+    {
+      "name": "unloadall",
+      "id": 852048,
+      "call_site": "0x6f229bde",
+      "string_address": "0x6f92ba98"
+    },
+    {
+      "name": "unloadallinstant",
+      "id": 852049,
+      "call_site": "0x6f229bef",
+      "string_address": "0x6f92ba84"
+    },
+    {
+      "name": "loadcorpse",
+      "id": 852050,
+      "call_site": "0x6f229c00",
+      "string_address": "0x6f92ba78"
+    },
+    {
+      "name": "loadcorpseinstant",
+      "id": 852053,
+      "call_site": "0x6f229c22",
+      "string_address": "0x6f92ba50"
+    },
+    {
+      "name": "unloadallcorpses",
+      "id": 852054,
+      "call_site": "0x6f229c11",
+      "string_address": "0x6f92ba64"
+    },
+    {
+      "name": "defend",
+      "id": 852055,
+      "call_site": "0x6f229d32",
+      "string_address": "0x6f92b98c"
+    },
+    {
+      "name": "undefend",
+      "id": 852056,
+      "call_site": "0x6f229d43",
+      "string_address": "0x6f92b980"
+    },
+    {
+      "name": "dispel",
+      "id": 852057,
+      "call_site": "0x6f229d54",
+      "string_address": "0x6f92b978"
+    },
+    {
+      "name": "flare",
+      "id": 852060,
+      "call_site": "0x6f229d65",
+      "string_address": "0x6f92b970"
+    },
+    {
+      "name": "heal",
+      "id": 852063,
+      "call_site": "0x6f229d76",
+      "string_address": "0x6f92b968"
+    },
+    {
+      "name": "healon",
+      "id": 852064,
+      "call_site": "0x6f229d87",
+      "string_address": "0x6f92b960"
+    },
+    {
+      "name": "healoff",
+      "id": 852065,
+      "call_site": "0x6f229d98",
+      "string_address": "0x6f92b958"
+    },
+    {
+      "name": "innerfire",
+      "id": 852066,
+      "call_site": "0x6f229da9",
+      "string_address": "0x6f92b94c"
+    },
+    {
+      "name": "innerfireon",
+      "id": 852067,
+      "call_site": "0x6f229dba",
+      "string_address": "0x6f92b940"
+    },
+    {
+      "name": "innerfireoff",
+      "id": 852068,
+      "call_site": "0x6f229dcb",
+      "string_address": "0x6f92b930"
+    },
+    {
+      "name": "invisibility",
+      "id": 852069,
+      "call_site": "0x6f229ddc",
+      "string_address": "0x6f92b920"
+    },
+    {
+      "name": "militiaconvert",
+      "id": 852071,
+      "call_site": "0x6f229e20",
+      "string_address": "0x6f92b8e4"
+    },
+    {
+      "name": "militia",
+      "id": 852072,
+      "call_site": "0x6f229e42",
+      "string_address": "0x6f92b8c8"
+    },
+    {
+      "name": "militiaoff",
+      "id": 852073,
+      "call_site": "0x6f229e53",
+      "string_address": "0x6f92b8bc"
+    },
+    {
+      "name": "polymorph",
+      "id": 852074,
+      "call_site": "0x6f229e86",
+      "string_address": "0x6f92b894"
+    },
+    {
+      "name": "slow",
+      "id": 852075,
+      "call_site": "0x6f229e97",
+      "string_address": "0x6f92b88c"
+    },
+    {
+      "name": "slowon",
+      "id": 852076,
+      "call_site": "0x6f229ea8",
+      "string_address": "0x6f92b884"
+    },
+    {
+      "name": "slowoff",
+      "id": 852077,
+      "call_site": "0x6f229eb9",
+      "string_address": "0x6f92b87c"
+    },
+    {
+      "name": "tankdroppilot",
+      "id": 852079,
+      "call_site": "0x6f229efd",
+      "string_address": "0x6f92b840"
+    },
+    {
+      "name": "tankloadpilot",
+      "id": 852080,
+      "call_site": "0x6f229f0e",
+      "string_address": "0x6f92b830"
+    },
+    {
+      "name": "tankpilot",
+      "id": 852081,
+      "call_site": "0x6f229f1f",
+      "string_address": "0x6f92b824"
+    },
+    {
+      "name": "townbellon",
+      "id": 852082,
+      "call_site": "0x6f229f30",
+      "string_address": "0x6f92b818"
+    },
+    {
+      "name": "townbelloff",
+      "id": 852083,
+      "call_site": "0x6f229f41",
+      "string_address": "0x6f92b80c"
+    },
+    {
+      "name": "avatar",
+      "id": 852086,
+      "call_site": "0x6f229f52",
+      "string_address": "0x6f92b804"
+    },
+    {
+      "name": "unavatar",
+      "id": 852087,
+      "call_site": "0x6f229f63",
+      "string_address": "0x6f92b7f8"
+    },
+    {
+      "name": "blizzard",
+      "id": 852089,
+      "call_site": "0x6f229f85",
+      "string_address": "0x6f92b7e4"
+    },
+    {
+      "name": "divineshield",
+      "id": 852090,
+      "call_site": "0x6f229f96",
+      "string_address": "0x6f92b7d4"
+    },
+    {
+      "name": "undivineshield",
+      "id": 852091,
+      "call_site": "0x6f229fa7",
+      "string_address": "0x6f92b7c4"
+    },
+    {
+      "name": "holybolt",
+      "id": 852092,
+      "call_site": "0x6f229fc9",
+      "string_address": "0x6f92b7ac"
+    },
+    {
+      "name": "massteleport",
+      "id": 852093,
+      "call_site": "0x6f229ffc",
+      "string_address": "0x6f92b77c"
+    },
+    {
+      "name": "resurrection",
+      "id": 852094,
+      "call_site": "0x6f22a01e",
+      "string_address": "0x6f92b75c"
+    },
+    {
+      "name": "thunderbolt",
+      "id": 852095,
+      "call_site": "0x6f22a02f",
+      "string_address": "0x6f92b750"
+    },
+    {
+      "name": "thunderclap",
+      "id": 852096,
+      "call_site": "0x6f22a040",
+      "string_address": "0x6f92b744"
+    },
+    {
+      "name": "waterelemental",
+      "id": 852097,
+      "call_site": "0x6f22a051",
+      "string_address": "0x6f92b734"
+    },
+    {
+      "name": "battlestations",
+      "id": 852099,
+      "call_site": "0x6f22a084",
+      "string_address": "0x6f92b6fc"
+    },
+    {
+      "name": "berserk",
+      "id": 852100,
+      "call_site": "0x6f22a095",
+      "string_address": "0x6f92b6f4"
+    },
+    {
+      "name": "bloodlust",
+      "id": 852101,
+      "call_site": "0x6f22a0a6",
+      "string_address": "0x6f92b6e8"
+    },
+    {
+      "name": "bloodluston",
+      "id": 852102,
+      "call_site": "0x6f22a0b7",
+      "string_address": "0x6f92b6dc"
+    },
+    {
+      "name": "bloodlustoff",
+      "id": 852103,
+      "call_site": "0x6f22a0c8",
+      "string_address": "0x6f92b6cc"
+    },
+    {
+      "name": "devour",
+      "id": 852104,
+      "call_site": "0x6f22a0fb",
+      "string_address": "0x6f92b6a4"
+    },
+    {
+      "name": "evileye",
+      "id": 852105,
+      "call_site": "0x6f22a172",
+      "string_address": "0x6f92b650"
+    },
+    {
+      "name": "ensnare",
+      "id": 852106,
+      "call_site": "0x6f22a11d",
+      "string_address": "0x6f92b690"
+    },
+    {
+      "name": "ensnareon",
+      "id": 852107,
+      "call_site": "0x6f22a12e",
+      "string_address": "0x6f92b684"
+    },
+    {
+      "name": "ensnareoff",
+      "id": 852108,
+      "call_site": "0x6f22a13f",
+      "string_address": "0x6f92b678"
+    },
+    {
+      "name": "healingward",
+      "id": 852109,
+      "call_site": "0x6f22a183",
+      "string_address": "0x6f92b644"
+    },
+    {
+      "name": "lightningshield",
+      "id": 852110,
+      "call_site": "0x6f22a194",
+      "string_address": "0x6f92b634"
+    },
+    {
+      "name": "purge",
+      "id": 852111,
+      "call_site": "0x6f22a1a5",
+      "string_address": "0x6f92b62c"
+    },
+    {
+      "name": "standdown",
+      "id": 852113,
+      "call_site": "0x6f22a1c7",
+      "string_address": "0x6f92b614"
+    },
+    {
+      "name": "stasistrap",
+      "id": 852114,
+      "call_site": "0x6f22a1d8",
+      "string_address": "0x6f92b608"
+    },
+    {
+      "name": "chainlightning",
+      "id": 852119,
+      "call_site": "0x6f22a1fa",
+      "string_address": "0x6f92b5e4"
+    },
+    {
+      "name": "earthquake",
+      "id": 852121,
+      "call_site": "0x6f22a20b",
+      "string_address": "0x6f92b5d8"
+    },
+    {
+      "name": "farsight",
+      "id": 852122,
+      "call_site": "0x6f22a21c",
+      "string_address": "0x6f92b5cc"
+    },
+    {
+      "name": "mirrorimage",
+      "id": 852123,
+      "call_site": "0x6f22a24f",
+      "string_address": "0x6f92b5b0"
+    },
+    {
+      "name": "shockwave",
+      "id": 852125,
+      "call_site": "0x6f22a260",
+      "string_address": "0x6f92b5a4"
+    },
+    {
+      "name": "spiritwolf",
+      "id": 852126,
+      "call_site": "0x6f22a271",
+      "string_address": "0x6f92b598"
+    },
+    {
+      "name": "stomp",
+      "id": 852127,
+      "call_site": "0x6f22a282",
+      "string_address": "0x6f92b590"
+    },
+    {
+      "name": "whirlwind",
+      "id": 852128,
+      "call_site": "0x6f22a2b5",
+      "string_address": "0x6f92b574"
+    },
+    {
+      "name": "windwalk",
+      "id": 852129,
+      "call_site": "0x6f22a2c6",
+      "string_address": "0x6f92b568"
+    },
+    {
+      "name": "unwindwalk",
+      "id": 852130,
+      "call_site": "0x6f22a2d7",
+      "string_address": "0x6f92b55c"
+    },
+    {
+      "name": "ambush",
+      "id": 852131,
+      "call_site": "0x6f22a2e8",
+      "string_address": "0x6f92b554"
+    },
+    {
+      "name": "autodispel",
+      "id": 852132,
+      "call_site": "0x6f22a2f9",
+      "string_address": "0x6f92b548"
+    },
+    {
+      "name": "autodispelon",
+      "id": 852133,
+      "call_site": "0x6f22a30a",
+      "string_address": "0x6f92b538"
+    },
+    {
+      "name": "autodispeloff",
+      "id": 852134,
+      "call_site": "0x6f22a31b",
+      "string_address": "0x6f92b528"
+    },
+    {
+      "name": "barkskin",
+      "id": 852135,
+      "call_site": "0x6f22a32c",
+      "string_address": "0x6f92b51c"
+    },
+    {
+      "name": "barkskinon",
+      "id": 852136,
+      "call_site": "0x6f22a33d",
+      "string_address": "0x6f92b510"
+    },
+    {
+      "name": "barkskinoff",
+      "id": 852137,
+      "call_site": "0x6f22a34e",
+      "string_address": "0x6f92b504"
+    },
+    {
+      "name": "bearform",
+      "id": 852138,
+      "call_site": "0x6f22a35f",
+      "string_address": "0x6f92b4f8"
+    },
+    {
+      "name": "unbearform",
+      "id": 852139,
+      "call_site": "0x6f22a370",
+      "string_address": "0x6f92b4ec"
+    },
+    {
+      "name": "corrosivebreath",
+      "id": 852140,
+      "call_site": "0x6f22a381",
+      "string_address": "0x6f92b4dc"
+    },
+    {
+      "name": "loadarcher",
+      "id": 852142,
+      "call_site": "0x6f22a392",
+      "string_address": "0x6f92b4d0"
+    },
+    {
+      "name": "mounthippogryph",
+      "id": 852143,
+      "call_site": "0x6f22a3a3",
+      "string_address": "0x6f92b4c0"
+    },
+    {
+      "name": "cyclone",
+      "id": 852144,
+      "call_site": "0x6f22a3d6",
+      "string_address": "0x6f92b498"
+    },
+    {
+      "name": "detonate",
+      "id": 852145,
+      "call_site": "0x6f22a3f8",
+      "string_address": "0x6f92b480"
+    },
+    {
+      "name": "eattree",
+      "id": 852146,
+      "call_site": "0x6f22a409",
+      "string_address": "0x6f92b478"
+    },
+    {
+      "name": "entangle",
+      "id": 852147,
+      "call_site": "0x6f22a41a",
+      "string_address": "0x6f92b46c"
+    },
+    {
+      "name": "entangleinstant",
+      "id": 852148,
+      "call_site": "0x6f22a42b",
+      "string_address": "0x6f92b45c"
+    },
+    {
+      "name": "faeriefire",
+      "id": 852149,
+      "call_site": "0x6f22a45e",
+      "string_address": "0x6f92b42c"
+    },
+    {
+      "name": "faeriefireon",
+      "id": 852150,
+      "call_site": "0x6f22a46f",
+      "string_address": "0x6f92b41c"
+    },
+    {
+      "name": "faeriefireoff",
+      "id": 852151,
+      "call_site": "0x6f22a480",
+      "string_address": "0x6f92b40c"
+    },
+    {
+      "name": "ravenform",
+      "id": 852155,
+      "call_site": "0x6f22a508",
+      "string_address": "0x6f92b398"
+    },
+    {
+      "name": "unravenform",
+      "id": 852156,
+      "call_site": "0x6f22a519",
+      "string_address": "0x6f92b38c"
+    },
+    {
+      "name": "recharge",
+      "id": 852157,
+      "call_site": "0x6f22a52a",
+      "string_address": "0x6f92ba1c"
+    },
+    {
+      "name": "rechargeon",
+      "id": 852158,
+      "call_site": "0x6f22a53b",
+      "string_address": "0x6f92b380"
+    },
+    {
+      "name": "rechargeoff",
+      "id": 852159,
+      "call_site": "0x6f22a54c",
+      "string_address": "0x6f92b374"
+    },
+    {
+      "name": "rejuvination",
+      "id": 852160,
+      "call_site": "0x6f22a55d",
+      "string_address": "0x6f92b364"
+    },
+    {
+      "name": "renew",
+      "id": 852161,
+      "call_site": "0x6f22a56e",
+      "string_address": "0x6f92b35c"
+    },
+    {
+      "name": "renewon",
+      "id": 852162,
+      "call_site": "0x6f22a57f",
+      "string_address": "0x6f92b354"
+    },
+    {
+      "name": "renewoff",
+      "id": 852163,
+      "call_site": "0x6f22a590",
+      "string_address": "0x6f92b348"
+    },
+    {
+      "name": "roar",
+      "id": 852164,
+      "call_site": "0x6f22a5a1",
+      "string_address": "0x6f92b340"
+    },
+    {
+      "name": "root",
+      "id": 852165,
+      "call_site": "0x6f22a5b2",
+      "string_address": "0x6f92b338"
+    },
+    {
+      "name": "unroot",
+      "id": 852166,
+      "call_site": "0x6f22a5c3",
+      "string_address": "0x6f92b330"
+    },
+    {
+      "name": "entanglingroots",
+      "id": 852171,
+      "call_site": "0x6f22a65c",
+      "string_address": "0x6f92b2bc"
+    },
+    {
+      "name": "flamingarrowstarg",
+      "id": 852173,
+      "call_site": "0x6f22a67e",
+      "string_address": "0x6f92b29c"
+    },
+    {
+      "name": "flamingarrows",
+      "id": 852174,
+      "call_site": "0x6f22a68f",
+      "string_address": "0x6f92b28c"
+    },
+    {
+      "name": "unflamingarrows",
+      "id": 852175,
+      "call_site": "0x6f22a6a0",
+      "string_address": "0x6f92b27c"
+    },
+    {
+      "name": "forceofnature",
+      "id": 852176,
+      "call_site": "0x6f22a6b1",
+      "string_address": "0x6f92b26c"
+    },
+    {
+      "name": "immolation",
+      "id": 852177,
+      "call_site": "0x6f22a6c2",
+      "string_address": "0x6f92b260"
+    },
+    {
+      "name": "unimmolation",
+      "id": 852178,
+      "call_site": "0x6f22a6d3",
+      "string_address": "0x6f92b250"
+    },
+    {
+      "name": "manaburn",
+      "id": 852179,
+      "call_site": "0x6f22a6e4",
+      "string_address": "0x6f92b244"
+    },
+    {
+      "name": "metamorphosis",
+      "id": 852180,
+      "call_site": "0x6f22a6f5",
+      "string_address": "0x6f92b234"
+    },
+    {
+      "name": "scout",
+      "id": 852181,
+      "call_site": "0x6f22a706",
+      "string_address": "0x6f92b22c"
+    },
+    {
+      "name": "sentinel",
+      "id": 852182,
+      "call_site": "0x6f22a5d4",
+      "string_address": "0x6f92b324"
+    },
+    {
+      "name": "starfall",
+      "id": 852183,
+      "call_site": "0x6f22a739",
+      "string_address": "0x6f92b1fc"
+    },
+    {
+      "name": "tranquility",
+      "id": 852184,
+      "call_site": "0x6f22a74a",
+      "string_address": "0x6f92b1f0"
+    },
+    {
+      "name": "acolyteharvest",
+      "id": 852185,
+      "call_site": "0x6f22a76c",
+      "string_address": "0x6f92b1d8"
+    },
+    {
+      "name": "antimagicshell",
+      "id": 852186,
+      "call_site": "0x6f22a77d",
+      "string_address": "0x6f92b1c8"
+    },
+    {
+      "name": "blight",
+      "id": 852187,
+      "call_site": "0x6f22a7b0",
+      "string_address": "0x6f92b1a4"
+    },
+    {
+      "name": "cannibalize",
+      "id": 852188,
+      "call_site": "0x6f22a7e3",
+      "string_address": "0x6f92b184"
+    },
+    {
+      "name": "cripple",
+      "id": 852189,
+      "call_site": "0x6f22a7f4",
+      "string_address": "0x6f92b17c"
+    },
+    {
+      "name": "curse",
+      "id": 852190,
+      "call_site": "0x6f22a805",
+      "string_address": "0x6f92b174"
+    },
+    {
+      "name": "curseon",
+      "id": 852191,
+      "call_site": "0x6f22a816",
+      "string_address": "0x6f92b16c"
+    },
+    {
+      "name": "curseoff",
+      "id": 852192,
+      "call_site": "0x6f22a827",
+      "string_address": "0x6f92b160"
+    },
+    {
+      "name": "freezingbreath",
+      "id": 852195,
+      "call_site": "0x6f22a87c",
+      "string_address": "0x6f92b110"
+    },
+    {
+      "name": "possession",
+      "id": 852196,
+      "call_site": "0x6f22a88d",
+      "string_address": "0x6f92b104"
+    },
+    {
+      "name": "raisedead",
+      "id": 852197,
+      "call_site": "0x6f22a89e",
+      "string_address": "0x6f92b0f8"
+    },
+    {
+      "name": "raisedeadon",
+      "id": 852198,
+      "call_site": "0x6f22a8af",
+      "string_address": "0x6f92b0ec"
+    },
+    {
+      "name": "raisedeadoff",
+      "id": 852199,
+      "call_site": "0x6f22a8c0",
+      "string_address": "0x6f92b0dc"
+    },
+    {
+      "name": "instant",
+      "id": 852200,
+      "call_site": "0x6f22a8d1",
+      "string_address": "0x6f92b0d4"
+    },
+    {
+      "name": "requestsacrifice",
+      "id": 852201,
+      "call_site": "0x6f22a97b",
+      "string_address": "0x6f92b030"
+    },
+    {
+      "name": "restoration",
+      "id": 852202,
+      "call_site": "0x6f22a98c",
+      "string_address": "0x6f92b024"
+    },
+    {
+      "name": "restorationon",
+      "id": 852203,
+      "call_site": "0x6f22a99d",
+      "string_address": "0x6f92b014"
+    },
+    {
+      "name": "restorationoff",
+      "id": 852204,
+      "call_site": "0x6f22a9ae",
+      "string_address": "0x6f92b004"
+    },
+    {
+      "name": "sacrifice",
+      "id": 852205,
+      "call_site": "0x6f22a9bf",
+      "string_address": "0x6f92aff8"
+    },
+    {
+      "name": "stoneform",
+      "id": 852206,
+      "call_site": "0x6f22a9d0",
+      "string_address": "0x6f92afec"
+    },
+    {
+      "name": "unstoneform",
+      "id": 852207,
+      "call_site": "0x6f22a9e1",
+      "string_address": "0x6f92afe0"
+    },
+    {
+      "name": "unholyfrenzy",
+      "id": 852209,
+      "call_site": "0x6f22a9f2",
+      "string_address": "0x6f92afd0"
+    },
+    {
+      "name": "unsummon",
+      "id": 852210,
+      "call_site": "0x6f22aa03",
+      "string_address": "0x6f92afc4"
+    },
+    {
+      "name": "web",
+      "id": 852211,
+      "call_site": "0x6f22aa14",
+      "string_address": "0x6f92afc0"
+    },
+    {
+      "name": "webon",
+      "id": 852212,
+      "call_site": "0x6f22aa25",
+      "string_address": "0x6f92afb8"
+    },
+    {
+      "name": "weboff",
+      "id": 852213,
+      "call_site": "0x6f22aa36",
+      "string_address": "0x6f92afb0"
+    },
+    {
+      "name": "wispharvest",
+      "id": 852214,
+      "call_site": "0x6f22a63a",
+      "string_address": "0x6f92b2d4"
+    },
+    {
+      "name": "auraunholy",
+      "id": 852215,
+      "call_site": "0x6f22aa58",
+      "string_address": "0x6f92af98"
+    },
+    {
+      "name": "auravampiric",
+      "id": 852216,
+      "call_site": "0x6f22aa69",
+      "string_address": "0x6f92af88"
+    },
+    {
+      "name": "animatedead",
+      "id": 852217,
+      "call_site": "0x6f22aa47",
+      "string_address": "0x6f92afa4"
+    },
+    {
+      "name": "carrionswarm",
+      "id": 852218,
+      "call_site": "0x6f22aabe",
+      "string_address": "0x6f92af28"
+    },
+    {
+      "name": "darkritual",
+      "id": 852219,
+      "call_site": "0x6f22aacf",
+      "string_address": "0x6f92af1c"
+    },
+    {
+      "name": "darksummoning",
+      "id": 852220,
+      "call_site": "0x6f22aae0",
+      "string_address": "0x6f92af0c"
+    },
+    {
+      "name": "deathanddecay",
+      "id": 852221,
+      "call_site": "0x6f22aaf1",
+      "string_address": "0x6f92aefc"
+    },
+    {
+      "name": "deathcoil",
+      "id": 852222,
+      "call_site": "0x6f22ab02",
+      "string_address": "0x6f92aef0"
+    },
+    {
+      "name": "deathpact",
+      "id": 852223,
+      "call_site": "0x6f22ab13",
+      "string_address": "0x6f92aee4"
+    },
+    {
+      "name": "dreadlordinferno",
+      "id": 852224,
+      "call_site": "0x6f22ab24",
+      "string_address": "0x6f92aed0"
+    },
+    {
+      "name": "frostarmor",
+      "id": 852225,
+      "call_site": "0x6f22ab35",
+      "string_address": "0x6f92aec4"
+    },
+    {
+      "name": "frostnova",
+      "id": 852226,
+      "call_site": "0x6f22ab68",
+      "string_address": "0x6f92ae98"
+    },
+    {
+      "name": "sleep",
+      "id": 852227,
+      "call_site": "0x6f22ab9b",
+      "string_address": "0x6f92ae7c"
+    },
+    {
+      "name": "darkconversion",
+      "id": 852228,
+      "call_site": "0x6f22b030",
+      "string_address": "0x6f92aac4"
+    },
+    {
+      "name": "darkportal",
+      "id": 852229,
+      "call_site": "0x6f22b041",
+      "string_address": "0x6f92aab8"
+    },
+    {
+      "name": "fingerofdeath",
+      "id": 852230,
+      "call_site": "0x6f22b052",
+      "string_address": "0x6f92aaa8"
+    },
+    {
+      "name": "firebolt",
+      "id": 852231,
+      "call_site": "0x6f22b063",
+      "string_address": "0x6f92aa9c"
+    },
+    {
+      "name": "inferno",
+      "id": 852232,
+      "call_site": "0x6f22ae54",
+      "string_address": "0x6f92ac50"
+    },
+    {
+      "name": "gold2lumber",
+      "id": 852233,
+      "call_site": "0x6f22ac89",
+      "string_address": "0x6f92adb4"
+    },
+    {
+      "name": "lumber2gold",
+      "id": 852234,
+      "call_site": "0x6f22ac9a",
+      "string_address": "0x6f92ada8"
+    },
+    {
+      "name": "spies",
+      "id": 852235,
+      "call_site": "0x6f22acbc",
+      "string_address": "0x6f92ad90"
+    },
+    {
+      "name": "rainofchaos",
+      "id": 852237,
+      "call_site": "0x6f22b0a7",
+      "string_address": "0x6f92aa6c"
+    },
+    {
+      "name": "rainoffire",
+      "id": 852238,
+      "call_site": "0x6f22b0b8",
+      "string_address": "0x6f92aa60"
+    },
+    {
+      "name": "request_hero",
+      "id": 852239,
+      "call_site": "0x6f22acde",
+      "string_address": "0x6f92ad70"
+    },
+    {
+      "name": "disassociate",
+      "id": 852240,
+      "call_site": "0x6f22b10d",
+      "string_address": "0x6f92aa1c"
+    },
+    {
+      "name": "revenge",
+      "id": 852241,
+      "call_site": "0x6f22b0c9",
+      "string_address": "0x6f92aa58"
+    },
+    {
+      "name": "soulpreservation",
+      "id": 852242,
+      "call_site": "0x6f22b0da",
+      "string_address": "0x6f92aa44"
+    },
+    {
+      "name": "coldarrowstarg",
+      "id": 852243,
+      "call_site": "0x6f22adbb",
+      "string_address": "0x6f92acc0"
+    },
+    {
+      "name": "coldarrows",
+      "id": 852244,
+      "call_site": "0x6f22adcc",
+      "string_address": "0x6f92acb4"
+    },
+    {
+      "name": "uncoldarrows",
+      "id": 852245,
+      "call_site": "0x6f22addd",
+      "string_address": "0x6f92aca4"
+    },
+    {
+      "name": "creepanimatedead",
+      "id": 852246,
+      "call_site": "0x6f22abbd",
+      "string_address": "0x6f92ae58"
+    },
+    {
+      "name": "creepdevour",
+      "id": 852247,
+      "call_site": "0x6f22abce",
+      "string_address": "0x6f92ae4c"
+    },
+    {
+      "name": "creepheal",
+      "id": 852248,
+      "call_site": "0x6f22abdf",
+      "string_address": "0x6f92ae40"
+    },
+    {
+      "name": "creephealon",
+      "id": 852249,
+      "call_site": "0x6f22abf0",
+      "string_address": "0x6f92ae34"
+    },
+    {
+      "name": "creephealoff",
+      "id": 852250,
+      "call_site": "0x6f22ac01",
+      "string_address": "0x6f92ae24"
+    },
+    {
+      "name": "creepthunderbolt",
+      "id": 852252,
+      "call_site": "0x6f22ac12",
+      "string_address": "0x6f92ae10"
+    },
+    {
+      "name": "creepthunderclap",
+      "id": 852253,
+      "call_site": "0x6f22ac23",
+      "string_address": "0x6f92adfc"
+    },
+    {
+      "name": "poisonarrowstarg",
+      "id": 852254,
+      "call_site": "0x6f22ae76",
+      "string_address": "0x6f92ac34"
+    },
+    {
+      "name": "poisonarrows",
+      "id": 852255,
+      "call_site": "0x6f22ae87",
+      "string_address": "0x6f92ac24"
+    },
+    {
+      "name": "unpoisonarrows",
+      "id": 852256,
+      "call_site": "0x6f22ae98",
+      "string_address": "0x6f92ac14"
+    },
+    {
+      "name": "frostarmoron",
+      "id": 852458,
+      "call_site": "0x6f22ab46",
+      "string_address": "0x6f92aeb4"
+    },
+    {
+      "name": "frostarmoroff",
+      "id": 852459,
+      "call_site": "0x6f22ab57",
+      "string_address": "0x6f92aea4"
+    },
+    {
+      "name": "awaken",
+      "id": 852466,
+      "call_site": "0x6f229a46",
+      "string_address": "0x6f92bbb4"
+    },
+    {
+      "name": "nagabuild",
+      "id": 852467,
+      "call_site": "0x6f229af0",
+      "string_address": "0x6f92bb44"
+    },
+    {
+      "name": "mount",
+      "id": 852469,
+      "call_site": "0x6f229c33",
+      "string_address": "0x6f92ba48"
+    },
+    {
+      "name": "dismount",
+      "id": 852470,
+      "call_site": "0x6f229c44",
+      "string_address": "0x6f92ba3c"
+    },
+    {
+      "name": "cloudoffog",
+      "id": 852473,
+      "call_site": "0x6f229d10",
+      "string_address": "0x6f92b9a4"
+    },
+    {
+      "name": "controlmagic",
+      "id": 852474,
+      "call_site": "0x6f229d21",
+      "string_address": "0x6f92b994"
+    },
+    {
+      "name": "magicdefense",
+      "id": 852478,
+      "call_site": "0x6f229ded",
+      "string_address": "0x6f92b910"
+    },
+    {
+      "name": "magicundefense",
+      "id": 852479,
+      "call_site": "0x6f229dfe",
+      "string_address": "0x6f92b900"
+    },
+    {
+      "name": "magicleash",
+      "id": 852480,
+      "call_site": "0x6f229e0f",
+      "string_address": "0x6f92b8f4"
+    },
+    {
+      "name": "phoenixfire",
+      "id": 852481,
+      "call_site": "0x6f229e64",
+      "string_address": "0x6f92b8b0"
+    },
+    {
+      "name": "phoenixmorph",
+      "id": 852482,
+      "call_site": "0x6f229e75",
+      "string_address": "0x6f92b8a0"
+    },
+    {
+      "name": "spellsteal",
+      "id": 852483,
+      "call_site": "0x6f229eca",
+      "string_address": "0x6f92b870"
+    },
+    {
+      "name": "spellstealon",
+      "id": 852484,
+      "call_site": "0x6f229edb",
+      "string_address": "0x6f92b860"
+    },
+    {
+      "name": "spellstealoff",
+      "id": 852485,
+      "call_site": "0x6f229eec",
+      "string_address": "0x6f92b850"
+    },
+    {
+      "name": "banish",
+      "id": 852486,
+      "call_site": "0x6f229f74",
+      "string_address": "0x6f92b7f0"
+    },
+    {
+      "name": "drain",
+      "id": 852487,
+      "call_site": "0x6f22adff",
+      "string_address": "0x6f92ac94"
+    },
+    {
+      "name": "flamestrike",
+      "id": 852488,
+      "call_site": "0x6f229fb8",
+      "string_address": "0x6f92b7b8"
+    },
+    {
+      "name": "summonphoenix",
+      "id": 852489,
+      "call_site": "0x6f22a00d",
+      "string_address": "0x6f92b76c"
+    },
+    {
+      "name": "ancestralspirit",
+      "id": 852490,
+      "call_site": "0x6f22a062",
+      "string_address": "0x6f92b724"
+    },
+    {
+      "name": "ancestralspirittarget",
+      "id": 852491,
+      "call_site": "0x6f22a073",
+      "string_address": "0x6f92b70c"
+    },
+    {
+      "name": "corporealform",
+      "id": 852493,
+      "call_site": "0x6f22a0d9",
+      "string_address": "0x6f92b6bc"
+    },
+    {
+      "name": "uncorporealform",
+      "id": 852494,
+      "call_site": "0x6f22a0ea",
+      "string_address": "0x6f92b6ac"
+    },
+    {
+      "name": "disenchant",
+      "id": 852495,
+      "call_site": "0x6f22a10c",
+      "string_address": "0x6f92b698"
+    },
+    {
+      "name": "etherealform",
+      "id": 852496,
+      "call_site": "0x6f22a150",
+      "string_address": "0x6f92b668"
+    },
+    {
+      "name": "unetherealform",
+      "id": 852497,
+      "call_site": "0x6f22a161",
+      "string_address": "0x6f92b658"
+    },
+    {
+      "name": "spiritlink",
+      "id": 852499,
+      "call_site": "0x6f22a1b6",
+      "string_address": "0x6f92b620"
+    },
+    {
+      "name": "unstableconcoction",
+      "id": 852500,
+      "call_site": "0x6f22a1e9",
+      "string_address": "0x6f92b5f4"
+    },
+    {
+      "name": "healingwave",
+      "id": 852501,
+      "call_site": "0x6f22a22d",
+      "string_address": "0x6f92b5c0"
+    },
+    {
+      "name": "hex",
+      "id": 852502,
+      "call_site": "0x6f22a23e",
+      "string_address": "0x6f92b5bc"
+    },
+    {
+      "name": "voodoo",
+      "id": 852503,
+      "call_site": "0x6f22a293",
+      "string_address": "0x6f92b588"
+    },
+    {
+      "name": "ward",
+      "id": 852504,
+      "call_site": "0x6f22a2a4",
+      "string_address": "0x6f92b580"
+    },
+    {
+      "name": "autoentangle",
+      "id": 852505,
+      "call_site": "0x6f22a43c",
+      "string_address": "0x6f92b44c"
+    },
+    {
+      "name": "autoentangleinstant",
+      "id": 852506,
+      "call_site": "0x6f22a44d",
+      "string_address": "0x6f92b438"
+    },
+    {
+      "name": "coupletarget",
+      "id": 852507,
+      "call_site": "0x6f22a3c5",
+      "string_address": "0x6f92b4a0"
+    },
+    {
+      "name": "coupleinstant",
+      "id": 852508,
+      "call_site": "0x6f22a3b4",
+      "string_address": "0x6f92b4b0"
+    },
+    {
+      "name": "decouple",
+      "id": 852509,
+      "call_site": "0x6f22a3e7",
+      "string_address": "0x6f92b48c"
+    },
+    {
+      "name": "grabtree",
+      "id": 852511,
+      "call_site": "0x6f22a491",
+      "string_address": "0x6f92b400"
+    },
+    {
+      "name": "manaflareon",
+      "id": 852512,
+      "call_site": "0x6f22a4a2",
+      "string_address": "0x6f92b3f4"
+    },
+    {
+      "name": "manaflareoff",
+      "id": 852513,
+      "call_site": "0x6f22a4b3",
+      "string_address": "0x6f92b3e4"
+    },
+    {
+      "name": "phaseshift",
+      "id": 852514,
+      "call_site": "0x6f22a4c4",
+      "string_address": "0x6f92b3d8"
+    },
+    {
+      "name": "phaseshifton",
+      "id": 852515,
+      "call_site": "0x6f22a4d5",
+      "string_address": "0x6f92b3c8"
+    },
+    {
+      "name": "phaseshiftoff",
+      "id": 852516,
+      "call_site": "0x6f22a4e6",
+      "string_address": "0x6f92b3b8"
+    },
+    {
+      "name": "phaseshiftinstant",
+      "id": 852517,
+      "call_site": "0x6f22a4f7",
+      "string_address": "0x6f92b3a4"
+    },
+    {
+      "name": "taunt",
+      "id": 852520,
+      "call_site": "0x6f22a5e5",
+      "string_address": "0x6f92b31c"
+    },
+    {
+      "name": "vengeance",
+      "id": 852521,
+      "call_site": "0x6f22a5f6",
+      "string_address": "0x6f92b310"
+    },
+    {
+      "name": "vengeanceon",
+      "id": 852522,
+      "call_site": "0x6f22a607",
+      "string_address": "0x6f92b304"
+    },
+    {
+      "name": "vengeanceoff",
+      "id": 852523,
+      "call_site": "0x6f22a618",
+      "string_address": "0x6f92b2f4"
+    },
+    {
+      "name": "vengeanceinstant",
+      "id": 852524,
+      "call_site": "0x6f22a629",
+      "string_address": "0x6f92b2e0"
+    },
+    {
+      "name": "blink",
+      "id": 852525,
+      "call_site": "0x6f22a64b",
+      "string_address": "0x6f92b2cc"
+    },
+    {
+      "name": "fanofknives",
+      "id": 852526,
+      "call_site": "0x6f22a66d",
+      "string_address": "0x6f92b2b0"
+    },
+    {
+      "name": "shadowstrike",
+      "id": 852527,
+      "call_site": "0x6f22a717",
+      "string_address": "0x6f92b21c"
+    },
+    {
+      "name": "spiritofvengeance",
+      "id": 852528,
+      "call_site": "0x6f22a728",
+      "string_address": "0x6f92b208"
+    },
+    {
+      "name": "absorb",
+      "id": 852529,
+      "call_site": "0x6f22a75b",
+      "string_address": "0x6f92b1e8"
+    },
+    {
+      "name": "avengerform",
+      "id": 852531,
+      "call_site": "0x6f22a78e",
+      "string_address": "0x6f92b1bc"
+    },
+    {
+      "name": "unavengerform",
+      "id": 852532,
+      "call_site": "0x6f22a79f",
+      "string_address": "0x6f92b1ac"
+    },
+    {
+      "name": "burrow",
+      "id": 852533,
+      "call_site": "0x6f22a7c1",
+      "string_address": "0x6f92b19c"
+    },
+    {
+      "name": "unburrow",
+      "id": 852534,
+      "call_site": "0x6f22a7d2",
+      "string_address": "0x6f92b190"
+    },
+    {
+      "name": "devourmagic",
+      "id": 852536,
+      "call_site": "0x6f22a838",
+      "string_address": "0x6f92b154"
+    },
+    {
+      "name": "flamingattacktarg",
+      "id": 852539,
+      "call_site": "0x6f22a849",
+      "string_address": "0x6f92b140"
+    },
+    {
+      "name": "flamingattack",
+      "id": 852540,
+      "call_site": "0x6f22a85a",
+      "string_address": "0x6f92b130"
+    },
+    {
+      "name": "unflamingattack",
+      "id": 852541,
+      "call_site": "0x6f22a86b",
+      "string_address": "0x6f92b120"
+    },
+    {
+      "name": "replenish",
+      "id": 852542,
+      "call_site": "0x6f22a8e2",
+      "string_address": "0x6f92b0c8"
+    },
+    {
+      "name": "replenishon",
+      "id": 852543,
+      "call_site": "0x6f22a8f3",
+      "string_address": "0x6f92b0bc"
+    },
+    {
+      "name": "replenishoff",
+      "id": 852544,
+      "call_site": "0x6f22a904",
+      "string_address": "0x6f92b0ac"
+    },
+    {
+      "name": "replenishlife",
+      "id": 852545,
+      "call_site": "0x6f22a915",
+      "string_address": "0x6f92b09c"
+    },
+    {
+      "name": "replenishlifeon",
+      "id": 852546,
+      "call_site": "0x6f22a926",
+      "string_address": "0x6f92b08c"
+    },
+    {
+      "name": "replenishlifeoff",
+      "id": 852547,
+      "call_site": "0x6f22a937",
+      "string_address": "0x6f92b078"
+    },
+    {
+      "name": "replenishmana",
+      "id": 852548,
+      "call_site": "0x6f22a948",
+      "string_address": "0x6f92b068"
+    },
+    {
+      "name": "replenishmanaon",
+      "id": 852549,
+      "call_site": "0x6f22a959",
+      "string_address": "0x6f92b058"
+    },
+    {
+      "name": "replenishmanaoff",
+      "id": 852550,
+      "call_site": "0x6f22a96a",
+      "string_address": "0x6f92b044"
+    },
+    {
+      "name": "carrionscarabs",
+      "id": 852551,
+      "call_site": "0x6f22aa7a",
+      "string_address": "0x6f92af78"
+    },
+    {
+      "name": "carrionscarabson",
+      "id": 852552,
+      "call_site": "0x6f22aa8b",
+      "string_address": "0x6f92af64"
+    },
+    {
+      "name": "carrionscarabsoff",
+      "id": 852553,
+      "call_site": "0x6f22aa9c",
+      "string_address": "0x6f92af50"
+    },
+    {
+      "name": "carrionscarabsinstant",
+      "id": 852554,
+      "call_site": "0x6f22aaad",
+      "string_address": "0x6f92af38"
+    },
+    {
+      "name": "impale",
+      "id": 852555,
+      "call_site": "0x6f22ab79",
+      "string_address": "0x6f92ae90"
+    },
+    {
+      "name": "locustswarm",
+      "id": 852556,
+      "call_site": "0x6f22ab8a",
+      "string_address": "0x6f92ae84"
+    },
+    {
+      "name": "breathoffrost",
+      "id": 852560,
+      "call_site": "0x6f22abac",
+      "string_address": "0x6f92ae6c"
+    },
+    {
+      "name": "frenzy",
+      "id": 852561,
+      "call_site": "0x6f22ac34",
+      "string_address": "0x6f92adf4"
+    },
+    {
+      "name": "frenzyon",
+      "id": 852562,
+      "call_site": "0x6f22ac45",
+      "string_address": "0x6f92ade8"
+    },
+    {
+      "name": "frenzyoff",
+      "id": 852563,
+      "call_site": "0x6f22ac56",
+      "string_address": "0x6f92addc"
+    },
+    {
+      "name": "mechanicalcritter",
+      "id": 852564,
+      "call_site": "0x6f22ac67",
+      "string_address": "0x6f92adc8"
+    },
+    {
+      "name": "mindrot",
+      "id": 852565,
+      "call_site": "0x6f22ac78",
+      "string_address": "0x6f92adc0"
+    },
+    {
+      "name": "neutralinteract",
+      "id": 852566,
+      "call_site": "0x6f22acab",
+      "string_address": "0x6f92ad98"
+    },
+    {
+      "name": "preservation",
+      "id": 852568,
+      "call_site": "0x6f22accd",
+      "string_address": "0x6f92ad80"
+    },
+    {
+      "name": "sanctuary",
+      "id": 852569,
+      "call_site": "0x6f22acef",
+      "string_address": "0x6f92ad64"
+    },
+    {
+      "name": "shadowsight",
+      "id": 852570,
+      "call_site": "0x6f22ad00",
+      "string_address": "0x6f92ad58"
+    },
+    {
+      "name": "spellshield",
+      "id": 852571,
+      "call_site": "0x6f22ad11",
+      "string_address": "0x6f92ad4c"
+    },
+    {
+      "name": "spellshieldaoe",
+      "id": 852572,
+      "call_site": "0x6f22ad22",
+      "string_address": "0x6f92ad3c"
+    },
+    {
+      "name": "spirittroll",
+      "id": 852573,
+      "call_site": "0x6f22ad33",
+      "string_address": "0x6f92ad30"
+    },
+    {
+      "name": "steal",
+      "id": 852574,
+      "call_site": "0x6f22ad44",
+      "string_address": "0x6f92ad28"
+    },
+    {
+      "name": "attributemodskill",
+      "id": 852576,
+      "call_site": "0x6f22ad55",
+      "string_address": "0x6f92ad14"
+    },
+    {
+      "name": "blackarrow",
+      "id": 852577,
+      "call_site": "0x6f22ad66",
+      "string_address": "0x6f92ad08"
+    },
+    {
+      "name": "blackarrowon",
+      "id": 852578,
+      "call_site": "0x6f22ad77",
+      "string_address": "0x6f92acf8"
+    },
+    {
+      "name": "blackarrowoff",
+      "id": 852579,
+      "call_site": "0x6f22ad88",
+      "string_address": "0x6f92ace8"
+    },
+    {
+      "name": "breathoffire",
+      "id": 852580,
+      "call_site": "0x6f22ad99",
+      "string_address": "0x6f92acd8"
+    },
+    {
+      "name": "charm",
+      "id": 852581,
+      "call_site": "0x6f22adaa",
+      "string_address": "0x6f92acd0"
+    },
+    {
+      "name": "doom",
+      "id": 852583,
+      "call_site": "0x6f22adee",
+      "string_address": "0x6f92ac9c"
+    },
+    {
+      "name": "drunkenhaze",
+      "id": 852585,
+      "call_site": "0x6f22ae10",
+      "string_address": "0x6f92ac88"
+    },
+    {
+      "name": "elementalfury",
+      "id": 852586,
+      "call_site": "0x6f22ae21",
+      "string_address": "0x6f92ac78"
+    },
+    {
+      "name": "forkedlightning",
+      "id": 852587,
+      "call_site": "0x6f22ae32",
+      "string_address": "0x6f92ac68"
+    },
+    {
+      "name": "howlofterror",
+      "id": 852588,
+      "call_site": "0x6f22ae43",
+      "string_address": "0x6f92ac58"
+    },
+    {
+      "name": "manashieldon",
+      "id": 852589,
+      "call_site": "0x6f229fda",
+      "string_address": "0x6f92b79c"
+    },
+    {
+      "name": "manashieldoff",
+      "id": 852590,
+      "call_site": "0x6f229feb",
+      "string_address": "0x6f92b78c"
+    },
+    {
+      "name": "monsoon",
+      "id": 852591,
+      "call_site": "0x6f22ae65",
+      "string_address": "0x6f92ac48"
+    },
+    {
+      "name": "silence",
+      "id": 852592,
+      "call_site": "0x6f22aea9",
+      "string_address": "0x6f92ac0c"
+    },
+    {
+      "name": "stampede",
+      "id": 852593,
+      "call_site": "0x6f22aeba",
+      "string_address": "0x6f92ac00"
+    },
+    {
+      "name": "summongrizzly",
+      "id": 852594,
+      "call_site": "0x6f22aecb",
+      "string_address": "0x6f92abf0"
+    },
+    {
+      "name": "summonquillbeast",
+      "id": 852595,
+      "call_site": "0x6f22aedc",
+      "string_address": "0x6f92abdc"
+    },
+    {
+      "name": "summonwareagle",
+      "id": 852596,
+      "call_site": "0x6f22aeed",
+      "string_address": "0x6f92abcc"
+    },
+    {
+      "name": "tornado",
+      "id": 852597,
+      "call_site": "0x6f22aefe",
+      "string_address": "0x6f92abc4"
+    },
+    {
+      "name": "wateryminion",
+      "id": 852598,
+      "call_site": "0x6f22af0f",
+      "string_address": "0x6f92abb4"
+    },
+    {
+      "name": "battleroar",
+      "id": 852599,
+      "call_site": "0x6f22b00e",
+      "string_address": "0x6f92aadc"
+    },
+    {
+      "name": "channel",
+      "id": 852600,
+      "call_site": "0x6f22b01f",
+      "string_address": "0x6f92aad4"
+    },
+    {
+      "name": "parasite",
+      "id": 852601,
+      "call_site": "0x6f22b074",
+      "string_address": "0x6f92aa90"
+    },
+    {
+      "name": "parasiteon",
+      "id": 852602,
+      "call_site": "0x6f22b085",
+      "string_address": "0x6f92aa84"
+    },
+    {
+      "name": "parasiteoff",
+      "id": 852603,
+      "call_site": "0x6f22b096",
+      "string_address": "0x6f92aa78"
+    },
+    {
+      "name": "submerge",
+      "id": 852604,
+      "call_site": "0x6f22b0eb",
+      "string_address": "0x6f92aa38"
+    },
+    {
+      "name": "unsubmerge",
+      "id": 852605,
+      "call_site": "0x6f22b0fc",
+      "string_address": "0x6f92aa2c"
+    },
+    {
+      "name": "neutralspell",
+      "id": 852630,
+      "call_site": "0x6f22b11e",
+      "string_address": "0x6f92aa0c"
+    },
+    {
+      "name": "militiaunconvert",
+      "id": 852651,
+      "call_site": "0x6f229e31",
+      "string_address": "0x6f92b8d0"
+    },
+    {
+      "name": "clusterrockets",
+      "id": 852652,
+      "call_site": "0x6f22af64",
+      "string_address": "0x6f92ab6c"
+    },
+    {
+      "name": "robogoblin",
+      "id": 852656,
+      "call_site": "0x6f22af75",
+      "string_address": "0x6f92ab60"
+    },
+    {
+      "name": "unrobogoblin",
+      "id": 852657,
+      "call_site": "0x6f22af86",
+      "string_address": "0x6f92ab50"
+    },
+    {
+      "name": "summonfactory",
+      "id": 852658,
+      "call_site": "0x6f22af97",
+      "string_address": "0x6f92ab40"
+    },
+    {
+      "name": "acidbomb",
+      "id": 852662,
+      "call_site": "0x6f22af20",
+      "string_address": "0x6f92aba8"
+    },
+    {
+      "name": "chemicalrage",
+      "id": 852663,
+      "call_site": "0x6f22af31",
+      "string_address": "0x6f92ab98"
+    },
+    {
+      "name": "healingspray",
+      "id": 852664,
+      "call_site": "0x6f22af42",
+      "string_address": "0x6f92ab88"
+    },
+    {
+      "name": "transmute",
+      "id": 852665,
+      "call_site": "0x6f22af53",
+      "string_address": "0x6f92ab7c"
+    },
+    {
+      "name": "lavamonster",
+      "id": 852667,
+      "call_site": "0x6f22afdb",
+      "string_address": "0x6f92aafc"
+    },
+    {
+      "name": "soulburn",
+      "id": 852668,
+      "call_site": "0x6f22afec",
+      "string_address": "0x6f92aaf0"
+    },
+    {
+      "name": "volcano",
+      "id": 852669,
+      "call_site": "0x6f22affd",
+      "string_address": "0x6f92aae8"
+    },
+    {
+      "name": "incineratearrow",
+      "id": 852670,
+      "call_site": "0x6f22afa8",
+      "string_address": "0x6f92ab30"
+    },
+    {
+      "name": "incineratearrowon",
+      "id": 852671,
+      "call_site": "0x6f22afb9",
+      "string_address": "0x6f92ab1c"
+    },
+    {
+      "name": "incineratearrowoff",
+      "id": 852672,
+      "call_site": "0x6f22afca",
+      "string_address": "0x6f92ab08"
+    }
+  ],
+  "registration_history": [
+    {
+      "name": "attack",
+      "id": 851983,
+      "call_site": "0x6f229a13",
+      "string_address": "0x6f92bbd8"
+    },
+    {
+      "name": "attackground",
+      "id": 851984,
+      "call_site": "0x6f229a24",
+      "string_address": "0x6f92bbc8"
+    },
+    {
+      "name": "attackonce",
+      "id": 851985,
+      "call_site": "0x6f229a35",
+      "string_address": "0x6f92bbbc"
+    },
+    {
+      "name": "awaken",
+      "id": 852466,
+      "call_site": "0x6f229a46",
+      "string_address": "0x6f92bbb4"
+    },
+    {
+      "name": "move",
+      "id": 851986,
+      "call_site": "0x6f229a57",
+      "string_address": "0x6f92bbac"
+    },
+    {
+      "name": "AImove",
+      "id": 851988,
+      "call_site": "0x6f229a68",
+      "string_address": "0x6f92bba4"
+    },
+    {
+      "name": "patrol",
+      "id": 851990,
+      "call_site": "0x6f229a79",
+      "string_address": "0x6f92bb9c"
+    },
+    {
+      "name": "holdposition",
+      "id": 851993,
+      "call_site": "0x6f229a8a",
+      "string_address": "0x6f92bb8c"
+    },
+    {
+      "name": "build",
+      "id": 851994,
+      "call_site": "0x6f229a9b",
+      "string_address": "0x6f92bb84"
+    },
+    {
+      "name": "humanbuild",
+      "id": 851995,
+      "call_site": "0x6f229aac",
+      "string_address": "0x6f92bb78"
+    },
+    {
+      "name": "orcbuild",
+      "id": 851996,
+      "call_site": "0x6f229abd",
+      "string_address": "0x6f92bb6c"
+    },
+    {
+      "name": "nightelfbuild",
+      "id": 851997,
+      "call_site": "0x6f229ace",
+      "string_address": "0x6f92bb5c"
+    },
+    {
+      "name": "undeadbuild",
+      "id": 851998,
+      "call_site": "0x6f229adf",
+      "string_address": "0x6f92bb50"
+    },
+    {
+      "name": "nagabuild",
+      "id": 852467,
+      "call_site": "0x6f229af0",
+      "string_address": "0x6f92bb44"
+    },
+    {
+      "name": "resumebuild",
+      "id": 851999,
+      "call_site": "0x6f229b01",
+      "string_address": "0x6f92bb38"
+    },
+    {
+      "name": "dropitem",
+      "id": 852001,
+      "call_site": "0x6f229b12",
+      "string_address": "0x6f92bb2c"
+    },
+    {
+      "name": "board",
+      "id": 852043,
+      "call_site": "0x6f229b23",
+      "string_address": "0x6f92bb24"
+    },
+    {
+      "name": "detectaoe",
+      "id": 852015,
+      "call_site": "0x6f229b34",
+      "string_address": "0x6f92bb18"
+    },
+    {
+      "name": "getitem",
+      "id": 851981,
+      "call_site": "0x6f229b45",
+      "string_address": "0x6f92bb10"
+    },
+    {
+      "name": "harvest",
+      "id": 852018,
+      "call_site": "0x6f229b56",
+      "string_address": "0x6f92bb08"
+    },
+    {
+      "name": "autoharvestgold",
+      "id": 852021,
+      "call_site": "0x6f229b67",
+      "string_address": "0x6f92baf8"
+    },
+    {
+      "name": "autoharvestlumber",
+      "id": 852022,
+      "call_site": "0x6f229b78",
+      "string_address": "0x6f92bae4"
+    },
+    {
+      "name": "resumeharvesting",
+      "id": 852017,
+      "call_site": "0x6f229b89",
+      "string_address": "0x6f92bad0"
+    },
+    {
+      "name": "returnresources",
+      "id": 852020,
+      "call_site": "0x6f229b9a",
+      "string_address": "0x6f92bac0"
+    },
+    {
+      "name": "forceboard",
+      "id": 852044,
+      "call_site": "0x6f229bab",
+      "string_address": "0x6f92bab4"
+    },
+    {
+      "name": "load",
+      "id": 852046,
+      "call_site": "0x6f229bbc",
+      "string_address": "0x6f92baac"
+    },
+    {
+      "name": "unload",
+      "id": 852047,
+      "call_site": "0x6f229bcd",
+      "string_address": "0x6f92baa4"
+    },
+    {
+      "name": "unloadall",
+      "id": 852048,
+      "call_site": "0x6f229bde",
+      "string_address": "0x6f92ba98"
+    },
+    {
+      "name": "unloadallinstant",
+      "id": 852049,
+      "call_site": "0x6f229bef",
+      "string_address": "0x6f92ba84"
+    },
+    {
+      "name": "loadcorpse",
+      "id": 852050,
+      "call_site": "0x6f229c00",
+      "string_address": "0x6f92ba78"
+    },
+    {
+      "name": "unloadallcorpses",
+      "id": 852054,
+      "call_site": "0x6f229c11",
+      "string_address": "0x6f92ba64"
+    },
+    {
+      "name": "loadcorpseinstant",
+      "id": 852053,
+      "call_site": "0x6f229c22",
+      "string_address": "0x6f92ba50"
+    },
+    {
+      "name": "mount",
+      "id": 852469,
+      "call_site": "0x6f229c33",
+      "string_address": "0x6f92ba48"
+    },
+    {
+      "name": "dismount",
+      "id": 852470,
+      "call_site": "0x6f229c44",
+      "string_address": "0x6f92ba3c"
+    },
+    {
+      "name": "neutraldetectaoe",
+      "id": 852023,
+      "call_site": "0x6f229c55",
+      "string_address": "0x6f92ba28"
+    },
+    {
+      "name": "recharge",
+      "id": 852157,
+      "call_site": "0x6f229c66",
+      "string_address": "0x6f92ba1c"
+    },
+    {
+      "name": "repair",
+      "id": 852024,
+      "call_site": "0x6f229c77",
+      "string_address": "0x6f92ba14"
+    },
+    {
+      "name": "repairon",
+      "id": 852025,
+      "call_site": "0x6f229c88",
+      "string_address": "0x6f92ba08"
+    },
+    {
+      "name": "repairoff",
+      "id": 852026,
+      "call_site": "0x6f229c99",
+      "string_address": "0x6f92b9fc"
+    },
+    {
+      "name": "revive",
+      "id": 852039,
+      "call_site": "0x6f229caa",
+      "string_address": "0x6f92b9f4"
+    },
+    {
+      "name": "selfdestruct",
+      "id": 852040,
+      "call_site": "0x6f229cbb",
+      "string_address": "0x6f92b9e4"
+    },
+    {
+      "name": "selfdestructon",
+      "id": 852041,
+      "call_site": "0x6f229ccc",
+      "string_address": "0x6f92b9d4"
+    },
+    {
+      "name": "selfdestructoff",
+      "id": 852042,
+      "call_site": "0x6f229cdd",
+      "string_address": "0x6f92b9c4"
+    },
+    {
+      "name": "setrally",
+      "id": 851980,
+      "call_site": "0x6f229cee",
+      "string_address": "0x6f92b9b8"
+    },
+    {
+      "name": "stop",
+      "id": 851972,
+      "call_site": "0x6f229cff",
+      "string_address": "0x6f92b9b0"
+    },
+    {
+      "name": "cloudoffog",
+      "id": 852473,
+      "call_site": "0x6f229d10",
+      "string_address": "0x6f92b9a4"
+    },
+    {
+      "name": "controlmagic",
+      "id": 852474,
+      "call_site": "0x6f229d21",
+      "string_address": "0x6f92b994"
+    },
+    {
+      "name": "defend",
+      "id": 852055,
+      "call_site": "0x6f229d32",
+      "string_address": "0x6f92b98c"
+    },
+    {
+      "name": "undefend",
+      "id": 852056,
+      "call_site": "0x6f229d43",
+      "string_address": "0x6f92b980"
+    },
+    {
+      "name": "dispel",
+      "id": 852057,
+      "call_site": "0x6f229d54",
+      "string_address": "0x6f92b978"
+    },
+    {
+      "name": "flare",
+      "id": 852060,
+      "call_site": "0x6f229d65",
+      "string_address": "0x6f92b970"
+    },
+    {
+      "name": "heal",
+      "id": 852063,
+      "call_site": "0x6f229d76",
+      "string_address": "0x6f92b968"
+    },
+    {
+      "name": "healon",
+      "id": 852064,
+      "call_site": "0x6f229d87",
+      "string_address": "0x6f92b960"
+    },
+    {
+      "name": "healoff",
+      "id": 852065,
+      "call_site": "0x6f229d98",
+      "string_address": "0x6f92b958"
+    },
+    {
+      "name": "innerfire",
+      "id": 852066,
+      "call_site": "0x6f229da9",
+      "string_address": "0x6f92b94c"
+    },
+    {
+      "name": "innerfireon",
+      "id": 852067,
+      "call_site": "0x6f229dba",
+      "string_address": "0x6f92b940"
+    },
+    {
+      "name": "innerfireoff",
+      "id": 852068,
+      "call_site": "0x6f229dcb",
+      "string_address": "0x6f92b930"
+    },
+    {
+      "name": "invisibility",
+      "id": 852069,
+      "call_site": "0x6f229ddc",
+      "string_address": "0x6f92b920"
+    },
+    {
+      "name": "magicdefense",
+      "id": 852478,
+      "call_site": "0x6f229ded",
+      "string_address": "0x6f92b910"
+    },
+    {
+      "name": "magicundefense",
+      "id": 852479,
+      "call_site": "0x6f229dfe",
+      "string_address": "0x6f92b900"
+    },
+    {
+      "name": "magicleash",
+      "id": 852480,
+      "call_site": "0x6f229e0f",
+      "string_address": "0x6f92b8f4"
+    },
+    {
+      "name": "militiaconvert",
+      "id": 852071,
+      "call_site": "0x6f229e20",
+      "string_address": "0x6f92b8e4"
+    },
+    {
+      "name": "militiaunconvert",
+      "id": 852651,
+      "call_site": "0x6f229e31",
+      "string_address": "0x6f92b8d0"
+    },
+    {
+      "name": "militia",
+      "id": 852072,
+      "call_site": "0x6f229e42",
+      "string_address": "0x6f92b8c8"
+    },
+    {
+      "name": "militiaoff",
+      "id": 852073,
+      "call_site": "0x6f229e53",
+      "string_address": "0x6f92b8bc"
+    },
+    {
+      "name": "phoenixfire",
+      "id": 852481,
+      "call_site": "0x6f229e64",
+      "string_address": "0x6f92b8b0"
+    },
+    {
+      "name": "phoenixmorph",
+      "id": 852482,
+      "call_site": "0x6f229e75",
+      "string_address": "0x6f92b8a0"
+    },
+    {
+      "name": "polymorph",
+      "id": 852074,
+      "call_site": "0x6f229e86",
+      "string_address": "0x6f92b894"
+    },
+    {
+      "name": "slow",
+      "id": 852075,
+      "call_site": "0x6f229e97",
+      "string_address": "0x6f92b88c"
+    },
+    {
+      "name": "slowon",
+      "id": 852076,
+      "call_site": "0x6f229ea8",
+      "string_address": "0x6f92b884"
+    },
+    {
+      "name": "slowoff",
+      "id": 852077,
+      "call_site": "0x6f229eb9",
+      "string_address": "0x6f92b87c"
+    },
+    {
+      "name": "spellsteal",
+      "id": 852483,
+      "call_site": "0x6f229eca",
+      "string_address": "0x6f92b870"
+    },
+    {
+      "name": "spellstealon",
+      "id": 852484,
+      "call_site": "0x6f229edb",
+      "string_address": "0x6f92b860"
+    },
+    {
+      "name": "spellstealoff",
+      "id": 852485,
+      "call_site": "0x6f229eec",
+      "string_address": "0x6f92b850"
+    },
+    {
+      "name": "tankdroppilot",
+      "id": 852079,
+      "call_site": "0x6f229efd",
+      "string_address": "0x6f92b840"
+    },
+    {
+      "name": "tankloadpilot",
+      "id": 852080,
+      "call_site": "0x6f229f0e",
+      "string_address": "0x6f92b830"
+    },
+    {
+      "name": "tankpilot",
+      "id": 852081,
+      "call_site": "0x6f229f1f",
+      "string_address": "0x6f92b824"
+    },
+    {
+      "name": "townbellon",
+      "id": 852082,
+      "call_site": "0x6f229f30",
+      "string_address": "0x6f92b818"
+    },
+    {
+      "name": "townbelloff",
+      "id": 852083,
+      "call_site": "0x6f229f41",
+      "string_address": "0x6f92b80c"
+    },
+    {
+      "name": "avatar",
+      "id": 852086,
+      "call_site": "0x6f229f52",
+      "string_address": "0x6f92b804"
+    },
+    {
+      "name": "unavatar",
+      "id": 852087,
+      "call_site": "0x6f229f63",
+      "string_address": "0x6f92b7f8"
+    },
+    {
+      "name": "banish",
+      "id": 852486,
+      "call_site": "0x6f229f74",
+      "string_address": "0x6f92b7f0"
+    },
+    {
+      "name": "blizzard",
+      "id": 852089,
+      "call_site": "0x6f229f85",
+      "string_address": "0x6f92b7e4"
+    },
+    {
+      "name": "divineshield",
+      "id": 852090,
+      "call_site": "0x6f229f96",
+      "string_address": "0x6f92b7d4"
+    },
+    {
+      "name": "undivineshield",
+      "id": 852091,
+      "call_site": "0x6f229fa7",
+      "string_address": "0x6f92b7c4"
+    },
+    {
+      "name": "flamestrike",
+      "id": 852488,
+      "call_site": "0x6f229fb8",
+      "string_address": "0x6f92b7b8"
+    },
+    {
+      "name": "holybolt",
+      "id": 852092,
+      "call_site": "0x6f229fc9",
+      "string_address": "0x6f92b7ac"
+    },
+    {
+      "name": "manashieldon",
+      "id": 852589,
+      "call_site": "0x6f229fda",
+      "string_address": "0x6f92b79c"
+    },
+    {
+      "name": "manashieldoff",
+      "id": 852590,
+      "call_site": "0x6f229feb",
+      "string_address": "0x6f92b78c"
+    },
+    {
+      "name": "massteleport",
+      "id": 852093,
+      "call_site": "0x6f229ffc",
+      "string_address": "0x6f92b77c"
+    },
+    {
+      "name": "summonphoenix",
+      "id": 852489,
+      "call_site": "0x6f22a00d",
+      "string_address": "0x6f92b76c"
+    },
+    {
+      "name": "resurrection",
+      "id": 852094,
+      "call_site": "0x6f22a01e",
+      "string_address": "0x6f92b75c"
+    },
+    {
+      "name": "thunderbolt",
+      "id": 852095,
+      "call_site": "0x6f22a02f",
+      "string_address": "0x6f92b750"
+    },
+    {
+      "name": "thunderclap",
+      "id": 852096,
+      "call_site": "0x6f22a040",
+      "string_address": "0x6f92b744"
+    },
+    {
+      "name": "waterelemental",
+      "id": 852097,
+      "call_site": "0x6f22a051",
+      "string_address": "0x6f92b734"
+    },
+    {
+      "name": "ancestralspirit",
+      "id": 852490,
+      "call_site": "0x6f22a062",
+      "string_address": "0x6f92b724"
+    },
+    {
+      "name": "ancestralspirittarget",
+      "id": 852491,
+      "call_site": "0x6f22a073",
+      "string_address": "0x6f92b70c"
+    },
+    {
+      "name": "battlestations",
+      "id": 852099,
+      "call_site": "0x6f22a084",
+      "string_address": "0x6f92b6fc"
+    },
+    {
+      "name": "berserk",
+      "id": 852100,
+      "call_site": "0x6f22a095",
+      "string_address": "0x6f92b6f4"
+    },
+    {
+      "name": "bloodlust",
+      "id": 852101,
+      "call_site": "0x6f22a0a6",
+      "string_address": "0x6f92b6e8"
+    },
+    {
+      "name": "bloodluston",
+      "id": 852102,
+      "call_site": "0x6f22a0b7",
+      "string_address": "0x6f92b6dc"
+    },
+    {
+      "name": "bloodlustoff",
+      "id": 852103,
+      "call_site": "0x6f22a0c8",
+      "string_address": "0x6f92b6cc"
+    },
+    {
+      "name": "corporealform",
+      "id": 852493,
+      "call_site": "0x6f22a0d9",
+      "string_address": "0x6f92b6bc"
+    },
+    {
+      "name": "uncorporealform",
+      "id": 852494,
+      "call_site": "0x6f22a0ea",
+      "string_address": "0x6f92b6ac"
+    },
+    {
+      "name": "devour",
+      "id": 852104,
+      "call_site": "0x6f22a0fb",
+      "string_address": "0x6f92b6a4"
+    },
+    {
+      "name": "disenchant",
+      "id": 852495,
+      "call_site": "0x6f22a10c",
+      "string_address": "0x6f92b698"
+    },
+    {
+      "name": "ensnare",
+      "id": 852106,
+      "call_site": "0x6f22a11d",
+      "string_address": "0x6f92b690"
+    },
+    {
+      "name": "ensnareon",
+      "id": 852107,
+      "call_site": "0x6f22a12e",
+      "string_address": "0x6f92b684"
+    },
+    {
+      "name": "ensnareoff",
+      "id": 852108,
+      "call_site": "0x6f22a13f",
+      "string_address": "0x6f92b678"
+    },
+    {
+      "name": "etherealform",
+      "id": 852496,
+      "call_site": "0x6f22a150",
+      "string_address": "0x6f92b668"
+    },
+    {
+      "name": "unetherealform",
+      "id": 852497,
+      "call_site": "0x6f22a161",
+      "string_address": "0x6f92b658"
+    },
+    {
+      "name": "evileye",
+      "id": 852105,
+      "call_site": "0x6f22a172",
+      "string_address": "0x6f92b650"
+    },
+    {
+      "name": "healingward",
+      "id": 852109,
+      "call_site": "0x6f22a183",
+      "string_address": "0x6f92b644"
+    },
+    {
+      "name": "lightningshield",
+      "id": 852110,
+      "call_site": "0x6f22a194",
+      "string_address": "0x6f92b634"
+    },
+    {
+      "name": "purge",
+      "id": 852111,
+      "call_site": "0x6f22a1a5",
+      "string_address": "0x6f92b62c"
+    },
+    {
+      "name": "spiritlink",
+      "id": 852499,
+      "call_site": "0x6f22a1b6",
+      "string_address": "0x6f92b620"
+    },
+    {
+      "name": "standdown",
+      "id": 852113,
+      "call_site": "0x6f22a1c7",
+      "string_address": "0x6f92b614"
+    },
+    {
+      "name": "stasistrap",
+      "id": 852114,
+      "call_site": "0x6f22a1d8",
+      "string_address": "0x6f92b608"
+    },
+    {
+      "name": "unstableconcoction",
+      "id": 852500,
+      "call_site": "0x6f22a1e9",
+      "string_address": "0x6f92b5f4"
+    },
+    {
+      "name": "chainlightning",
+      "id": 852119,
+      "call_site": "0x6f22a1fa",
+      "string_address": "0x6f92b5e4"
+    },
+    {
+      "name": "earthquake",
+      "id": 852121,
+      "call_site": "0x6f22a20b",
+      "string_address": "0x6f92b5d8"
+    },
+    {
+      "name": "farsight",
+      "id": 852122,
+      "call_site": "0x6f22a21c",
+      "string_address": "0x6f92b5cc"
+    },
+    {
+      "name": "healingwave",
+      "id": 852501,
+      "call_site": "0x6f22a22d",
+      "string_address": "0x6f92b5c0"
+    },
+    {
+      "name": "hex",
+      "id": 852502,
+      "call_site": "0x6f22a23e",
+      "string_address": "0x6f92b5bc"
+    },
+    {
+      "name": "mirrorimage",
+      "id": 852123,
+      "call_site": "0x6f22a24f",
+      "string_address": "0x6f92b5b0"
+    },
+    {
+      "name": "shockwave",
+      "id": 852125,
+      "call_site": "0x6f22a260",
+      "string_address": "0x6f92b5a4"
+    },
+    {
+      "name": "spiritwolf",
+      "id": 852126,
+      "call_site": "0x6f22a271",
+      "string_address": "0x6f92b598"
+    },
+    {
+      "name": "stomp",
+      "id": 852127,
+      "call_site": "0x6f22a282",
+      "string_address": "0x6f92b590"
+    },
+    {
+      "name": "voodoo",
+      "id": 852503,
+      "call_site": "0x6f22a293",
+      "string_address": "0x6f92b588"
+    },
+    {
+      "name": "ward",
+      "id": 852504,
+      "call_site": "0x6f22a2a4",
+      "string_address": "0x6f92b580"
+    },
+    {
+      "name": "whirlwind",
+      "id": 852128,
+      "call_site": "0x6f22a2b5",
+      "string_address": "0x6f92b574"
+    },
+    {
+      "name": "windwalk",
+      "id": 852129,
+      "call_site": "0x6f22a2c6",
+      "string_address": "0x6f92b568"
+    },
+    {
+      "name": "unwindwalk",
+      "id": 852130,
+      "call_site": "0x6f22a2d7",
+      "string_address": "0x6f92b55c"
+    },
+    {
+      "name": "ambush",
+      "id": 852131,
+      "call_site": "0x6f22a2e8",
+      "string_address": "0x6f92b554"
+    },
+    {
+      "name": "autodispel",
+      "id": 852132,
+      "call_site": "0x6f22a2f9",
+      "string_address": "0x6f92b548"
+    },
+    {
+      "name": "autodispelon",
+      "id": 852133,
+      "call_site": "0x6f22a30a",
+      "string_address": "0x6f92b538"
+    },
+    {
+      "name": "autodispeloff",
+      "id": 852134,
+      "call_site": "0x6f22a31b",
+      "string_address": "0x6f92b528"
+    },
+    {
+      "name": "barkskin",
+      "id": 852135,
+      "call_site": "0x6f22a32c",
+      "string_address": "0x6f92b51c"
+    },
+    {
+      "name": "barkskinon",
+      "id": 852136,
+      "call_site": "0x6f22a33d",
+      "string_address": "0x6f92b510"
+    },
+    {
+      "name": "barkskinoff",
+      "id": 852137,
+      "call_site": "0x6f22a34e",
+      "string_address": "0x6f92b504"
+    },
+    {
+      "name": "bearform",
+      "id": 852138,
+      "call_site": "0x6f22a35f",
+      "string_address": "0x6f92b4f8"
+    },
+    {
+      "name": "unbearform",
+      "id": 852139,
+      "call_site": "0x6f22a370",
+      "string_address": "0x6f92b4ec"
+    },
+    {
+      "name": "corrosivebreath",
+      "id": 852140,
+      "call_site": "0x6f22a381",
+      "string_address": "0x6f92b4dc"
+    },
+    {
+      "name": "loadarcher",
+      "id": 852142,
+      "call_site": "0x6f22a392",
+      "string_address": "0x6f92b4d0"
+    },
+    {
+      "name": "mounthippogryph",
+      "id": 852143,
+      "call_site": "0x6f22a3a3",
+      "string_address": "0x6f92b4c0"
+    },
+    {
+      "name": "coupleinstant",
+      "id": 852508,
+      "call_site": "0x6f22a3b4",
+      "string_address": "0x6f92b4b0"
+    },
+    {
+      "name": "coupletarget",
+      "id": 852507,
+      "call_site": "0x6f22a3c5",
+      "string_address": "0x6f92b4a0"
+    },
+    {
+      "name": "cyclone",
+      "id": 852144,
+      "call_site": "0x6f22a3d6",
+      "string_address": "0x6f92b498"
+    },
+    {
+      "name": "decouple",
+      "id": 852509,
+      "call_site": "0x6f22a3e7",
+      "string_address": "0x6f92b48c"
+    },
+    {
+      "name": "detonate",
+      "id": 852145,
+      "call_site": "0x6f22a3f8",
+      "string_address": "0x6f92b480"
+    },
+    {
+      "name": "eattree",
+      "id": 852146,
+      "call_site": "0x6f22a409",
+      "string_address": "0x6f92b478"
+    },
+    {
+      "name": "entangle",
+      "id": 852147,
+      "call_site": "0x6f22a41a",
+      "string_address": "0x6f92b46c"
+    },
+    {
+      "name": "entangleinstant",
+      "id": 852148,
+      "call_site": "0x6f22a42b",
+      "string_address": "0x6f92b45c"
+    },
+    {
+      "name": "autoentangle",
+      "id": 852505,
+      "call_site": "0x6f22a43c",
+      "string_address": "0x6f92b44c"
+    },
+    {
+      "name": "autoentangleinstant",
+      "id": 852506,
+      "call_site": "0x6f22a44d",
+      "string_address": "0x6f92b438"
+    },
+    {
+      "name": "faeriefire",
+      "id": 852149,
+      "call_site": "0x6f22a45e",
+      "string_address": "0x6f92b42c"
+    },
+    {
+      "name": "faeriefireon",
+      "id": 852150,
+      "call_site": "0x6f22a46f",
+      "string_address": "0x6f92b41c"
+    },
+    {
+      "name": "faeriefireoff",
+      "id": 852151,
+      "call_site": "0x6f22a480",
+      "string_address": "0x6f92b40c"
+    },
+    {
+      "name": "grabtree",
+      "id": 852511,
+      "call_site": "0x6f22a491",
+      "string_address": "0x6f92b400"
+    },
+    {
+      "name": "manaflareon",
+      "id": 852512,
+      "call_site": "0x6f22a4a2",
+      "string_address": "0x6f92b3f4"
+    },
+    {
+      "name": "manaflareoff",
+      "id": 852513,
+      "call_site": "0x6f22a4b3",
+      "string_address": "0x6f92b3e4"
+    },
+    {
+      "name": "phaseshift",
+      "id": 852514,
+      "call_site": "0x6f22a4c4",
+      "string_address": "0x6f92b3d8"
+    },
+    {
+      "name": "phaseshifton",
+      "id": 852515,
+      "call_site": "0x6f22a4d5",
+      "string_address": "0x6f92b3c8"
+    },
+    {
+      "name": "phaseshiftoff",
+      "id": 852516,
+      "call_site": "0x6f22a4e6",
+      "string_address": "0x6f92b3b8"
+    },
+    {
+      "name": "phaseshiftinstant",
+      "id": 852517,
+      "call_site": "0x6f22a4f7",
+      "string_address": "0x6f92b3a4"
+    },
+    {
+      "name": "ravenform",
+      "id": 852155,
+      "call_site": "0x6f22a508",
+      "string_address": "0x6f92b398"
+    },
+    {
+      "name": "unravenform",
+      "id": 852156,
+      "call_site": "0x6f22a519",
+      "string_address": "0x6f92b38c"
+    },
+    {
+      "name": "recharge",
+      "id": 852157,
+      "call_site": "0x6f22a52a",
+      "string_address": "0x6f92ba1c"
+    },
+    {
+      "name": "rechargeon",
+      "id": 852158,
+      "call_site": "0x6f22a53b",
+      "string_address": "0x6f92b380"
+    },
+    {
+      "name": "rechargeoff",
+      "id": 852159,
+      "call_site": "0x6f22a54c",
+      "string_address": "0x6f92b374"
+    },
+    {
+      "name": "rejuvination",
+      "id": 852160,
+      "call_site": "0x6f22a55d",
+      "string_address": "0x6f92b364"
+    },
+    {
+      "name": "renew",
+      "id": 852161,
+      "call_site": "0x6f22a56e",
+      "string_address": "0x6f92b35c"
+    },
+    {
+      "name": "renewon",
+      "id": 852162,
+      "call_site": "0x6f22a57f",
+      "string_address": "0x6f92b354"
+    },
+    {
+      "name": "renewoff",
+      "id": 852163,
+      "call_site": "0x6f22a590",
+      "string_address": "0x6f92b348"
+    },
+    {
+      "name": "roar",
+      "id": 852164,
+      "call_site": "0x6f22a5a1",
+      "string_address": "0x6f92b340"
+    },
+    {
+      "name": "root",
+      "id": 852165,
+      "call_site": "0x6f22a5b2",
+      "string_address": "0x6f92b338"
+    },
+    {
+      "name": "unroot",
+      "id": 852166,
+      "call_site": "0x6f22a5c3",
+      "string_address": "0x6f92b330"
+    },
+    {
+      "name": "sentinel",
+      "id": 852182,
+      "call_site": "0x6f22a5d4",
+      "string_address": "0x6f92b324"
+    },
+    {
+      "name": "taunt",
+      "id": 852520,
+      "call_site": "0x6f22a5e5",
+      "string_address": "0x6f92b31c"
+    },
+    {
+      "name": "vengeance",
+      "id": 852521,
+      "call_site": "0x6f22a5f6",
+      "string_address": "0x6f92b310"
+    },
+    {
+      "name": "vengeanceon",
+      "id": 852522,
+      "call_site": "0x6f22a607",
+      "string_address": "0x6f92b304"
+    },
+    {
+      "name": "vengeanceoff",
+      "id": 852523,
+      "call_site": "0x6f22a618",
+      "string_address": "0x6f92b2f4"
+    },
+    {
+      "name": "vengeanceinstant",
+      "id": 852524,
+      "call_site": "0x6f22a629",
+      "string_address": "0x6f92b2e0"
+    },
+    {
+      "name": "wispharvest",
+      "id": 852214,
+      "call_site": "0x6f22a63a",
+      "string_address": "0x6f92b2d4"
+    },
+    {
+      "name": "blink",
+      "id": 852525,
+      "call_site": "0x6f22a64b",
+      "string_address": "0x6f92b2cc"
+    },
+    {
+      "name": "entanglingroots",
+      "id": 852171,
+      "call_site": "0x6f22a65c",
+      "string_address": "0x6f92b2bc"
+    },
+    {
+      "name": "fanofknives",
+      "id": 852526,
+      "call_site": "0x6f22a66d",
+      "string_address": "0x6f92b2b0"
+    },
+    {
+      "name": "flamingarrowstarg",
+      "id": 852173,
+      "call_site": "0x6f22a67e",
+      "string_address": "0x6f92b29c"
+    },
+    {
+      "name": "flamingarrows",
+      "id": 852174,
+      "call_site": "0x6f22a68f",
+      "string_address": "0x6f92b28c"
+    },
+    {
+      "name": "unflamingarrows",
+      "id": 852175,
+      "call_site": "0x6f22a6a0",
+      "string_address": "0x6f92b27c"
+    },
+    {
+      "name": "forceofnature",
+      "id": 852176,
+      "call_site": "0x6f22a6b1",
+      "string_address": "0x6f92b26c"
+    },
+    {
+      "name": "immolation",
+      "id": 852177,
+      "call_site": "0x6f22a6c2",
+      "string_address": "0x6f92b260"
+    },
+    {
+      "name": "unimmolation",
+      "id": 852178,
+      "call_site": "0x6f22a6d3",
+      "string_address": "0x6f92b250"
+    },
+    {
+      "name": "manaburn",
+      "id": 852179,
+      "call_site": "0x6f22a6e4",
+      "string_address": "0x6f92b244"
+    },
+    {
+      "name": "metamorphosis",
+      "id": 852180,
+      "call_site": "0x6f22a6f5",
+      "string_address": "0x6f92b234"
+    },
+    {
+      "name": "scout",
+      "id": 852181,
+      "call_site": "0x6f22a706",
+      "string_address": "0x6f92b22c"
+    },
+    {
+      "name": "shadowstrike",
+      "id": 852527,
+      "call_site": "0x6f22a717",
+      "string_address": "0x6f92b21c"
+    },
+    {
+      "name": "spiritofvengeance",
+      "id": 852528,
+      "call_site": "0x6f22a728",
+      "string_address": "0x6f92b208"
+    },
+    {
+      "name": "starfall",
+      "id": 852183,
+      "call_site": "0x6f22a739",
+      "string_address": "0x6f92b1fc"
+    },
+    {
+      "name": "tranquility",
+      "id": 852184,
+      "call_site": "0x6f22a74a",
+      "string_address": "0x6f92b1f0"
+    },
+    {
+      "name": "absorb",
+      "id": 852529,
+      "call_site": "0x6f22a75b",
+      "string_address": "0x6f92b1e8"
+    },
+    {
+      "name": "acolyteharvest",
+      "id": 852185,
+      "call_site": "0x6f22a76c",
+      "string_address": "0x6f92b1d8"
+    },
+    {
+      "name": "antimagicshell",
+      "id": 852186,
+      "call_site": "0x6f22a77d",
+      "string_address": "0x6f92b1c8"
+    },
+    {
+      "name": "avengerform",
+      "id": 852531,
+      "call_site": "0x6f22a78e",
+      "string_address": "0x6f92b1bc"
+    },
+    {
+      "name": "unavengerform",
+      "id": 852532,
+      "call_site": "0x6f22a79f",
+      "string_address": "0x6f92b1ac"
+    },
+    {
+      "name": "blight",
+      "id": 852187,
+      "call_site": "0x6f22a7b0",
+      "string_address": "0x6f92b1a4"
+    },
+    {
+      "name": "burrow",
+      "id": 852533,
+      "call_site": "0x6f22a7c1",
+      "string_address": "0x6f92b19c"
+    },
+    {
+      "name": "unburrow",
+      "id": 852534,
+      "call_site": "0x6f22a7d2",
+      "string_address": "0x6f92b190"
+    },
+    {
+      "name": "cannibalize",
+      "id": 852188,
+      "call_site": "0x6f22a7e3",
+      "string_address": "0x6f92b184"
+    },
+    {
+      "name": "cripple",
+      "id": 852189,
+      "call_site": "0x6f22a7f4",
+      "string_address": "0x6f92b17c"
+    },
+    {
+      "name": "curse",
+      "id": 852190,
+      "call_site": "0x6f22a805",
+      "string_address": "0x6f92b174"
+    },
+    {
+      "name": "curseon",
+      "id": 852191,
+      "call_site": "0x6f22a816",
+      "string_address": "0x6f92b16c"
+    },
+    {
+      "name": "curseoff",
+      "id": 852192,
+      "call_site": "0x6f22a827",
+      "string_address": "0x6f92b160"
+    },
+    {
+      "name": "devourmagic",
+      "id": 852536,
+      "call_site": "0x6f22a838",
+      "string_address": "0x6f92b154"
+    },
+    {
+      "name": "flamingattacktarg",
+      "id": 852539,
+      "call_site": "0x6f22a849",
+      "string_address": "0x6f92b140"
+    },
+    {
+      "name": "flamingattack",
+      "id": 852540,
+      "call_site": "0x6f22a85a",
+      "string_address": "0x6f92b130"
+    },
+    {
+      "name": "unflamingattack",
+      "id": 852541,
+      "call_site": "0x6f22a86b",
+      "string_address": "0x6f92b120"
+    },
+    {
+      "name": "freezingbreath",
+      "id": 852195,
+      "call_site": "0x6f22a87c",
+      "string_address": "0x6f92b110"
+    },
+    {
+      "name": "possession",
+      "id": 852196,
+      "call_site": "0x6f22a88d",
+      "string_address": "0x6f92b104"
+    },
+    {
+      "name": "raisedead",
+      "id": 852197,
+      "call_site": "0x6f22a89e",
+      "string_address": "0x6f92b0f8"
+    },
+    {
+      "name": "raisedeadon",
+      "id": 852198,
+      "call_site": "0x6f22a8af",
+      "string_address": "0x6f92b0ec"
+    },
+    {
+      "name": "raisedeadoff",
+      "id": 852199,
+      "call_site": "0x6f22a8c0",
+      "string_address": "0x6f92b0dc"
+    },
+    {
+      "name": "instant",
+      "id": 852200,
+      "call_site": "0x6f22a8d1",
+      "string_address": "0x6f92b0d4"
+    },
+    {
+      "name": "replenish",
+      "id": 852542,
+      "call_site": "0x6f22a8e2",
+      "string_address": "0x6f92b0c8"
+    },
+    {
+      "name": "replenishon",
+      "id": 852543,
+      "call_site": "0x6f22a8f3",
+      "string_address": "0x6f92b0bc"
+    },
+    {
+      "name": "replenishoff",
+      "id": 852544,
+      "call_site": "0x6f22a904",
+      "string_address": "0x6f92b0ac"
+    },
+    {
+      "name": "replenishlife",
+      "id": 852545,
+      "call_site": "0x6f22a915",
+      "string_address": "0x6f92b09c"
+    },
+    {
+      "name": "replenishlifeon",
+      "id": 852546,
+      "call_site": "0x6f22a926",
+      "string_address": "0x6f92b08c"
+    },
+    {
+      "name": "replenishlifeoff",
+      "id": 852547,
+      "call_site": "0x6f22a937",
+      "string_address": "0x6f92b078"
+    },
+    {
+      "name": "replenishmana",
+      "id": 852548,
+      "call_site": "0x6f22a948",
+      "string_address": "0x6f92b068"
+    },
+    {
+      "name": "replenishmanaon",
+      "id": 852549,
+      "call_site": "0x6f22a959",
+      "string_address": "0x6f92b058"
+    },
+    {
+      "name": "replenishmanaoff",
+      "id": 852550,
+      "call_site": "0x6f22a96a",
+      "string_address": "0x6f92b044"
+    },
+    {
+      "name": "requestsacrifice",
+      "id": 852201,
+      "call_site": "0x6f22a97b",
+      "string_address": "0x6f92b030"
+    },
+    {
+      "name": "restoration",
+      "id": 852202,
+      "call_site": "0x6f22a98c",
+      "string_address": "0x6f92b024"
+    },
+    {
+      "name": "restorationon",
+      "id": 852203,
+      "call_site": "0x6f22a99d",
+      "string_address": "0x6f92b014"
+    },
+    {
+      "name": "restorationoff",
+      "id": 852204,
+      "call_site": "0x6f22a9ae",
+      "string_address": "0x6f92b004"
+    },
+    {
+      "name": "sacrifice",
+      "id": 852205,
+      "call_site": "0x6f22a9bf",
+      "string_address": "0x6f92aff8"
+    },
+    {
+      "name": "stoneform",
+      "id": 852206,
+      "call_site": "0x6f22a9d0",
+      "string_address": "0x6f92afec"
+    },
+    {
+      "name": "unstoneform",
+      "id": 852207,
+      "call_site": "0x6f22a9e1",
+      "string_address": "0x6f92afe0"
+    },
+    {
+      "name": "unholyfrenzy",
+      "id": 852209,
+      "call_site": "0x6f22a9f2",
+      "string_address": "0x6f92afd0"
+    },
+    {
+      "name": "unsummon",
+      "id": 852210,
+      "call_site": "0x6f22aa03",
+      "string_address": "0x6f92afc4"
+    },
+    {
+      "name": "web",
+      "id": 852211,
+      "call_site": "0x6f22aa14",
+      "string_address": "0x6f92afc0"
+    },
+    {
+      "name": "webon",
+      "id": 852212,
+      "call_site": "0x6f22aa25",
+      "string_address": "0x6f92afb8"
+    },
+    {
+      "name": "weboff",
+      "id": 852213,
+      "call_site": "0x6f22aa36",
+      "string_address": "0x6f92afb0"
+    },
+    {
+      "name": "animatedead",
+      "id": 852217,
+      "call_site": "0x6f22aa47",
+      "string_address": "0x6f92afa4"
+    },
+    {
+      "name": "auraunholy",
+      "id": 852215,
+      "call_site": "0x6f22aa58",
+      "string_address": "0x6f92af98"
+    },
+    {
+      "name": "auravampiric",
+      "id": 852216,
+      "call_site": "0x6f22aa69",
+      "string_address": "0x6f92af88"
+    },
+    {
+      "name": "carrionscarabs",
+      "id": 852551,
+      "call_site": "0x6f22aa7a",
+      "string_address": "0x6f92af78"
+    },
+    {
+      "name": "carrionscarabson",
+      "id": 852552,
+      "call_site": "0x6f22aa8b",
+      "string_address": "0x6f92af64"
+    },
+    {
+      "name": "carrionscarabsoff",
+      "id": 852553,
+      "call_site": "0x6f22aa9c",
+      "string_address": "0x6f92af50"
+    },
+    {
+      "name": "carrionscarabsinstant",
+      "id": 852554,
+      "call_site": "0x6f22aaad",
+      "string_address": "0x6f92af38"
+    },
+    {
+      "name": "carrionswarm",
+      "id": 852218,
+      "call_site": "0x6f22aabe",
+      "string_address": "0x6f92af28"
+    },
+    {
+      "name": "darkritual",
+      "id": 852219,
+      "call_site": "0x6f22aacf",
+      "string_address": "0x6f92af1c"
+    },
+    {
+      "name": "darksummoning",
+      "id": 852220,
+      "call_site": "0x6f22aae0",
+      "string_address": "0x6f92af0c"
+    },
+    {
+      "name": "deathanddecay",
+      "id": 852221,
+      "call_site": "0x6f22aaf1",
+      "string_address": "0x6f92aefc"
+    },
+    {
+      "name": "deathcoil",
+      "id": 852222,
+      "call_site": "0x6f22ab02",
+      "string_address": "0x6f92aef0"
+    },
+    {
+      "name": "deathpact",
+      "id": 852223,
+      "call_site": "0x6f22ab13",
+      "string_address": "0x6f92aee4"
+    },
+    {
+      "name": "dreadlordinferno",
+      "id": 852224,
+      "call_site": "0x6f22ab24",
+      "string_address": "0x6f92aed0"
+    },
+    {
+      "name": "frostarmor",
+      "id": 852225,
+      "call_site": "0x6f22ab35",
+      "string_address": "0x6f92aec4"
+    },
+    {
+      "name": "frostarmoron",
+      "id": 852458,
+      "call_site": "0x6f22ab46",
+      "string_address": "0x6f92aeb4"
+    },
+    {
+      "name": "frostarmoroff",
+      "id": 852459,
+      "call_site": "0x6f22ab57",
+      "string_address": "0x6f92aea4"
+    },
+    {
+      "name": "frostnova",
+      "id": 852226,
+      "call_site": "0x6f22ab68",
+      "string_address": "0x6f92ae98"
+    },
+    {
+      "name": "impale",
+      "id": 852555,
+      "call_site": "0x6f22ab79",
+      "string_address": "0x6f92ae90"
+    },
+    {
+      "name": "locustswarm",
+      "id": 852556,
+      "call_site": "0x6f22ab8a",
+      "string_address": "0x6f92ae84"
+    },
+    {
+      "name": "sleep",
+      "id": 852227,
+      "call_site": "0x6f22ab9b",
+      "string_address": "0x6f92ae7c"
+    },
+    {
+      "name": "breathoffrost",
+      "id": 852560,
+      "call_site": "0x6f22abac",
+      "string_address": "0x6f92ae6c"
+    },
+    {
+      "name": "creepanimatedead",
+      "id": 852246,
+      "call_site": "0x6f22abbd",
+      "string_address": "0x6f92ae58"
+    },
+    {
+      "name": "creepdevour",
+      "id": 852247,
+      "call_site": "0x6f22abce",
+      "string_address": "0x6f92ae4c"
+    },
+    {
+      "name": "creepheal",
+      "id": 852248,
+      "call_site": "0x6f22abdf",
+      "string_address": "0x6f92ae40"
+    },
+    {
+      "name": "creephealon",
+      "id": 852249,
+      "call_site": "0x6f22abf0",
+      "string_address": "0x6f92ae34"
+    },
+    {
+      "name": "creephealoff",
+      "id": 852250,
+      "call_site": "0x6f22ac01",
+      "string_address": "0x6f92ae24"
+    },
+    {
+      "name": "creepthunderbolt",
+      "id": 852252,
+      "call_site": "0x6f22ac12",
+      "string_address": "0x6f92ae10"
+    },
+    {
+      "name": "creepthunderclap",
+      "id": 852253,
+      "call_site": "0x6f22ac23",
+      "string_address": "0x6f92adfc"
+    },
+    {
+      "name": "frenzy",
+      "id": 852561,
+      "call_site": "0x6f22ac34",
+      "string_address": "0x6f92adf4"
+    },
+    {
+      "name": "frenzyon",
+      "id": 852562,
+      "call_site": "0x6f22ac45",
+      "string_address": "0x6f92ade8"
+    },
+    {
+      "name": "frenzyoff",
+      "id": 852563,
+      "call_site": "0x6f22ac56",
+      "string_address": "0x6f92addc"
+    },
+    {
+      "name": "mechanicalcritter",
+      "id": 852564,
+      "call_site": "0x6f22ac67",
+      "string_address": "0x6f92adc8"
+    },
+    {
+      "name": "mindrot",
+      "id": 852565,
+      "call_site": "0x6f22ac78",
+      "string_address": "0x6f92adc0"
+    },
+    {
+      "name": "gold2lumber",
+      "id": 852233,
+      "call_site": "0x6f22ac89",
+      "string_address": "0x6f92adb4"
+    },
+    {
+      "name": "lumber2gold",
+      "id": 852234,
+      "call_site": "0x6f22ac9a",
+      "string_address": "0x6f92ada8"
+    },
+    {
+      "name": "neutralinteract",
+      "id": 852566,
+      "call_site": "0x6f22acab",
+      "string_address": "0x6f92ad98"
+    },
+    {
+      "name": "spies",
+      "id": 852235,
+      "call_site": "0x6f22acbc",
+      "string_address": "0x6f92ad90"
+    },
+    {
+      "name": "preservation",
+      "id": 852568,
+      "call_site": "0x6f22accd",
+      "string_address": "0x6f92ad80"
+    },
+    {
+      "name": "request_hero",
+      "id": 852239,
+      "call_site": "0x6f22acde",
+      "string_address": "0x6f92ad70"
+    },
+    {
+      "name": "sanctuary",
+      "id": 852569,
+      "call_site": "0x6f22acef",
+      "string_address": "0x6f92ad64"
+    },
+    {
+      "name": "shadowsight",
+      "id": 852570,
+      "call_site": "0x6f22ad00",
+      "string_address": "0x6f92ad58"
+    },
+    {
+      "name": "spellshield",
+      "id": 852571,
+      "call_site": "0x6f22ad11",
+      "string_address": "0x6f92ad4c"
+    },
+    {
+      "name": "spellshieldaoe",
+      "id": 852572,
+      "call_site": "0x6f22ad22",
+      "string_address": "0x6f92ad3c"
+    },
+    {
+      "name": "spirittroll",
+      "id": 852573,
+      "call_site": "0x6f22ad33",
+      "string_address": "0x6f92ad30"
+    },
+    {
+      "name": "steal",
+      "id": 852574,
+      "call_site": "0x6f22ad44",
+      "string_address": "0x6f92ad28"
+    },
+    {
+      "name": "attributemodskill",
+      "id": 852576,
+      "call_site": "0x6f22ad55",
+      "string_address": "0x6f92ad14"
+    },
+    {
+      "name": "blackarrow",
+      "id": 852577,
+      "call_site": "0x6f22ad66",
+      "string_address": "0x6f92ad08"
+    },
+    {
+      "name": "blackarrowon",
+      "id": 852578,
+      "call_site": "0x6f22ad77",
+      "string_address": "0x6f92acf8"
+    },
+    {
+      "name": "blackarrowoff",
+      "id": 852579,
+      "call_site": "0x6f22ad88",
+      "string_address": "0x6f92ace8"
+    },
+    {
+      "name": "breathoffire",
+      "id": 852580,
+      "call_site": "0x6f22ad99",
+      "string_address": "0x6f92acd8"
+    },
+    {
+      "name": "charm",
+      "id": 852581,
+      "call_site": "0x6f22adaa",
+      "string_address": "0x6f92acd0"
+    },
+    {
+      "name": "coldarrowstarg",
+      "id": 852243,
+      "call_site": "0x6f22adbb",
+      "string_address": "0x6f92acc0"
+    },
+    {
+      "name": "coldarrows",
+      "id": 852244,
+      "call_site": "0x6f22adcc",
+      "string_address": "0x6f92acb4"
+    },
+    {
+      "name": "uncoldarrows",
+      "id": 852245,
+      "call_site": "0x6f22addd",
+      "string_address": "0x6f92aca4"
+    },
+    {
+      "name": "doom",
+      "id": 852583,
+      "call_site": "0x6f22adee",
+      "string_address": "0x6f92ac9c"
+    },
+    {
+      "name": "drain",
+      "id": 852487,
+      "call_site": "0x6f22adff",
+      "string_address": "0x6f92ac94"
+    },
+    {
+      "name": "drunkenhaze",
+      "id": 852585,
+      "call_site": "0x6f22ae10",
+      "string_address": "0x6f92ac88"
+    },
+    {
+      "name": "elementalfury",
+      "id": 852586,
+      "call_site": "0x6f22ae21",
+      "string_address": "0x6f92ac78"
+    },
+    {
+      "name": "forkedlightning",
+      "id": 852587,
+      "call_site": "0x6f22ae32",
+      "string_address": "0x6f92ac68"
+    },
+    {
+      "name": "howlofterror",
+      "id": 852588,
+      "call_site": "0x6f22ae43",
+      "string_address": "0x6f92ac58"
+    },
+    {
+      "name": "inferno",
+      "id": 852232,
+      "call_site": "0x6f22ae54",
+      "string_address": "0x6f92ac50"
+    },
+    {
+      "name": "monsoon",
+      "id": 852591,
+      "call_site": "0x6f22ae65",
+      "string_address": "0x6f92ac48"
+    },
+    {
+      "name": "poisonarrowstarg",
+      "id": 852254,
+      "call_site": "0x6f22ae76",
+      "string_address": "0x6f92ac34"
+    },
+    {
+      "name": "poisonarrows",
+      "id": 852255,
+      "call_site": "0x6f22ae87",
+      "string_address": "0x6f92ac24"
+    },
+    {
+      "name": "unpoisonarrows",
+      "id": 852256,
+      "call_site": "0x6f22ae98",
+      "string_address": "0x6f92ac14"
+    },
+    {
+      "name": "silence",
+      "id": 852592,
+      "call_site": "0x6f22aea9",
+      "string_address": "0x6f92ac0c"
+    },
+    {
+      "name": "stampede",
+      "id": 852593,
+      "call_site": "0x6f22aeba",
+      "string_address": "0x6f92ac00"
+    },
+    {
+      "name": "summongrizzly",
+      "id": 852594,
+      "call_site": "0x6f22aecb",
+      "string_address": "0x6f92abf0"
+    },
+    {
+      "name": "summonquillbeast",
+      "id": 852595,
+      "call_site": "0x6f22aedc",
+      "string_address": "0x6f92abdc"
+    },
+    {
+      "name": "summonwareagle",
+      "id": 852596,
+      "call_site": "0x6f22aeed",
+      "string_address": "0x6f92abcc"
+    },
+    {
+      "name": "tornado",
+      "id": 852597,
+      "call_site": "0x6f22aefe",
+      "string_address": "0x6f92abc4"
+    },
+    {
+      "name": "wateryminion",
+      "id": 852598,
+      "call_site": "0x6f22af0f",
+      "string_address": "0x6f92abb4"
+    },
+    {
+      "name": "acidbomb",
+      "id": 852662,
+      "call_site": "0x6f22af20",
+      "string_address": "0x6f92aba8"
+    },
+    {
+      "name": "chemicalrage",
+      "id": 852663,
+      "call_site": "0x6f22af31",
+      "string_address": "0x6f92ab98"
+    },
+    {
+      "name": "healingspray",
+      "id": 852664,
+      "call_site": "0x6f22af42",
+      "string_address": "0x6f92ab88"
+    },
+    {
+      "name": "transmute",
+      "id": 852665,
+      "call_site": "0x6f22af53",
+      "string_address": "0x6f92ab7c"
+    },
+    {
+      "name": "clusterrockets",
+      "id": 852652,
+      "call_site": "0x6f22af64",
+      "string_address": "0x6f92ab6c"
+    },
+    {
+      "name": "robogoblin",
+      "id": 852656,
+      "call_site": "0x6f22af75",
+      "string_address": "0x6f92ab60"
+    },
+    {
+      "name": "unrobogoblin",
+      "id": 852657,
+      "call_site": "0x6f22af86",
+      "string_address": "0x6f92ab50"
+    },
+    {
+      "name": "summonfactory",
+      "id": 852658,
+      "call_site": "0x6f22af97",
+      "string_address": "0x6f92ab40"
+    },
+    {
+      "name": "incineratearrow",
+      "id": 852670,
+      "call_site": "0x6f22afa8",
+      "string_address": "0x6f92ab30"
+    },
+    {
+      "name": "incineratearrowon",
+      "id": 852671,
+      "call_site": "0x6f22afb9",
+      "string_address": "0x6f92ab1c"
+    },
+    {
+      "name": "incineratearrowoff",
+      "id": 852672,
+      "call_site": "0x6f22afca",
+      "string_address": "0x6f92ab08"
+    },
+    {
+      "name": "lavamonster",
+      "id": 852667,
+      "call_site": "0x6f22afdb",
+      "string_address": "0x6f92aafc"
+    },
+    {
+      "name": "soulburn",
+      "id": 852668,
+      "call_site": "0x6f22afec",
+      "string_address": "0x6f92aaf0"
+    },
+    {
+      "name": "volcano",
+      "id": 852669,
+      "call_site": "0x6f22affd",
+      "string_address": "0x6f92aae8"
+    },
+    {
+      "name": "battleroar",
+      "id": 852599,
+      "call_site": "0x6f22b00e",
+      "string_address": "0x6f92aadc"
+    },
+    {
+      "name": "channel",
+      "id": 852600,
+      "call_site": "0x6f22b01f",
+      "string_address": "0x6f92aad4"
+    },
+    {
+      "name": "darkconversion",
+      "id": 852228,
+      "call_site": "0x6f22b030",
+      "string_address": "0x6f92aac4"
+    },
+    {
+      "name": "darkportal",
+      "id": 852229,
+      "call_site": "0x6f22b041",
+      "string_address": "0x6f92aab8"
+    },
+    {
+      "name": "fingerofdeath",
+      "id": 852230,
+      "call_site": "0x6f22b052",
+      "string_address": "0x6f92aaa8"
+    },
+    {
+      "name": "firebolt",
+      "id": 852231,
+      "call_site": "0x6f22b063",
+      "string_address": "0x6f92aa9c"
+    },
+    {
+      "name": "parasite",
+      "id": 852601,
+      "call_site": "0x6f22b074",
+      "string_address": "0x6f92aa90"
+    },
+    {
+      "name": "parasiteon",
+      "id": 852602,
+      "call_site": "0x6f22b085",
+      "string_address": "0x6f92aa84"
+    },
+    {
+      "name": "parasiteoff",
+      "id": 852603,
+      "call_site": "0x6f22b096",
+      "string_address": "0x6f92aa78"
+    },
+    {
+      "name": "rainofchaos",
+      "id": 852237,
+      "call_site": "0x6f22b0a7",
+      "string_address": "0x6f92aa6c"
+    },
+    {
+      "name": "rainoffire",
+      "id": 852238,
+      "call_site": "0x6f22b0b8",
+      "string_address": "0x6f92aa60"
+    },
+    {
+      "name": "revenge",
+      "id": 852241,
+      "call_site": "0x6f22b0c9",
+      "string_address": "0x6f92aa58"
+    },
+    {
+      "name": "soulpreservation",
+      "id": 852242,
+      "call_site": "0x6f22b0da",
+      "string_address": "0x6f92aa44"
+    },
+    {
+      "name": "submerge",
+      "id": 852604,
+      "call_site": "0x6f22b0eb",
+      "string_address": "0x6f92aa38"
+    },
+    {
+      "name": "unsubmerge",
+      "id": 852605,
+      "call_site": "0x6f22b0fc",
+      "string_address": "0x6f92aa2c"
+    },
+    {
+      "name": "disassociate",
+      "id": 852240,
+      "call_site": "0x6f22b10d",
+      "string_address": "0x6f92aa1c"
+    },
+    {
+      "name": "neutralspell",
+      "id": 852630,
+      "call_site": "0x6f22b11e",
+      "string_address": "0x6f92aa0c"
+    },
+    {
+      "name": "smart",
+      "id": 851971,
+      "call_site": "0x6f3b07b7",
+      "string_address": "0x6f932b50"
+    }
+  ]
+}
