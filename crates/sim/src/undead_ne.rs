@@ -97,7 +97,12 @@ pub fn relation(table: &[i32; 8], enemy: bool, ally: bool, undead: bool) -> i32 
 /// One-second period of the roots' damage (UNSURE).
 const ROOT_TICK_SECONDS: f32 = 1.0;
 /// Shadow Strike damage tick and Immolation pulse periods (UNSURE: public data).
-const STRIKE_TICK_SECONDS: f32 = 1.0;
+/// CONFIRMED (S33, Unicorn `tools/emu/undead_ne3_emu.py` CHECK=launch / buffinit): the pulse period of
+/// `CBuffShadowStrike` is the ability's Cast field (stored as a property at `+0x128`, read back by slots `0x358` and
+/// `0x35C` = `0x6F1F61B0` / `0x6F1F61C0`), also for the first pulse. The pulse class is `0x2000000` (slot `0x374`).
+const STRIKE_DOT_DAMAGE_TYPE: u32 = 25;
+/// The CAgentTimer start clamp (`0x6F477F80`): a timeout below 1e-4 becomes 1e-4.
+const MIN_PERIOD_SECONDS: f32 = 1.0e-4;
 const IMMOLATION_PULSE_SECONDS: f32 = 1.0;
 /// UNSURE: Shadow Strike's damage class (the spell class `0x200` like Frost Nova).
 const SHADOW_STRIKE_DAMAGE_TYPE: u32 = 9;
@@ -115,8 +120,8 @@ pub struct State {
     immolations: BTreeMap<(ObjKey, u32), Immolation>,
     /// Shadow Strike missiles in flight: id -> record.
     strikes: BTreeMap<u32, Strike>,
-    /// Running Shadow Strike damage over time: buff serial -> (caster, damage per tick).
-    strike_dots: BTreeMap<u32, (ObjKey, F32)>,
+    /// Running Shadow Strike damage over time: buff serial -> (caster, damage per tick, period in seconds).
+    strike_dots: BTreeMap<u32, (ObjKey, F32, f32)>,
     next_strike: u32,
     /// Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (S33, CONFIRMED source of the Frost Nova slow);
     /// `0.0` when the key is absent, as the original's reader defaults.
@@ -154,6 +159,13 @@ pub const TICK_IMMOLATION: u8 = 2;
 pub const TICK_STRIKE_HIT: u8 = 3;
 /// A Shadow Strike damage tick (`aux` = the buff serial).
 pub const TICK_STRIKE_DOT: u8 = 4;
+
+/// Whether the level's `Cast` field of `base` is not a cast-time delay: Shadow Strike's Cast (3 s in the stock data)
+/// is the pulse period of its buff (S33, CONFIRMED by the property flow of the launcher and the buff init), so the
+/// cast pipeline must not wait on it.
+pub fn cast_field_is_period(base: u32) -> bool {
+    base == SHADOW_STRIKE
+}
 
 /// Whether `base` is cast without a target (an immediate order). Only Immolation (the toggle).
 pub fn is_immediate(base: u32) -> bool {
@@ -648,8 +660,9 @@ fn strike_hit(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
             let effect = BuffEffect::Slow { move_delta: slow, attack_delta: slow };
             let serial = gm.add_spell_buff(st.target, BUFF_SHADOW_STRIKE, effect, dur);
             if serial != 0 {
-                gm.spells_hero_state_mut().strike_dots.insert(serial, (caster, level.data[0]));
-                gm.timers_start_hero(STRIKE_TICK_SECONDS, TICK_STRIKE_DOT, st.target, serial);
+                let period = level.cast.to_f32().max(MIN_PERIOD_SECONDS);
+                gm.spells_hero_state_mut().strike_dots.insert(serial, (caster, level.data[0], period));
+                gm.timers_start_hero(period, TICK_STRIKE_DOT, st.target, serial);
             }
         }
     }
@@ -663,7 +676,7 @@ fn strike_dot(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, se
     let caster;
     {
         let mut gm = game.borrow_mut();
-        let Some(&(c, dmg)) = gm.spells_hero_state_mut().strike_dots.get(&serial) else {
+        let Some(&(c, dmg, period)) = gm.spells_hero_state_mut().strike_dots.get(&serial) else {
             return;
         };
         caster = c;
@@ -672,10 +685,10 @@ fn strike_dot(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, se
             return;
         }
         if gm.object_is_live_unit(unit) {
-            killed = gm.unit_damage_target(c, unit, dmg, false, false, 0, SHADOW_STRIKE_DAMAGE_TYPE);
+            killed = gm.unit_damage_target(c, unit, dmg, false, false, 0, STRIKE_DOT_DAMAGE_TYPE);
         }
         if killed.is_none() {
-            gm.timers_start_hero(STRIKE_TICK_SECONDS, TICK_STRIKE_DOT, unit, serial);
+            gm.timers_start_hero(period, TICK_STRIKE_DOT, unit, serial);
         } else {
             gm.spells_hero_state_mut().strike_dots.remove(&serial);
         }

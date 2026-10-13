@@ -252,6 +252,113 @@ def run_roots_effect():
     return seen, TG
 
 
+PVT = DATA + 0x5E00      # shared "property object" vtable (slot k -> recorder stub k)
+VALS = DATA + 0x6800     # distinct argument values live here, one dword each
+
+
+def make_props(obj, offsets, log):
+    """Gives `obj` property objects at `offsets` whose vtable slots record (offset, slot, value read through arg)."""
+    mu.mem_write(PVT, b"\0" * 0x80)
+    for k in range(16):
+        stub = stub_slot()
+
+        def rec(uc, esp, ecx, k=k):
+            arg = rd(esp + 4)
+            val = rd(arg) if DATA <= arg < DATA + 0x10000 else arg
+            log.append((ecx - obj, k, val))
+            return ecx + 4
+
+        hook_fn(stub, rec, 8)
+        wr(PVT + 4 * k, stub)
+    for o in offsets:
+        wr(obj + o, PVT)
+
+
+def run_launch():
+    """Missile launcher `0x6F1D5490` of CMissileShadowStrike: which effect argument ends up in which missile field."""
+    A.setup_stubs()
+    log = []
+    base_args = []
+    hook_fn(0x6F2C58E0, lambda uc, esp, ecx: base_args.append([rd(esp + 4 + 4 * i) for i in range(6)]) or 0, 24)
+    M = DATA + 0x7400
+    mu.mem_write(M, b"\0" * 0x400)
+    wr(M, 0x6F916CFC)
+    make_props(M, (0xE8, 0xF0, 0xF8, 0x108, 0x110), log)
+    names = ["A1", "A2", "A3", "A4", "A5", "DataA", "Cast", "DataB", "DataC", "DataD"]
+    ptrs = []
+    for i, nm in enumerate(names):
+        p = VALS + 4 * i
+        wr(p, 0x41000000 + 0x100000 * (i + 1))
+        ptrs.append(p)
+    # the first argument is dereferenced (`[edi + 0x38]` is a unit-ref object whose slot 0xEC is a getter)
+    U = DATA + 0x7C00
+    mu.mem_write(U, b"\0" * 0x100)
+    getter = stub_slot()
+    hook_fn(getter, lambda uc, esp, ecx: 0, 0)
+    UVT2 = DATA + 0x7D00
+    mu.mem_write(UVT2, b"\0" * 0x400)
+    wr(UVT2 + 0xEC, getter)
+    wr(U, UVT2)
+    wr(U + 0x38, U)
+    ptrs[0] = U
+    emu.call(0x6F1D5490, ecx=M, stack_args=tuple(ptrs))
+    val_name = {0x41000000 + 0x100000 * (i + 1): nm for i, nm in enumerate(names)}
+    out = []
+    for off, k, val in log:
+        out.append((off, k, val_name.get(val, hex(val))))
+    raw = {o: rd(M + o) for o in (0x100, 0x104)}
+    raw = {o: (val_name.get(v, hex(v)) if v not in [p for p in ptrs] else names[ptrs.index(v)] + "*") for o, v in raw.items()}
+    return out, raw, base_args, names
+
+
+def run_buff_init():
+    """`CBuffShadowStrike` init slot 0x38C (`0x6F1D5290`): which of its 8 arguments reaches which field."""
+    A.setup_stubs()
+    log = []
+    hook_fn(F_TIMER_ARM, lambda uc, esp, ecx: 0, 4)
+    hook_fn(0x6F477D30, lambda uc, esp, ecx: 0, 0)
+    hook_fn(0x6F4778F0, lambda uc, esp, ecx: log.append((ecx - BUFF, "timer", rd(esp + 4), rd(esp + 8))) or 0, 20)
+    hook_fn(0x6F0D5390, lambda uc, esp, ecx: log.append(("base_apply", [rd(esp + 4 + 4 * i) for i in range(5)])) or 0, 20)
+    hook_fn(0x6F0D53C0, lambda uc, esp, ecx: log.append(("base_53c0", [rd(esp + 4 + 4 * i) for i in range(5)])) or 0, 20)
+    mu.mem_write(BUFF, b"\0" * 0x400)
+    wr(BUFF, VT_STRIKE)
+    # slot 0x37C is called by 0x6F113BA0 with (a, b, 1.0) -> record
+    s37c = stub_slot()
+    hook_fn(s37c, lambda uc, esp, ecx: log.append(("slot37c", [rd(esp + 4), rd(esp + 8), rd(rd(esp + 12))])) or 0, 12)
+    vt = DATA + 0x5C00
+    mu.mem_write(vt, b"\0" * 0x500)
+    for i in range(0x400 // 4):
+        wr(vt + 4 * i, rd(VT_STRIKE + 4 * i))
+    wr(vt + 0x37C, s37c)
+    wr(BUFF, vt)
+    make_props(BUFF, (0xCC, 0xD4, 0xE8, 0xFC, 0x104, 0x10C, 0x128, 0x130, 0x138, 0x140), log)
+    names = ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8"]
+    args = []
+    for i, nm in enumerate(names):
+        p = VALS + 0x100 + 4 * i
+        wr(p, 0x41000000 + 0x100000 * (i + 1))
+        args.append(p)
+    emu.call(0x6F1D5290, ecx=BUFF, stack_args=tuple(args))
+    val_name = {0x41000000 + 0x100000 * (i + 1): nm for i, nm in enumerate(names)}
+    ptr_name = {p: nm + "*" for p, nm in zip(args, names)}
+
+    def nm(v):
+        return ptr_name.get(v) or val_name.get(v) or hex(v)
+
+    res = []
+    for e in log:
+        if e[0] in ("base_apply", "base_53c0"):
+            res.append((e[0], [nm(x) for x in e[1]]))
+        elif e[0] == "slot37c":
+            res.append((e[0], [nm(x) for x in e[1]]))
+        elif len(e) == 4 and e[1] == "timer":
+            res.append(("timer", hex(e[0]), hex(e[2]), hex(e[3])))
+        else:
+            res.append((hex(e[0]), e[1], nm(e[2])))
+    raws = {hex(o): nm(rd(BUFF + o)) for o in (0x108, 0x10C, 0x110, 0x114, 0x12C, 0x144)}
+    return res, raws
+
+
 def fmt_calls(calls):
     out = []
     for c in calls:
@@ -270,6 +377,17 @@ def main():
     which = os.environ.get("CHECK", "frost")
     if dump:
         os.makedirs(dump, exist_ok=True)
+    if which == "launch":
+        out, raw, base_args, names = run_launch()
+        for o in out:
+            print("launch prop", hex(o[0]), "slot", o[1], "<-", o[2])
+        print("launch raw", {hex(k): v for k, v in raw.items()})
+        print("launch base args", [hex(x) for x in base_args[0]] if base_args else None)
+    if which == "buffinit":
+        res, raws = run_buff_init()
+        for r_ in res:
+            print("buffinit", r_)
+        print("buffinit raw", raws)
     if which == "roots":
         seen, tg = run_roots_effect()
         for hero, d in seen.items():

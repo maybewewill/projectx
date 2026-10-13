@@ -156,7 +156,9 @@ fn host() -> ScriptHost {
         // Sleep: Dur 20, HeroDur 10.
         g.set_spell_levels(SLEEP, vec![level(125, 10.0, 20.0, 10.0, 0.0, &[0.0])]);
         // Shadow Strike: DataA 10 per second (UNSURE role), DataB slow 0.5, DataE initial damage 50, Dur 5.
-        g.set_spell_levels(SHADOW_STRIKE, vec![level(75, 8.0, 5.0, 5.0, 0.0, &[10.0, 0.5, 0.0, 0.0, 50.0])]);
+        let mut strike = level(75, 8.0, 5.0, 5.0, 0.0, &[10.0, 0.5, 0.0, 3.0, 50.0]);
+        strike.cast = f(2.0); // Cast = the pulse period (S33, CONFIRMED)
+        g.set_spell_levels(SHADOW_STRIKE, vec![strike]);
         // Immolation: Area 200, DataA 20 per pulse, DataB drain 10 mana per second, DataC buffer 10.
         g.set_spell_levels(IMMOLATION, vec![level(0, 0.0, 0.0, 0.0, 200.0, &[20.0, 10.0, 10.0])]);
         g.set_spell_order(852218, DEATH_PACT);
@@ -323,11 +325,11 @@ fn shadow_strike_hits_slows_and_ticks() {
     assert_eq!(life(&h, e1), l0 - 50.0, "initial damage DataE");
     assert!(has_buff(&h, e1, BUFF_SHADOW_STRIKE));
     assert_eq!(h.game().unit(e1).move_speed.to_f32(), 135.0, "slowed by half");
-    // 1.0 s ticks of 10 for the duration 5 s.
+    // Pulses every Cast = 2 s (the first one too) of DataA = 10 for the duration 5 s: at 2 s and 4 s.
     run(&mut h, 25);
-    assert_eq!(life(&h, e1), l0 - 50.0 - 20.0);
+    assert_eq!(life(&h, e1), l0 - 50.0 - 10.0);
     run(&mut h, 40);
-    assert_eq!(life(&h, e1), l0 - 50.0 - 40.0, "four ticks: the fifth coincides with the expiry, which runs first");
+    assert_eq!(life(&h, e1), l0 - 50.0 - 20.0, "two pulses before the expiry");
     assert!(!has_buff(&h, e1, BUFF_SHADOW_STRIKE));
     assert_eq!(h.game().unit(e1).move_speed.to_f32(), 270.0, "speed restored");
 }

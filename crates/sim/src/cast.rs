@@ -704,7 +704,7 @@ fn stage1(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
         end_cast(game, rt, id, false);
         return;
     }
-    if waits(rec.level.cast) {
+    if waits(rec.level.cast) && !crate::undead_ne::cast_field_is_period(rec.base) {
         game.borrow_mut().timers.start(
             rec.level.cast.to_f32(),
             false,
