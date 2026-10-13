@@ -599,7 +599,7 @@ attack) calls the arming slot `0x124` of every ability and buff of the attacker 
 mechanism that ends Wind Walk when a spell is cast was not found; the first strike (section 11) is the only confirmed end. The Wind Walk
 arming slot `0x6F171870` clears flag `0x200`, does nothing without a target or with buff flag `0x100`, and otherwise asks the filter
 `0x6F26D590(owner, target, buff+0xB8)`: ZERO arms the strike (flag `0x200`, event 0xE), NON-ZERO removes the buff. The buff word `+0xB8` is
-the ability's `targs` (`air,ground,enemy,neutral`), so an attack on an ally or other non-enemy removes the invisibility instead of arming it.
+LIKELY the ability's `targs` (`air,ground,enemy,neutral`; the buff base constructor was not read), in which case an attack on an ally or other non-enemy removes the invisibility instead of arming it.
 
 ### 23.3 Chain Lightning: when the damage lands
 
