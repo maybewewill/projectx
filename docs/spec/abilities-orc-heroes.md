@@ -89,20 +89,45 @@ Dur/HeroDur rule. Model: `orc::war_stomp`. UNSURE: the relation filter (enemies)
 exact ground/organic tests. Numeric cores: none new (the arithmetic is the verified soft-float add and the Storm Bolt
 duration rule).
 
-## 4. Chain Lightning (`AOcl`, `CAbilityChainLightning`, vtable `0x6F8B0E74`)
+### 3.1 S29 addendum (disassembly only, no new Unicorn run)
 
-Data: `DataA` damage (100/140/180), `DataB` units hit (4/6/8), `DataC` reduction 0.15, `Area` 500 bounce radius, `Rng` 700.
-Slot `0x424` = `0x6F1CB550` sets the relation flags (`0x80000` when the target is an enemy, `0x100000` when
-`target+0xEC > 0`), resets the factor cell (`+0x128`, value at `+0x12C`) to 1.0 and starts the hop body `0x6F1C2F50`
-(CONFIRMED): hop damage = `mul(DataA, factor)`, then `factor := mul(factor, sub(1.0, DataC))`; the unit is appended to the hit
-list (`+0x134`, 12-byte entries, count `+0x124`); damage record flags `0x400` (never miss) to the source's damage slot.
-Next target: `0x6F1B6F30` = group builder around the unit just hit with `Area`, callback `0x6F1B0780`: in the distance mode it
-keeps a candidate only when `lt(distance, best)` (strict, `0x6F00C110`), so the NEAREST valid unit wins and the first of equal
-distances stays; validity `0x6F1B06F0`: attackable by the owner (`0x6F284EE0(owner, unit, 0, 4)`), not rejected by slot
-`0x3F0`, not immune (`0x6F28D750`), not already hit (`0x6F1A2110`), and the `+0xEC` count rule. Model: `orc::chain_lightning`
-(no hop delay: UNSURE; the damage class and the exact relation filter UNSURE). The arithmetic composes already
-Unicorn-checked soft-float helpers (mul `0x6F6EEE20`, sub `0x6F6EEEF0`); the hop function itself was not run (it needs the
-agile cell objects).
+* `AOws` is `CAbilityStomp` (atlas: parent `CAbilityThunderClap`), not `CAbilityWarStomp` (that is the passive `Awar`).
+* Per-unit body `0x6F1607B0` (re-read): skip when unit slot `0x11C` is true or `0x6F28D750` (immunity) rejects; damage record
+  flags are `0x40` (the `0x10` bit is only set on a path that is never taken, `ebp = 0`), class from slot `0x42C`;
+  the victim is then stored in the ability's hit list; the stun (slot `0x430` = `0x6F18ABF0`, Dur / HeroDur by `0x6F1D2660`)
+  is applied only when the unit's slot `0x114` result has bit `0x8` clear. The area set is built by `0x6F2A3270` with the tags
+  area (radius, x, y), `0x1D` (flag word = `targs & 0xFFFF0FFF | 0x10000`, caster, -1) and the mask builder `0x6F25D830`
+  (`0xFF0000` family; relation bits via `0x6F25D480`). Which relation bits `ground,organic` (no `enemy` word) produce was
+  NOT decoded, so the enemy-only filter of the model stays UNSURE. Status unchanged: structure CONFIRMED, filter UNSURE.
+
+## 4. Chain Lightning (`AOcl`, `CAbilityChainLightning`, vtable `0x6F8B0E74`) - task S29
+
+Data: `DataA` damage (100/140/180), `DataB` units hit (4/6/8), `DataC` reduction 0.15, `Area` 500, `Rng` 700.
+Cast slot `0x424` = `0x6F1CB550` sets the ability flags (`0x80000` enemy, `0x100000` target `+0xEC > 0`), the factor cell
+(`+0x128`, value `+0x12C`) to 1.0, count `+0x124` to 0, then hops at once.
+
+* **Unicorn (CONFIRMED, `tools/emu/chain_emu.py`, `tests/data/orc/chain.txt`, `tests/orc_chain.rs`; the real hop body
+  `0x6F1C2F50` and the real next-hop gate `0x6F1C3200` run on a fake ability with the real level getters; stubs for the
+  handle helpers, the record builder, the effect constructors and the agile cell setter; 400 hop cases + 400 gate cases,
+  0 mismatches):** damage = `mul(DataA, factor)`; record flags `0x400` (never miss); factor := `mul(factor, sub(1.0,
+  DataC))` through the cell setter; the hit count `+0x124` grows by one; the bolt effect (`vtable + 0xA4`, `0x6F1B09C0`)
+  is started with the delay pointers 0.25 (`0x6FAAE4B8`) and 1.0; the gate lets a hop through only while
+  `count < F2I(DataB)`; the flag word given to the next-target slot `0x43C` is `(targs & 0xFFFE0FFF) | 0x10000 |
+  (0x8000 if ability flag 0x80000)` (slot `0x42C` returns 0 for this class).
+* **Timing (CONFIRMED by disassembly):** the bolt effect (`CEffectChainLightning`, vtable `0x6F8FBD74`) starts the timer
+  message `0xD01D2` after 0.25 s and `0xD01D3` (destroy) after 1.0 s. Handler: slot 3 `0x6F1A2210`; `0xD01D2` -> effect slot
+  `0x84` = `0x6F1C3360` -> `0x6F1C3200` (the gate, then slot `0x43C` and a new hop with the found unit). So hops are 0.25 s
+  apart. The damage source of every hop is the caster (the hop arg1 is only the origin of the bolt).
+* Next target (CONFIRMED by disassembly): slot `0x43C` = `0x6F1B6F30` builds the area set with the callback `0x6F1B0780`;
+  slot `0x434` returns 0 and `0x438` returns 1 (distance mode), so the NEAREST candidate wins, kept only when its distance
+  is strictly smaller (soft `lt`), the first of equal distances stays. Validity `0x6F1B06F0`: relation check
+  `0x6F284EE0(owner, unit, 0, 4)` and slot `0x3F0`. The distance is `0x6F476860` with flag 1: the squared distance
+  (`0x6F6EF3B0`) from the hit unit's point to the candidate's footprint point (`0x6F497460` + `0x6F38B0B0`), not the centre.
+* UNSURE / NOT FOUND: the instant the damage lands (the effect has a repeating 0.1 s fade timer `0xD01A3` -> slot `0x98`
+  `0x6F2BD210`, which only fades the lightning art; the code that applies the record was not found; the model damages at
+  the hop), the footprint distance (model: centre distance), the relation filter and target-flag mask builder
+  (`0x6F25D830`, class mask `0xFD0000` family, decoded but not applied), the damage class.
+* Model: `orc::chain_lightning` / `chain_hop` / `chain_next` (timer kind `0x82`).
 
 ## 5. Shockwave (`AOsh`, `CAbilityShockwave`, vtable `0x6F92075C`)
 
@@ -110,6 +135,17 @@ Data: `DataA` damage (75/130/200), `DataB` cap, `DataC` distance 800, `DataD` en
 `Rng` 700, targs `ground,structure`. Point slots `0x418/0x41C/0x420/0x424` all forward to `0x6F1DD4F0`; the line missile
 is spawned by `0x6F1F2B90` through the engine projectile system (not decoded). Model `orc::shockwave` (UNSURE): one
 instant pass over the segment (width = max(Area, DataD), inclusive), hits ordered by travel distance, `min(DataA, DataB)`.
+
+### 5.1 S29 addendum (disassembly only)
+
+Atlas: `AOsh` `CAbilityShockwave` descends from `CAbilityCarrionSwarm` (same launcher as `AUcs`). The launcher `0x6F1DD4F0`
+(all four point slots forward to it) reads the caster position, `DataC` (`0x6F02EAC0`, distance 800) and `Area`
+(`0x6F02E900`), forms `d = target - start`, `len2 = dx*dx + dy*dy`; if `len2` exceeds the tiny constant `0x6FAB35F4` squared
+the direction is `d` normalised (`0x6F07B870`), otherwise the caster's facing vector (`0x6F10E370`); the end point is
+`start + dir * DataC` (soft add/mul). So the wave always travels `DataC` along the click direction, independent of the
+click distance - the model's segment is right in that respect. The missile (`0x6F24F3E0`, class `CMissileShockwave`,
+vtable `0x6F916DDC`) then flies and damages on its own path: speed, hit timing and per-unit rules were NOT decoded; the model
+hits everything at the cast instant (UNSURE). Next: decode the missile's move slot and `0x6F1D5B90` (slot `0x430`).
 
 ## 6. Wind Walk (`AOwk`, `CAbilityWindWalk`, vtable `0x6F8F2534`)
 
@@ -121,13 +157,48 @@ buff (UNSURE: flat versus percent, order against the crit). Invisibility, the fa
 
 ## 7. Mirror Image (`AOmi`) and Feral Spirit (`AOsf`)
 
-Mirror Image (vtable `0x6F8D9E5C`, effect `0x6F135740`): `DataA` images (1/2/3), `DataB` damage dealt 0, `DataC` damage taken
-2.0, `DataD` 0.5 (animation delay), `Dur` 60, `Area` 1000. Feral Spirit (vtable `0x6F927B2C`, effect `0x6F1DF330`): `UnitID`
-`osw1..3`, `DataB` = 2 wolves, `Dur` 60. A direct-call search to depth 5 from both effects (and from the summon helpers
-`0x6F1D27A0`, `0x6F299390`, `0x6F1DD4F0`) finds NO draw of the RNG helpers `0x6F2853D0/0x6F285320/0x6F285350`: no stream
-draw is known for the placement (virtual calls not followed: UNSURE). Model: units built at the caster (illusion flag with
-the damage factors; summoned flag), timed life `Dur`/`HeroDur` through BTLF. UNSURE: placement offsets, life of the images,
-abilities of the images, where the taken factor applies.
+### 7.1 Mirror Image (task S29; CONFIRMED numeric cores, LIKELY structure)
+
+The earlier search for an RNG draw (S25) only followed direct calls from the cast effect. The draw is in the **delayed
+handler**, not in the effect. Level getters (Unicorn, `tools/emu` probe with a numbered level record): `0x6F02E760` Dur,
+`0x6F02E7D0` HeroDur, `0x6F02E900` Area, `0x6F02E970` **Rng**, `0x6F02E9E0` DataA, `0x6F02EA50` DataB, `0x6F02EAC0` DataC,
+`0x6F02EB30` DataD, `0x6F02EBA0` DataE.
+
+* Cast effect `0x6F135740` (slot `0x3C0`): (1) class slot `0x3E4` = `0x6F11B0C0` walks the images of the previous cast
+  (12-byte handle pairs at ability `+0xF4`, count `+0xF0`) and calls the unit slot `0x124` with `0.0` on each (LIKELY
+  "set life 0": a recast kills the old images); (2) buff / state calls on the caster (`0x6F0767F0`, `0x6F076700` with the
+  callback `0x6F1128B0`, `0x6F0796F0`, caster flag `+0x20 |= 0x800000`, cleared again at the end of the handler); (3) the
+  timer message **`0xD01C1`** (`ability+0x16C`) with `DataD` seconds (0.5). The class message slot 3 (`0x6F1432F0`) routes
+  `0xD01C1` to `0x6F13D990`.
+* Handler `0x6F13D990` (read in full, the numeric cores run in Unicorn):
+  1. `n = F2I(DataA)`, `c = min(n, 9)`, the polygon has `c + 1` slots. The hero's slot is drawn FIRST:
+     `h = R2I(roll(1 die, n + 1 sides)) - 1` with the roll wrapper `0x6F285350` on **combat stream 12** (EDX = 0xC at
+     `0x6F13DA6C`), count 1, bonus 0, multiplier 1.0. One draw per cast. The sides use `n`, not the capped `c`.
+  2. Slot `i` is placed at `centre + M * (r sin a_i, r cos a_i, 0)` with `a_i = (I2R(i) * 2 pi) / I2R(c + 1)`
+     (`0x6F1127D0`; `r` = **Rng**, 128; `2 pi` = the constant `0x6FAAE608`), `M` = the rotation about `(0, 0, 1)` by the
+     caster's facing (`0x6F4AFCD0`, flag 1 = axis not normalised), applied by `0x6F07B950`
+     (`out[c] = (v0*M[c] + v1*M[3+c]) + v2*M[6+c]`), then added to the caster's position (`add(rotated, centre)`).
+     The matrix is `[c, s, -0, -s, c, +0, +0, -0, c + (1 - c)]` with the soft `c + (1 - c)` = `0.99999994`.
+  3. Pass one (ascending): `0x6F127E00` -> placement search `0x6F11AD50` -> **`0x6F29F990`** (the unit creator) builds a
+     unit of the caster's type for the caster's owner at every slot. A failed placement search returns 0 and the slot has
+     no unit. Pass two (ascending): for the hero slot (`i == h`) the created unit is the placeholder: the caster is moved
+     to its position (virtual `+0x180` of the caster with the position) and the placeholder is removed (`0x6F1280D0`);
+     every other unit gets the Mirror Image buff (`vcall 0xC8`) with `DataB`/`DataC` (damage dealt / taken factors), and
+     the duration `Dur + ability+0x9C` (soft add `0x6F6EF000`; no HeroDur in this path).
+* Unicorn (`tools/emu/mirror_emu.py`, vectors `crates/sim/tests/data/orc/mirror.txt`, `crates/sim/tests/orc_mirror.rs`):
+  slot pick on stream 12 (400 cases incl. the full stream state after), polygon offset (400), rotation matrix (400),
+  transform (400): **0 mismatches**. Rust: `orc::{mirror_pick, mirror_offset, mirror_rotation, mirror_transform}`.
+* Model (`orc::mirror_image` / `mirror_fire`, `tests/orc_mirror_cast.rs`): the delay is a `HeroSpell` timer (kind `0x81`);
+  without the soft-float or RNG tables (a host that has none) the images stand at the caster and no draw is made.
+* UNSURE: which of the two branches of pass two is the real hero swap (read from the arguments of the calls, not run),
+  the failure drop of a slot, the caster's state during the 0.5 s, the abilities of the images, the exact meaning of
+  `vcall 0xC8`, where the taken factor (DataC = 2) applies, `unit slot 0x124` = kill.
+
+### 7.2 Feral Spirit (`AOsf`)
+
+Feral Spirit (vtable `0x6F927B2C`, effect `0x6F1DF330`): `UnitID` `osw1..3`, `DataB` = 2 wolves, `Dur` 60. A direct-call
+search to depth 5 from the effect finds no draw of the RNG helpers. Model: units built at the caster (summoned flag),
+timed life `Dur`/`HeroDur` through BTLF. UNSURE: placement offsets, life of the wolves, abilities of the wolves.
 
 ## 8. Far Sight (`AOfs`, `CAbilityFarSight`, vtable `0x6F88B25C`)
 
@@ -141,8 +212,9 @@ Model: a visible-state fog modifier over the circle for the owner, stopped with 
 |---|---|---|---|
 | Critical Strike | yes (roll, PRD, damage) | yes, 800 cases, 0 mismatches | yes (`start_swing`, `SpecDamage::roll`) |
 | War Stomp | structure CONFIRMED | no new core | yes |
-| Chain Lightning | hop arithmetic and selection rule read | components only | yes (no hop delay) |
-| Shockwave | data + launcher only | no | MODEL |
+| Chain Lightning | hop, gate, timing, selection rule | yes: hop body + gate run for real (800 cases, 0 mismatches) | yes (0.25 s hops; damage instant, footprint distance UNSURE) |
+| Shockwave | launcher end point decoded; missile path not | no | MODEL |
 | Wind Walk | effect read | no | MODEL |
-| Mirror Image / Feral Spirit | effect entry points, no RNG found | no | MODEL |
+| Mirror Image | cast effect, delayed handler, RNG stream 12, polygon | yes: pick, offset, rotation, transform (4 x 400, 0 mismatches) | yes (hero swap LIKELY) |
+| Feral Spirit | effect entry point, no RNG found | no | MODEL |
 | Far Sight | slots only | no | MODEL |

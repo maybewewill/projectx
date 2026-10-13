@@ -983,6 +983,7 @@ impl Game {
         if arith::eq(amount, F32::ZERO) {
             return None;
         }
+        self.wake_sleeping(target);
         let next = arith::sub(life, amount);
         set_life(self, target, next).then_some(target)
     }
@@ -1037,6 +1038,8 @@ impl Game {
     /// abilities-human-heroes.md section 3; the order of the two is UNSURE). Returns the unit that died.
     fn hit_with_bash(&mut self, attacker: ObjKey, target: ObjKey, damage: F32) -> Option<ObjKey> {
         let killed = self.apply_damage(target, damage);
+        // Vampiric Aura's life steal of the attacker (`undead_ne.rs`).
+        self.apply_lifesteal(attacker, target, damage);
         let bash = if killed.is_none() {
             self.bash_on_hit(attacker, target)
         } else {
@@ -1055,6 +1058,9 @@ impl Game {
         };
         if dead || removed || self.unit_is_invulnerable(target) {
             return None;
+        }
+        if arith::gt(amount, F32::ZERO) {
+            self.wake_sleeping(target);
         }
         let next = arith::sub(life, amount);
         set_life(self, target, next).then_some(target)

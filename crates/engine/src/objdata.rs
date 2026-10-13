@@ -360,13 +360,14 @@ pub fn item_stock(stock_max: Option<&str>, stock_regen: Option<&str>) -> TypeSto
 }
 
 /// The aura classes whose levels are read from the ability table (`sim::auras`).
-const AURA_KINDS: [sim::auras::AuraKind; 6] = [
+const AURA_KINDS: [sim::auras::AuraKind; 7] = [
     sim::auras::AuraKind::Devotion,
     sim::auras::AuraKind::Endurance,
     sim::auras::AuraKind::Unholy,
     sim::auras::AuraKind::Brilliance,
     sim::auras::AuraKind::Command,
     sim::auras::AuraKind::Trueshot,
+    sim::auras::AuraKind::Vampiric,
 ];
 
 fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {

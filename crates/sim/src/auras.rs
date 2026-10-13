@@ -162,6 +162,9 @@ pub enum AuraKind {
     Command,
     /// `AEar` (Trueshot Aura): the same, for the attacker's weapon.
     Trueshot,
+    /// `AUav` (Vampiric Aura, S28): the buff carries the life steal fraction `DataA` (`CBuffAuraVampiric` `+0xD0`); its
+    /// effect is the damage handler `undead_ne::vampiric_heal`, not a stat sink.
+    Vampiric,
 }
 
 impl AuraKind {
@@ -174,6 +177,7 @@ impl AuraKind {
             b if b == code(b"AHab") => AuraKind::Brilliance,
             b if b == code(b"AOac") => AuraKind::Command,
             b if b == code(b"AEar") => AuraKind::Trueshot,
+            b if b == code(b"AUav") => AuraKind::Vampiric,
             _ => return None,
         })
     }
@@ -187,6 +191,7 @@ impl AuraKind {
             AuraKind::Brilliance => code(b"AHab"),
             AuraKind::Command => code(b"AOac"),
             AuraKind::Trueshot => code(b"AEar"),
+            AuraKind::Vampiric => code(b"AUav"),
         }
     }
 
@@ -199,6 +204,8 @@ impl AuraKind {
             AuraKind::Brilliance => code(b"BHab"),
             AuraKind::Command => code(b"BOac"),
             AuraKind::Trueshot => code(b"BEar"),
+            // CONFIRMED: the code getter of `CBuffAuraVampiric` (`0x6F196740`) returns 'BUav'.
+            AuraKind::Vampiric => code(b"BUav"),
         }
     }
 
@@ -436,6 +443,14 @@ impl Game {
         } else {
             arith::mul(u.move_speed, u.bonuses.move_mult)
         }
+    }
+
+    /// The life steal fraction of `unit`'s Vampiric buff (`'BUav'`), if it has one.
+    pub fn vampiric_fraction(&self, unit: ObjKey) -> Option<F32> {
+        self.unit(unit).buffs.iter().find_map(|b| match &b.effect {
+            Some(BuffEffect::Aura(a)) if a.kind == AuraKind::Vampiric => Some(a.values[0]),
+            _ => None,
+        })
     }
 
     /// The damage bonus buffs add to the dice bonus of the unit's attacks.
@@ -761,7 +776,7 @@ impl Game {
             AuraKind::Devotion | AuraKind::Brilliance => [nonzero(d[1]), false, false],
             AuraKind::Unholy => [false, nonzero(d[2]), false],
             AuraKind::Command | AuraKind::Trueshot => [nonzero(d[1]), nonzero(d[2]), nonzero(d[3])],
-            AuraKind::Endurance => [false; 3],
+            AuraKind::Endurance | AuraKind::Vampiric => [false; 3],
         };
         match self.buff_position(target, buff_code) {
             Some(i) => self.refresh_aura_buff(source, target, i, kind, values, flags),

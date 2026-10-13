@@ -184,6 +184,8 @@ pub enum BuffEffect {
     Stun,
     /// A buff with no stat effect of its own; the module that applied it reads it (`orc.rs`).
     Marker,
+    /// Sleep (`'BUsl'`, `undead_ne.rs`): disables like a stun and ends on damage.
+    Sleep,
     /// The move speed delta (negative slows) and the attack speed delta (stored only).
     Slow { move_delta: F32, attack_delta: F32 },
 }
@@ -275,13 +277,28 @@ pub fn cost_value(cost: i32) -> F32 {
 impl SpellSystem {
     pub fn new() -> Self {
         let mut s = Self::default();
-        // Order ids of the three spells: UNSURE (taken from the public order-id lists, not read from the DLL).
+        // Original cast-order getters (slot 0x348), Unicorn-checked in tools/analysis/ability_orders.py.
         s.order_ids.insert(852_095, STORM_BOLT);
-        s.order_ids.insert(852_089, HOLY_LIGHT);
+        s.order_ids.insert(852_092, HOLY_LIGHT);
         s.order_ids.insert(852_075, SLOW);
         crate::orc::register_orders(&mut s.order_ids);
         crate::unit_spells::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
+            s.order_ids.insert(id, base);
+        }
+        // Undead / night elf hero spells: cast getters (slot 0x348) from tools/analysis/ability_orders.py.
+        for (id, base) in [
+            (852_222, crate::undead_ne::DEATH_COIL),
+            (852_226, crate::undead_ne::FROST_NOVA),
+            (852_171, crate::undead_ne::ENTANGLING_ROOTS),
+            (852_176, crate::undead_ne::FORCE_OF_NATURE),
+            (852_223, crate::undead_ne::DEATH_PACT),
+            (852_218, crate::undead_ne::CARRION_SWARM),
+            (852_227, crate::undead_ne::SLEEP),
+            (852_527, crate::undead_ne::SHADOW_STRIKE),
+            (852_525, crate::undead_ne::BLINK),
+            (852_177, crate::undead_ne::IMMOLATION),
+        ] {
             s.order_ids.insert(id, base);
         }
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).
@@ -309,6 +326,11 @@ impl Game {
     /// Sets the missile speed of an ability (0 = instant).
     pub fn set_spell_missile_speed(&mut self, base: u32, speed: F32) {
         self.spells.missile_speed.insert(base, speed);
+    }
+
+    /// The missile speed registered for `base` (0.0 when none).
+    pub fn spell_missile_speed_of(&self, base: u32) -> F32 {
+        self.spells.missile_speed.get(&base).copied().unwrap_or_default()
     }
 
     /// The ability handling `order_id`, if the unit has it.
@@ -505,7 +527,7 @@ impl Game {
             },
         );
         // Apply stun effect: increment stun counter
-        if code == BUFF_STUN {
+        if code == BUFF_STUN || matches!(effect, BuffEffect::Sleep) {
             self.unit_mut(unit).bonuses.stun += 1;
         }
         self.refresh_slow(unit);
@@ -520,7 +542,7 @@ impl Game {
             self.timers.cancel(t);
         }
         // Remove stun effect: decrement stun counter
-        if b.code == BUFF_STUN {
+        if b.code == BUFF_STUN || matches!(b.effect, BuffEffect::Sleep) {
             self.unit_mut(b.unit).bonuses.stun = self.unit(b.unit).bonuses.stun.saturating_sub(1);
         }
         self.unit_mut(b.unit).buffs.retain(|x| x.serial != serial);
@@ -653,6 +675,7 @@ pub fn begin_cast(
                 if !crate::orc::takes_no_target(base)
                     && !crate::unit_spells::takes_no_target(base)
                     && !crate::human_heroes::is_immediate_spell(base)
+                    && !crate::undead_ne::is_immediate(base)
                 {
                     return Err(CastError::BadTarget);
                 }
@@ -976,6 +999,7 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
             let _ = unit;
             game.borrow_mut().drop_spell_buff(serial);
         }
+        SpellMsg::HeroSpell { kind, unit, aux } if kind >= 0x80 => crate::orc::on_timer(game, rt, kind, unit, aux),
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
         SpellMsg::UnitSpell { kind, unit, base, aux } => crate::unit_spells::on_timer(game, rt, kind, unit, base, aux),
     }

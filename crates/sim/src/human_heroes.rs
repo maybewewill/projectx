@@ -56,12 +56,13 @@ pub const BUFF_WATER_ELEMENTAL: u32 = code(b"BHwe");
 /// Wind Walk's buff: Bash does not roll while its owner has it (`0x6F15A110` returns `BOwk`).
 pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
 
-/// Order ids of the immediate spells (UNSURE: from the public order-id lists, not read from the DLL).
-pub const ORDER_THUNDER_CLAP: u32 = 852_594;
+/// Cast order ids from the original slot 0x348 (Unicorn-checked by tools/analysis/ability_orders.py).
+pub const ORDER_THUNDER_CLAP: u32 = 852_096;
 pub const ORDER_AVATAR: u32 = 852_086;
 pub const ORDER_DIVINE_SHIELD: u32 = 852_090;
+/// UNSURE: the state-dependent cancel getter has not been verified.
 pub const ORDER_UNDIVINE_SHIELD: u32 = 852_056;
-pub const ORDER_RESURRECTION: u32 = 852_044;
+pub const ORDER_RESURRECTION: u32 = 852_094;
 pub const ORDER_WATER_ELEMENTAL: u32 = 852_097;
 
 /// The `(order id, ability)` pairs the cast core registers.

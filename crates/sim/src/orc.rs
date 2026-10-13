@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use softfloat::{arith, conv, F32};
 
 use crate::abilities::code;
-use crate::cast::{effect_duration, BuffEffect, CastRec, CastTarget, BUFF_STUN};
+use crate::cast::{effect_duration, BuffEffect, CastRec, CastTarget, SpellLevel, BUFF_STUN};
 use crate::natives::game::{Game, ObjKey};
 use crate::natives::unit_attr::is_unit_type;
 use crate::natives::{dispatch_unit_death_by, ScriptRuntime};
@@ -81,6 +81,55 @@ pub fn crit_damage(damage: F32, mult: F32) -> F32 {
     arith::add(arith::sub(damage, F32::ZERO), bonus)
 }
 
+// ---- Mirror Image numeric cores (CONFIRMED in Unicorn: `tools/emu/mirror_emu.py`, `tests/data/orc/mirror.txt`) ----
+
+/// The combat RNG stream of the slot pick of Mirror Image: the roll wrapper `0x6F285350` is called with `EDX = 0xC`
+/// at `0x6F13DA6C` (CONFIRMED by disassembly and by the Unicorn run of the wrapper on stream 12).
+pub const MIRROR_STREAM: usize = 12;
+/// The cap of the polygon: `min(DataA, 9)` images (`cmp ebx, 9` at `0x6F13DAAC`).
+pub const MIRROR_MAX_IMAGES: i32 = 9;
+/// `2 pi` as the float constant `0x6FAAE608`.
+const TWO_PI: F32 = F32::from_bits(0x40C9_0FDB);
+
+/// The slot of the real hero among the `images + 1` polygon slots: `R2I(roll(1 die of images + 1 sides, stream
+/// 12)) - 1` (`0x6F13DA6C..0x6F13DA82`). The sides use `DataA` itself, not the capped count.
+pub fn mirror_pick(stream: &mut crate::rng::Rng, table: &crate::rng::RngTable, images: i32) -> Option<i32> {
+    let sides = u32::try_from(images.saturating_add(1)).unwrap_or(0);
+    let total = crate::damage::roll_total(stream, table, 1, sides, 0)?;
+    Some(total.wrapping_sub(1))
+}
+
+/// `0x6F1127D0`: the offset of slot `k` of `n` on the circle of radius `r`: `(r * sin(a), r * cos(a))` with
+/// `a = (I2R(k) * 2 pi) / I2R(n)` (soft float throughout).
+pub fn mirror_offset(k: i32, n: i32, r: F32, t: &softfloat::Tables) -> (F32, F32) {
+    let angle = arith::div(arith::mul(conv::i2r(k), TWO_PI), conv::i2r(n), t);
+    let s = softfloat::math::sin(angle, t);
+    let c = softfloat::math::cos(angle, t);
+    (arith::mul(r, s), arith::mul(r, c))
+}
+
+/// `0x6F4AFCD0` for the axis `(0, 0, 1)`: the 3x3 rotation matrix (row-major) of the caster's facing, as the axis-angle
+/// formula leaves it in the soft float: `m22 = c + (1 - c)` (so `0.99999994` for most angles), signed zeros as in the
+/// original.
+pub fn mirror_rotation(angle: F32, t: &softfloat::Tables) -> [F32; 9] {
+    let s = softfloat::math::sin(angle, t);
+    let c = softfloat::math::cos(angle, t);
+    let neg_zero = F32::from_bits(0x8000_0000);
+    [c, s, neg_zero, arith::neg(s), c, F32::ZERO, F32::ZERO, neg_zero, arith::add(c, arith::sub(F32::ONE, c))]
+}
+
+/// `0x6F07B950`: `out[c] = (v0 * m[c] + v1 * m[3 + c]) + v2 * m[6 + c]` (soft float, that association).
+pub fn mirror_transform(m: &[F32; 9], v: [F32; 3]) -> [F32; 3] {
+    let mut out = [F32::ZERO; 3];
+    for (c, o) in out.iter_mut().enumerate() {
+        let a = arith::mul(v[0], m[c]);
+        let b = arith::mul(v[1], m[3 + c]);
+        let d = arith::mul(v[2], m[6 + c]);
+        *o = arith::add(arith::add(a, b), d);
+    }
+    out
+}
+
 /// The other seven abilities' base codes.
 pub const WIND_WALK: u32 = code(b"AOwk");
 pub const MIRROR_IMAGE: u32 = code(b"AOmi");
@@ -97,15 +146,21 @@ pub const BUFF_FAR_SIGHT: u32 = code(b"BOfs");
 /// bit index as Storm Bolt in `cast.rs`).
 const SPELL_DAMAGE_TYPE: u32 = 15;
 
-/// Order ids (UNSURE: the public order-id list, like the three spells of `cast.rs`).
+/// Timer kinds of [`crate::cast::SpellMsg::HeroSpell`] used by the orc spells (the undead / night elf spells use
+/// the small numbers).
+pub const TICK_MIRROR: u8 = 0x81;
+/// The next-hop timer of Chain Lightning.
+pub const TICK_CHAIN: u8 = 0x82;
+
+/// Original cast-order getters (slot 0x348), Unicorn-checked by tools/analysis/ability_orders.py.
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_127, WAR_STOMP);
     ids.insert(852_125, SHOCKWAVE);
     ids.insert(852_119, CHAIN_LIGHTNING);
     ids.insert(852_129, WIND_WALK);
-    ids.insert(852_093, MIRROR_IMAGE);
+    ids.insert(852_123, MIRROR_IMAGE);
     ids.insert(852_122, FAR_SIGHT);
-    ids.insert(852_120, FERAL_SPIRIT);
+    ids.insert(852_126, FERAL_SPIRIT);
 }
 
 /// Abilities cast without a target (`targs` empty or area around the caster).
@@ -131,6 +186,14 @@ pub struct OrcState {
     illusions: BTreeMap<ObjKey, (F32, F32)>,
     /// Far Sight reveals: marker buff serial -> fog modifier.
     reveals: BTreeMap<u32, ObjKey>,
+    /// Mirror Image: the images of the last cast of each caster (killed by the next cast).
+    mirror_images: BTreeMap<ObjKey, Vec<ObjKey>>,
+    /// Mirror Image casts waiting for the `DataD` delay: caster -> (cast serial, level record).
+    mirror_pending: BTreeMap<ObjKey, (u32, SpellLevel)>,
+    mirror_serial: u32,
+    /// Chain Lightning chains in flight, by serial.
+    chains: BTreeMap<u32, ChainState>,
+    chain_serial: u32,
 }
 
 impl OrcState {
@@ -228,7 +291,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         CHAIN_LIGHTNING => chain_lightning(game, rt, rec),
         SHOCKWAVE => shockwave(game, rt, rec),
         WIND_WALK => wind_walk(game, rec),
-        MIRROR_IMAGE => mirror_image(game, rec),
+        MIRROR_IMAGE => mirror_image(game, rt, rec),
         FERAL_SPIRIT => feral_spirit(game, rec),
         FAR_SIGHT => far_sight(game, rec),
         _ => return false,
@@ -277,43 +340,127 @@ fn war_stomp(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     }
 }
 
-/// Chain Lightning (class `0x6F8B0E74`; hop body `0x6F1C2F50`, next-target search `0x6F1B6F30`, CONFIRMED structure):
-/// the hop damage is `DataA * m` with `m` starting at 1.0, and after each hop `m := m * (1 - DataC)` (soft mul/sub, the
-/// factor cell at `+0x12C`). `DataB` is the number of units hit. The next unit is the NEAREST valid unit to the unit
-/// just hit, inside `Area` (the best-of collector `0x6F1B0780` keeps a candidate only when its distance is strictly
-/// smaller, so the first of equals wins), never a unit already hit (list at `+0x134`). UNSURE: the delay between hops
-/// (none here), the relation filter (enemies, not magic immune, not structure/mechanical per `air,ground,enemy,
-/// neutral,organic`), the damage class.
+// ---- Chain Lightning numeric cores (CONFIRMED in Unicorn: `tools/emu/chain_emu.py`, `tests/data/orc/chain.txt`) ----
+
+/// The delay from the start of one bolt to the next hop: the bolt effect (`CEffectChainLightning`, start slot
+/// `0x6F1B09C0`) starts the timer message `0xD01D2` with the float at `0x6FAAE4B8` (0.25) and the destroy message
+/// `0xD01D3` with 1.0; the `0xD01D2` handler (effect slot `0x84` = `0x6F1C3360`) calls the ability's next-hop gate
+/// `0x6F1C3200` (Unicorn: the hop passes the 0.25 and 1.0 pointers, `H` rows of `chain.txt`).
+pub const CHAIN_HOP_DELAY_BITS: u32 = 0x3E80_0000;
+/// The damage record flags of a hop: `0x400` (never miss), written by the hop body at `0x6F1C30EF`.
+pub const CHAIN_RECORD_FLAGS: u32 = 0x400;
+
+/// The damage of a hop: `DataA * factor` (soft multiply, `DataA` first), `0x6F1C2FA6`.
+pub fn chain_hop_amount(data_a: F32, factor: F32) -> F32 {
+    arith::mul(data_a, factor)
+}
+
+/// The factor after a hop: `factor * (1.0 - DataC)` (soft sub then mul), written through the agile cell setter
+/// (`0x6F1C2FDA`..`0x6F1C2FEE`).
+pub fn chain_next_factor(factor: F32, data_c: F32) -> F32 {
+    arith::mul(factor, arith::sub(F32::ONE, data_c))
+}
+
+/// The next-hop gate `0x6F1C3200`: another hop only while `count < F2I(DataB)` (signed compare, `jge` ends the chain).
+pub fn chain_gate_open(count: i32, data_b: F32) -> bool {
+    count < conv::f2i(data_b)
+}
+
+/// The flag word handed to the next-target search (slot `0x43C`) by `0x6F1C3200`: the ability's target word
+/// (`+0x4C`) with bits 12..16 cleared, bit 16 set, and bit 15 set when the ability flag `0x80000` (enemy cast) is on
+/// (`0x6F1C3253`..`0x6F1C327E`; the slot `0x42C` is 0 for this class).
+pub fn chain_next_flags(targs: u32, ability_flags: u32) -> u32 {
+    let mut w = (targs & 0xFFFE_0FFF) | 0x1_0000;
+    if ability_flags & 0x8_0000 != 0 {
+        w |= 0x8000;
+    }
+    w
+}
+
+/// The state of one running Chain Lightning (the ability's factor cell `+0x128/+0x12C`, hit count `+0x124`, hit list
+/// `+0x134`).
+#[derive(Debug, Clone)]
+pub(crate) struct ChainState {
+    caster: ObjKey,
+    level: SpellLevel,
+    factor: F32,
+    hits: Vec<ObjKey>,
+}
+
+/// Chain Lightning (class `0x6F8B0E74`; cast slot `0x424` = `0x6F1CB550`, hop body `0x6F1C2F50`, next-hop gate
+/// `0x6F1C3200`, next-target search `0x6F1B6F30`; spec section 4).
+///
+/// CONFIRMED (Unicorn, the real hop body and gate on a fake ability: 400 + 400 cases, 0 mismatches): the cast sets the
+/// factor cell to 1.0 and the hit count to 0 and hops once at once; a hop's damage is `DataA * factor`, the record flags
+/// `0x400`, the factor becomes `factor * (1 - DataC)`, the target is appended to the hit list, and the bolt effect
+/// starts the next-hop timer of 0.25 s. The gate: another hop only while `count < F2I(DataB)`.
+/// CONFIRMED by disassembly only: the next target is the NEAREST valid unit (the collector `0x6F1B0780` keeps a
+/// candidate only when its distance is strictly smaller, distance mode because slot `0x438` returns 1 and slot `0x434`
+/// returns 0), never one already hit; the damage source of every hop is the caster. UNSURE: the instant the damage lands
+/// (here at the hop; the bolt effect has a 0.1 s repeating fade timer `0xD01A3`, but the code that applies the record
+/// was not found), the distance (the original measures to the candidate's footprint point, `0x6F476860` with flag 1,
+/// here the centre distance), the relation filter (`0x6F1B06F0`: `0x6F284EE0(owner, unit, 0, 4)`; here enemy, not magic
+/// immune, not structure or mechanical), the damage class, the vanishing of the chain when the last target is removed
+/// (modelled: it ends).
 fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     let CastTarget::Unit(first) = rec.target else {
         return;
     };
-    let mut killed = Vec::new();
-    {
+    let serial = {
         let mut gm = game.borrow_mut();
-        let owner = gm.unit(rec.caster).owner;
-        let hops = conv::f2i(rec.level.data[1]).max(0);
-        let keep = arith::sub(F32::ONE, rec.level.data[2]);
-        let mut mult = F32::ONE;
-        let mut hit: Vec<ObjKey> = Vec::new();
-        let mut current = first;
-        for _ in 0..hops {
-            if !gm.alive(current) {
-                break;
-            }
-            let amount = arith::mul(rec.level.data[0], mult);
-            if let Some(t) = gm.unit_damage_target(rec.caster, current, amount, false, false, 0, SPELL_DAMAGE_TYPE) {
-                killed.push(t);
-            }
-            hit.push(current);
-            mult = arith::mul(mult, keep);
+        gm.orc.chain_serial = gm.orc.chain_serial.wrapping_add(1);
+        let serial = gm.orc.chain_serial;
+        gm.orc.chains.insert(
+            serial,
+            ChainState { caster: rec.caster, level: rec.level, factor: F32::ONE, hits: Vec::new() },
+        );
+        serial
+    };
+    chain_hop(game, rt, serial, first);
+}
+
+/// One hop at `target`: damage, factor, hit list, and the timer of the next hop.
+fn chain_hop(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32, target: ObjKey) {
+    let killed = {
+        let mut gm = game.borrow_mut();
+        let Some(st) = gm.orc.chains.get_mut(&serial) else {
+            return;
+        };
+        let amount = chain_hop_amount(st.level.data[0], st.factor);
+        st.factor = chain_next_factor(st.factor, st.level.data[2]);
+        st.hits.push(target);
+        let caster = st.caster;
+        gm.timers_start_hero(f32::from_bits(CHAIN_HOP_DELAY_BITS), TICK_CHAIN, caster, serial);
+        gm.unit_damage_target(caster, target, amount, false, false, 0, SPELL_DAMAGE_TYPE)
+    };
+    if let Some(t) = killed {
+        let caster = game.borrow().orc.chains.get(&serial).map(|s| s.caster);
+        dispatch_unit_death_by(game, rt, t, caster);
+    }
+}
+
+/// The next-hop timer (`0xD01D2`, handler `0x6F1C3360` -> gate `0x6F1C3200`).
+fn chain_next(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
+    let next = {
+        let gm = game.borrow();
+        let Some(st) = gm.orc.chains.get(&serial) else {
+            return;
+        };
+        let last = st.hits.last().copied();
+        let open = last.is_some_and(|l| !gm.unit(l).removed)
+            && chain_gate_open(i32::try_from(st.hits.len()).unwrap_or(i32::MAX), st.level.data[1]);
+        if !open {
+            None
+        } else {
+            let last = last.expect("checked");
+            let owner = gm.unit(st.caster).owner;
             let (cx, cy) = {
-                let u = gm.unit(current);
+                let u = gm.unit(last);
                 (u.x, u.y)
             };
             let mut best: Option<(ObjKey, F32)> = None;
-            for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
-                if hit.contains(&k) || k == rec.caster || !spell_target_ok(&gm, owner, k) {
+            for k in crate::natives::group::circle_candidates(&gm, cx, cy, st.level.area) {
+                if st.hits.contains(&k) || k == st.caster || !spell_target_ok(&gm, owner, k) {
                     continue;
                 }
                 let u = gm.unit(k);
@@ -325,14 +472,14 @@ fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastR
                     best = Some((k, d));
                 }
             }
-            match best {
-                Some((k, _)) => current = k,
-                None => break,
-            }
+            best.map(|(k, _)| k)
         }
-    }
-    for t in killed {
-        dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    };
+    match next {
+        Some(k) => chain_hop(game, rt, serial, k),
+        None => {
+            game.borrow_mut().orc.chains.remove(&serial);
+        }
     }
 }
 
@@ -416,29 +563,122 @@ fn rad_to_deg(r: F32) -> F32 {
     arith::mul(r, F32::from_bits(0x4265_2EE1))
 }
 
-/// Mirror Image (class `0x6F8D9E5C`, effect `0x6F135740`): `DataA` copies of the caster, with `DataB` as the damage
-/// they deal and `DataC` as the damage they take (factors), living `Dur`/`HeroDur`. No RNG draw is reachable from the
-/// effect through direct calls (checked to depth 5). UNSURE: the placement (all copies at the caster's position here;
-/// the engine's push-apart spreads them), the copies' life and abilities, where the taken factor applies.
-fn mirror_image(game: &RefCell<Game>, rec: &CastRec) {
+/// Mirror Image (class `0x6F8D9E5C`, cast effect `0x6F135740`, delayed handler `0x6F13D990`). Spec section 7.
+///
+/// The cast effect (CONFIRMED structure) first runs the class slot `0x3E4` = `0x6F11B0C0`, which walks the list of the
+/// images of the previous cast (12-byte entries at ability `+0xF4`, count `+0xF0`) and calls the unit slot `0x124` with
+/// `0.0` on each (LIKELY: that slot sets the life, so they die), then marks the caster and starts the timer message
+/// `0xD01C1` with `DataD` seconds (`0x6F02EB30`, 0.5). Everything else happens in the handler ([`mirror_fire`]).
+fn mirror_image(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let old: Vec<ObjKey> = {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(rec.caster) {
+            return;
+        }
+        gm.orc.mirror_images.remove(&rec.caster).unwrap_or_default()
+    };
+    for k in old {
+        let died = {
+            let mut gm = game.borrow_mut();
+            gm.alive(k) && crate::natives::set_life(&mut gm, k, F32::ZERO)
+        };
+        if died {
+            dispatch_unit_death_by(game, rt, k, None);
+        }
+    }
     let mut gm = game.borrow_mut();
-    if !gm.alive(rec.caster) {
+    gm.orc.mirror_serial = gm.orc.mirror_serial.wrapping_add(1);
+    let serial = gm.orc.mirror_serial;
+    gm.orc.mirror_pending.insert(rec.caster, (serial, rec.level));
+    gm.timers_start_hero(rec.level.data[3].to_f32(), TICK_MIRROR, rec.caster, serial);
+}
+
+/// The timer handler of Mirror Image (message `0xD01C1`, `0x6F13D990`). CONFIRMED by disassembly, the numeric cores by
+/// Unicorn ([`mirror_pick`], [`mirror_offset`], [`mirror_rotation`], [`mirror_transform`]):
+/// 1. `n = F2I(DataA)`, slots `c + 1` with `c = min(n, 9)`; the hero's slot `h = R2I(roll(1 die of n + 1 sides, stream
+///    12)) - 1` is drawn FIRST (one draw per cast).
+/// 2. The polygon: slot `i` is at `centre + M * (r sin a_i, r cos a_i, 0)`, `a_i = 2 pi i / (c + 1)`, `r` = the level's
+///    `Rng` (128), `M` the rotation about the vertical axis by the caster's facing.
+/// 3. Pass one creates a unit of the caster's type at every slot, in ascending slot order (each allocates its handle id
+///    when built). Pass two (ascending): the slot `h` takes the hero (the caster is moved there, the placeholder unit is
+///    removed, freeing its id), every other unit becomes an image (illusion with the factors `DataB`/`DataC`, living
+///    `Dur + ability+0x9C` seconds). LIKELY structure (the slot-`h` branch is read from the arguments of the pass-two
+///    calls, not run); UNSURE: placement failures (the original drops the slot when the placement search fails), the
+///    state of the caster during the delay, abilities and the 0xC8 buff application of the images.
+///
+/// Without the soft-float or RNG tables (a host that has none) the images stand at the caster, no draw is made.
+fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey, serial: u32) {
+    let _ = rt;
+    let mut gm = game.borrow_mut();
+    let Some((s, level)) = gm.orc.mirror_pending.get(&caster).copied() else {
+        return;
+    };
+    if s != serial {
         return;
     }
-    let count = conv::f2i(rec.level.data[0]).max(0);
-    let (owner, type_id, x, y, facing) = {
-        let u = gm.unit(rec.caster);
+    gm.orc.mirror_pending.remove(&caster);
+    if gm.unit(caster).removed {
+        return;
+    }
+    let n = conv::f2i(level.data[0]);
+    let c = n.min(MIRROR_MAX_IMAGES);
+    let slots = c.saturating_add(1);
+    let (owner, type_id, cx, cy, facing) = {
+        let u = gm.unit(caster);
         (u.owner, u.type_id, u.x, u.y, u.facing)
     };
-    let hero = gm.target_hero(rec.caster);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
-    for _ in 0..count {
-        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, type_id, x, y, rad_to_deg(facing), true) else {
+    let tables = gm.softfloat_tables().cloned();
+    let mut chosen: Option<i32> = None;
+    if tables.is_some() {
+        if let Some((table, streams)) = gm.rng_parts() {
+            chosen = mirror_pick(streams.stream_mut(MIRROR_STREAM), table, n);
+        }
+    }
+    // Pass one: the polygon and the units.
+    let mut made: Vec<(i32, ObjKey, F32, F32)> = Vec::new();
+    for i in 0..slots.max(0) {
+        let (px, py) = match tables.as_ref() {
+            Some(t) => {
+                let (o1, o2) = mirror_offset(i, slots, level.rng, t);
+                let m = mirror_rotation(facing, t);
+                let o = mirror_transform(&m, [o1, o2, F32::ZERO]);
+                (arith::add(o[0], cx), arith::add(o[1], cy))
+            }
+            None => (cx, cy),
+        };
+        // Without the tables there is no hero slot: only the images are made.
+        if tables.is_none() && i >= c {
+            continue;
+        }
+        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, type_id, px, py, rad_to_deg(facing), true) else {
             continue;
         };
+        made.push((i, k, px, py));
+    }
+    // Pass two.
+    let dur = arith::add(level.dur, F32::ZERO);
+    let mut images = Vec::new();
+    for (i, k, px, py) in made {
+        if chosen == Some(i) {
+            let (x, y) = gm.clamp_unit_move(px, py);
+            gm.store_unit_position(caster, x, y);
+            crate::natives::unit::remove_unit(&mut gm, k);
+            continue;
+        }
         gm.unit_mut(k).illusion = true;
-        gm.orc.illusions.insert(k, (rec.level.data[1], rec.level.data[2]));
+        gm.orc.illusions.insert(k, (level.data[1], level.data[2]));
         gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, dur);
+        images.push(k);
+    }
+    gm.orc.mirror_images.insert(caster, images);
+}
+
+/// Timer dispatch of the orc spells (`SpellMsg::HeroSpell` kinds from `0x80`).
+pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, aux: u32) {
+    match kind {
+        TICK_MIRROR => mirror_fire(game, rt, unit, aux),
+        TICK_CHAIN => chain_next(game, rt, aux),
+        _ => {}
     }
 }
 
