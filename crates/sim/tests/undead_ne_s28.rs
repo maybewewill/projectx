@@ -11,7 +11,7 @@ use sim::combat::AttackType;
 use sim::natives::game::{ObjKey, UnitType};
 use sim::orders::{AbilityKind, TypeOrderData};
 use sim::undead_ne::{
-    BLINK, BUFF_IMMOLATION, BUFF_SHADOW_STRIKE, BUFF_SLEEP, BUFF_SLEEP_PAUSE, CARRION_SWARM, DEATH_PACT, IMMOLATION,
+    BLINK, BUFF_IMMOLATION, BUFF_SHADOW_STRIKE, BUFF_SLEEP, BUFF_SLEEP_PAUSE, CARRION_SWARM, DARK_RITUAL, DEATH_PACT, IMMOLATION,
     SHADOW_STRIKE, SLEEP, VAMPIRIC_AURA,
 };
 use sim::ScriptHost;
@@ -49,6 +49,7 @@ function setup takes nothing returns nothing
     set enemy3 = CreateUnit(Player(1), 'hfoo', 600.0, 900.0, 0.0)
     set friend = CreateUnit(Player(0), 'hfoo', 100.0, 0.0, 0.0)
     call UnitAddAbility(caster, 'AUdp')
+    call UnitAddAbility(caster, 'AUdr')
     call UnitAddAbility(caster, 'AEbl')
     call UnitAddAbility(caster, 'AUcs')
     call UnitAddAbility(caster, 'AUsl')
@@ -58,6 +59,9 @@ function setup takes nothing returns nothing
 endfunction
 function pact takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852218, friend)
+endfunction
+function ritual takes nothing returns nothing
+    set accepted = IssueTargetOrderById(caster, 852219, friend)
 endfunction
 function blink_to takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852525, 0.0, 500.0)
@@ -144,7 +148,7 @@ fn host() -> ScriptHost {
                 ..Default::default()
             },
         );
-        for code in [DEATH_PACT, BLINK, CARRION_SWARM, SLEEP, SHADOW_STRIKE, IMMOLATION, VAMPIRIC_AURA] {
+        for code in [DEATH_PACT, DARK_RITUAL, BLINK, CARRION_SWARM, SLEEP, SHADOW_STRIKE, IMMOLATION, VAMPIRIC_AURA] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         // Death Pact: DataA 0.5 (mana factor of the life), DataB 1.0 (life factor), C = D = E = 0.
@@ -161,6 +165,9 @@ fn host() -> ScriptHost {
         g.set_spell_levels(SHADOW_STRIKE, vec![strike]);
         // Immolation: Area 200, DataA 20 per pulse, DataB drain 10 mana per second, DataC buffer 10.
         g.set_spell_levels(IMMOLATION, vec![level(0, 0.0, 0.0, 0.0, 200.0, &[20.0, 10.0, 10.0])]);
+        // Dark Ritual: DataA 0.33 of the sacrificed life as mana, DataB 0.
+        g.set_spell_levels(DARK_RITUAL, vec![level(0, 0.0, 0.0, 0.0, 0.0, &[0.33, 0.0, 0.0, 0.0, 0.0])]);
+        g.set_spell_order(852219, DARK_RITUAL);
         g.set_spell_order(852218, DEATH_PACT);
         g.set_spell_order(852525, BLINK);
         g.set_spell_order(852129, CARRION_SWARM);
@@ -231,6 +238,21 @@ fn death_pact_kills_the_friend_and_pays_the_caster() {
     assert_eq!(life(&h, c), 600.0);
     assert_eq!(mana(&h, c), 200.0 - 75.0 + 250.0);
     assert!(h.game().is_cooling(c, DEATH_PACT) || h.game().cooldown_remaining(c, DEATH_PACT).to_f32() >= 0.0);
+}
+
+#[test]
+fn dark_ritual_shares_the_death_pact_effect_and_pays_mana_only() {
+    let mut h = host();
+    let (c, friend) = (unit(&h, "caster"), unit(&h, "friend"));
+    h.game_mut().unit_mut(c).life = f(100.0);
+    h.game_mut().unit_mut(c).mana = f(200.0);
+    call(&mut h, "ritual");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(h.game().unit(friend).dead);
+    assert_eq!(life(&h, c), 100.0, "DataB = 0: no life for the caster");
+    let m = mana(&h, c);
+    assert!((m - (200.0 + 500.0 * 0.33)).abs() < 0.01, "mana {m}");
 }
 
 #[test]

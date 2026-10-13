@@ -45,6 +45,9 @@ pub const FROST_NOVA: u32 = code(b"AUfn");
 pub const ENTANGLING_ROOTS: u32 = code(b"AEer");
 pub const FORCE_OF_NATURE: u32 = code(b"AEfn");
 pub const DEATH_PACT: u32 = code(b"AUdp");
+/// Dark Ritual shares the effect `0x6F09FD50` with Death Pact (`CAbilityDeathPact` derives from `CAbilityDarkRitual`;
+/// both have slot `0x424` = `0x6F09FD50`, S33). Order id 852219 (getter `0x6F0BD230`).
+pub const DARK_RITUAL: u32 = code(b"AUdr");
 pub const CARRION_SWARM: u32 = code(b"AUcs");
 pub const SLEEP: u32 = code(b"AUsl");
 pub const SHADOW_STRIKE: u32 = code(b"AEsh");
@@ -186,14 +189,14 @@ pub(crate) fn run_effect(
         (FROST_NOVA, CastTarget::Unit(t)) => frost_nova(game, rt, caster, level, t),
         (ENTANGLING_ROOTS, CastTarget::Unit(t)) => entangling_roots(game, caster, level, t),
         (FORCE_OF_NATURE, CastTarget::Point(x, y)) => force_of_nature(game, rt, caster, level, x, y),
-        (DEATH_PACT, CastTarget::Unit(t)) => death_pact(game, rt, caster, level, t),
+        (DEATH_PACT | DARK_RITUAL, CastTarget::Unit(t)) => death_pact(game, rt, caster, level, t),
         (SLEEP, CastTarget::Unit(t)) => sleep(game, caster, level, t),
         (SHADOW_STRIKE, CastTarget::Unit(t)) => shadow_strike(game, rt, caster, level, t),
         (BLINK, CastTarget::Point(x, y)) => blink(game, caster, level, x, y),
         (CARRION_SWARM, CastTarget::Point(x, y)) => carrion_swarm(game, rt, caster, level, x, y),
         (IMMOLATION | IMMOLATION_UNDEAD, CastTarget::None) => immolation(game, caster, base, level),
         (
-            DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | SLEEP | SHADOW_STRIKE | BLINK
+            DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | DARK_RITUAL | SLEEP | SHADOW_STRIKE | BLINK
             | CARRION_SWARM | IMMOLATION | IMMOLATION_UNDEAD,
             _,
         ) => {}
