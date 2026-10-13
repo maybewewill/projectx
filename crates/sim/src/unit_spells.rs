@@ -415,6 +415,8 @@ pub struct State {
     shield: BTreeMap<u32, ShieldRec>,
     /// Polymorphed units: what they were.
     morphs: BTreeMap<ObjKey, MorphRec>,
+    /// Casts that the autocast scan started and whose effect has not run yet, by (caster, ability).
+    auto_started: std::collections::BTreeSet<(ObjKey, u32)>,
     /// The sheep types by movement class (0 = [`SHEEP`]).
     pub sheep: [u32; 4],
     /// Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (None = the 1.26a data values 0.5 / 0.25).
@@ -641,37 +643,10 @@ fn heal_needs(gm: &Game, target: ObjKey) -> bool {
     !arith::lt(deficit, F32::ONE)
 }
 
-/// The corpses `unit` could raise: dead, not removed, within `Area` of the caster, not structures or mechanical units,
-/// in the order of the circle query (the original's group builder `0x6F2A3270` with the callback `0x6F0FBA50`; the
-/// per-unit filters `0x6F0E6CC0` / `0x6F0E6D20` are not decoded, the model's list is LIKELY).
-fn corpses_near(gm: &Game, caster: ObjKey, area: F32) -> Vec<ObjKey> {
-    let (cx, cy) = (gm.unit(caster).x, gm.unit(caster).y);
-    let area2 = arith::mul(area, area);
-    let mut out = Vec::new();
-    for i in 0..gm.object_count() {
-        let k = ObjKey(i as u32);
-        if !matches!(gm.object(k), crate::natives::game::Object::Unit(_)) || k == caster {
-            continue;
-        }
-        let u = gm.unit(k);
-        if !u.dead || u.removed || u.illusion {
-            continue;
-        }
-        if is_unit_type(gm, u, ty::STRUCTURE) || is_unit_type(gm, u, ty::MECHANICAL) {
-            continue;
-        }
-        let (dx, dy) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
-        if arith::le(arith::add(arith::mul(dx, dx), arith::mul(dy, dy)), area2) {
-            out.push(k);
-        }
-    }
-    out
-}
-
 /// Errors of a cast without a target (the readiness error "no corpse" of Raise Dead).
 pub(crate) fn untargeted_error(gm: &Game, caster: ObjKey, base: u32, level: &crate::cast::SpellLevel) -> Option<CastError> {
     match base {
-        RAISE_DEAD if corpses_near(gm, caster, level.area).is_empty() => Some(CastError::BadTarget),
+        RAISE_DEAD if pick_corpse(gm, caster, level.area).is_none() => Some(CastError::BadTarget),
         _ => None,
     }
 }
@@ -840,7 +815,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             true
         }
         RAISE_DEAD => {
-            raise_dead(game, rec);
+            raise_dead(game, rt, rec);
             true
         }
         ROAR => {
@@ -936,42 +911,136 @@ fn unholy_frenzy(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     gm.register_tick(target, serial, rec.caster, d[1], false, DAMAGE_TYPE_DEATH, true);
 }
 
-/// Raise Dead (`Arai`, `CAbilityRaiseDead` vtable `0x6F8CB89C`; effect `0x6F0E6AA0`, corpse group `0x6F0FBB30`):
-/// `DataA` units of the first type (`UnitID`) and `DataB` of the second (`DataD`, the skeletal mage) are made from
-/// the corpses within `Area` of the caster, first corpses first (circle query order, LIKELY); each unit gets the
-/// caster's owner, the summoned class bit, the corpse's position and a timed life buff `Brai` of `HeroDur` / `Dur`
-/// (hero rule on the caster, CONFIRMED order of the reads), and the corpse is removed. Fewer corpses than units
-/// raise fewer units.
-fn raise_dead(game: &RefCell<Game>, rec: &CastRec) {
-    let mut gm = game.borrow_mut();
-    let corpses = corpses_near(&gm, rec.caster, rec.level.area);
-    let a = conv::f2i(rec.level.data[0]).max(0) as usize;
-    let b = conv::f2i(rec.level.data[1]).max(0) as usize;
-    let hero = gm.target_hero(rec.caster);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
-    let owner = gm.unit(rec.caster).owner;
-    let first = rec.level.unit_id;
-    let second = if gm.spells.unit.raise_dead_second != 0 { gm.spells.unit.raise_dead_second } else { SKELETAL_MAGE };
-    let mut it = corpses.into_iter();
-    for (n, ty_id) in [(a, first), (b, second)] {
-        for _ in 0..n {
-            let Some(c) = it.next() else {
-                return;
-            };
-            let (x, y, facing) = {
-                let u = gm.unit(c);
-                (u.x, u.y, u.facing)
-            };
+/// Raise Dead (`Arai`, `CAbilityRaiseDead` vtable `0x6F8CB89C`; effect slot `0x424` = `0x6F0E6AA0`). CONFIRMED structure
+/// (S38, re-read: the earlier reading "one corpse per unit" was wrong): the effect takes ONE corpse `c` (its argument,
+/// chosen by the autocast search: filter slot `0x450`, comparator slot `0x458` = `0x6F0F5950`, which prefers a dead
+/// candidate over a living one and otherwise falls back to the shared comparator `0x6F023400`), reads `a = f2i(DataA)`
+/// and `b = f2i(DataB)`, the two unit types (`0x6F0E69E0`: `UnitID`, `0x6F0E6A40`: the second type, `DataD` in the
+/// editor), the duration by the hero rule applied to the CORPSE (`HeroDur` when the corpse was a hero, else `Dur` +
+/// ability `+0x9C`), makes `a` units of the first type and `b` of the second FROM THAT CORPSE
+/// (`0x6F0DE9C0(ability, corpse, type, dur != 0)`; each is tied to the caster by `0x6F1D2600`, notified, given the
+/// timed life `Brai` through slot `0x484` and registered), then removes the corpse (`0x6F2964E0`, event `0xD015A`,
+/// `0x6F29ED60`). Level 1 therefore raises two skeleton warriors from one corpse, level 2 a warrior and a mage.
+/// Afterwards the unit cap runs: `existing = slot 0x47C` (`0x6F0E6CC0`: the player's typed counts of both types,
+/// flag `0x12`), `limit = slot 0x480` (`0x6F0E6D20`: the player's tech `max allowed` of `UnitID`, `INT_MAX` when never
+/// set by `SetPlayerTechMaxAllowed`); when `limit - existing < 0` slot `0x488` (`0x6F0FBB30`) kills that many of the
+/// raised units, ordered by a key (the remaining timed life of `Brai` times a constant, else 500; the sort and the
+/// end it takes from are UNSURE: the model kills the oldest). The readiness slot `0x380` (`0x6F0E69A0`) and the
+/// autocast gate `0x3D8` require `a + b + existing <= limit` (slot `0x478`) when the ability flag `0x200000` is set.
+/// UNSURE stand-ins: the corpse choice (the model picks by the shared comparator over the circle query of radius
+/// `Area`, which keeps the farthest of two corpses in range), the placement (all units at the corpse), the second type
+/// (`State::raise_dead_second`, default the skeletal mage).
+fn raise_dead(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let mut killed = Vec::new();
+    {
+        let mut gm = game.borrow_mut();
+        let Some(corpse) = pick_corpse(&gm, rec.caster, rec.level.area) else {
+            return;
+        };
+        let a = conv::f2i(rec.level.data[0]).max(0) as usize;
+        let b = conv::f2i(rec.level.data[1]).max(0) as usize;
+        let hero = gm.target_hero(corpse);
+        let dur = effect_duration(&rec.level, hero, F32::ZERO);
+        let owner = gm.unit(rec.caster).owner;
+        let first = rec.level.unit_id;
+        let second = if gm.spells.unit.raise_dead_second != 0 { gm.spells.unit.raise_dead_second } else { SKELETAL_MAGE };
+        let (x, y, facing) = {
+            let u = gm.unit(corpse);
+            (u.x, u.y, u.facing)
+        };
+        crate::natives::unit::remove_unit(&mut gm, corpse);
+        for (n, ty_id) in [(a, first), (b, second)] {
             if ty_id == 0 {
                 continue;
             }
-            crate::natives::unit::remove_unit(&mut gm, c);
-            if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty_id, x, y, facing, true) {
-                gm.unit_mut(k).summoned = true;
-                gm.apply_timed_life(k, BUFF_RAISE_DEAD, dur);
+            for _ in 0..n {
+                if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty_id, x, y, facing, true) {
+                    gm.unit_mut(k).summoned = true;
+                    gm.apply_timed_life(k, BUFF_RAISE_DEAD, dur);
+                }
+            }
+        }
+        // The unit cap: kill the surplus (oldest first).
+        let limit = gm.player_tech_max_allowed(owner, first);
+        let existing = raised_count(&gm, owner, first, second);
+        if let Some(extra) = i64::from(existing).checked_sub(i64::from(limit)).filter(|&e| e > 0) {
+            let mut mine: Vec<ObjKey> = (0..gm.object_count())
+                .map(|i| ObjKey(i as u32))
+                .filter(|&k| {
+                    matches!(gm.object(k), crate::natives::game::Object::Unit(u)
+                        if u.owner == owner && (u.type_id == first || u.type_id == second) && !u.dead && !u.removed && u.summoned)
+                })
+                .collect();
+            mine.sort();
+            for k in mine.into_iter().take(extra as usize) {
+                if crate::natives::set_life(&mut gm, k, F32::ZERO) {
+                    killed.push(k);
+                }
             }
         }
     }
+    for t in killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+/// The player's living units of the two raised types (slot `0x47C`, `0x6F0E6CC0`: the typed counts of both types, the
+/// second only when it differs from the first).
+fn raised_count(gm: &Game, owner: u32, first: u32, second: u32) -> i32 {
+    let n = |ty: u32| -> i32 {
+        (0..gm.object_count())
+            .filter(|&i| {
+                matches!(gm.object(ObjKey(i as u32)), crate::natives::game::Object::Unit(u)
+                    if u.owner == owner && u.type_id == ty && !u.dead && !u.removed)
+            })
+            .count() as i32
+    };
+    if first == second {
+        n(first)
+    } else {
+        n(first) + n(second)
+    }
+}
+
+/// Slot `0x478` (`0x6F0E6930`): whether raising `a + b` more units stays within the cap.
+fn raise_dead_cap_ok(gm: &Game, caster: ObjKey, level: &crate::cast::SpellLevel) -> bool {
+    let owner = gm.unit(caster).owner;
+    let a = conv::f2i(level.data[0]);
+    let b = conv::f2i(level.data[1]);
+    let second = if gm.spells.unit.raise_dead_second != 0 { gm.spells.unit.raise_dead_second } else { SKELETAL_MAGE };
+    let existing = raised_count(gm, owner, level.unit_id, second);
+    let limit = gm.player_tech_max_allowed(owner, level.unit_id);
+    i64::from(a) + i64::from(b) + i64::from(existing) <= i64::from(limit)
+}
+
+/// The corpse the effect gets: the circle query around the caster (radius `Area`), the corpses among them, the shared
+/// comparator (`default_prefers`, all in range).
+fn pick_corpse(gm: &Game, caster: ObjKey, area: F32) -> Option<ObjKey> {
+    let t = arith::mul(area, area);
+    let mut best: Option<(ObjKey, F32)> = None;
+    let (cx, cy) = (gm.unit(caster).x, gm.unit(caster).y);
+    for k in crate::natives::group::circle_candidates(gm, cx, cy, area) {
+        if k == caster || !corpse_ok(gm, k) {
+            continue;
+        }
+        let v = dist2(gm, caster, k);
+        best = match best {
+            None => Some((k, v)),
+            Some((b, vb)) => {
+                if raise_dead_prefers(true, true, v, vb, t) {
+                    Some((k, v))
+                } else {
+                    Some((b, vb))
+                }
+            }
+        };
+    }
+    best.map(|(k, _)| k)
+}
+
+fn corpse_ok(gm: &Game, k: ObjKey) -> bool {
+    let u = gm.unit(k);
+    u.dead && !u.removed && !u.illusion && !is_unit_type(gm, u, ty::STRUCTURE) && !is_unit_type(gm, u, ty::MECHANICAL)
 }
 
 /// Roar (`Aroa`, `CAbilityRoar` vtable `0x6F8A21BC`; instant effect slot `0x3C0` = `0x6F1EED60`, readiness `0x6F1EEBF0`):
@@ -1206,7 +1275,10 @@ fn abolish_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec
             return;
         }
         let a7 = u32::from(arith::lt(F32::ZERO, rec.level.data[8]));
-        dispel_one(&mut gm, rec.caster, target, rec.level.data[1], rec.level.data[0], true, a7)
+        // Smart mode (relation-aware removal) only for a cast the autocast started (see `scan`); a manual order removes
+        // both polarities like Dispel Magic (UNSURE: the ability flag `0x200000` decides in the original).
+        let smart = gm.spells.unit.auto_started.remove(&(rec.caster, ABOLISH_MAGIC));
+        dispel_one(&mut gm, rec.caster, target, rec.level.data[1], rec.level.data[0], smart, a7)
     };
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
@@ -2235,10 +2307,12 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
 /// One autocast scan of `base` for `unit`; returns the delay to the next one.
 fn scan(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, base: u32) -> f32 {
     if base == RAISE_DEAD {
-        // No target: the scan looks for corpses (`0x6F0E6CC0`); with some in reach the cast is ordered.
+        // No target: the scan looks for corpses; with some in reach the cast is ordered. The autocast gate `0x3D8`
+        // also asks the unit cap (slot `0x478`).
         let ready = {
             let gm = game.borrow();
-            !gm.is_stunned(unit) && order_allows_autocast(&gm, unit)
+            let level = gm.ability_level_record(unit, base).unwrap_or_default();
+            !gm.is_stunned(unit) && order_allows_autocast(&gm, unit) && raise_dead_cap_ok(&gm, unit, &level)
         };
         if ready && begin_cast(game, rt, unit, base, CastTarget::None).is_ok() {
             let gm = game.borrow();
@@ -2260,6 +2334,9 @@ fn scan(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, base: u3
     };
     match begin_cast(game, rt, unit, base, CastTarget::Unit(target)) {
         Ok(_) => {
+            // Remember that this cast came from the autocast scan: Abolish Magic's effect runs in its smart mode then
+            // (the ability flag `0x200000`, UNSURE reading of what sets it).
+            game.borrow_mut().spells.unit.auto_started.insert((unit, base));
             // max(total cast time, 1.0): the level's Cast plus the cast point (UNSURE composition of slot 0x3E0).
             let gm = game.borrow();
             let level = gm.ability_level_record(unit, base).unwrap_or_default();
@@ -2330,6 +2407,18 @@ pub fn default_prefers(vc: F32, vb: F32, t: F32) -> bool {
         (false, true) => false,
         (true, true) => !(g(vb) > g(vc)),
         (false, false) => g(vb) > g(vc),
+    }
+}
+
+/// Raise Dead's comparator `0x6F0F5950` (slot `0x458`; CONFIRMED by Unicorn, `tools/emu/raise_dead_cmp_emu.py`, 1,200
+/// cases, 0 mismatches, `tests/raise_dead_vectors.rs`): a dead candidate (`+0x5C` bit 8) beats a living best, a living
+/// candidate loses to a dead best, and when both are dead or both alive the shared comparator `0x6F023400`
+/// ([`default_prefers`]) decides.
+pub fn raise_dead_prefers(cand_dead: bool, best_dead: bool, vc: F32, vb: F32, t: F32) -> bool {
+    match (cand_dead, best_dead) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => default_prefers(vc, vb, t),
     }
 }
 

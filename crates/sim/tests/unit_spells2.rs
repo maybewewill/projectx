@@ -29,6 +29,7 @@ native IssueTargetOrder takes unit whichUnit, string order, widget target return
 native IssueImmediateOrderById takes unit whichUnit, integer order returns boolean
 native IssuePointOrderById takes unit whichUnit, integer order, real x, real y returns boolean
 native IssuePointOrder takes unit whichUnit, string order, real x, real y returns boolean
+native SetPlayerTechMaxAllowed takes player whichPlayer, integer techid, integer maximum returns nothing
 "#;
 
 const SRC: &str = r#"
@@ -62,6 +63,16 @@ function curse_ally takes nothing returns nothing
 endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
+endfunction
+function kill_two takes nothing returns nothing
+    call SetWidgetLife(grunt, 0.0)
+    call SetWidgetLife(grunt2, 0.0)
+endfunction
+function raise_now takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shaman, 852197)
+endfunction
+function cap_skeletons takes nothing returns nothing
+    call SetPlayerTechMaxAllowed(Player(0), 'uske', 1)
 endfunction
 function ward_here takes nothing returns nothing
     set accepted = IssuePointOrderById(shaman, 852109, 5000.0, 300.0)
@@ -319,6 +330,83 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
 }
 
+// ---- Raise Dead: one corpse, two types, unit cap ----
+
+const SKE: u32 = 0x7573_6B65; // 'uske'
+const SKM: u32 = 0x7573_6B6D; // 'uskm'
+
+fn with_raise(h: &ScriptHost, a: f32, b: f32) {
+    let k = {
+        let id = h.vm().global("shaman").and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    for (id, name) in [(SKE, "Skeleton Warrior"), (SKM, "Skeletal Mage")] {
+        g.unit_types_mut().insert(id, UnitType { name: name.to_string(), max_life: f(100.0), ..Default::default() });
+    }
+    g.ability_types_mut().insert(RAISE_DEAD, AbilityType { max_level: Some(1) });
+    // Raise Dead level 2 shape: DataA 1 unit of UnitID, DataB 1 unit of the second type, Area 900, Dur 40 (shortened).
+    g.set_spell_levels(
+        RAISE_DEAD,
+        vec![SpellLevel {
+            cost: 75,
+            cool: f(1.0),
+            dur: f(10.0),
+            hero_dur: f(10.0),
+            area: f(900.0),
+            rng: f(600.0),
+            data: data(&[(0, a), (1, b)]),
+            unit_id: SKE,
+            ..Default::default()
+        }],
+    );
+    g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(RAISE_DEAD, None));
+}
+
+fn live_units_of(h: &ScriptHost, ty: u32) -> usize {
+    let g = h.game();
+    (0..g.object_count())
+        .map(|i| ObjKey(i as u32))
+        .filter(|&k| matches!(g.object(k), sim::natives::game::Object::Unit(u) if u.type_id == ty && !u.dead && !u.removed))
+        .count()
+}
+
+#[test]
+fn raise_dead_makes_a_warrior_and_a_mage_from_one_corpse_and_leaves_the_other_corpse() {
+    let mut h = started();
+    with_raise(&h, 1.0, 1.0);
+    call(&mut h, "kill_two");
+    run(&mut h, 1);
+    call(&mut h, "raise_now");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(live_units_of(&h, SKE), 1);
+    assert_eq!(live_units_of(&h, SKM), 1);
+    let corpses = {
+        let g = h.game();
+        (0..g.object_count())
+            .map(|i| ObjKey(i as u32))
+            .filter(|&k| matches!(g.object(k), sim::natives::game::Object::Unit(u) if u.type_id == FOOT && u.dead && !u.removed))
+            .count()
+    };
+    assert_eq!(corpses, 1, "only one corpse was used");
+    run(&mut h, 110);
+    assert_eq!(live_units_of(&h, SKE) + live_units_of(&h, SKM), 0, "timed life");
+}
+
+#[test]
+fn raise_dead_respects_the_tech_max_allowed_cap_by_killing_the_surplus() {
+    let mut h = started();
+    with_raise(&h, 2.0, 0.0);
+    call(&mut h, "kill_two");
+    call(&mut h, "cap_skeletons");
+    run(&mut h, 1);
+    call(&mut h, "raise_now");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(live_units_of(&h, SKE), 1, "two were made, the cap of 1 killed the older one");
+}
+
 // ---- Passive attack modifiers: Frost Attack, Slow Poison, Feedback ----
 
 fn give_passive(h: &ScriptHost, name: &str, base: u32, level: SpellLevel) {
@@ -567,7 +655,7 @@ fn neg() -> sim::abilities::BuffPredicates {
 }
 
 #[test]
-fn abolish_magic_removes_negative_buffs_from_friends_and_positive_ones_from_enemies() {
+fn a_manual_abolish_magic_removes_both_polarities_like_dispel_magic_and_the_autocast_is_relation_aware() {
     let mut h = started();
     with_abolish(&h);
     let (grunt, foe) = (unit(&h, "grunt"), unit(&h, "foe"));
@@ -581,11 +669,11 @@ fn abolish_magic_removes_negative_buffs_from_friends_and_positive_ones_from_enem
     call(&mut h, "abolish_grunt");
     run(&mut h, 12);
     assert!(accepted(&h));
-    assert!(!has_buff(&h, grunt, BUFF_CRIPPLE) && has_buff(&h, grunt, BUFF_BLOODLUST));
+    assert!(!has_buff(&h, grunt, BUFF_CRIPPLE) && !has_buff(&h, grunt, BUFF_BLOODLUST), "a manual cast: positive = negative = 1");
     call(&mut h, "abolish_foe");
     run(&mut h, 1);
     assert!(accepted(&h));
-    assert!(has_buff(&h, foe, BUFF_CRIPPLE) && !has_buff(&h, foe, BUFF_BLOODLUST));
+    assert!(!has_buff(&h, foe, BUFF_CRIPPLE) && !has_buff(&h, foe, BUFF_BLOODLUST));
     assert_eq!(h.game().unit(unit(&h, "shaman")).mana.to_f32(), 200.0);
 }
 

@@ -816,7 +816,7 @@ fn raise_dead_makes_skeletons_from_corpses_in_reach_and_they_expire() {
     assert!(accepted(&h));
     assert_eq!(h.game().unit(shaman).mana.to_f32(), 225.0);
     assert_eq!(count_units(&h, SKELETON, true), 2);
-    assert_eq!(count_units(&h, FOOT, false), 6, "of 8 footmen two corpses were consumed (removed)");
+    assert_eq!(count_units(&h, FOOT, false), 7, "S38: ONE of the 8 footmen was raised (consumed): both skeletons come from the same corpse");
     run(&mut h, 55);
     assert_eq!(count_units(&h, SKELETON, true), 0, "timed life ended");
 }
