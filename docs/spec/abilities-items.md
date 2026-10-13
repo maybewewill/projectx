@@ -112,6 +112,16 @@ Sinks: `heroes::life_sink` / `mana_sink` (Unicorn-checked earlier) and the attri
 then slot `0x424` on the candidate). The model applies `UnitMods { move_delta: DataA, attack_delta: DataB }` through
 `apply_mods_buff` for the duration; the buff flags (positive, magic, dispellable) are UNSURE.
 
+### Regeneration (`AIrg`, LIKELY)
+
+`CAbilityRegeneration` (a `CAbilityRejuvination` child; unit effect `0x424` = `0x6F108AC0`, area `0x428` = `0x6F1088D0`
+with the callback `0x6F108800`). The real data (potions and scrolls of rejuvenation and regeneration, `BuffID`
+`BIrg,BIrl,BIrm`): `DataA` the life total, `DataB` the mana total, `Dur` 30/45 s, scrolls with `Area` 600. The model reuses
+the Rejuvenation mechanics of `unit_spells.rs` (decoded in `abilities-unit-spells.md` section 7): the hero rule duration, the buff
+for the duration + 0.01 s, a repeating 1.0 s tick (first after 1.0 s) of `DataA / dur` life and `DataB / dur` mana by soft
+division, added through the life and mana adders; a refresh replaces the amounts. LIKELY from the class parentage and
+the data meaning, not Unicorn-checked.
+
 ## 5. Town portal (`AItp`, UNSURE model)
 
 `CAbilityItemTownPortal` (vtable `0x6F88C75C`, child of `CAbilityItemTeleport`): data `Cast` 5 s, `Area` 1100,
@@ -123,8 +133,7 @@ clustering flag) to the target; **UNSURE** in the field meanings and the delay.
 
 ## 6. NOT DONE
 
-`AIrm` / `Arel` (regeneration items: a hero-only modifier on the mana/life property), `AIrg` (Replenishment, a
-`CAbilityRejuvination` child), `AIva`, `AIsr`, `AIcf`, the orbs (`CAbilityDamageBonusBase` family), `AIvi`/`AIvu`
+`AIrm` / `Arel` (regeneration items: a hero-only modifier on the mana/life property), `AIva`, `AIsr`, `AIcf`, the orbs (`CAbilityDamageBonusBase` family), `AIvi`/`AIvu`
 (invisibility, invulnerability potions), `AIrc`, `AIrs`, `AIan`, `AIrd`, the figurines, `AIte`, `AIfl`/flags, `AIbl`/`AIco`,
 `AIgl`. Their classes are listed in `docs/research/ability-atlas/factory.tsv`; the tracer decodes a slot in minutes.
 
@@ -134,5 +143,5 @@ clustering flag) to the target; **UNSURE** in the field meanings and the delay.
 `usable`, `perishable`, `powerup`, `Level` (capital L), `droppable`, `pawnable`, `sellable`. `AbilityData.slk` rows of item
 abilities have `code` (the factory base) and `item` = 1. Example: Potion of Healing `phea` has `abilList` `AIh1` (base `AIhe`),
 `uses` 1, `perishable` 1, `cooldownID` `AIhe`; `AIh1` has `Cool1` 20 and `DataA1` 250. About 120 distinct base codes
-appear in the item table; 28 are modelled (the codes of sections 2 to 5). The unmodelled ones with the most items are the
-orb family (`AIfb` and siblings, 13 items), `AIrg` (11), the figurines (`AIfs`, 8) and the build scrolls (`AIbl`, 8).
+appear in the item table; 29 are modelled (the codes of sections 2 to 5). The unmodelled ones with the most items are the
+orb family (`AIfb` and siblings, 13 items), the figurines (`AIfs`, 8) and the build scrolls (`AIbl`, 8).

@@ -163,6 +163,8 @@ pub enum SpellMsg {
     Human { kind: u8, id: u32 },
     /// A timer of the unit spells in `unit_spells.rs` (autocast scans).
     UnitSpell { kind: u8, unit: ObjKey, base: u32, aux: u32 },
+    /// A timer of the item abilities in `item_abilities.rs` (regeneration ticks).
+    Item { kind: u8, unit: ObjKey, aux: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1026,5 +1028,6 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
         SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
         SpellMsg::UnitSpell { kind, unit, base, aux } => crate::unit_spells::on_timer(game, rt, kind, unit, base, aux),
+        SpellMsg::Item { kind, unit, aux } => crate::item_abilities::on_timer(game, rt, kind, unit, aux),
     }
 }

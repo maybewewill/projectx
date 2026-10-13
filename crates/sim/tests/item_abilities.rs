@@ -84,6 +84,13 @@ function setup_speed takes nothing returns nothing
     set potion = CreateItem('psp1', 0.0, 0.0)
     call UnitAddItem(u, potion)
 endfunction
+function setup_regen takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    call SetWidgetLife(u, 100.0)
+    call SetUnitState(u, 2, 50.0)
+    set potion = CreateItem('prj1', 0.0, 0.0)
+    call UnitAddItem(u, potion)
+endfunction
 function setup_portal takes nothing returns nothing
     set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
     set friend = CreateUnit(Player(0), 'hfoo', 100.0, 0.0, 0.0)
@@ -148,6 +155,7 @@ const RESTORE: u32 = 0x7072_3031; // 'pr01'
 const SCROLL: u32 = 0x7073_3031; // 'ps01' healing area scroll
 const SPEED_POTION: u32 = 0x7073_7031; // 'psp1'
 const PORTAL: u32 = 0x7374_7770; // 'stwp'
+const REJUV: u32 = 0x7072_6A31; // 'prj1' potion of rejuvenation: 100 life and 25 mana over 30 s
 const TOWN: u32 = 0x6874_6F77; // 'htow'
 const CLAW: u32 = 0x636C_3031; // 'cl01' +15 damage
 const BOOTS: u32 = 0x6274_3031; // 'bt01' +10 armor
@@ -159,6 +167,7 @@ const A_REST: u32 = 0x4149_7231; // 'AIr1'
 const A_SCROLL: u32 = 0x4149_6832 + 0x100; // 'AIh3'
 const A_SPEED: u32 = 0x4149_7370; // 'AIsp'
 const A_PORTAL: u32 = 0x4149_7470; // 'AItp'
+const A_REJUV: u32 = 0x4149_7031; // 'AIp1'
 const A_CLAW: u32 = 0x4149_6133; // 'AIa3'
 const A_BOOTS: u32 = 0x4149_6434; // 'AId4'
 const A_TOME: u32 = 0x4149_7331; // 'AIs1'
@@ -271,6 +280,10 @@ fn host(with_tables: bool) -> ScriptHost {
         speed_level.dur = f(45.0);
         speed_level.hero_dur = f(45.0);
         add(SPEED_POTION, &[A_SPEED], ITEM_SPEED, speed_level, &|s| s.perishable = true);
+        let mut rejuv_level = level(0, 0.0, 0.0, 100.0, 25.0, 0.0);
+        rejuv_level.dur = f(30.0);
+        rejuv_level.hero_dur = f(30.0);
+        add(REJUV, &[A_REJUV], ITEM_REGEN, rejuv_level, &|s| s.perishable = true);
         add(PORTAL, &[A_PORTAL], TOWN_PORTAL, level(0, 0.0, 1100.0, 90.0, 1.0, 0.0), &|s| s.perishable = true);
         add(CLAW, &[A_CLAW], BONUS_ATTACK, level(0, 0.0, 0.0, 15.0, 0.0, 0.0), &|_| {});
         add(BOOTS, &[A_BOOTS], BONUS_DEFENSE, level(0, 0.0, 0.0, 10.0, 0.0, 0.0), &|_| {});
@@ -283,6 +296,7 @@ fn host(with_tables: bool) -> ScriptHost {
         g.item_types_mut().insert(SCROLL, item_type(1, true, false));
         g.item_types_mut().insert(SPEED_POTION, item_type(1, true, false));
         g.item_types_mut().insert(PORTAL, item_type(1, true, false));
+        g.item_types_mut().insert(REJUV, item_type(1, true, false));
         g.item_types_mut().insert(CLAW, item_type(0, false, false));
         g.item_types_mut().insert(BOOTS, item_type(0, false, false));
         g.item_types_mut().insert(TOME, item_type(0, false, true));
@@ -536,4 +550,24 @@ fn town_portal_moves_the_caster_and_nearby_allies_to_the_structure() {
     assert!((ux - 4000.0).abs() < 1.0, "caster at {ux}");
     assert!((fx - 4100.0).abs() < 1.0, "ally at {fx}");
     assert_eq!(h.game().unit(foe).x.to_f32(), 0.0);
+}
+
+#[test]
+fn regeneration_potion_restores_life_and_mana_over_its_duration() {
+    let mut h = started("setup_regen", false);
+    let u = global_unit(&h, "u");
+    call(&mut h, "use_potion");
+    assert!(accepted(&h));
+    assert!(h.game().buffs(u).iter().any(|b| b.base == BUFF_REGEN));
+    run(&mut h, 105);
+    // After about 10 ticks: 10 x (100 / 30) life and 10 x (25 / 30) mana.
+    let l = life(&h, u);
+    assert!((l - (100.0 + 10.0 * 100.0 / 30.0)).abs() < 1.0, "life {l}");
+    let m = h.game().unit(u).mana.to_f32();
+    assert!((m - (50.0 + 10.0 * 25.0 / 30.0)).abs() < 1.0, "mana {m}");
+    run(&mut h, 400);
+    // All 30 ticks done: the totals are in, the buff has ended.
+    assert!((life(&h, u) - 200.0).abs() < 1.0);
+    assert!((h.game().unit(u).mana.to_f32() - 75.0).abs() < 1.0);
+    assert!(!h.game().buffs(u).iter().any(|b| b.base == BUFF_REGEN));
 }

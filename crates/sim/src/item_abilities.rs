@@ -26,6 +26,7 @@ use crate::heroes::{self, BonusEnv, EngineEnv, Gain};
 use crate::natives::event::{Datum, Field, Firing};
 use crate::natives::game::{item_flags, Game, ItemType, ObjKey};
 use crate::natives::{fire_observers_in, set_life, ScriptRuntime, KEY_BASE};
+use crate::timer::TimerId;
 
 // ---- the base codes of the families ----
 
@@ -57,6 +58,9 @@ pub const BONUS_ATTRS: u32 = code(b"AIab");
 pub const ITEM_SPEED: u32 = code(b"AIsp");
 pub const ITEM_SPEED_AOE: u32 = code(b"AIsa");
 pub const TOWN_PORTAL: u32 = code(b"AItp");
+pub const ITEM_REGEN: u32 = code(b"AIrg");
+/// The buff of the regeneration items (the first of `BuffID` `BIrg,BIrl,BIrm`).
+pub const BUFF_REGEN: u32 = code(b"BIrg");
 /// The buff of the item speed abilities (`BuffID` of `AIsp` and `AIsa`).
 pub const BUFF_SPEED: u32 = code(b"Bspe");
 
@@ -99,6 +103,8 @@ pub enum Family {
     SpeedAoe,
     /// `CAbilityItemTownPortal` (UNSURE model, see [`town_portal`]).
     TownPortal,
+    /// `CAbilityRegeneration` (`AIrg`, a `CAbilityRejuvination` child): life `DataA` and mana `DataB` over the duration.
+    Regen,
 }
 
 impl Family {
@@ -145,6 +151,7 @@ impl Family {
             ITEM_SPEED => Family::Speed,
             ITEM_SPEED_AOE => Family::SpeedAoe,
             TOWN_PORTAL => Family::TownPortal,
+            ITEM_REGEN => Family::Regen,
             _ => return None,
         })
     }
@@ -212,8 +219,18 @@ pub struct State {
     applied: BTreeMap<(ObjKey, u32), (ObjKey, Applied)>,
     /// Casts started by a use order and not ended yet: `(caster, alias) -> item`.
     pending: BTreeMap<(ObjKey, u32), ObjKey>,
+    /// Regeneration buffs running by buff serial.
+    regen: BTreeMap<u32, RegenRec>,
     /// Misc `IllusionsCanRestoreLife`-like switch of the area callbacks (UNSURE key).
     pub illusions_heal: bool,
+}
+
+/// One running regeneration (`AIrg`): the amounts per 1.0 s tick and the repeating timer.
+#[derive(Debug, Clone, Copy)]
+struct RegenRec {
+    life: F32,
+    mana: F32,
+    timer: Option<TimerId>,
 }
 
 impl State {
@@ -650,6 +667,18 @@ fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, 
             }
         }
         Family::TownPortal => town_portal(gm, caster, target, level),
+        Family::Regen => {
+            // The scroll forms (`Area` above 0) act on the units around the target or owner (`0x6F1088D0`), the potions on
+            // the target or the owner (`0x6F108AC0`).
+            let units = if arith::lt(F32::ZERO, level.area) {
+                area_units(gm, caster, target, level)
+            } else {
+                vec![effect_target(caster, target)]
+            };
+            for k in units {
+                apply_regen(gm, caster, k, level);
+            }
+        }
         Family::Gold | Family::Lumber => {
             let t = effect_target(caster, target);
             let owner = gm.unit(t).owner;
@@ -661,6 +690,80 @@ fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, 
             gm.credit_resource(owner, res, conv::f2i(d[0]), crate::economy::Flags::NONE);
         }
         _ => {}
+    }
+}
+
+/// The per-tick amounts of a regeneration: the totals `DataA` (life) and `DataB` (mana) spread over the duration (soft
+/// division, like Rejuvenation `0x6F0F0650`).
+pub fn regen_tick_amounts(level: &SpellLevel, dur: F32, t: Option<&Tables>) -> (F32, F32) {
+    let div = |total: F32| match t {
+        Some(t) => arith::div(total, dur, t),
+        None => F32::from_bits((total.to_f32() / dur.to_f32()).to_bits()),
+    };
+    (div(level.data[0]), div(level.data[1]))
+}
+
+/// `AIrg` on one unit: the hero rule duration, the buff `BIrg` for the duration plus 0.01 s and a repeating 1.0 s tick that
+/// adds the per-tick life and mana (LIKELY: the class reuses the Rejuvenation tick `0x6F0E3A20`; a refresh replaces the
+/// amounts and keeps the running timer).
+fn apply_regen(gm: &mut Game, caster: ObjKey, target: ObjKey, level: &SpellLevel) {
+    let _ = caster;
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let tables = gm.order_tables().cloned();
+    let (life, mana) = regen_tick_amounts(level, dur, tables.as_ref());
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..crate::abilities::buff_predicates(BUFF_REGEN)
+    };
+    let buff_dur = arith::add(dur, F32::from_bits(0x3C23_D70A));
+    let serial = gm.apply_mods_buff(target, BUFF_REGEN, preds, crate::unit_spells::UnitMods::default(), buff_dur);
+    if let Some(rec) = gm.spells.item.regen.get_mut(&serial) {
+        rec.life = life;
+        rec.mana = mana;
+        return;
+    }
+    let timer = gm.timers.start(
+        1.0,
+        true,
+        crate::natives::game::Payload::Spell(crate::cast::SpellMsg::Item { kind: TICK_REGEN, unit: target, aux: serial }),
+    );
+    gm.spells.item.regen.insert(serial, RegenRec { life, mana, timer: Some(timer) });
+}
+
+/// The timer kind of a regeneration tick.
+pub const TICK_REGEN: u8 = 1;
+
+/// A timer of [`crate::cast::SpellMsg::Item`]: one regeneration tick while the buff lives.
+pub(crate) fn on_timer(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, serial: u32) {
+    if kind != TICK_REGEN {
+        return;
+    }
+    let mut gm = game.borrow_mut();
+    let Some(rec) = gm.spells.item.regen.get(&serial).copied() else {
+        return;
+    };
+    let alive = gm.alive(unit) && gm.unit(unit).buffs.iter().any(|b| b.serial == serial);
+    if !alive {
+        if let Some(t) = rec.timer {
+            gm.timers.cancel(t);
+        }
+        gm.spells.item.regen.remove(&serial);
+        return;
+    }
+    if rec.life.to_bits() & 0x7FFF_FFFF != 0 {
+        add_life(&mut gm, unit, rec.life);
+    }
+    if rec.mana.to_bits() & 0x7FFF_FFFF != 0 {
+        add_mana(&mut gm, unit, rec.mana);
     }
 }
 
