@@ -36,6 +36,8 @@ globals
     unit e4 = null
     unit decoy = null
     unit ally = null
+    unit ally2 = null
+    unit ally3 = null
     boolean accepted = false
 endglobals
 function setup takes nothing returns nothing
@@ -46,6 +48,8 @@ function setup takes nothing returns nothing
     set e4 = CreateUnit(Player(1), 'hfoo', 1500.0, 0.0, 0.0)
     set decoy = CreateUnit(Player(1), 'hfoo', 300.0, 150.0, 0.0)
     set ally = CreateUnit(Player(0), 'hfoo', 50.0, 0.0, 0.0)
+    set ally2 = CreateUnit(Player(0), 'hfoo', 50.0, 200.0, 0.0)
+    set ally3 = CreateUnit(Player(0), 'hfoo', 50.0, -300.0, 0.0)
     call UnitAddAbility(caster, 'AOws')
     call UnitAddAbility(caster, 'AOcl')
     call UnitAddAbility(caster, 'AOsh')
@@ -53,6 +57,8 @@ function setup takes nothing returns nothing
     call UnitAddAbility(caster, 'AOmi')
     call UnitAddAbility(caster, 'AOsf')
     call UnitAddAbility(caster, 'AOfs')
+    call UnitAddAbility(caster, 'AOww')
+    call UnitAddAbility(caster, 'AOhw')
     call SetUnitState(caster, 2, 1000.0)
 endfunction
 function stomp takes nothing returns nothing
@@ -72,6 +78,12 @@ function mirror takes nothing returns nothing
 endfunction
 function wolves takes nothing returns nothing
     set accepted = IssueImmediateOrderById(caster, 852126)
+endfunction
+function storm takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(caster, 852128)
+endfunction
+function heal takes nothing returns nothing
+    set accepted = IssueTargetOrderById(caster, 852501, ally)
 endfunction
 function sight takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852122, 2000.0, 0.0)
@@ -125,7 +137,7 @@ fn host() -> ScriptHost {
                 },
             );
         }
-        for code in [WAR_STOMP, CHAIN_LIGHTNING, SHOCKWAVE, WIND_WALK, MIRROR_IMAGE, FERAL_SPIRIT, FAR_SIGHT] {
+        for code in [WAR_STOMP, CHAIN_LIGHTNING, SHOCKWAVE, WIND_WALK, MIRROR_IMAGE, FERAL_SPIRIT, FAR_SIGHT, BLADESTORM, HEALING_WAVE] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         // Stomp: Dur 3 / HeroDur 2, Area 250, DataA = damage 25.
@@ -141,6 +153,10 @@ fn host() -> ScriptHost {
         // Feral Spirit: 2 wolves, 60 s.
         g.set_spell_levels(FERAL_SPIRIT, vec![level(100, 15.0, 60.0, 60.0, 200.0, 0.0, [0.0, 2.0, 0.0, 0.0, 0.0])]);
         g.set_summon_units(FERAL_SPIRIT, vec![WOLF]);
+        // Bladestorm: 5 s, area 200, 110 damage per second.
+        g.set_spell_levels(BLADESTORM, vec![level(130, 0.0, 5.0, 5.0, 200.0, 0.0, [110.0, 0.0, 0.0, 0.0, 0.0])]);
+        // Healing Wave: heal 100, 3 targets, reduction 0.15, bounce radius 500.
+        g.set_spell_levels(HEALING_WAVE, vec![level(80, 9.0, 0.0, 0.0, 500.0, 700.0, [100.0, 3.0, 0.15, 0.0, 0.0])]);
         // Far Sight: 8 s, area 600.
         g.set_spell_levels(FAR_SIGHT, vec![level(75, 0.0, 8.0, 8.0, 600.0, 99999.0, [3.0, 0.0, 0.0, 0.0, 0.0])]);
     }
@@ -252,8 +268,11 @@ fn wind_walk_speeds_up_and_the_first_strike_ends_it() {
     assert!(has_buff(&h, c, BUFF_WIND_WALK));
     let speed = h.game().unit(c).move_speed.to_f32();
     assert!((509.0..=510.1).contains(&speed), "speed {speed}");
+    h.game_mut().orc_swing_start(c);
     let raw = h.game_mut().orc_crit_raw(c, f(50.0));
     assert_eq!(raw.to_f32(), 150.0, "DataC added to the first strike");
+    assert!(has_buff(&h, c, BUFF_WIND_WALK), "the buff ends 0.01 s after the strike (slot 0x34C), not at once");
+    run(&mut h, 1);
     assert!(!has_buff(&h, c, BUFF_WIND_WALK));
     assert_eq!(h.game().unit(c).move_speed.to_f32(), 300.0, "speed restored");
     assert_eq!(h.game_mut().orc_crit_raw(c, f(50.0)).to_f32(), 50.0, "only the first strike");
@@ -293,4 +312,42 @@ fn far_sight_marks_the_caster_for_its_duration() {
     assert!(has_buff(&h, c, BUFF_FAR_SIGHT));
     run(&mut h, 90);
     assert!(!has_buff(&h, c, BUFF_FAR_SIGHT));
+}
+
+#[test]
+fn bladestorm_hurts_the_enemies_around_the_caster_every_tick() {
+    let mut h = host();
+    let (e1, e3, ally) = (unit(&h, "e1"), unit(&h, "e3"), unit(&h, "ally"));
+    h.game_mut().unit_mut(e1).x = f(100.0);
+    h.game_mut().unit_mut(e1).y = f(0.0);
+    cast(&mut h, "storm");
+    assert_eq!(life(&h, e1), 500.0, "the first tick comes 0.2 s later");
+    run(&mut h, 3);
+    let after = 500.0 - life(&h, e1);
+    assert!(after > 0.0, "a tick landed");
+    run(&mut h, 60);
+    assert!(life(&h, e1) <= 0.0 || h.game().unit(e1).dead, "5 s of 110 per second kills a 500 life footman");
+    assert_eq!(life(&h, e3), 500.0, "out of the radius");
+    assert_eq!(life(&h, ally), 500.0, "an ally is untouched");
+}
+
+#[test]
+fn healing_wave_jumps_to_the_most_wounded_ally() {
+    let mut h = host();
+    let (ally, ally2, ally3) = (unit(&h, "ally"), unit(&h, "ally2"), unit(&h, "ally3"));
+    {
+        let mut g = h.game_mut();
+        g.unit_mut(ally).life = f(200.0);
+        g.unit_mut(ally2).life = f(450.0);
+        g.unit_mut(ally3).life = f(100.0);
+    }
+    cast(&mut h, "heal");
+    assert_eq!(life(&h, ally), 300.0, "the target takes the full heal");
+    run(&mut h, 4);
+    // ally3 (deficit 400) beats ally2 (deficit 50) although ally2 is nearer; 85 % of 100.
+    let healed3 = life(&h, ally3) - 100.0;
+    assert!((84.9..=85.0).contains(&healed3), "second hop {healed3}");
+    run(&mut h, 4);
+    // Third hop: ally2, 72.25, capped at its maximum 500.
+    assert!(life(&h, ally2) > 450.0 && life(&h, ally2) <= 500.0);
 }

@@ -81,6 +81,80 @@ pub fn crit_damage(damage: F32, mult: F32) -> F32 {
     arith::add(arith::sub(damage, F32::ZERO), bonus)
 }
 
+// ---- Wind Walk first strike (CONFIRMED in Unicorn: `tools/emu/ww_emu.py`, `tests/data/orc/windwalk.txt`) ----
+
+/// The shared bonus writer `0x6F255720` on a damage record (`+0x10` damage `a`, `+0x18` bonus `b`): refused when the
+/// record already carries a positive bonus (x87 `0.0 < b`; NaN goes on), otherwise `a := (a - b) + v` and `b := v`.
+/// Critical Strike and the Wind Walk first strike both write through it, so whichever handler runs first keeps the record.
+pub fn record_bonus(a: F32, b: F32, v: F32) -> Option<(F32, F32)> {
+    if 0.0f32 < b.to_f32() {
+        return None;
+    }
+    Some((arith::add(arith::sub(a, b), v), v))
+}
+
+/// The buff handler `0x6F1637B0` (slot `0x134`, category `0x0B`): with the buff flag `0x200` set it adds the buff bonus
+/// (`buff+0xE8` = DataC) to the record through [`record_bonus`], ORs the record flag `0x400` when the buff flag `0x400`
+/// (set by the constructor when DataD is non-zero) is set, and asks the buff to end in 0.01 s (slot `0x34C`, the
+/// constant `[0x6FAAE480]`). Returns the new record `(damage, bonus, flags)`; `None` when the buff is not armed.
+/// Unicorn: 400 cases, 0 mismatches (damage, bonus, flags, event and slot call).
+pub fn ww_first_strike(buff_flags: u32, a: F32, b: F32, v: F32, rec_flags: u32) -> Option<(F32, F32, u32)> {
+    if buff_flags & 0x200 == 0 {
+        return None;
+    }
+    let (a, b) = record_bonus(a, b, v).unwrap_or((a, b));
+    let flags = if buff_flags & 0x400 != 0 { rec_flags | 0x400 } else { rec_flags };
+    Some((a, b, flags))
+}
+
+/// The arming slot `0x124` (`0x6F171870`, order broadcast `0xD000F` at the swing start): clears `0x200`; with a target and
+/// buff flag `0x100` clear the target filter `0x6F26D590(owner, target, buff+0xB8)` decides: zero arms the buff (flag
+/// `0x200`, owner event 0xE), non-zero removes the buff (`0x6F079CC0`). Returns `(flags, removed, event)`.
+pub fn ww_arm(has_target: bool, buff_flags: u32, filter_answer: u32) -> (u32, bool, bool) {
+    let flags = buff_flags & !0x200;
+    if !has_target || flags & 0x100 != 0 {
+        return (flags, false, false);
+    }
+    if filter_answer == 0 {
+        (flags | 0x200, false, true)
+    } else {
+        (flags, true, false)
+    }
+}
+
+/// Seconds until the Wind Walk buff ends after the strike: `[0x6FAAE480]` = 0.01 (`0x3C23D70A`).
+pub const WW_END_DELAY_BITS: u32 = 0x3C23_D70A;
+/// Timer kind that ends the buff after the first strike.
+pub const TICK_WW_END: u8 = 0x83;
+/// Timer kind of the Bladestorm damage tick (message `0xD01C1`).
+pub const TICK_BLADE: u8 = 0x84;
+
+// ---- Bladestorm set-up (CONFIRMED in Unicorn: `tools/emu/bs_emu.py`, `tests/data/orc/bladestorm.txt`) ----
+
+/// The tick rate constant `[0x6FAB1F4C]` = 5.0 (ticks per second); the tick period is its soft reciprocal, 0.2 s.
+pub const BLADESTORM_TICK_RATE_BITS: u32 = 0x40A0_0000;
+
+/// The total duration of a Bladestorm: `Dur + ability+0x9C` (soft add); the class initialiser `0x6F163570` uses `Dur` for
+/// heroes too (no `HeroDur`).
+pub fn bladestorm_total(dur: F32, bonus: F32) -> F32 {
+    arith::add(dur, bonus)
+}
+
+/// The tick count `0x6F163570` stores at `+0xF8`: `f2i(total * 5.0)`, at least 1.
+pub fn bladestorm_ticks(total: F32) -> i32 {
+    let n = conv::f2i(arith::mul(total, F32::from_bits(BLADESTORM_TICK_RATE_BITS)));
+    if n > 0 {
+        n
+    } else {
+        1
+    }
+}
+
+/// The damage of one tick (the value `+0x104` of the agile cell `+0x100`): `DataA * total / I2R(ticks)`.
+pub fn bladestorm_tick_damage(data_a: F32, total: F32, ticks: i32, t: &softfloat::Tables) -> F32 {
+    arith::div(arith::mul(data_a, total), conv::i2r(ticks), t)
+}
+
 // ---- Mirror Image numeric cores (CONFIRMED in Unicorn: `tools/emu/mirror_emu.py`, `tests/data/orc/mirror.txt`) ----
 
 /// The combat RNG stream of the slot pick of Mirror Image: the roll wrapper `0x6F285350` is called with `EDX = 0xC`
@@ -138,6 +212,9 @@ pub const WAR_STOMP: u32 = code(b"AOws");
 pub const CHAIN_LIGHTNING: u32 = code(b"AOcl");
 pub const FAR_SIGHT: u32 = code(b"AOfs");
 pub const FERAL_SPIRIT: u32 = code(b"AOsf");
+pub const HEALING_WAVE: u32 = code(b"AOhw");
+pub const BLADESTORM: u32 = code(b"AOww");
+pub const BUFF_BLADESTORM: u32 = code(b"BOww");
 /// Buff codes.
 pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
 pub const BUFF_FAR_SIGHT: u32 = code(b"BOfs");
@@ -152,7 +229,8 @@ pub const TICK_MIRROR: u8 = 0x81;
 /// The next-hop timer of Chain Lightning.
 pub const TICK_CHAIN: u8 = 0x82;
 
-/// Original cast-order getters (slot 0x348), Unicorn-checked by tools/analysis/ability_orders.py.
+/// Original cast-order getters (slot 0x348, Unicorn-checked by tools/analysis/ability_orders.py; healing wave 852501 agrees
+/// with slot 0x308 = 0xD0215).
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_127, WAR_STOMP);
     ids.insert(852_125, SHOCKWAVE);
@@ -161,11 +239,13 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_123, MIRROR_IMAGE);
     ids.insert(852_122, FAR_SIGHT);
     ids.insert(852_126, FERAL_SPIRIT);
+    ids.insert(852_501, HEALING_WAVE);
+    ids.insert(852_128, BLADESTORM);
 }
 
 /// Abilities cast without a target (`targs` empty or area around the caster).
 pub fn takes_no_target(base: u32) -> bool {
-    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT)
+    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT | BLADESTORM)
 }
 
 /// Abilities cast on a point.
@@ -194,6 +274,11 @@ pub struct OrcState {
     /// Chain Lightning chains in flight, by serial.
     chains: BTreeMap<u32, ChainState>,
     chain_serial: u32,
+    /// Units whose Wind Walk buff is armed for the coming execute (buff flag `0x200`).
+    ww_armed: BTreeSet<ObjKey>,
+    /// Bladestorms in progress, by serial.
+    blades: BTreeMap<u32, BladeState>,
+    blade_serial: u32,
 }
 
 impl OrcState {
@@ -209,7 +294,12 @@ impl Game {
     }
 
     /// Swing start: the Critical Strike arming roll (see the module notes). One stream-3 draw per ability.
-    pub(crate) fn orc_swing_start(&mut self, unit: ObjKey) {
+    pub fn orc_swing_start(&mut self, unit: ObjKey) {
+        // The Wind Walk buff arms itself on the same broadcast (target filter assumed to accept, UNSURE).
+        self.orc.ww_armed.remove(&unit);
+        if self.unit(unit).buffs.iter().any(|b| b.base == BUFF_WIND_WALK) {
+            self.orc.ww_armed.insert(unit);
+        }
         self.orc.crit_armed.remove(&unit);
         let alive = {
             let u = self.unit(unit);
@@ -240,19 +330,35 @@ impl Game {
     /// (their order relative to the crit is UNSURE).
     pub fn orc_crit_raw(&mut self, attacker: ObjKey, raw: F32) -> F32 {
         let mut raw = raw;
+        let mut bonus = F32::ZERO;
+        // The walk of `0x6F2763A0` visits the unit's abilities newest first (`0x6F079990` inserts at the list head), so
+        // the Wind Walk buff (added at cast time) comes before Critical Strike: it takes the record's bonus field and a
+        // positive bonus makes the Critical Strike writer refuse (`record_bonus`). CONFIRMED order rule; the exception
+        // (Critical Strike learned while the buff is up) is not modelled.
+        if self.orc.ww_armed.remove(&attacker) {
+            let ww = self.unit(attacker).buffs.iter().find(|b| b.base == BUFF_WIND_WALK).map(|b| b.serial);
+            if let (Some(serial), Some(record)) = (ww, self.ability_level_record(attacker, WIND_WALK)) {
+                if let Some((a, b, _)) = ww_first_strike(0x200, raw, bonus, record.data[2], 0) {
+                    raw = a;
+                    bonus = b;
+                }
+                self.timers_start_hero(f32::from_bits(WW_END_DELAY_BITS), TICK_WW_END, attacker, serial);
+            }
+        }
         if self.orc.crit_armed.contains(&attacker) {
             if let Some(record) = self.ability_level_record(attacker, CRITICAL_STRIKE) {
-                raw = crit_damage(raw, record.data[1]);
+                let mult = record.data[1];
+                // The x87 equality test skips only an exact zero; NaN goes on.
+                if mult.to_f32() != 0.0 {
+                    let extra = arith::sub(arith::mul(raw, mult), raw);
+                    if let Some((a, b)) = record_bonus(raw, bonus, extra) {
+                        raw = a;
+                        bonus = b;
+                    }
+                }
             }
         }
-        // Wind Walk: the first strike ends the buff and adds DataC (flat; UNSURE whether DataC is a flat bonus).
-        let ww = self.unit(attacker).buffs.iter().find(|b| b.base == BUFF_WIND_WALK).map(|b| b.serial);
-        if let Some(serial) = ww {
-            if let Some(record) = self.ability_level_record(attacker, WIND_WALK) {
-                raw = arith::add(raw, record.data[2]);
-            }
-            self.drop_spell_buff(serial);
-        }
+        let _ = bonus;
         if let Some(&(dealt, _)) = self.orc.illusions.get(&attacker) {
             raw = arith::mul(raw, dealt);
         }
@@ -288,7 +394,9 @@ fn spell_target_ok(gm: &Game, owner: u32, k: ObjKey) -> bool {
 pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
     match rec.base {
         WAR_STOMP => war_stomp(game, rt, rec),
-        CHAIN_LIGHTNING => chain_lightning(game, rt, rec),
+        CHAIN_LIGHTNING => chain_lightning(game, rt, rec, false),
+        HEALING_WAVE => chain_lightning(game, rt, rec, true),
+        BLADESTORM => bladestorm(game, rt, rec),
         SHOCKWAVE => shockwave(game, rt, rec),
         WIND_WALK => wind_walk(game, rec),
         MIRROR_IMAGE => mirror_image(game, rt, rec),
@@ -377,10 +485,139 @@ pub fn chain_next_flags(targs: u32, ability_flags: u32) -> u32 {
     w
 }
 
+/// The flag word of the next-target search for a class whose slot `0x42C` is `heals` (`0x6F1C3253`..`0x6F1C327E`):
+/// the base is `0x10000` for Chain Lightning and `0x7000` for Healing Wave (`neg; sbb; and 0xFFFF7000; add 0x10000`).
+/// Unicorn: `HG` rows of `tests/data/orc/heal.txt` (400 cases, 0 mismatches).
+pub fn chain_next_flags_for(heals: bool, targs: u32, ability_flags: u32) -> u32 {
+    let base = if heals { 0x7000 } else { 0x1_0000 };
+    let mut w = (targs & 0xFFFE_0FFF) | base;
+    if ability_flags & 0x8_0000 != 0 {
+        w |= 0x8000;
+    }
+    w
+}
+
+/// The record amount of a hop: Healing Wave (slot `0x42C` non-zero) negates it (sign bit flipped, `0x6F1C30C8`..), the
+/// record then heals. Unicorn `HH` rows of `heal.txt`.
+pub fn chain_hop_record_amount(heals: bool, data_a: F32, factor: F32) -> F32 {
+    let a = chain_hop_amount(data_a, factor);
+    if heals {
+        F32::from_bits(a.to_bits() ^ 0x8000_0000)
+    } else {
+        a
+    }
+}
+
+/// The destroy delay of the bolt effect: the float at `0x6FAAE4F4` (1.0) for Chain Lightning, at `0x6FAAE504` (2.0) for
+/// Healing Wave (`0x6F1C3144`..`0x6F1C314B`). Unicorn `HH` rows.
+pub fn chain_destroy_delay_bits(heals: bool) -> u32 {
+    if heals {
+        0x4000_0000
+    } else {
+        0x3F80_0000
+    }
+}
+
+/// `0x6F01FE40`: `|a - b| < 2e-7` (soft subtract, sign cleared, an x87 compare against `[0x6FAAE614]`; NaN is false).
+pub fn approx_equal_tiny(a: F32, b: F32) -> bool {
+    let d = F32::from_bits(arith::sub(a, b).to_bits() & 0x7FFF_FFFF);
+    f32::from_bits(0x3456_BF95) > d.to_f32()
+}
+
+/// The class parameters read by the candidate collector `0x6F1B0780`: slot `0x42C` (`heals`), `0x434` (score mode) and
+/// `0x438` (distance mode). Chain Lightning: (false, false, true); Healing Wave: (true, true, false).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainClass {
+    pub heals: bool,
+    pub score_mode: bool,
+    pub dist_mode: bool,
+}
+
+pub const CHAIN_CLASS: ChainClass = ChainClass { heals: false, score_mode: false, dist_mode: true };
+pub const HEAL_CLASS: ChainClass = ChainClass { heals: true, score_mode: true, dist_mode: false };
+
+/// One candidate as the collector sees it. `dist` is the squared distance `0x6F476860` returns (the model supplies it).
+#[derive(Debug, Clone, Copy)]
+pub struct ChainCandidate {
+    pub life: F32,
+    pub max_life: F32,
+    pub dist: F32,
+    /// `unit+0x5C`; bit `0x40000000` = illusion.
+    pub flags_5c: u32,
+    /// `unit+0xEC` (signed).
+    pub field_ec: i32,
+    /// `0x6F284EE0`: the owner's player can see the unit.
+    pub visible: bool,
+    /// `0x6F28D750` (immunity vs. the ability's slot `0x348` word).
+    pub immune: bool,
+    /// `0x6F1A2110`: already in the hit list.
+    pub already_hit: bool,
+    /// Misc `IllusionsCanRestoreLife`.
+    pub illusions_restore: bool,
+}
+
+/// The search record the collector updates (`S+0x14` best distance, `S+0x18` best score).
+#[derive(Debug, Clone, Copy)]
+pub struct ChainBest {
+    pub dist: F32,
+    pub score: F32,
+}
+
+/// The validity chain `0x6F1B06F0` + slot `0x3F0` (`0x6F1B0650`). Unicorn `CB` rows (800 cases).
+pub fn chain_candidate_valid(class: ChainClass, ability_flags: u32, c: &ChainCandidate) -> bool {
+    if !c.visible {
+        return false;
+    }
+    if class.heals {
+        // slot 0x3F0: a unit at full life (|life - max| < 2e-7) is refused; an illusion is refused unless Misc allows.
+        if approx_equal_tiny(c.life, c.max_life) {
+            return false;
+        }
+        if !c.illusions_restore && c.flags_5c & 0x4000_0000 != 0 {
+            return false;
+        }
+    }
+    if c.immune || c.already_hit {
+        return false;
+    }
+    // flag 0x100000 clear, slot 0x42C zero: a candidate with `+0xEC > 0` is refused.
+    if ability_flags & 0x10_0000 == 0 && !class.heals && c.field_ec > 0 {
+        return false;
+    }
+    true
+}
+
+/// The collector `0x6F1B0780` for one candidate: returns whether it became the new best and updates `best`.
+/// Distance mode (Chain Lightning): strictly nearer wins (soft `lt`). Score mode (Healing Wave): the score is
+/// `max - life` (soft sub) for a healer, the life alone otherwise; strictly greater (soft `gt`) wins. Unicorn
+/// `tests/data/orc/heal.txt` `CB` rows: 800 cases (hits and misses of both classes), 0 mismatches.
+pub fn chain_candidate_update(class: ChainClass, ability_flags: u32, c: &ChainCandidate, best: &mut ChainBest) -> bool {
+    if !chain_candidate_valid(class, ability_flags, c) {
+        return false;
+    }
+    if class.dist_mode {
+        if arith::lt(c.dist, best.dist) {
+            best.dist = c.dist;
+            return true;
+        }
+        return false;
+    }
+    if class.score_mode {
+        let score = if class.heals { arith::sub(c.max_life, c.life) } else { c.life };
+        if arith::gt(score, best.score) {
+            best.score = score;
+            return true;
+        }
+    }
+    false
+}
+
 /// The state of one running Chain Lightning (the ability's factor cell `+0x128/+0x12C`, hit count `+0x124`, hit list
 /// `+0x134`).
 #[derive(Debug, Clone)]
 pub(crate) struct ChainState {
+    /// Healing Wave (class slot `0x42C` non-zero): the hop heals instead of hurting.
+    heals: bool,
     caster: ObjKey,
     level: SpellLevel,
     factor: F32,
@@ -402,7 +639,7 @@ pub(crate) struct ChainState {
 /// here the centre distance), the relation filter (`0x6F1B06F0`: `0x6F284EE0(owner, unit, 0, 4)`; here enemy, not magic
 /// immune, not structure or mechanical), the damage class, the vanishing of the chain when the last target is removed
 /// (modelled: it ends).
-fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, heals: bool) {
     let CastTarget::Unit(first) = rec.target else {
         return;
     };
@@ -412,7 +649,7 @@ fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastR
         let serial = gm.orc.chain_serial;
         gm.orc.chains.insert(
             serial,
-            ChainState { caster: rec.caster, level: rec.level, factor: F32::ONE, hits: Vec::new() },
+            ChainState { heals, caster: rec.caster, level: rec.level, factor: F32::ONE, hits: Vec::new() },
         );
         serial
     };
@@ -430,8 +667,20 @@ fn chain_hop(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32, targ
         st.factor = chain_next_factor(st.factor, st.level.data[2]);
         st.hits.push(target);
         let caster = st.caster;
+        let heals = st.heals;
         gm.timers_start_hero(f32::from_bits(CHAIN_HOP_DELAY_BITS), TICK_CHAIN, caster, serial);
-        gm.unit_damage_target(caster, target, amount, false, false, 0, SPELL_DAMAGE_TYPE)
+        if heals {
+            // The record carries the negated amount; the model adds the life, clamped to the maximum (as Holy Light).
+            if gm.alive(target) {
+                let u = gm.unit(target);
+                let sum = arith::add(u.life, amount);
+                let next = if arith::lt(u.max_life, sum) { u.max_life } else { sum };
+                crate::natives::unit::set_life(&mut gm, target, next);
+            }
+            None
+        } else {
+            gm.unit_damage_target(caster, target, amount, false, false, 0, SPELL_DAMAGE_TYPE)
+        }
     };
     if let Some(t) = killed {
         let caster = game.borrow().orc.chains.get(&serial).map(|s| s.caster);
@@ -458,21 +707,47 @@ fn chain_next(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
                 let u = gm.unit(last);
                 (u.x, u.y)
             };
-            let mut best: Option<(ObjKey, F32)> = None;
+            let class = if st.heals { HEAL_CLASS } else { CHAIN_CLASS };
+            let mut best_unit: Option<ObjKey> = None;
+            let mut best = ChainBest { dist: F32::from_bits(0x7F7F_FFFF), score: F32::ZERO };
             for k in crate::natives::group::circle_candidates(&gm, cx, cy, st.level.area) {
-                if st.hits.contains(&k) || k == st.caster || !spell_target_ok(&gm, owner, k) {
+                if st.hits.contains(&k) || k == st.caster {
                     continue;
                 }
                 let u = gm.unit(k);
-                if is_unit_type(&gm, u, ty::STRUCTURE) || is_unit_type(&gm, u, ty::MECHANICAL) {
+                if u.dead || u.removed || u.hidden {
                     continue;
                 }
-                let d = arith::dist2(cx, cy, u.x, u.y);
-                if best.is_none_or(|(_, bd)| arith::lt(d, bd)) {
-                    best = Some((k, d));
+                let enemy = gm.is_enemy(owner, u.owner);
+                if st.heals == enemy {
+                    continue;
+                }
+                if st.heals {
+                    if is_unit_type(&gm, u, ty::STRUCTURE) || is_unit_type(&gm, u, ty::MECHANICAL) {
+                        continue;
+                    }
+                } else if is_unit_type(&gm, u, ty::MAGIC_IMMUNE)
+                    || is_unit_type(&gm, u, ty::STRUCTURE)
+                    || is_unit_type(&gm, u, ty::MECHANICAL)
+                {
+                    continue;
+                }
+                let cand = ChainCandidate {
+                    life: u.life,
+                    max_life: u.max_life,
+                    dist: arith::dist2(cx, cy, u.x, u.y),
+                    flags_5c: 0,
+                    field_ec: 0,
+                    visible: true,
+                    immune: false,
+                    already_hit: false,
+                    illusions_restore: false,
+                };
+                if chain_candidate_update(class, 0x10_0000, &cand, &mut best) {
+                    best_unit = Some(k);
                 }
             }
-            best.map(|(k, _)| k)
+            best_unit
         }
     };
     match next {
@@ -673,11 +948,103 @@ fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey,
     gm.orc.mirror_images.insert(caster, images);
 }
 
+// ---- Bladestorm model ----
+
+/// A Bladestorm in progress (ability fields `+0xFC` ticks left, cells `+0x100` damage and `+0x108` radius).
+#[derive(Debug, Clone)]
+pub(crate) struct BladeState {
+    caster: ObjKey,
+    left: i32,
+    damage: F32,
+    radius: F32,
+    buff: u32,
+}
+
+/// Bladestorm (class `0x6F8F2144`, order 852128): the effect `0x6F1712D0` starts a repeating timer (message `0xD01C1`,
+/// period = soft reciprocal of 5.0 = 0.2 s), disables the caster's attack and orders; the level initialiser (Unicorn,
+/// `bladestorm_*`) fixes the tick count `f2i((Dur + x) * 5)` (min 1) and the damage per tick `DataA * total / ticks`. Every
+/// tick (`0x6F1912A0`) decrements the counter, ends the spin when it reaches 0 and STILL deals that tick's damage
+/// (the ring `(Area, damage)` around the caster through the area damage body `0x6F2C31D0`, damage class `0x20`).
+/// UNSURE: the target filter (here: living enemy ground non-structure units), the 0.2 s tick being a repeating timer
+/// (modelled as a re-armed one-shot), the missing softfloat tables fallback (0.2 s, no damage rounding).
+fn bladestorm(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let total = bladestorm_total(rec.level.dur, F32::ZERO);
+    let ticks = bladestorm_ticks(total);
+    let damage = match gm.softfloat_tables() {
+        Some(t) => bladestorm_tick_damage(rec.level.data[0], total, ticks, t),
+        None => rec.level.data[0],
+    };
+    let buff = gm.add_spell_buff(rec.caster, BUFF_BLADESTORM, BuffEffect::Marker, total);
+    gm.orc.blade_serial = gm.orc.blade_serial.wrapping_add(1);
+    let serial = gm.orc.blade_serial;
+    gm.orc.blades.insert(serial, BladeState { caster: rec.caster, left: ticks, damage, radius: rec.level.area, buff });
+    let period = f32::from_bits(blade_period_bits(&gm));
+    gm.timers_start_hero(period, TICK_BLADE, rec.caster, serial);
+}
+
+fn blade_period_bits(gm: &Game) -> u32 {
+    match gm.softfloat_tables() {
+        Some(t) => arith::recip(F32::from_bits(BLADESTORM_TICK_RATE_BITS), t).to_bits(),
+        None => 0x3E4C_CCCD,
+    }
+}
+
+fn blade_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
+    let mut killed = Vec::new();
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(st) = gm.orc.blades.get_mut(&serial) else {
+            return;
+        };
+        caster = st.caster;
+        st.left -= 1;
+        let (left, damage, radius, buff) = (st.left, st.damage, st.radius, st.buff);
+        if !gm.alive(caster) {
+            gm.orc.blades.remove(&serial);
+            return;
+        }
+        if left <= 0 {
+            gm.orc.blades.remove(&serial);
+            gm.drop_spell_buff(buff);
+        } else {
+            let period = f32::from_bits(blade_period_bits(&gm));
+            gm.timers_start_hero(period, TICK_BLADE, caster, serial);
+        }
+        let (cx, cy, owner) = {
+            let u = gm.unit(caster);
+            (u.x, u.y, u.owner)
+        };
+        for k in crate::natives::group::circle_candidates(&gm, cx, cy, radius) {
+            if k == caster || !spell_target_ok(&gm, owner, k) {
+                continue;
+            }
+            let u = gm.unit(k);
+            if !is_unit_type(&gm, u, ty::GROUND) || is_unit_type(&gm, u, ty::STRUCTURE) {
+                continue;
+            }
+            // Damage class 0x20 = 1 << 5 (damage type ENHANCED).
+            if let Some(t) = gm.unit_damage_target(caster, k, damage, false, false, 0, 5) {
+                killed.push(t);
+            }
+        }
+    }
+    for t in killed {
+        dispatch_unit_death_by(game, rt, t, Some(caster));
+    }
+}
+
 /// Timer dispatch of the orc spells (`SpellMsg::HeroSpell` kinds from `0x80`).
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, aux: u32) {
     match kind {
         TICK_MIRROR => mirror_fire(game, rt, unit, aux),
         TICK_CHAIN => chain_next(game, rt, aux),
+        TICK_WW_END => game.borrow_mut().drop_spell_buff(aux),
+        TICK_BLADE => blade_tick(game, rt, aux),
         _ => {}
     }
 }

@@ -218,3 +218,102 @@ Model: a visible-state fog modifier over the circle for the owner, stopped with 
 | Mirror Image | cast effect, delayed handler, RNG stream 12, polygon | yes: pick, offset, rotation, transform (4 x 400, 0 mismatches) | yes (hero swap LIKELY) |
 | Feral Spirit | effect entry point, no RNG found | no | MODEL |
 | Far Sight | slots only | no | MODEL |
+
+## 10. S34: Healing Wave (`AOhw`, `CAbilityHealingWave`, vtable `0x6F8B12BC`) and the shared chain collector
+
+Order id `0xD0215` = 852501 (slot `0x308`, agrees with the `ability_orders.py` cast getter). Atlas: a child of
+`CAbilityChainLightning`; the cast entry `0x6F1CB550`, hop body `0x6F1C2F50`, next-hop gate `0x6F1C3200`, next-target search
+`0x6F1B6F30` and collector `0x6F1B0780` are the chain code. The class overrides only: `0x42C` = 1 ("heals", also returned
+by slot `0x430`), `0x434` = 1 (score mode), `0x438` = 0 (distance mode off), `0x1FC` = 1, `0x308`.
+
+* **Unicorn (CONFIRMED, `tools/emu/heal_emu.py`, `tests/data/orc/heal.txt`, `tests/orc_heal.rs`; real code on fake
+  objects; 400 hop + 400 gate + 800 collector cases, 0 mismatches, 246 collector picks):**
+  * Hop (`HH`): the record amount is `DataA * factor` with the sign bit flipped when `0x42C` is non-zero (a negative
+    damage record = heal); flags `0x400`; the next-hop timer 0.25 s, the bolt destroy delay is `[0x6FAAE504]` = **2.0**
+    for Healing Wave (1.0 for Chain Lightning); factor and hit count as Chain Lightning (`factor * (1 - DataC)`).
+  * Gate (`HG`): the flag word for the next-target search is `(targs & 0xFFFE0FFF) | base | (0x8000 if ability flag
+    0x80000)`, with base `0x7000` for Healing Wave (slot `0x42C` non-zero) and `0x10000` for Chain Lightning.
+  * Collector (`CB`): validity = visible to the owner's player (`0x6F284EE0` is a fog test, `0x6F3A38F0`, not a relation
+    test), then slot `0x3F0` (`0x6F1B0650`): for a healer a unit with `|life - max| < 2e-7` (`0x6F01FE40`) is refused, and
+    an illusion (`unit+0x5C & 0x40000000`) is refused unless Misc `IllusionsCanRestoreLife`; then the immunity test
+    `0x6F28D750(unit, slot 0x348)`, the hit-list test `0x6F1A2110`, and for a non-healer without ability flag `0x100000` a
+    unit with `+0xEC > 0` is refused. Distance mode (Chain Lightning): the candidate wins if its squared distance is
+    strictly smaller (soft `lt`) than `S+0x14`. Score mode (Healing Wave): score = `max - life` (soft sub, slot `0x130`
+    minus slot `0x12C`), strictly greater (soft `gt`) than `S+0x18` (start 0.0) wins; ties keep the first. So Healing Wave
+    always jumps to the **most wounded** valid unit in the area, not the nearest. Rust: `orc::chain_candidate_update`.
+* Distance for Chain Lightning: `0x6F476860` is a method of the candidate's position object; its stack arguments are
+  (out, x, y, flag) pushed BEFORE the position getter call (slot `0xB8`, no arguments). It subtracts the grid origin
+  (`[0x6FAB7368] + 0x6C/0x70`), scales by 2^-5 (exponent subtract with underflow flush) and takes the fused squared
+  distance `0x6F6EF3B0` against the unit's cell position (`+0x78`), or against the footprint point via `0x6F497460` /
+  `0x6F38B0B0` with flag 1. Not run (needs the world); the model keeps the centre distance (UNSURE, unchanged).
+* Hop ethereal bonus (NOT modelled): when `0x42C != 0` and the target's `+0x158 > 0`, Misc `EtherealHealBonus` modifies the
+  amount (`0x6F1C3045..0x6F1C307D`).
+* Model: `orc::chain_lightning(.., heals = true)`: the heal adds life clamped to the maximum (as Holy Light; the
+  negative-record path of the target side is UNSURE); next target per the collector (allies, alive, not hit, wounded,
+  not structure / mechanical, visible assumed).
+* Corrections made while here: the order ids of Mirror Image (852123) and Feral Spirit (852126) were wrong (fixed upstream
+  by the coordinator); other ids from slot `0x308`: Earthquake 852121, Whirlwind (Bladestorm) 852128, Reincarnation
+  852124, Hex 852502, Voodoo 852503, Serpent Ward (`AOwd`, not `AOsw`) 852504.
+
+## 11. S34: Wind Walk (`AOwk` / buff `BOwk`, `CBuffWindWalk`, vtable `0x6F8ED58C`)
+
+Order id `0xD00A1` = 852129 (slot `0x308`). Atlas: `BOwk` descends from `CBuffInvisibility` (`Binv`).
+
+* **Buff constructor (slot `0x358` = `0x6F171630`), CONFIRMED by two Unicorn runs (`tools/emu/ww_ctor_emu.py`: the real
+  cast effect `0x6F18CAA0` with marker level values, then the real constructor with marker arguments):** the effect hands
+  `(owner, &duration, &DataA, &DataB, &DataC, &Area, ability, owner id, DataD != 0)`; the duration is `HeroDur` for a hero
+  (`0x6F1D2660`) else `Dur + ability+0x9C`. The constructor stores DataB into the agile cell `+0xDC` (value `+0xE0`: the
+  movement bonus), DataC into the cell `+0xE4` (value `+0xE8`: the first strike bonus), Area into `+0xF4`, the ability in
+  `+0xFC`, the owner id in `+0x108`; DataD != 0 sets the buff flag `0x400` (record flag "never miss"). DataA (fade time) is
+  not stored by the constructor (presentation / the invisibility base).
+* **Movement bonus:** the buff adds `DataB` to the unit's movement multiplier (`0x6F1717F0` / `0x6F171840` copy `+0xE0` into
+  the stat block; the removal slot `0x33C` = `0x6F171710` calls `0x6F202FF0(-DataB)` on the mover `unit+0x1EC`; the property
+  is an additive agile float snapped to 1.0 within `[0x6FAAE47C]`). So bonuses ADD (1 + sum), they do not take the maximum.
+  The model keeps its slow machinery (UNSURE for stacking with other speed bonuses).
+* **First strike, Unicorn (CONFIRMED, `tools/emu/ww_emu.py`, `tests/data/orc/windwalk.txt`, `tests/orc_windwalk.rs`, 400
+  handler + 400 arming cases, 0 mismatches):** the buff has category `0x130` = 0x0B (the SAME category as Critical Strike) and
+  handler `0x134` = `0x6F1637B0`, after-hit `0x154` = `0x6F163820` (presentation: a text tag). With the buff flag `0x200`
+  set the handler posts event 0xE, writes `DataC` through the shared record writer `0x6F255720` (`orc::record_bonus`:
+  refused when the record's bonus `+0x18` is positive, else `damage := (damage - bonus) + v`, `bonus := v`), ORs `0x400` into
+  the record flags when the buff flag `0x400` is set, and calls slot `0x34C(0.01 s, 0)`: the buff ENDS 0.01 s later through
+  the timed-life message `0xD01C4` (not in the same call). The bonus is FLAT (CONFIRMED: an add, not a percentage).
+* **Arming:** slot `0x124` = `0x6F171870` is called by the `0xD000F` broadcast at the swing start (same as Critical Strike):
+  clears `0x200`; with a target and buff flag `0x100` clear it calls the target filter `0x6F26D590(owner, target, buff+0xB8)`
+  (= `0x6F25D6F0(.., -1)`); answer 0 sets `0x200` and posts event 0xE, a non-zero answer REMOVES the buff (`0x6F079CC0`).
+  Which targets the filter refuses (buff word `+0xB8`) is not decoded (UNSURE; the model accepts every target).
+* **Order against Critical Strike (CONFIRMED rule):** `0x6F2763A0` walks the unit's ability list head to tail for each
+  category; `0x6F079990` (add ability) links a new ability at the HEAD, so the newest ability is visited first. The buff is
+  added at cast time, after the hero learned Critical Strike, so the Wind Walk handler runs first, fills the bonus field with
+  `DataC` and the Critical Strike writer is then refused: **a Wind Walk strike does not crit** (unless `DataC` is not
+  positive). The exception (Critical Strike learned while the buff is up) is not modelled. Both handlers return 0, so the
+  walk continues through all abilities. Rust: `Game::orc_crit_raw`.
+* **Cancel on cast:** the buff's slot `0x178` (`0x6F15A270`, six arguments) forwards to the removal `0x6F079CC0(owner, buff)`:
+  LIKELY the "ability cast by the owner" notification (not run; the model does not end the buff on casting).
+* Not modelled: the invisibility itself (`Binv` base, fade `DataA`), which belongs to the vision / detection system.
+
+## 12. S34: Bladestorm (`AOww`, `CAbilityWhirlwind`, vtable `0x6F8F2144`)
+
+Order id `0xD00A0` = 852128. Atlas: a direct child of `CAbilitySpell`; class slots: message `0xC` = `0x6F191350`, level
+initialiser `0x3E8` = `0x6F163570` (also called from the init slot `0x80`), cast effect `0x3C0` = `0x6F1712D0`, end
+`0x6F171450`, damage handler `0x134` = `0x6F163650` (category `0x130` = 0x0B), timer message `0xD01C1`.
+
+* **Set-up, Unicorn (CONFIRMED, `tools/emu/bs_emu.py`, `tests/data/orc/bladestorm.txt`, `tests/orc_bladestorm.rs`; the real
+  initialiser on a fake ability with a real level record, 400 cases, 0 mismatches):** `total = Dur + ability+0x9C`
+  (soft add; `HeroDur` is NOT used, there is no hero branch), `ticks = f2i(total * [0x6FAB1F4C])` with
+  `[0x6FAB1F4C]` = 5.0, at least 1, stored at `+0xF8` (and copied to the countdown `+0xFC` by the cast effect); the damage
+  per tick (agile cell `+0x100`, read at `+0x104`) = `div(mul(DataA, total), I2R(ticks))` (so the total damage is
+  `DataA * total`, spread evenly over the tick count; DataA is a damage PER SECOND); the radius cell `+0x108` = `Area`.
+* **Cast effect (CONFIRMED structure):** sets ability flag `0x10000`, starts a periodic timer (message `0xD01C1`,
+  period = soft reciprocal of 5.0 = 0.2 s), disables the attack ability (`0x6F0CCB00(.., 1, 0)`), posts the owner event
+  0x12, applies the movement state through unit slot `0x8C` (4, 0, 1), and toggles the Mirror Image / Detect abilities
+  (`Amim`, `Adet`); flag `0x8000` marks the spin. The end (`0x6F171450`) undoes all of it.
+* **Tick `0x6F1912A0` (CONFIRMED by reading):** `+0xFC -= 1`; when it reaches 0 the end routine runs; then, when the
+  pause counter `+0x3C` is not positive, the area damage body `0x6F2C31D0` is called with the caster, the ring
+  (`+0x10C` radius, `+0x104` amount), the ability's target word `+0x4C`, damage class **`0x20`** (= `1 << 5`, damage type
+  ENHANCED) and the eye-candy callback `0x6F18C930`. The final tick therefore still deals its damage: exactly `ticks` damage
+  ticks at 0.2 s, 0.4 s, ... (see `natives-damage-items.md` section 2 for the area body).
+* **Damage handler `0x134`:** while the spin is on (`+0xFC > 0`) and the target filter `0x6F26D590(owner, target, +0x4C)`
+  is zero, the unit's own attack record is zeroed (`damage = damage * 0.0`, `bonus = bonus * 0.0`, record flag `0x10`).
+* Model: `orc::bladestorm` / `blade_tick` with the three pure functions above; the target filter is UNSURE (living enemy
+  ground non-structure units), the re-armed one-shot timer replaces the repeating timer, a marker buff `BOww` lasts
+  `total`.
