@@ -47,6 +47,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(caster, 'AOsw')
     call UnitAddAbility(caster, 'AOhx')
     call UnitAddAbility(caster, 'AOvd')
+    call UnitAddAbility(caster, 'AOww')
     call SetUnitState(caster, 2, 1000.0)
 endfunction
 function stomp takes nothing returns nothing
@@ -54,6 +55,9 @@ function stomp takes nothing returns nothing
 endfunction
 function ward takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852504, 300.0, 50.0)
+endfunction
+function storm takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(caster, 852128)
 endfunction
 function voodoo takes nothing returns nothing
     set accepted = IssueImmediateOrderById(caster, 852503)
@@ -125,7 +129,7 @@ fn host(with_tables: bool) -> Option<ScriptHost> {
                 },
             );
         }
-        for code in [WAR_STOMP, SERPENT_WARD, HEX, VOODOO] {
+        for code in [WAR_STOMP, SERPENT_WARD, HEX, VOODOO, BLADESTORM] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         g.set_spell_levels(WAR_STOMP, vec![lvl(90, 6.0, 3.0, 2.0, 250.0, 0.0, [25.0, 0.0, 0.0])]);
@@ -133,6 +137,7 @@ fn host(with_tables: bool) -> Option<ScriptHost> {
         g.set_summon_units(SERPENT_WARD, vec![WARD]);
         g.set_spell_levels(HEX, vec![lvl(70, 7.0, 15.0, 4.0, 0.0, 800.0, [99.0, 0.0, 0.0])]);
         g.set_spell_levels(VOODOO, vec![lvl(200, 180.0, 3.0, 3.0, 800.0, 0.0, [0.0, 0.0, 0.0])]);
+        g.set_spell_levels(BLADESTORM, vec![lvl(130, 0.0, 5.0, 5.0, 200.0, 0.0, [110.0, 0.0, 0.0])]);
         g.set_orc_lists(HEX, vec![["nrat".into(), "nalb".into(), "nsha".into(), "nshw".into()]]);
         g.production_mut().building_angle = f(270.0);
     }
@@ -236,4 +241,16 @@ fn voodoo_makes_friends_in_the_area_invulnerable_while_it_pulses() {
     run(&mut h, 80);
     assert!(!h.game().unit_is_invulnerable(ally), "the voodoo ended after Dur and the last buff ran out");
     assert_eq!(voodoo_buff_duration().to_f32(), 1.0);
+}
+
+#[test]
+fn bladestorm_hurts_ground_units_and_structures_but_not_air() {
+    let mut h = host(false).unwrap();
+    let (ground, flier, tower, ally) = (unit(&h, "ground"), unit(&h, "flier"), unit(&h, "tower"), unit(&h, "ally"));
+    cast(&mut h, "storm");
+    run(&mut h, 60);
+    assert!(life(&h, ground) < 500.0, "ground enemy");
+    assert!(life(&h, tower) < 500.0, "the shipped targs name `structure`, so buildings are hit too");
+    assert_eq!(life(&h, flier), 500.0, "air is not in the targs");
+    assert_eq!(life(&h, ally), 500.0, "an ally");
 }

@@ -471,3 +471,26 @@ set), the weapon-type filters (`+0xDC + 4w` == 1 for ranged or `2..8` for the ot
 
 Endurance Aura (`AOae`): the movement bonus `DataA` and the attack speed bonus `DataB` are applied as in `buffs.md` (additive
 agile multiplier cell snapped to 1.0 within 0.001; attack ability re-arm in proportion); no new number was decoded in S39.
+
+## 19. S39: Bladestorm tick and targets (`AOww`) - Unicorn for the tick, reading for the filter
+
+* **Tick `0x6F1912A0`, Unicorn (`tools/emu/bladetick_emu.py`, 400 cases, 0 mismatches; `tests/data/orc/bladetick.txt`,
+  `tests/orc_bladetick.rs`; the real tick on a fake ability, the end routine and the area body recorded).** The counter at
+  `+0xFC` is decremented first (wrapping); when it is then exactly 0 the end routine `0x6F171450` runs; afterwards, when the
+  pause counter `+0x3C` is NOT positive (signed `jg` skip), the area body `0x6F2C31D0` is called once with the 12 stack words
+  (ring pointer, ring count 1, damage class `0x20`, 0, 0, the ability word `+0x4C` UNCHANGED, the caster, owner -1, the
+  eye-candy callback `0x6F18C930`, the ability, 1, 0); the ring is `(radius = cell +0x10C, amount = cell +0x104)`. Rust:
+  `orc::blade_tick_step`.
+* **Target filter (corrects section 12 and the old model, which excluded structures).** The area body dispatches on the
+  word: with any of the bits `0x7E0` (item, tree, wall, debris, decoration, bridge) set it uses the destructable-aware group
+  builder `0x6F2AE9E0` (tags `0x25`, `0x2A`, `0x2B`), otherwise `0x6F2A3270` (tag `0x1D`). The shipped word of Bladestorm
+  (`ground,structure,debris,enemy,neutral` = `0x1810A`) contains debris, so the destructable-aware builder runs. Both builders
+  install the SAME per-unit predicate for the word: `0x6F2AB890` (builder `0x6F2AE9E0`, flag `0x400`) and `0x6F26E510`
+  (builder `0x6F2A3270`) are both `0x6F25D6F0(unit, word, source, -1) == 0` (section 13). Therefore the units hit are the
+  ground units AND structures (kind bits ground/structure; air is refused), enemy or neutral relation, alive and
+  vulnerable (the default for an unnamed group), any hero / organic / mechanical state. The per-candidate immunity gate and the
+  ring membership test (`0x6F476C40`, collision-adjusted) are inside the collector `0x6F2C2E80` (not reproduced; the model keeps the
+  plain circle). Damage class `0x20` = damage type ENHANCED (type 5). Rust: `blade_tick` uses `area_predicate` with
+  `BLADESTORM_TARGS_DEFAULT` / `Game::set_orc_targs`.
+* **Debris.** The word names `debris`, so destructable debris (trees are not named) in the ring is damaged by the same body
+  (the destructable-aware builder collects them). The model has no destructable damage; NOT modelled.

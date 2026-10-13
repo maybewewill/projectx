@@ -315,6 +315,7 @@ impl Game {
             _ => match base {
                 WAR_STOMP => STOMP_TARGS_DEFAULT,
                 VOODOO => VOODOO_TARGS_DEFAULT,
+                BLADESTORM => BLADESTORM_TARGS_DEFAULT,
                 _ => 0,
             },
         }
@@ -1102,6 +1103,20 @@ fn blade_period_bits(gm: &Game) -> u32 {
     }
 }
 
+/// The shipped `targs` of Bladestorm: `ground,structure,debris,enemy,neutral` = ground 2, structure 8, debris `0x100`,
+/// enemy `0x10000`, neutral `0x8000`.
+pub const BLADESTORM_TARGS_DEFAULT: u32 = 0x0001_810A;
+
+/// One tick of the spin (`0x6F1912A0`, CONFIRMED by reading and Unicorn, `tools/emu/bladetick_emu.py`, 400 cases): the
+/// counter `+0xFC` is decremented first (wrapping); when it is then exactly 0 the end routine `0x6F171450` runs; then, when
+/// the pause counter `+0x3C` is NOT positive (signed compare), the area body `0x6F2C31D0` is called with ONE ring
+/// `(radius = +0x10C cell, amount = +0x104 cell)`, class `0x20`, the ability's `+0x4C` word unchanged, the caster as source
+/// and owner -1. Returns `(counter after, end routine runs, damage is dealt)`.
+pub fn blade_tick_step(left: i32, pause: i32) -> (i32, bool, bool) {
+    let after = left.wrapping_sub(1);
+    (after, after == 0, pause <= 0)
+}
+
 fn blade_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
     let mut killed = Vec::new();
     let caster;
@@ -1111,29 +1126,36 @@ fn blade_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
             return;
         };
         caster = st.caster;
-        st.left -= 1;
-        let (left, damage, radius, buff) = (st.left, st.damage, st.radius, st.buff);
+        let (left, ends, deals) = blade_tick_step(st.left, 0);
+        st.left = left;
+        let (damage, radius, buff) = (st.damage, st.radius, st.buff);
+        let _ = deals;
         if !gm.alive(caster) {
             gm.orc.blades.remove(&serial);
             return;
         }
-        if left <= 0 {
+        if ends || left < 0 {
             gm.orc.blades.remove(&serial);
             gm.drop_spell_buff(buff);
         } else {
             let period = f32::from_bits(blade_period_bits(&gm));
             gm.timers_start_hero(period, TICK_BLADE, caster, serial);
         }
-        let (cx, cy, owner) = {
+        let (cx, cy) = {
             let u = gm.unit(caster);
-            (u.x, u.y, u.owner)
+            (u.x, u.y)
         };
+        let level_index =
+            usize::try_from(gm.unit(caster).abilities.get(BLADESTORM).map_or(0, |a| a.level_index)).unwrap_or(0);
+        let word = gm.orc_targs(BLADESTORM, level_index);
         for k in crate::natives::group::circle_candidates(&gm, cx, cy, radius) {
-            if k == caster || !spell_target_ok(&gm, owner, k) {
-                continue;
+            {
+                let u = gm.unit(k);
+                if u.removed || u.hidden {
+                    continue;
+                }
             }
-            let u = gm.unit(k);
-            if !is_unit_type(&gm, u, ty::GROUND) || is_unit_type(&gm, u, ty::STRUCTURE) {
+            if !area_predicate(&gm, caster, k, word) {
                 continue;
             }
             // Damage class 0x20 = 1 << 5 (damage type ENHANCED).
