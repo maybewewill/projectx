@@ -112,4 +112,12 @@ fn real_item_tables_load() {
     assert_eq!((lv.data[0].to_f32(), lv.data[1].to_f32(), lv.data[2].to_f32()), (0.0, 0.0, 1.0));
     // Agility bonus +3 reads DataA.
     assert_eq!(ia.levels[&code(b"AIa3")][0].data[0].to_f32(), 3.0);
+    // Figurine of a Skeleton: DataC / DataD name the two summoned unit types, DataA / DataB their counts.
+    assert_eq!(ia.unit_codes[&code(b"AIfs")], [code(b"nsce"), code(b"nsca")]);
+    assert_eq!(ia.levels[&code(b"AIfs")][0].data[0].to_f32(), 4.0);
+    assert_eq!(ia.levels[&code(b"AIfr")].len(), 1);
+    // The Endurance Aura item (`AIae`, class `AOae`): the aura record has the area, the strengths and the buff.
+    let aura = &ia.auras[&code(b"AIae")];
+    assert!(aura[0].area.to_f32() > 0.0 && aura[0].data[0].to_f32() > 0.0, "{:?}", aura[0]);
+    assert_eq!(ia.bases[&code(b"AIae")], code(b"AOae"));
 }

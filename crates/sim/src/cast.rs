@@ -730,12 +730,14 @@ pub fn begin_cast(
         }
         let level = gm.spell_level(caster, base);
         gm.spell_ready(caster, base, &level)?;
+        // An item ability that borrows a unit spell class is gated by that class (`item_abilities::DELEGATED`).
+        let class = crate::item_abilities::effect_base(&gm, base);
         match target {
             CastTarget::Unit(t) => {
                 if !gm.alive(t) {
                     return Err(CastError::BadTarget);
                 }
-                if let Some(e) = crate::unit_spells::target_error(&gm, caster, base, t) {
+                if let Some(e) = crate::unit_spells::target_error(&gm, caster, class, t) {
                     return Err(e);
                 }
                 if arith::lt(F32::ZERO, level.rng) {
@@ -760,15 +762,15 @@ pub fn begin_cast(
                 }
             }
             CastTarget::None => {
-                if !crate::orc::takes_no_target(base)
-                    && !crate::unit_spells::takes_no_target(base)
-                    && !crate::human_heroes::is_immediate_spell(base)
-                    && !crate::undead_ne::is_immediate(base)
+                if !crate::orc::takes_no_target(class)
+                    && !crate::unit_spells::takes_no_target(class)
+                    && !crate::human_heroes::is_immediate_spell(class)
+                    && !crate::undead_ne::is_immediate(class)
                     && !crate::item_abilities::takes_no_target(&gm, base)
                 {
                     return Err(CastError::BadTarget);
                 }
-                if let Some(e) = crate::unit_spells::untargeted_error(&gm, caster, base, &level) {
+                if let Some(e) = crate::unit_spells::untargeted_error(&gm, caster, class, &level) {
                     return Err(e);
                 }
             }
@@ -1011,7 +1013,10 @@ pub fn process_interrupts(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime) {
 
 // ---- the class effects (slot 0x424) ----
 
-fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastRec) {
+    // An item ability that borrows a unit spell class runs that class under its class code (`item_abilities`).
+    let resolved = crate::item_abilities::resolve_rec(&game.borrow(), item_rec);
+    let rec = &resolved;
     if crate::human_heroes::is_immediate_spell(rec.base) {
         crate::human_heroes::run_immediate_effect(game, rt, rec);
         return;
@@ -1028,7 +1033,7 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     if crate::unit_spells::run_effect(game, rt, rec) {
         return;
     }
-    if crate::item_abilities::run_effect(game, rec) {
+    if crate::item_abilities::run_effect(game, item_rec) {
         return;
     }
     let CastTarget::Unit(target) = rec.target else {

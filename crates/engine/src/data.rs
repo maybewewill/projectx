@@ -230,6 +230,10 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
     }
     // The derived attribute bonus rates (`docs/spec/heroes.md`, section 9): plain reals, no table needed.
     game.set_hero_rates(hero_rates(&data.misc));
+    {
+        let b = &data.misc.hero.attr_bonus;
+        game.set_item_misc(b.int_regen_bonus, b.illusions_can_restore_life, b.illusions_can_restore_mana);
+    }
     // The kill experience Misc values and the hero skill level skip (`docs/spec/heroes.md`, sections 8 and 12).
     {
         let h = &data.misc.hero;

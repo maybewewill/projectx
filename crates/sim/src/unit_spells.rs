@@ -229,6 +229,8 @@ pub struct UnitMods {
     pub root: bool,
     /// The buff holds a morph (Polymorph): its removal restores the unit's own form.
     pub morph: bool,
+    /// One invulnerability count while the buff exists (the potion of invulnerability, `Bvul`).
+    pub invuln: bool,
 }
 
 impl Default for UnitMods {
@@ -243,6 +245,7 @@ impl Default for UnitMods {
             miss_chance: F32::ZERO,
             root: false,
             morph: false,
+            invuln: false,
         }
     }
 }
@@ -275,6 +278,9 @@ impl Game {
         if m.root {
             *self.spells.unit.rooted.entry(unit).or_insert(0) += 1;
         }
+        if m.invuln {
+            self.unit_mut(unit).invuln_count += 1;
+        }
     }
 
     /// Whether `unit` is rooted by a net (Ensnare, Web): its mover is halted while the count is above zero.
@@ -294,8 +300,13 @@ impl Game {
             miss_chance: F32::ZERO,
             root: false,
             morph: false,
+            invuln: false,
         };
         self.apply_mods(unit, &neg);
+        if m.invuln {
+            let u = self.unit_mut(unit);
+            u.invuln_count = (u.invuln_count - 1).max(0);
+        }
         if m.morph {
             self.restore_morph(unit);
         }
@@ -1428,6 +1439,12 @@ impl Game {
         if !targs_ok(self, attacker, target, targs_word("air,ground")) {
             return;
         }
+        self.frost_apply(target, &level);
+    }
+
+    /// The Frost buff `Bfro` on `target` for the level's `HeroDur` / `Dur` (the body of Frost Attack, shared with the
+    /// Orb of Frost, whose post-hit handler `0x6F108FC0` hands the same buff the same duration rule).
+    pub(crate) fn frost_apply(&mut self, target: ObjKey, level: &crate::cast::SpellLevel) {
         let hero = self.target_hero(target);
         let dur = if hero { level.hero_dur } else { level.dur };
         if !arith::lt(F32::ZERO, dur) {

@@ -1781,10 +1781,16 @@ impl Game {
         if level.cool.to_f32() > 0.0 {
             self.start_cooldown(unit, REINCARNATION, level.cool);
         }
+        self.start_reincarnation(unit, level.data[0].to_f32());
+    }
+
+    /// Starts the revival of the dead `unit` after `delay` seconds (the effect `CEffectReincarnation`: the timer of the
+    /// revival, shared with the item `AIrc`, `item_abilities::on_unit_died`).
+    pub(crate) fn start_reincarnation(&mut self, unit: ObjKey, delay: f32) {
         self.orc.reincarnate_serial = self.orc.reincarnate_serial.wrapping_add(1);
         let serial = self.orc.reincarnate_serial;
         self.orc.reincarnating.insert(unit, serial);
-        self.timers_start_hero(level.data[0].to_f32(), TICK_REINCARNATE, unit, serial);
+        self.timers_start_hero(delay, TICK_REINCARNATE, unit, serial);
     }
 
     /// Whether a Reincarnation of `unit` is pending (for tests and hosts).

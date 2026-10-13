@@ -59,6 +59,27 @@ pub const ITEM_SPEED: u32 = code(b"AIsp");
 pub const ITEM_SPEED_AOE: u32 = code(b"AIsa");
 pub const TOWN_PORTAL: u32 = code(b"AItp");
 pub const ITEM_REGEN: u32 = code(b"AIrg");
+pub const BONUS_LIFE_REGEN: u32 = code(b"Arel");
+pub const BONUS_MANA_REGEN: u32 = code(b"AIrm");
+pub const BONUS_SPELL_REDUCTION: u32 = code(b"AIsr");
+pub const BONUS_VAMPIRE: u32 = code(b"AIva");
+pub const FIGURINE: u32 = code(b"AIfs");
+pub const FIGURINE_GOLEM: u32 = code(b"AIfr");
+pub const FIGURINE_GUARD: u32 = code(b"AIfu");
+/// The buff of the figurine summons (the timed life special id `BFig`).
+pub const BUFF_FIGURINE: u32 = code(b"BFig");
+pub const ORB_FIRE: u32 = code(b"AIfb");
+pub const ORB_FROST: u32 = code(b"AIob");
+pub const ITEM_REINCARNATION: u32 = code(b"AIrc");
+pub const ITEM_INVIS: u32 = code(b"AIvi");
+pub const ITEM_INVUL: u32 = code(b"AIvu");
+pub const ITEM_RAISE_DEAD: u32 = code(b"AIrd");
+pub const ITEM_RESURRECTION: u32 = code(b"AIrs");
+pub const ITEM_DISPEL: u32 = code(b"AIdi");
+/// The buffs of the invisibility and invulnerability potions (the codes the effect bodies hand to the buff finder:
+/// `0x6F10F580` returns `'Binv'`, `0x6F10F990` returns `'Bvul'`).
+pub const BUFF_INVIS: u32 = code(b"Binv");
+pub const BUFF_INVUL: u32 = code(b"Bvul");
 /// The buff of the regeneration items (the first of `BuffID` `BIrg,BIrl,BIrm`).
 pub const BUFF_REGEN: u32 = code(b"BIrg");
 /// The buff of the item speed abilities (`BuffID` of `AIsp` and `AIsa`).
@@ -105,6 +126,29 @@ pub enum Family {
     TownPortal,
     /// `CAbilityRegeneration` (`AIrg`, a `CAbilityRejuvination` child): life `DataA` and mana `DataB` over the duration.
     Regen,
+    /// `CAbilityRegenLife` (`Arel`, persistent): a life regeneration modifier of `DataA` per second while carried.
+    BonusLifeRegen,
+    /// `CAbilityItemRegenMana` (`AIrm`, persistent, heroes only): a mana regeneration modifier of `DataA` times the hero's
+    /// base mana regeneration.
+    BonusManaRegen,
+    /// `CAbilityItemSpellReduction` (`AIsr`): Spells-type damage taken is scaled by `1 - DataB`.
+    BonusSpellReduction,
+    /// `CAbilityVampireBonus` (`AIva`): the carrier heals `DataA` times the damage its attacks deal.
+    BonusVampire,
+    /// `CAbilityFireDamageBonus` (`AIfb`, the Orb of Fire): `DataA` fire damage with `Area` splash after every hit.
+    OrbFire,
+    /// `CAbilityFrostDamageBonus` (`AIob`, the Orb of Frost): the Frost buff `Bfro` after every hit.
+    OrbFrost,
+    /// `CAbilityFigurine*` (`AIfs`, `AIfr`, `AIfu`; every figurine row of the item table uses the code `AIfs`): summons
+    /// `f2i(DataA)` units of type `DataC` and `f2i(DataB)` of type `DataD` for `Dur` seconds.
+    Figurine,
+    /// `CAbilityItemReincarnation` (`AIrc`, the Ankh): a passive; the carrier that dies revives after `DataA` seconds and the
+    /// item uses its charge (`0x6F2B8390`).
+    ItemReincarnation,
+    /// `CAbilityItemInvis` (`AIvi`): the buff `Binv` for the hero-rule duration.
+    Invis,
+    /// `CAbilityItemInvul` (`AIvu`): the buff `Bvul` for the hero-rule duration; the holder is invulnerable meanwhile.
+    Invul,
 }
 
 impl Family {
@@ -120,6 +164,13 @@ impl Family {
                 | Family::BonusMana
                 | Family::BonusSight
                 | Family::BonusAttrs
+                | Family::BonusLifeRegen
+                | Family::BonusManaRegen
+                | Family::BonusSpellReduction
+                | Family::BonusVampire
+                | Family::OrbFire
+                | Family::OrbFrost
+                | Family::ItemReincarnation
         )
     }
 
@@ -152,6 +203,16 @@ impl Family {
             ITEM_SPEED_AOE => Family::SpeedAoe,
             TOWN_PORTAL => Family::TownPortal,
             ITEM_REGEN => Family::Regen,
+            BONUS_LIFE_REGEN => Family::BonusLifeRegen,
+            BONUS_MANA_REGEN => Family::BonusManaRegen,
+            BONUS_SPELL_REDUCTION => Family::BonusSpellReduction,
+            BONUS_VAMPIRE => Family::BonusVampire,
+            FIGURINE | FIGURINE_GOLEM | FIGURINE_GUARD => Family::Figurine,
+            ITEM_REINCARNATION => Family::ItemReincarnation,
+            ORB_FIRE => Family::OrbFire,
+            ORB_FROST => Family::OrbFrost,
+            ITEM_INVIS => Family::Invis,
+            ITEM_INVUL => Family::Invul,
             _ => return None,
         })
     }
@@ -191,6 +252,10 @@ pub struct ItemAbilityData {
     pub specs: BTreeMap<u32, ItemSpec>,
     pub bases: BTreeMap<u32, u32>,
     pub levels: BTreeMap<u32, Vec<SpellLevel>>,
+    /// The unit type codes of `DataC` / `DataD` of the figurine rows (0 = the row has none).
+    pub unit_codes: BTreeMap<u32, [u32; 2]>,
+    /// The aura level records of the item aura rows by alias (the aura classes read `Area`, `DataA..D`, `BuffID`, `targs`).
+    pub auras: BTreeMap<u32, Vec<crate::auras::AuraLevel>>,
 }
 
 /// The effect a persistent bonus applied (kept so that it is taken off exactly).
@@ -204,6 +269,8 @@ enum Applied {
     Mana(F32),
     Sight(F32),
     Attrs { agi: i32, int: i32, str: i32 },
+    /// A regeneration modifier of the agile engine (or, without stats, the aura bonus fallback).
+    Regen { mana: bool, rate: F32, modifier: Option<crate::agile::ModId> },
 }
 
 /// State of the item abilities (owned by the spell system).
@@ -221,8 +288,16 @@ pub struct State {
     pending: BTreeMap<(ObjKey, u32), ObjKey>,
     /// Regeneration buffs running by buff serial.
     regen: BTreeMap<u32, RegenRec>,
-    /// Misc `IllusionsCanRestoreLife`-like switch of the area callbacks (UNSURE key).
+    /// The unit type codes of the figurine rows by alias.
+    unit_codes: BTreeMap<u32, [u32; 2]>,
+    /// The item ability ids that are aura classes (`AIae` -> Endurance, ...): the aura system treats them as the class.
+    aura_alias: BTreeMap<u32, crate::auras::AuraKind>,
+    /// Misc `IllusionsCanRestoreLife` (key CONFIRMED at `0x6F876B18`): illusions heal and carry life regeneration items.
     pub illusions_heal: bool,
+    /// Misc `IllusionsCanRestoreMana` (key at `0x6F876B30`): the same for the mana regeneration item.
+    pub illusions_mana: bool,
+    /// Misc `IntRegenBonus` (read by `0x6F2082C0`): mana regeneration per point of hero intelligence.
+    pub int_regen_bonus: F32,
 }
 
 /// One running regeneration (`AIrg`): the amounts per 1.0 s tick and the repeating timer.
@@ -282,11 +357,23 @@ impl Game {
         for (&alias, levels) in &data.levels {
             self.set_spell_levels(alias, levels.clone());
         }
+        for (&alias, codes) in &data.unit_codes {
+            self.spells.item.unit_codes.insert(alias, *codes);
+        }
+        for (&alias, levels) in &data.auras {
+            let kind = data.bases.get(&alias).and_then(|&b| crate::auras::AuraKind::of(b));
+            if let Some(kind) = kind {
+                self.spells.item.aura_alias.insert(alias, kind);
+                self.aura_types_mut().insert(alias, levels.clone());
+            }
+        }
     }
 
-    /// Registers the abilities of item type `type_id`.
+    /// Registers the abilities of item type `type_id`. The cooldown group of the item is its `cooldownID` (the key of the
+    /// unit's group table, `0x6F2B8D70`): an alias of the item whose own id differs from the group is checked against
+    /// the group when it is cast from a command card (the use path checks the item's group itself).
     pub fn set_item_spec(&mut self, type_id: u32, spec: ItemSpec) {
-        if spec.cooldown_id != 0 && !spec.ignore_cooldown {
+        if spec.cooldown_id != 0 {
             for &a in &spec.abilities {
                 if a != spec.cooldown_id {
                     self.spells.item.groups.entry(a).or_insert(spec.cooldown_id);
@@ -296,9 +383,22 @@ impl Game {
         self.spells.item.specs.insert(type_id, spec);
     }
 
+    /// The Misc inputs of the regeneration items: `IntRegenBonus` and the two illusion switches.
+    pub fn set_item_misc(&mut self, int_regen_bonus: F32, illusions_heal: bool, illusions_mana: bool) {
+        let st = &mut self.spells.item;
+        st.int_regen_bonus = int_regen_bonus;
+        st.illusions_heal = illusions_heal;
+        st.illusions_mana = illusions_mana;
+    }
+
     /// Registers the factory base code of an alias ability id.
     pub fn set_item_ability_base(&mut self, alias: u32, base: u32) {
         self.spells.item.bases.insert(alias, base);
+    }
+
+    /// The aura class of an item ability id (see [`State::aura_alias`]).
+    pub(crate) fn item_aura_kind(&self, alias: u32) -> Option<crate::auras::AuraKind> {
+        self.spells.item.aura_alias.get(&alias).copied()
     }
 
     /// The item spec of a type.
@@ -311,6 +411,61 @@ impl Game {
 /// order-class gate): every castable family does, a unit target or a point is accepted too.
 pub(crate) fn takes_no_target(gm: &Game, base: u32) -> bool {
     gm.spells.item.family(base).is_some_and(Family::castable)
+}
+
+/// The spell classes an item ability can borrow unchanged: the item row's `code` names the same class as the unit
+/// spell (`AEbl` Dagger of Escape, `AHds` Potion of Divinity, `AHhb`, `AHmt` Staff of Teleportation, `AHre` and its
+/// item child `AIrs`, `Arai` and `AIrd`, wards, Lightning Shield, Purge, Roar, Chain Lightning, Death Pact, Inferno):
+/// the effect slots are the unit spell's own (the factory atlas lists the item child without an override of them), so
+/// the unit spell's effect runs with the item's level record. CONFIRMED for `AIrs` (only the code and order getters
+/// of `CAbilityResurrection` are overridden) and `AIrd` (the same effect slot `0x424` = `0x6F0E6AA0` as `Arai`; the
+/// child only changes the autocast gate `0x380`); LIKELY for the others (same class).
+const DELEGATED: [u32; 15] = [
+    crate::unit_spells::DISPEL_MAGIC,
+    crate::undead_ne::BLINK,
+    crate::human_heroes::DIVINE_SHIELD,
+    crate::cast::HOLY_LIGHT,
+    crate::human_heroes::MASS_TELEPORT,
+    crate::human_heroes::RESURRECTION,
+    crate::unit_spells::RAISE_DEAD,
+    crate::unit_spells::SENTRY_WARD,
+    crate::unit_spells::HEALING_WARD,
+    crate::unit_spells::LIGHTNING_SHIELD,
+    crate::unit_spells::PURGE,
+    crate::unit_spells::ROAR,
+    crate::orc::CHAIN_LIGHTNING,
+    crate::undead_ne::DEATH_PACT,
+    crate::undead_ne::INFERNO,
+];
+
+/// The class code that runs an ability id's effect: the factory base code of the alias, with the two item classes that
+/// inherit a spell class mapped to it (`AIrs` -> `AHre`, `AIrd` -> `Arai`). An id with no registered base maps to itself.
+pub(crate) fn effect_base(gm: &Game, alias: u32) -> u32 {
+    match gm.spells.item.base_of(alias) {
+        ITEM_RESURRECTION => crate::human_heroes::RESURRECTION,
+        ITEM_RAISE_DEAD => crate::unit_spells::RAISE_DEAD,
+        // `AIdi` (CAbilityItemDispelAoe) overrides only the code and order getters of `CAbilityDispelMagic`; the area
+        // effect slot `0x418` is `0x6F0EF320` in both.
+        ITEM_DISPEL => crate::unit_spells::DISPEL_MAGIC,
+        b => b,
+    }
+}
+
+/// Whether the ability id is an item ability that borrows a unit spell class ([`DELEGATED`]).
+pub(crate) fn delegated(gm: &Game, alias: u32) -> bool {
+    gm.spells.item.bases.contains_key(&alias) && DELEGATED.contains(&effect_base(gm, alias))
+}
+
+/// `rec` with the alias replaced by its class code, for the unit spell modules (they match on the class code).
+pub(crate) fn resolve_rec(gm: &Game, rec: &CastRec) -> CastRec {
+    if delegated(gm, rec.base) {
+        CastRec {
+            base: effect_base(gm, rec.base),
+            ..*rec
+        }
+    } else {
+        *rec
+    }
 }
 
 /// Whether the cooldown group of `base` is cooling on `unit` (UNSURE: the group is the item's `cooldownID`).
@@ -341,6 +496,8 @@ pub(crate) fn on_pack_add(gm: &mut Game, unit: ObjKey, item: ObjKey) {
             }
         }
     }
+    // An aura ability among them starts its emitter (`auras::sync_auras`).
+    gm.sync_auras(unit);
 }
 
 /// `item` leaves the pack of `unit` (dropped, removed or consumed): its persistent bonuses come off and the abilities
@@ -364,6 +521,7 @@ pub(crate) fn on_pack_remove(gm: &mut Game, unit: ObjKey, item: ObjKey) {
             gm.unit_mut(unit).abilities.remove(alias);
         }
     }
+    gm.sync_auras(unit);
 }
 
 /// A powerup taken by `unit` (consumed at once): its castable abilities run their effect on the unit with no mana,
@@ -380,7 +538,7 @@ pub(crate) fn on_powerup(gm: &mut Game, unit: ObjKey, item: ObjKey) {
         };
         if fam.castable() {
             let level = level_of(gm, alias);
-            apply_effect(gm, fam, &level, unit, CastTarget::Unit(unit));
+            apply_effect(gm, fam, alias, &level, unit, CastTarget::Unit(unit));
         }
     }
 }
@@ -425,6 +583,36 @@ fn apply_passive(gm: &mut Game, unit: ObjKey, item: ObjKey, alias: u32, fam: Fam
             add_attributes(gm, unit, agi, int, str);
             Applied::Attrs { agi, int, str }
         }
+        Family::BonusLifeRegen => {
+            let illusion = gm.unit(unit).illusion;
+            if !regen_item_gate(illusion, gm.spells.item.illusions_heal) {
+                return;
+            }
+            let modifier = gm.add_life_regen_modifier(unit, a);
+            if modifier.is_none() {
+                gm.add_life_regen(unit, a);
+            }
+            Applied::Regen { mana: false, rate: a, modifier }
+        }
+        Family::BonusManaRegen => {
+            // `0x6F0FB370`: heroes only, and the illusion gate with the mana switch.
+            let Some(h) = gm.unit(unit).hero.as_ref() else {
+                return;
+            };
+            let illusion = gm.unit(unit).illusion;
+            if !regen_item_gate(illusion, gm.spells.item.illusions_mana) {
+                return;
+            }
+            let int_total = heroes::intelligence(h.int_base, h.int_plus, h.level - 1);
+            let type_regen = gm.unit_types().get(gm.unit(unit).type_id).map_or(F32::ZERO, |t| t.regen_mana);
+            let term = hero_int_regen_term(gm.spells.item.int_regen_bonus, int_total);
+            let rate = mana_regen_item_rate(type_regen, term, a);
+            let modifier = gm.add_mana_regen_modifier(unit, rate);
+            if modifier.is_none() {
+                gm.add_mana_regen(unit, rate);
+            }
+            Applied::Regen { mana: true, rate, modifier }
+        }
         _ => return,
     };
     gm.spells.item.applied.insert((item, alias), (unit, applied));
@@ -441,6 +629,14 @@ fn undo_applied(gm: &mut Game, unit: ObjKey, applied: Applied) {
         Applied::Sight(a) => add_sight(gm, unit, arith::neg(a)),
         Applied::Attrs { agi, int, str } => {
             add_attributes(gm, unit, agi.wrapping_neg(), int.wrapping_neg(), str.wrapping_neg())
+        }
+        Applied::Regen { modifier: Some(m), .. } => gm.release_modifier(m),
+        Applied::Regen { mana, rate, modifier: None } => {
+            if mana {
+                gm.add_mana_regen(unit, arith::neg(rate));
+            } else {
+                gm.add_life_regen(unit, arith::neg(rate));
+            }
         }
     }
 }
@@ -493,6 +689,100 @@ fn add_attributes(gm: &mut Game, unit: ObjKey, agi: i32, int: i32, str: i32) {
 
 // ---- the pure cores (Unicorn-checked against the original, `tools/emu/item_cores_emu.py`) ----
 
+/// The illusion gate of the regeneration items (`0x6F0F4840` for `Arel`, `0x6F0F4AE0` for `AIrm`, Unicorn `RL` rows): the
+/// modifier is made unless the carrier is an illusion and the Misc switch (`IllusionsCanRestoreLife` /
+/// `IllusionsCanRestoreMana`) is off.
+pub fn regen_item_gate(illusion: bool, misc: bool) -> bool {
+    !illusion || misc
+}
+
+/// The damage handler of `AIsr` (`0x6F0F5730`, Unicorn `SR` rows): the factor `1 - DataB` (soft subtract from `1.0`) that
+/// `0x6F255800` applies to the record, or `None` when the handler leaves the record alone: no record, an illusion
+/// carrier, record flag `0x10`, or a record type row other than 0 (Spells).
+pub fn spell_reduction_factor(has_record: bool, carrier_illusion: bool, record_flags: u32, record_row: u32, data_b: F32) -> Option<F32> {
+    if !has_record || carrier_illusion || record_flags & 0x10 != 0 || record_row != 0 {
+        None
+    } else {
+        Some(arith::sub(F32::ONE, data_b))
+    }
+}
+
+/// The record scale `0x6F255800` (Unicorn `RS` rows): the two amounts of the record times the factor.
+pub fn scale_record(a: F32, b: F32, factor: F32) -> (F32, F32) {
+    (arith::mul(a, factor), arith::mul(b, factor))
+}
+
+/// The inputs of the life steal handler of `AIva` (`0x6F0F53A0`, Unicorn `VA` rows).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LifeStealInput {
+    /// The pre-damage handler armed the ability (flag `0x80`).
+    pub armed: bool,
+    /// The target filter (`0x6F26D590`) refused the victim.
+    pub filter_refused: bool,
+    /// The victim answers the immunity query (`0x6F28D750`).
+    pub immune: bool,
+    /// The victim resolved (`0x6F282F60`).
+    pub victim: bool,
+    pub owner_illusion: bool,
+    pub victim_illusion: bool,
+    /// Misc `IllusionsCanRestoreLife`.
+    pub misc: bool,
+}
+
+/// The life steal handler of `AIva`: `(effect shown, heal)`. The heal is `DataA * damage` (soft multiply) for a damage
+/// above 0.0, unless an illusion on either side blocks it while the Misc switch is off; the effect routine
+/// (`0x6F053040`) is called whenever the gates up to the damage compare pass.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn life_steal_outcome(i: &LifeStealInput, damage: F32, data_a: F32) -> (bool, Option<F32>) {
+    // The compare is an x87 `fcompp` + `test ah, 1`: C0 is set for 0.0 < damage and for an unordered pair, so a NaN
+    // damage passes the gate (Unicorn `VA` rows).
+    let positive = !(0.0f32 >= f32::from_bits(damage.to_bits()));
+    if !i.armed || i.filter_refused || (i.victim && i.immune) || !positive {
+        return (false, None);
+    }
+    let heal = arith::mul(data_a, damage);
+    let blocked = !i.misc && (i.owner_illusion || (i.victim && i.victim_illusion));
+    (true, (!blocked).then_some(heal))
+}
+
+/// The duration the Orb of Frost hands to the Frost buff (`0x6F108FC0`, Unicorn `FR` rows): `HeroDur` for a hero victim,
+/// else `Dur` as it is (no extra term), plus the carrier's illusion bit.
+pub fn orb_frost_duration(level: &SpellLevel, hero: bool) -> F32 {
+    if hero {
+        level.hero_dur
+    } else {
+        level.dur
+    }
+}
+
+/// The damage type index of the orb damage: the record class `0x4000000` that the slot `0x324` of the damage bonus
+/// classes returns (`0x6F100880` for `AIfb`) is `1 << 26`.
+pub const ORB_DAMAGE_TYPE: u32 = 26;
+
+/// The summon batches of a figurine (`0x6F0B8A00`, Unicorn `FG` rows): the unit type of `DataC` times `f2i(DataA)` and
+/// the unit type of `DataD` times `f2i(DataB)` (a batch whose type is the empty marker `0x5F5F5F5F` is skipped), each
+/// with the lifetime `Dur + extra` (soft add) and the `Area`.
+pub fn figurine_batches(level: &SpellLevel, codes: [u32; 2], extra: F32) -> Vec<(u32, i32, F32, F32)> {
+    let dur = arith::add(level.dur, extra);
+    let mut out = Vec::new();
+    for (code, count) in [(codes[0], conv::f2i(level.data[0])), (codes[1], conv::f2i(level.data[1]))] {
+        if code != 0x5F5F_5F5F && code != 0 {
+            out.push((code, count, dur, level.area));
+        }
+    }
+    out
+}
+
+/// The hero term of the mana regeneration item (`0x6F2082C0`, Unicorn `RH` rows): `Misc IntRegenBonus * I2R(int)`.
+pub fn hero_int_regen_term(misc: F32, int_total: i32) -> F32 {
+    arith::mul(misc, conv::i2r(int_total))
+}
+
+/// The rate of the mana regeneration item (`0x6F0E64E0`, Unicorn `RM` rows): `(type regenMana + hero term) * DataA`.
+pub fn mana_regen_item_rate(type_regen: F32, hero_term: F32, data_a: F32) -> F32 {
+    arith::mul(arith::add(type_regen, hero_term), data_a)
+}
+
 /// Where a restoration amount goes: the life adder `0x6F277C20` or the mana adder `0x6F279140`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sink {
@@ -538,6 +828,131 @@ pub fn charge_outcome(flags: u32, charges: i32, holder_live: bool) -> Option<(i3
     let (_, new) = charge_step(flags, charges);
     let new = new?;
     Some((new, holder_live, destroys(flags, new)))
+}
+
+// ---- damage hooks ----
+
+/// The levels of the passive item abilities of family `fam` that `unit` holds.
+fn passive_levels(gm: &Game, unit: ObjKey, fam: Family) -> Vec<SpellLevel> {
+    gm.unit(unit)
+        .abilities
+        .iter()
+        .filter(|a| !a.is_removed() && gm.spells.item.family(a.base) == Some(fam))
+        .map(|a| level_of(gm, a.base))
+        .collect()
+}
+
+/// `AIsr` on a damage record about to be delivered to `target` (the handler runs in the target side before armor,
+/// `0x6F0F5730`): the raw amount of a Spells-type record is scaled by `1 - DataB` for every bracer carried.
+pub(crate) fn spell_reduction(gm: &Game, target: ObjKey, row: u32, flags: u32, raw: F32) -> F32 {
+    let illusion = gm.unit(target).illusion;
+    let mut amount = raw;
+    for level in passive_levels(gm, target, Family::BonusSpellReduction) {
+        if let Some(factor) = spell_reduction_factor(true, illusion, flags, row, level.data[1]) {
+            amount = scale_record(amount, F32::ZERO, factor).0;
+        }
+    }
+    amount
+}
+
+/// The on-hit hook of a basic attack that dealt `damage` to `victim` (called by the attack arrival after the damage):
+/// the life steal of `AIva` and the orbs. The pre-damage arming of the original (`0x6F0F54A0` / `0x6F0F2B40`: the
+/// carrier is enabled and not paused, not an illusion for the orbs, the target filter accepts the victim) is modelled
+/// by the enemy test. Returns the units the orb damage killed, in order.
+pub fn on_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32, victim_alive: bool) -> Vec<ObjKey> {
+    let mut died = Vec::new();
+    if !gm.alive(attacker) {
+        return died;
+    }
+    let abilities: Vec<u32> = gm
+        .unit(attacker)
+        .abilities
+        .iter()
+        .filter(|a| !a.is_removed())
+        .map(|a| a.base)
+        .collect();
+    let (a_owner, v_owner) = (gm.unit(attacker).owner, gm.unit(victim).owner);
+    let enemy = gm.is_enemy(a_owner, v_owner);
+    for alias in abilities {
+        let level = level_of(gm, alias);
+        match gm.spells.item.family(alias) {
+            Some(Family::BonusVampire) => {
+                let input = LifeStealInput {
+                    armed: true,
+                    filter_refused: !enemy,
+                    immune: false,
+                    victim: true,
+                    owner_illusion: gm.unit(attacker).illusion,
+                    victim_illusion: gm.unit(victim).illusion,
+                    misc: gm.spells.item.illusions_heal,
+                };
+                if let (_, Some(heal)) = life_steal_outcome(&input, damage, level.data[0]) {
+                    add_life(gm, attacker, heal);
+                }
+            }
+            Some(Family::OrbFire) if enemy && !gm.unit(attacker).illusion => {
+                orb_fire(gm, attacker, victim, &level, &mut died);
+            }
+            Some(Family::OrbFrost) if enemy && victim_alive && !gm.unit(attacker).illusion => {
+                gm.frost_apply(victim, &level);
+            }
+            _ => {}
+        }
+    }
+    died
+}
+
+/// The Orb of Fire after a hit (`0x6F0F2CD0`, CONFIRMED structure: a damage record of the bonus value `DataA` (slot
+/// `0x320` returns the value stored at init), class `0x4000000` and the ability's `Area`, delivered to the victim). UNSURE:
+/// how the record's area is used by the target side; the model hits every other enemy in `Area` of the victim with the
+/// same amount. The damage goes through `unit_damage_target` as Spells-row damage (armor does not apply).
+fn orb_fire(gm: &mut Game, attacker: ObjKey, victim: ObjKey, level: &SpellLevel, died: &mut Vec<ObjKey>) {
+    let amount = level.data[0];
+    if let Some(k) = gm.unit_damage_target(attacker, victim, amount, false, false, 0, ORB_DAMAGE_TYPE) {
+        died.push(k);
+    }
+    if arith::lt(F32::ZERO, level.area) {
+        let (vx, vy) = (gm.unit(victim).x, gm.unit(victim).y);
+        let owner = gm.unit(attacker).owner;
+        for k in crate::natives::circle_candidates(gm, vx, vy, level.area) {
+            if k == victim || !gm.alive(k) {
+                continue;
+            }
+            if !gm.is_enemy(owner, gm.unit(k).owner) {
+                continue;
+            }
+            if let Some(d) = gm.unit_damage_target(attacker, k, amount, false, false, 0, ORB_DAMAGE_TYPE) {
+                died.push(d);
+            }
+        }
+    }
+}
+
+/// The Ankh of Reincarnation when its carrier dies (`0x6F1F1D50`, the death handler of `CAbilityItemReincarnation`,
+/// structure CONFIRMED by reading): the carrier must not be an illusion; the effect starts with the delay `DataA` (the
+/// same revival timer as `AOre`), the item uses a charge (`0x6F2B8390`, which destroys the perishable Ankh) and the
+/// unit gets flag `0x1000`. UNSURE: the other conditions of the handler (`0x6F1DB690`, the pathing probe at the death
+/// point, `0x6F1D2F20`), and the roles of `DataB` (500, clamped to at least 1.0) and `DataC` (-1, a negative value
+/// selects a unit stat): the model revives with full life, like Reincarnation.
+pub(crate) fn on_unit_died(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey) {
+    let (item, delay) = {
+        let gm = game.borrow();
+        if gm.unit(unit).illusion {
+            return;
+        }
+        let found = gm.unit(unit).abilities.iter().find_map(|a| {
+            (!a.is_removed() && gm.spells.item.family(a.base) == Some(Family::ItemReincarnation)).then_some(a.base)
+        });
+        let Some(alias) = found else {
+            return;
+        };
+        let Some(&item) = gm.spells.item.holders.get(&(unit, alias)).and_then(|v| v.first()) else {
+            return;
+        };
+        (item, level_of(&gm, alias).data[0].to_f32())
+    };
+    game.borrow_mut().start_reincarnation(unit, delay);
+    use_charge(game, rt, item);
 }
 
 // ---- the effects ----
@@ -613,7 +1028,7 @@ fn area_units(gm: &Game, caster: ObjKey, target: CastTarget, level: &SpellLevel)
 }
 
 /// Runs the effect of `fam` for `caster` (state only: no events are needed, so the powerup path shares it).
-fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, target: CastTarget) {
+fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, caster: ObjKey, target: CastTarget) {
     let d = &level.data;
     match fam {
         Family::Heal | Family::Mana | Family::Restore => {
@@ -667,6 +1082,11 @@ fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, 
             }
         }
         Family::TownPortal => town_portal(gm, caster, target, level),
+        Family::Figurine => figurine(gm, caster, alias, level),
+        Family::Invis | Family::Invul => {
+            let t = effect_target(caster, target);
+            apply_potion_buff(gm, fam, t, level);
+        }
         Family::Regen => {
             // The scroll forms (`Area` above 0) act on the units around the target or owner (`0x6F1088D0`), the potions on
             // the target or the owner (`0x6F108AC0`).
@@ -690,6 +1110,62 @@ fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, 
             gm.credit_resource(owner, res, conv::f2i(d[0]), crate::economy::Flags::NONE);
         }
         _ => {}
+    }
+}
+
+/// The duration the potion buff effects hand to the buff apply (`0x6F13C180` for `AIvi`, `0x6F13C270` for `AIvu`,
+/// Unicorn `VI` rows): `HeroDur` for a hero target, else `Dur` plus the ability's extra term (`+0x9C`, a soft add).
+pub fn potion_buff_duration(level: &SpellLevel, hero: bool, extra: F32) -> F32 {
+    crate::cast::effect_duration(level, hero, extra)
+}
+
+/// `AIvi` / `AIvu` on one unit: the buff `Binv` (invisibility) or `Bvul` (invulnerability) for [`potion_buff_duration`].
+/// The effect bodies are CONFIRMED (they find or create the buff by its code and call its apply slot `0x350` with the
+/// duration); the buff classes are not decoded: invisibility has no model beyond the buff (no detection in the sim),
+/// invulnerability adds one count (the same flag the `Avul` ability sets); both are positive and magic (UNSURE).
+fn apply_potion_buff(gm: &mut Game, fam: Family, target: ObjKey, level: &SpellLevel) {
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = potion_buff_duration(level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let (code, invuln) = if fam == Family::Invul { (BUFF_INVUL, true) } else { (BUFF_INVIS, false) };
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..crate::abilities::buff_predicates(code)
+    };
+    let mods = crate::unit_spells::UnitMods {
+        invuln,
+        ..Default::default()
+    };
+    gm.apply_mods_buff(target, code, preds, mods, dur);
+}
+
+/// A figurine (`0x6F0B8A00`, structure CONFIRMED by Unicorn `FG` rows): the summon batches of [`figurine_batches`], each
+/// unit a summoned unit with the figurine timed life `BFig` (the summon loop `0x6F0B8900` creates the units near the
+/// owner, marks them summoned (`+0x5C` bit `0x2000`) and starts the buff with the batch's duration). UNSURE: the spot (the
+/// original asks the owner for a placement within `Area`; the model uses the owner's position) and the hero duration.
+fn figurine(gm: &mut Game, caster: ObjKey, alias: u32, level: &SpellLevel) {
+    if !gm.alive(caster) {
+        return;
+    }
+    let codes = gm.spells.item.unit_codes.get(&alias).copied().unwrap_or([0, 0]);
+    let (x, y, owner, facing) = {
+        let c = gm.unit(caster);
+        (c.x, c.y, c.owner, c.facing)
+    };
+    for (code, count, dur, _area) in figurine_batches(level, codes, F32::ZERO) {
+        for _ in 0..count.max(0) {
+            if let Some((k, _)) = crate::natives::unit::build(gm, owner, code, x, y, facing, true) {
+                gm.unit_mut(k).summoned = true;
+                gm.apply_timed_life(k, BUFF_FIGURINE, dur);
+            }
+        }
     }
 }
 
@@ -934,7 +1410,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rec: &CastRec) -> bool {
         | Family::TomeAttack => level_one(&gm, rec.base),
         _ => rec.level,
     };
-    apply_effect(&mut gm, fam, &level, rec.caster, rec.target);
+    apply_effect(&mut gm, fam, rec.base, &level, rec.caster, rec.target);
     true
 }
 
@@ -943,7 +1419,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rec: &CastRec) -> bool {
 /// The first castable ability of an item (`0x6F2B6CC0`: the first ability whose class answers as usable).
 fn usable_alias(gm: &Game, item: ObjKey) -> Option<Option<u32>> {
     let spec = gm.spells.item.specs.get(&gm.item(item).type_id)?;
-    Some(spec.abilities.iter().copied().find(|&a| gm.spells.item.family(a).is_some_and(Family::castable)))
+    Some(spec.abilities.iter().copied().find(|&a| gm.spells.item.family(a).is_some_and(Family::castable) || delegated(gm, a)))
 }
 
 /// Starts the use of `item` by `unit`: the cast of the item's first castable ability on `target`. `None` when the item
@@ -968,6 +1444,11 @@ pub fn start_use(
         if !gm.alive(unit) || gm.item(item).removed || gm.item(item).holder != Some(unit) {
             return Some(false);
         }
+        // The item cools while its group cools on the holder (`0x6F2B6CC0`: the item's cooling flag `0x200` yields no order).
+        let g = item_group(&gm, item);
+        if g != 0 && gm.is_cooling(unit, g) {
+            return Some(false);
+        }
         gm.spells.item.pending.insert((unit, alias), item);
     }
     let ok = begin_cast(game, rt, unit, alias, target).is_ok();
@@ -975,6 +1456,23 @@ pub fn start_use(
         game.borrow_mut().spells.item.pending.remove(&(unit, alias));
     }
     Some(ok)
+}
+
+/// The group cooldown a finished item cast starts (`0x6F05C840`, the item cast end, CONFIRMED structure, Unicorn `GR`
+/// rows): the ability's `Cool` is handed to the unit's group routine (`0x6F0E3F30`) for the item named by the ability's
+/// item key, unless the item type's `ignoreCD` flag (`0x6F2B8DA0`) zeroes it, and only when it is above 0.0 (the soft
+/// compare `0x6F01FD40`).
+pub fn group_cooldown_start(cool: F32, ignore: bool) -> Option<F32> {
+    if ignore || !arith::lt(F32::ZERO, cool) {
+        None
+    } else {
+        Some(cool)
+    }
+}
+
+/// The cooldown group of an item: its type's `cooldownID` (the key the unit's group table compares, `0x6F2B8D70`).
+fn item_group(gm: &Game, item: ObjKey) -> u32 {
+    gm.spells.item.specs.get(&gm.item(item).type_id).map_or(0, |s| s.cooldown_id)
 }
 
 /// The end of a cast (`0x6F050950`): a cast started by a use order uses one charge when it completed (UNSURE for a
@@ -988,9 +1486,14 @@ pub(crate) fn on_cast_end(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec:
         if !completed {
             return;
         }
-        // The cooldown group (UNSURE): the shared id cools as long as the ability's own cooldown.
-        if let Some(&g) = gm.spells.item.groups.get(&rec.base) {
-            gm.start_cooldown(rec.caster, g, rec.level.cool);
+        // The cooldown group (CONFIRMED, see [`group_cooldown_start`]): keyed by the item type's `cooldownID`, started with
+        // the ability's `Cool` for every item of the group the unit carries.
+        let g = item_group(&gm, item);
+        let ignore = gm.spells.item.specs.get(&gm.item(item).type_id).is_some_and(|s| s.ignore_cooldown);
+        if g != 0 && g != rec.base {
+            if let Some(cool) = group_cooldown_start(rec.level.cool, ignore) {
+                gm.start_cooldown(rec.caster, g, cool);
+            }
         }
         item
     };
