@@ -51,6 +51,7 @@ pub mod sync;
 pub mod terrain;
 pub mod timer;
 pub mod unit_counts;
+pub mod undead_ne;
 pub mod unitclass;
 pub mod unit_position;
 mod unit_stats;
