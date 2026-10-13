@@ -386,6 +386,15 @@ pub enum BuffEffect {
     },
     /// A stun: counted on the unit while the buff exists.
     Stun,
+    /// Avatar (`CBuffAvatar`): the armor, maximum life and damage it added, and one magic immunity count
+    /// (`docs/spec/abilities-human-heroes.md` section 4).
+    Avatar {
+        armor: F32,
+        life: F32,
+        damage: i32,
+    },
+    /// Divine Shield (`CBuffDivineShield`): one invulnerability count and one magic immunity count.
+    DivineShield,
 }
 
 /// The state of one running aura emitter (a unit's aura ability).
@@ -466,7 +475,7 @@ impl Game {
 
     // --- stat sinks ---------------------------------------------------------------------------------------------
 
-    fn add_armor(&mut self, unit: ObjKey, delta: F32) {
+    pub(crate) fn add_armor(&mut self, unit: ObjKey, delta: F32) {
         let u = self.unit_mut(unit);
         u.bonuses.armor = arith::add(u.bonuses.armor, delta);
     }
@@ -496,7 +505,7 @@ impl Game {
         u.bonuses.mana_regen = arith::add(u.bonuses.mana_regen, delta);
     }
 
-    fn add_damage(&mut self, unit: ObjKey, delta: i32) {
+    pub(crate) fn add_damage(&mut self, unit: ObjKey, delta: i32) {
         let u = self.unit_mut(unit);
         u.bonuses.damage = u.bonuses.damage.saturating_add(delta);
     }
@@ -642,6 +651,12 @@ impl Game {
                 let u = self.unit_mut(unit);
                 u.bonuses.stun = u.bonuses.stun.saturating_sub(1);
             }
+            Some(BuffEffect::Avatar { armor, life, damage }) => self.undo_avatar(unit, armor, life, damage),
+            Some(BuffEffect::DivineShield) => {
+                let u = self.unit_mut(unit);
+                u.invuln_count -= 1;
+                u.magic_immune -= 1;
+            }
             None => {}
         }
     }
@@ -662,7 +677,7 @@ impl Game {
 
     /// Starts (or restarts, per the set-duration rule) the expiry timer of buff `serial` on `unit` for `duration`.
     /// Returns whether the buff has a running duration (flag `0x80`).
-    fn set_buff_duration(&mut self, unit: ObjKey, serial: u32, duration: F32) -> bool {
+    pub(crate) fn set_buff_duration(&mut self, unit: ObjKey, serial: u32, duration: F32) -> bool {
         let Some(i) = self.unit(unit).buffs.iter().position(|b| b.serial == serial) else {
             return false;
         };
@@ -690,7 +705,7 @@ impl Game {
         true
     }
 
-    fn buff_position(&self, unit: ObjKey, base: u32) -> Option<usize> {
+    pub(crate) fn buff_position(&self, unit: ObjKey, base: u32) -> Option<usize> {
         self.unit(unit).buffs.iter().position(|b| b.base == base)
     }
 
@@ -919,7 +934,19 @@ impl Game {
     /// attack multipliers, `duration` seconds. An existing slow keeps one buff and has its factors **replaced** (CONFIRMED,
     /// `vf214` has no strength compare) and its duration set by the never-shorten rule.
     pub fn apply_slow(&mut self, target: ObjKey, duration: F32, move_factor: F32, attack_factor: F32) -> u32 {
-        let serial = match self.buff_position(target, SLOW) {
+        self.apply_slow_as(SLOW, target, duration, move_factor, attack_factor)
+    }
+
+    /// [`Game::apply_slow`] for the slow buff with base code `base` (Thunder Clap applies `BHtc`).
+    pub fn apply_slow_as(
+        &mut self,
+        base: u32,
+        target: ObjKey,
+        duration: F32,
+        move_factor: F32,
+        attack_factor: F32,
+    ) -> u32 {
+        let serial = match self.buff_position(target, base) {
             Some(i) => {
                 let serial = self.unit(target).buffs[i].serial;
                 self.set_buff_duration(target, serial, duration);
@@ -940,7 +967,7 @@ impl Game {
                 let serial = self.next_buff_serial();
                 self.unit_mut(target).buffs.push(Buff {
                     serial,
-                    base: SLOW,
+                    base,
                     predicates: BuffPredicates {
                         negative: true,
                         magic: true,
@@ -970,7 +997,12 @@ impl Game {
     /// Applies a stun to `target` for `duration` seconds. An existing stun is kept and its duration is set by the
     /// never-shorten rule (UNSURE: whether the caster looks the buff up before creating one is not read).
     pub fn apply_stun(&mut self, target: ObjKey, duration: F32) -> u32 {
-        if let Some(i) = self.buff_position(target, STUN) {
+        self.apply_stun_as(STUN, target, duration)
+    }
+
+    /// [`Game::apply_stun`] for the disabling buff with base code `base` (Bash applies `BPSE`, a pause buff).
+    pub fn apply_stun_as(&mut self, base: u32, target: ObjKey, duration: F32) -> u32 {
+        if let Some(i) = self.buff_position(target, base) {
             let serial = self.unit(target).buffs[i].serial;
             self.set_buff_duration(target, serial, duration);
             return serial;
@@ -978,7 +1010,7 @@ impl Game {
         let serial = self.next_buff_serial();
         self.unit_mut(target).buffs.push(Buff {
             serial,
-            base: STUN,
+            base,
             predicates: BuffPredicates {
                 negative: true,
                 magic: true,

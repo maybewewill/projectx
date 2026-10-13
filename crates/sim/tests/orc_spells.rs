@@ -101,6 +101,7 @@ fn level(cost: i32, cool: f32, dur: f32, hero_dur: f32, area: f32, rng: f32, dat
         area: f(area),
         rng: f(rng),
         data: d,
+        unit_id: 0,
     }
 }
 

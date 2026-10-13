@@ -144,6 +144,7 @@ fn level(cost: i32, cool: f32, dur: f32, hero_dur: f32, a: f32, b: f32) -> Spell
         area: F32::ZERO,
         rng: f(600.0),
         data,
+        unit_id: 0,
     }
 }
 

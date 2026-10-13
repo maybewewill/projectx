@@ -97,6 +97,8 @@ pub struct SpellLevel {
     pub area: F32,
     pub rng: F32,
     pub data: [F32; 9],
+    /// The level's `UnitID` (raw code, record `+0x44`, 0 when empty): the unit type Water Elemental summons.
+    pub unit_id: u32,
 }
 
 /// The cast point and backswing of a unit type (`castpt`, `castbsw`).
@@ -206,6 +208,8 @@ pub struct SpellSystem {
     missiles: BTreeMap<u32, Missile>,
     buffs: BTreeMap<u32, SpellBuff>,
     base_speed: BTreeMap<ObjKey, F32>,
+    /// Bash state per owner (`docs/spec/abilities-human-heroes.md` section 3).
+    pub(crate) bash: BTreeMap<ObjKey, crate::human_heroes::BashState>,
     /// The stage log: `(caster, base, event index)` of every spell event fired, in order (for tests and the host).
     pub log: Vec<(ObjKey, u32, u32)>,
     /// State of the Undead / Night Elf hero spells (`undead_ne.rs`).
@@ -272,6 +276,9 @@ impl SpellSystem {
         s.order_ids.insert(852_089, HOLY_LIGHT);
         s.order_ids.insert(852_075, SLOW);
         crate::orc::register_orders(&mut s.order_ids);
+        for (id, base) in crate::human_heroes::SPELL_ORDERS {
+            s.order_ids.insert(id, base);
+        }
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).
         s.missile_speed.insert(STORM_BOLT, F32::from_bits(1000.0f32.to_bits()));
         s
@@ -511,7 +518,7 @@ impl Game {
         self.refresh_slow(b.unit);
     }
 
-    fn start_cooldown(&mut self, unit: ObjKey, base: u32, cool: F32) {
+    pub(crate) fn start_cooldown(&mut self, unit: ObjKey, base: u32, cool: F32) {
         // The level builder clamps a negative or NaN `Cool` to 0.0; the cooldown starts only when it is above zero.
         if !arith::lt(F32::ZERO, cool) {
             return;
@@ -630,7 +637,7 @@ pub fn begin_cast(
                 }
             }
             CastTarget::None => {
-                if !crate::orc::takes_no_target(base) {
+                if !crate::orc::takes_no_target(base) && !crate::human_heroes::is_immediate_spell(base) {
                     return Err(CastError::BadTarget);
                 }
             }
@@ -772,6 +779,10 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
 // ---- the class effects (slot 0x424) ----
 
 fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    if crate::human_heroes::is_immediate_spell(rec.base) {
+        crate::human_heroes::run_immediate_effect(game, rt, rec);
+        return;
+    }
     if crate::orc::run_effect(game, rt, rec) {
         return;
     }

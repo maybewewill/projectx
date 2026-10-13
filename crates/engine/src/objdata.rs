@@ -399,6 +399,12 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
         ("AOcl", sim::orc::CHAIN_LIGHTNING),
         ("AOfs", sim::orc::FAR_SIGHT),
         ("AOsf", sim::orc::FERAL_SPIRIT),
+        ("AHtc", sim::human_heroes::THUNDER_CLAP),
+        ("AHbh", sim::human_heroes::BASH),
+        ("AHav", sim::human_heroes::AVATAR),
+        ("AHds", sim::human_heroes::DIVINE_SHIELD),
+        ("AHre", sim::human_heroes::RESURRECTION),
+        ("AHwe", sim::human_heroes::WATER_ELEMENTAL),
     ] {
         if let Some(def) = gamedata::abilitytype::read_ability(&slk, name) {
             let f = |v: f32| F32::from_bits(v.to_bits());
@@ -419,6 +425,7 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
                         area: f(l.area),
                         rng: f(l.rng),
                         data,
+                        unit_id: l.unit_id,
                     }
                 })
                 .collect();
