@@ -89,6 +89,17 @@ Dur/HeroDur rule. Model: `orc::war_stomp`. UNSURE: the relation filter (enemies)
 exact ground/organic tests. Numeric cores: none new (the arithmetic is the verified soft-float add and the Storm Bolt
 duration rule).
 
+### 3.1 S29 addendum (disassembly only, no new Unicorn run)
+
+* `AOws` is `CAbilityStomp` (atlas: parent `CAbilityThunderClap`), not `CAbilityWarStomp` (that is the passive `Awar`).
+* Per-unit body `0x6F1607B0` (re-read): skip when unit slot `0x11C` is true or `0x6F28D750` (immunity) rejects; damage record
+  flags are `0x40` (the `0x10` bit is only set on a path that is never taken, `ebp = 0`), class from slot `0x42C`;
+  the victim is then stored in the ability's hit list; the stun (slot `0x430` = `0x6F18ABF0`, Dur / HeroDur by `0x6F1D2660`)
+  is applied only when the unit's slot `0x114` result has bit `0x8` clear. The area set is built by `0x6F2A3270` with the tags
+  area (radius, x, y), `0x1D` (flag word = `targs & 0xFFFF0FFF | 0x10000`, caster, -1) and the mask builder `0x6F25D830`
+  (`0xFF0000` family; relation bits via `0x6F25D480`). Which relation bits `ground,organic` (no `enemy` word) produce was
+  NOT decoded, so the enemy-only filter of the model stays UNSURE. Status unchanged: structure CONFIRMED, filter UNSURE.
+
 ## 4. Chain Lightning (`AOcl`, `CAbilityChainLightning`, vtable `0x6F8B0E74`) - task S29
 
 Data: `DataA` damage (100/140/180), `DataB` units hit (4/6/8), `DataC` reduction 0.15, `Area` 500, `Rng` 700.
@@ -124,6 +135,17 @@ Data: `DataA` damage (75/130/200), `DataB` cap, `DataC` distance 800, `DataD` en
 `Rng` 700, targs `ground,structure`. Point slots `0x418/0x41C/0x420/0x424` all forward to `0x6F1DD4F0`; the line missile
 is spawned by `0x6F1F2B90` through the engine projectile system (not decoded). Model `orc::shockwave` (UNSURE): one
 instant pass over the segment (width = max(Area, DataD), inclusive), hits ordered by travel distance, `min(DataA, DataB)`.
+
+### 5.1 S29 addendum (disassembly only)
+
+Atlas: `AOsh` `CAbilityShockwave` descends from `CAbilityCarrionSwarm` (same launcher as `AUcs`). The launcher `0x6F1DD4F0`
+(all four point slots forward to it) reads the caster position, `DataC` (`0x6F02EAC0`, distance 800) and `Area`
+(`0x6F02E900`), forms `d = target - start`, `len2 = dx*dx + dy*dy`; if `len2` exceeds the tiny constant `0x6FAB35F4` squared
+the direction is `d` normalised (`0x6F07B870`), otherwise the caster's facing vector (`0x6F10E370`); the end point is
+`start + dir * DataC` (soft add/mul). So the wave always travels `DataC` along the click direction, independent of the
+click distance - the model's segment is right in that respect. The missile (`0x6F24F3E0`, class `CMissileShockwave`,
+vtable `0x6F916DDC`) then flies and damages on its own path: speed, hit timing and per-unit rules were NOT decoded; the model
+hits everything at the cast instant (UNSURE). Next: decode the missile's move slot and `0x6F1D5B90` (slot `0x430`).
 
 ## 6. Wind Walk (`AOwk`, `CAbilityWindWalk`, vtable `0x6F8F2534`)
 
@@ -191,7 +213,7 @@ Model: a visible-state fog modifier over the circle for the owner, stopped with 
 | Critical Strike | yes (roll, PRD, damage) | yes, 800 cases, 0 mismatches | yes (`start_swing`, `SpecDamage::roll`) |
 | War Stomp | structure CONFIRMED | no new core | yes |
 | Chain Lightning | hop, gate, timing, selection rule | yes: hop body + gate run for real (800 cases, 0 mismatches) | yes (0.25 s hops; damage instant, footprint distance UNSURE) |
-| Shockwave | data + launcher only | no | MODEL |
+| Shockwave | launcher end point decoded; missile path not | no | MODEL |
 | Wind Walk | effect read | no | MODEL |
 | Mirror Image | cast effect, delayed handler, RNG stream 12, polygon | yes: pick, offset, rotation, transform (4 x 400, 0 mismatches) | yes (hero swap LIKELY) |
 | Feral Spirit | effect entry point, no RNG found | no | MODEL |
