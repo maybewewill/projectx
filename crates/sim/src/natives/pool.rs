@@ -28,12 +28,15 @@
 //! 6. A picked id of `-1` (0xFFFFFFFF) is replaced by the id of entry 0.
 //! 7. The unit or item is built at the position and the handle is allocated last. A failed build returns null.
 //!
-//! UNSURE: the owner and facing registers of the unit builder call (`FUN_6f24f1f0` / `FUN_6f29f990`) are not decoded.
+//! The unit selection helper forwards owner in ECX, selected rawcode in EDX, then X/Y/facing pointers on the stack.
+//! The item helper forwards selected rawcode in ECX, X in EDX and Y on the stack (Unicorn-checked).
+//! Native facing conversion and the downstream creation routines remain outside this check.
 //! The unit is built through the `CreateUnit` path with the player as owner and the facing in degrees, as `CreateUnit`
 //! does. The order of the checks follows the disassembly: pool, then player, then the draw.
-//! The pick is checked in `tests/pool_natives.rs` against the generator's own draws, on the stand-in table or, with
-//! `GAME_DLL` set, on the user's table. The draw order and the walk are not yet compared with the original's
-//! emulated run (the Unicorn harness does not drive `FUN_6f3e17b0` yet).
+//! `tools/emu/pool_selection_emu.py` runs both original selection helpers and bounded add/remove operations.
+//! The module's vector tests compare selected ids, final global RNG state and exact entry order/weight bits:
+//! 2,000 pool inputs through each original helper and 2,000 mutation steps (zero mismatches).
+//! Creation, handle allocation and array growth beyond the preallocated capacity are not covered by these vectors.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -330,5 +333,78 @@ mod tests {
         assert_eq!(entries(&g), vec![(2, F32::ONE)]);
         remove_entry(&mut g, k, 5);
         assert_eq!(entries(&g), vec![(2, F32::ONE)]);
+    }
+
+    fn hex(text: &str) -> u32 {
+        u32::from_str_radix(text, 16).expect("vector hex")
+    }
+
+    #[test]
+    #[ignore = "requires GAME_DLL; run explicitly to compare with the original RNG table"]
+    fn selection_matches_original_pool_vectors() {
+        let path = std::env::var("GAME_DLL").expect("GAME_DLL is required for the original-table check");
+        let dll = std::fs::read(path).expect("Game.dll");
+        let table = crate::rng::RngTable::from_game_dll(&dll).expect("original RNG table");
+        let mut game = Game::new();
+        game.set_rng_table(Some(table));
+        let keys = [false, true].map(|item| {
+            game.add_object(Object::Pool(PoolObj { item, entries: Vec::new() }), 0).0
+        });
+        let mut checked = 0;
+        for (line_no, line) in include_str!("../../tests/data/pools/selection.txt").lines().enumerate() {
+            let mut fields = line.split_whitespace();
+            if fields.next() != Some("P") {
+                continue;
+            }
+            let before = crate::rng::Rng { a: hex(fields.next().unwrap()), b: hex(fields.next().unwrap()) };
+            let count: usize = fields.next().unwrap().parse().unwrap();
+            let entries: Vec<_> = (0..count).map(|_| {
+                (hex(fields.next().unwrap()), F32::from_bits(hex(fields.next().unwrap())))
+            }).collect();
+            let expected = match fields.next().unwrap() {
+                "none" => None,
+                value => Some(hex(value)),
+            };
+            let after = crate::rng::Rng { a: hex(fields.next().unwrap()), b: hex(fields.next().unwrap()) };
+            let draws: usize = fields.next().unwrap().parse().unwrap();
+            assert_eq!(draws, usize::from(count != 0));
+            assert!(fields.next().is_none());
+            for key in keys {
+                pool_mut(&mut game, key).entries = entries.clone();
+                game.rng_parts().unwrap().1.global = before;
+                assert_eq!(pick(&mut game, key).expect("tables"), expected, "selection line {}", line_no + 1);
+                assert_eq!(game.rng_parts().unwrap().1.global, after, "RNG line {}", line_no + 1);
+            }
+            checked += 1;
+        }
+        assert!(checked >= 1000, "original selection vectors must execute");
+    }
+
+    #[test]
+    fn mutation_matches_original_pool_vectors() {
+        let mut game = Game::new();
+        let key = game.add_object(Object::Pool(PoolObj { item: false, entries: Vec::new() }), 0).0;
+        let mut checked = 0;
+        for (line_no, line) in include_str!("../../tests/data/pools/selection.txt").lines().enumerate() {
+            let mut fields = line.split_whitespace();
+            if fields.next() != Some("M") {
+                continue;
+            }
+            let operation = fields.next().unwrap();
+            let id = hex(fields.next().unwrap());
+            let weight = F32::from_bits(hex(fields.next().unwrap()));
+            match operation {
+                "add" => add_entry(&mut game, key, id, weight),
+                "remove" => remove_entry(&mut game, key, id),
+                _ => panic!("unknown mutation"),
+            }
+            let count: usize = fields.next().unwrap().parse().unwrap();
+            let expected: Vec<_> = (0..count).map(|_| (hex(fields.next().unwrap()), hex(fields.next().unwrap()))).collect();
+            assert!(fields.next().is_none());
+            let actual: Vec<_> = pool_mut(&mut game, key).entries.iter().map(|&(id, weight)| (id, weight.to_bits())).collect();
+            assert_eq!(actual, expected, "mutation line {}", line_no + 1);
+            checked += 1;
+        }
+        assert!(checked >= 1000, "original mutation vectors must execute");
     }
 }
