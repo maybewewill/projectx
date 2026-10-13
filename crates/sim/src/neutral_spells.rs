@@ -30,6 +30,26 @@ use crate::natives::{dispatch_unit_death_by, ScriptRuntime};
 pub const VENOM_SPEAR: u32 = code(b"Aven");
 pub const MAGIC_IMMUNITY: u32 = code(b"Amim");
 pub const PULVERIZE: u32 = code(b"Awar");
+/// S43: Cleaving Attack, Resistant Skin, Mana Shield, Cyclone, Silence, Charm, Howl of Terror.
+pub const CLEAVE: u32 = code(b"ANca");
+pub const RESISTANT_SKIN: u32 = code(b"Arsk");
+pub const MANA_SHIELD: u32 = code(b"ANms");
+pub const CYCLONE: u32 = code(b"Acyc");
+pub const SILENCE: u32 = code(b"ANsi");
+pub const CHARM: u32 = code(b"ANch");
+pub const HOWL: u32 = code(b"ANht");
+pub const BUFF_MANA_SHIELD: u32 = code(b"BNms");
+pub const BUFF_CYCLONE: u32 = code(b"Bcyc");
+/// The second Cyclone buff (`CBuffCycloneTwo < CBuffCyclone`, the invulnerability half in this model).
+pub const BUFF_CYCLONE_TWO: u32 = code(b"Bcy2");
+pub const BUFF_SILENCE: u32 = code(b"BNsi");
+pub const BUFF_HOWL: u32 = code(b"BNht");
+/// Mana Shield on (`manashieldon`, slot `0x348`) and off (slot `0x318`) order ids
+/// (`tools/analysis/ability_orders.py`).
+pub const ORDER_MANA_SHIELD_ON: u32 = 852_589;
+pub const ORDER_MANA_SHIELD_OFF: u32 = 852_590;
+/// The damage type of the Cleaving Attack area hit (class word `0x20`, as Pulverize).
+const CLEAVE_DAMAGE_TYPE: u32 = 5;
 /// The poison buff of Envenomed Spears (`BuffID` `Bpoi`).
 pub const BUFF_POISON: u32 = code(b"Bpoi");
 /// The combat stream of the Pulverize roll (`sub_6F2853D0(…, 40)` at `0x6F170FF0`).
@@ -42,7 +62,7 @@ const PULVERIZE_DAMAGE_TYPE: u32 = 5;
 /// `(derived class code, modelled code it derives from, order id of the derived class)`. Parents are the RTTI
 /// parents of the atlas (`docs/research/ability-atlas/factory.tsv`); the order ids are the Unicorn-checked cast getters
 /// (`tools/analysis/ability_orders.py`, slot `0x348`).
-pub const STATIC_PARENTS: [(u32, u32, u32); 7] = [
+pub const STATIC_PARENTS: [(u32, u32, u32); 8] = [
     // CAbilityNeutralHeal < CAbilityHeal: only the order ids (slots 0x348 / 0x308 / 0x318) differ.
     (code(b"Anhe"), code(b"Ahea"), ORDER_NEUTRAL_HEAL),
     // CAbilityCreepThunderBolt < CAbilityThunderBolt, no override but the codes.
@@ -57,6 +77,9 @@ pub const STATIC_PARENTS: [(u32, u32, u32); 7] = [
     (code(b"ACbf"), code(b"AUcs"), 852_560),
     // CAbilityCreepReincarnation < CAbilityReincarnation: slot 0x80 only adds the order ids 852314 / 852315.
     (code(b"ACrn"), code(b"AOre"), 0),
+    // CAbilityRainOfFire < CAbilityBlizzard (Pit Lord): one override; the data layout is the Blizzard one (the editor
+    // fields `HBZ1..6`), so the channelled wave engine of `human_heroes.rs` runs (S43, LIKELY).
+    (code(b"ANrf"), code(b"AHbz"), 852_238),
 ];
 
 /// Neutral Heal (`Anhe`, `CAbilityNeutralHeal < CAbilityHeal`): the cast, autocast-on and autocast-off order ids are the
@@ -76,7 +99,8 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"AOre", *b"AOsf", *b"AOsh", *b"AOsw", *b"AOvd", *b"AOwk", *b"AOws", *b"AOww", *b"Aply", *b"Aprg", *b"Arai",
     *b"Arej", *b"Aroa", *b"Aslo", *b"Aspo", *b"Asta", *b"AUau", *b"AUav", *b"AUcs", *b"AUdc", *b"AUdd", *b"AUdp",
     *b"AUdr", *b"AUfa", *b"AUfn", *b"AUfu", *b"Auhf", *b"AUim", *b"AUin", *b"AUsl", *b"AUts", *b"Aweb", *b"Ablo",
-    *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar",
+    *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
+    *b"ANch", *b"ANht", *b"AHbz",
 ];
 
 fn is_modelled(c: u32) -> bool {
@@ -111,6 +135,8 @@ pub struct State {
     /// Pulverize hit counters (1 before any roll) and armed flags (`ability+0x20 & 0x200`).
     pulv_count: BTreeMap<ObjKey, i32>,
     pulv_armed: BTreeSet<ObjKey>,
+    /// Mana Shield parameters `(DataA, DataB)` of the level the shield was cast at, by unit (valid while `BNms` exists).
+    shield: BTreeMap<ObjKey, (F32, F32)>,
 }
 
 /// The order ids this module adds: `(order id, modelled code)`.
@@ -120,10 +146,33 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
             ids.insert(order, parent);
         }
     }
+    for (id, base) in [
+        (ORDER_MANA_SHIELD_ON, MANA_SHIELD),
+        (852_581, CHARM),
+        (852_144, CYCLONE),
+        (852_592, SILENCE),
+        (852_588, HOWL),
+    ] {
+        ids.insert(id, base);
+    }
+}
+
+/// Abilities of this module cast without a target (Mana Shield, Howl of Terror).
+pub(crate) fn takes_no_target(base: u32) -> bool {
+    base == MANA_SHIELD || base == HOWL
 }
 
 /// The autocast toggle orders of Neutral Heal (`healon` / `healoff` of the neutral class). `None` for any other id.
 pub(crate) fn toggle_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Option<bool> {
+    if id == ORDER_MANA_SHIELD_OFF {
+        // `manashieldoff` (slot `0x318`): the shield comes off (LIKELY: the buff is destroyed, `0x6F079CC0`).
+        let mut gm = game.borrow_mut();
+        if gm.unit(unit).abilities.get(MANA_SHIELD).is_none_or(|a| a.is_removed()) {
+            return Some(false);
+        }
+        gm.remove_buff_code(unit, BUFF_MANA_SHIELD);
+        return Some(true);
+    }
     if id != ORDER_NEUTRAL_HEAL_ON && id != ORDER_NEUTRAL_HEAL_OFF {
         return None;
     }
@@ -290,5 +339,288 @@ impl Game {
 pub fn dispatch_deaths(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, killer: ObjKey, killed: Vec<ObjKey>) {
     for t in killed {
         dispatch_unit_death_by(game, rt, t, Some(killer));
+    }
+}
+
+// ---- S43: more creep abilities (spec `docs/spec/abilities-neutral.md` section 6) ----
+
+use crate::cast::{effect_duration, CastRec, CastTarget, SpellLevel};
+use crate::unit_spells::{targs_ok, targs_word, UnitMods};
+
+/// Extra target rules of the S43 spells (called from `unit_spells::target_error`).
+pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<crate::cast::CastError> {
+    use crate::cast::CastError::BadTarget;
+    match base {
+        CYCLONE => {
+            // targs of the creep and hero rows: ground,enemy,neutral,organic.
+            let w = targs_word("ground,enemy,neutral,organic");
+            (gm.unit(target).removed || !targs_ok(gm, caster, target, w)).then_some(BadTarget)
+        }
+        CHARM => {
+            let w = targs_word("air,ground,nonhero,enemy,neutral,organic");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(BadTarget);
+            }
+            // `DataA` is the highest creep level that can be charmed (editor `NCH1`, LIKELY).
+            let max = gm.spell_level(caster, CHARM).data[0].to_f32();
+            let level = gm.unit_types().get(gm.unit(target).type_id).map_or(0, |t| t.level);
+            (level as f32 > max).then_some(BadTarget)
+        }
+        _ => None,
+    }
+}
+
+/// The class effects of the S43 spells. Returns false for any other ability.
+pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
+    match rec.base {
+        MANA_SHIELD => {
+            mana_shield(game, rec);
+            true
+        }
+        CYCLONE => {
+            if let CastTarget::Unit(t) = rec.target {
+                cyclone(game, rec, t);
+            }
+            true
+        }
+        SILENCE => {
+            silence(game, rec);
+            true
+        }
+        HOWL => {
+            howl(game, rec);
+            true
+        }
+        CHARM => {
+            if let CastTarget::Unit(t) = rec.target {
+                charm(game, rt, rec, t);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The hero-rule duration of a target (`HeroDur` for heroes, `Dur` otherwise).
+fn duration_for(gm: &Game, level: &SpellLevel, target: ObjKey) -> F32 {
+    effect_duration(level, gm.target_hero(target), F32::ZERO)
+}
+
+/// Mana Shield (`ANms`, `CAbilityManaShield < CAbilitySimpleSpell`, buff `CBuffManaShield < CBuff`): the cast puts the
+/// buff `BNms` on the caster and gives it the two level numbers (`DataA`, `DataB`: the apply slot `0x354`
+/// `0x6F1116E0` stores them in two property cells, CONFIRMED). The buff has no duration (it ends when the mana runs
+/// out or the off order comes). The damage side is [`Game::neutral_absorb`].
+fn mana_shield(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_MANA_SHIELD)
+    };
+    gm.apply_mods_buff(rec.caster, BUFF_MANA_SHIELD, preds, UnitMods::default(), F32::ZERO);
+    gm.spells.neutral.shield.insert(rec.caster, (rec.level.data[0], rec.level.data[1]));
+}
+
+/// Cyclone (`Acyc`, `CAbilityCyclone`; buffs `Bcyc` / `Bcy2`, `CBuffCycloneTwo < CBuffCyclone`): the target is lifted for
+/// the hero-rule duration, cannot act (the stun count) and cannot be hurt (the invulnerability count). The Misc key
+/// `CycloneStasis` (read by the effect slot `0x6F1CCC70`) only decides whether the effect object freezes the target
+/// in place; it has no simulation effect here. The split of the two halves between the two buffs is UNSURE.
+fn cyclone(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let dur = duration_for(&gm, &rec.level, target);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    gm.apply_stun_as(BUFF_CYCLONE, target, dur);
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_CYCLONE_TWO)
+    };
+    gm.apply_mods_buff(target, BUFF_CYCLONE_TWO, preds, UnitMods { invuln: true, ..UnitMods::default() }, dur);
+}
+
+/// Silence (`ANsi`, `CAbilitySilence`; buff `CBuffSilence < CBuffSpeed`, `BNsi`): every enemy air or ground organic
+/// (or neutral) unit within `Area` of the target point gets the buff for the hero-rule duration; a silenced unit
+/// cannot start a spell ([`Game::is_silenced`]). Units with spell immunity are skipped (the immunity test
+/// `0x6F28D750`, LIKELY). `DataA` (the `silenceFlags` word, 8 in the data) is not decoded: every silence blocks all
+/// spells here (UNSURE); the speed fields of the `CBuffSpeed` base (`NSI2..4`) are zero in 1.26a.
+fn silence(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    let (cx, cy) = match rec.target {
+        CastTarget::Point(x, y) => (x, y),
+        CastTarget::Unit(t) => (gm.unit(t).x, gm.unit(t).y),
+        CastTarget::None => return,
+    };
+    let word = targs_word("air,ground,enemy,organic,neutral");
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_SILENCE)
+    };
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        {
+            let u = gm.unit(k);
+            if u.removed || u.hidden || u.dead || u.magic_immune > 0 {
+                continue;
+            }
+        }
+        if !targs_ok(&gm, rec.caster, k, word) {
+            continue;
+        }
+        let dur = duration_for(&gm, &rec.level, k);
+        if arith::lt(F32::ZERO, dur) {
+            gm.apply_mods_buff(k, BUFF_SILENCE, preds, UnitMods::default(), dur);
+        }
+    }
+}
+
+/// Howl of Terror (`ANht`, `CAbilityHowlOfTerror < CAbilityRoar`, buff `BNht`): the mirror of Roar: every enemy ground
+/// or air unit within `Area` of the caster loses `DataA` (a fraction) of its damage for the hero-rule duration. The
+/// sign and the relation come from the level's `targs` (`air,ground,enemy,neutral`); the buff base is the Roar one
+/// (damage fraction sink). LIKELY.
+fn howl(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    let (cx, cy) = {
+        let c = gm.unit(rec.caster);
+        (c.x, c.y)
+    };
+    let word = targs_word("air,ground,enemy,neutral");
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_HOWL)
+    };
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        {
+            let u = gm.unit(k);
+            if u.removed || u.hidden || u.dead || u.magic_immune > 0 {
+                continue;
+            }
+        }
+        if !targs_ok(&gm, rec.caster, k, word) {
+            continue;
+        }
+        let dur = duration_for(&gm, &rec.level, k);
+        if arith::lt(F32::ZERO, dur) {
+            let mods = UnitMods { damage_pct: arith::neg(rec.level.data[0]), ..UnitMods::default() };
+            gm.apply_mods_buff(k, BUFF_HOWL, preds, mods, dur);
+        }
+    }
+}
+
+/// Charm (`ANch`, `CAbilityCharm`; the only extra overrides are the target rule and the effect spawn): the target
+/// changes owner to the caster's owner for good (the owner change of `SetUnitOwner`), its orders are cleared. The
+/// target rule (`DataA` = highest creep level) is in [`target_error`]. LIKELY.
+fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target: ObjKey) {
+    let changed = {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(target) {
+            return;
+        }
+        let to = gm.unit(rec.caster).owner;
+        let from = crate::natives::unit::change_owner(&mut gm, target, to);
+        if from.is_some() {
+            let stop = crate::orders::Order {
+                id: crate::orders::ORDER_STOP,
+                class: crate::orders::OrderClass::Immediate,
+                point: None,
+                target: 0,
+            };
+            let _ = gm.issue_order(target, stop, true);
+        }
+        from.map(|f| (f, to))
+    };
+    if let Some((from, to)) = changed {
+        crate::natives::event::fire_owner_change(game, rt, target, from, to);
+    }
+}
+
+impl Game {
+    /// Whether `unit` carries the Silence buff (it cannot start a spell).
+    pub fn is_silenced(&self, unit: ObjKey) -> bool {
+        self.unit(unit).buffs.iter().any(|b| b.base == BUFF_SILENCE)
+    }
+
+    /// Mana Shield (`CBuffManaShield` damage slot `0x6F126DD0`, structure CONFIRMED, numbers LIKELY): of an incoming
+    /// damage `d` the share `DataB * d` goes to the mana at `DataA` damage per mana point. When the mana cannot pay it
+    /// all, the mana pays what it can (to zero) and the buff is destroyed. Returns the damage that reaches the life.
+    /// The record-flag test `& 0x10` of the original (damage that skips the shield) is not modelled.
+    pub(crate) fn neutral_absorb(&mut self, target: ObjKey, amount: F32) -> F32 {
+        let Some(&(per_mana, share)) = self.spells.neutral.shield.get(&target) else {
+            return amount;
+        };
+        if !self.unit(target).buffs.iter().any(|b| b.base == BUFF_MANA_SHIELD) {
+            self.spells.neutral.shield.remove(&target);
+            return amount;
+        }
+        if !arith::lt(F32::ZERO, amount) || !arith::lt(F32::ZERO, per_mana) {
+            return amount;
+        }
+        let absorbed = arith::mul(share, amount);
+        let need = self.soft_div(absorbed, per_mana);
+        let mana = self.unit(target).mana;
+        if arith::le(need, mana) {
+            self.write_mana(target, arith::sub(mana, need));
+            arith::sub(amount, absorbed)
+        } else {
+            let covered = arith::mul(mana, per_mana);
+            self.write_mana(target, F32::ZERO);
+            self.remove_buff_code(target, BUFF_MANA_SHIELD);
+            self.spells.neutral.shield.remove(&target);
+            arith::sub(amount, covered)
+        }
+    }
+
+    /// Cleaving Attack (`ANca`, `CAbilityCleavingAttack < CAbilityPassive`; swing start `0x6F1B1440` arms it when the
+    /// attack target passes `0x6F26D590`, execute slot `0x154` = `0x6F1B7310` CONFIRMED structure): the area body
+    /// `0x6F2C31D0` around the attack's target damages the enemy ground units within `Area` with `DataA` times the
+    /// attack's damage (class `0x20`, the level's `targs`); the callback `0x6F1B14F0` is taken to skip the main target
+    /// (LIKELY). Returns the units that died.
+    pub(crate) fn neutral_cleave(&mut self, attacker: ObjKey, target: ObjKey, damage: F32) -> Vec<ObjKey> {
+        if self.unit(attacker).abilities.get(CLEAVE).is_none_or(|a| a.is_removed()) {
+            return Vec::new();
+        }
+        let Some(level) = self.ability_level_record(attacker, CLEAVE) else {
+            return Vec::new();
+        };
+        if !arith::lt(F32::ZERO, level.data[0]) || !self.alive(attacker) {
+            return Vec::new();
+        }
+        let (cx, cy) = {
+            let u = self.unit(target);
+            (u.x, u.y)
+        };
+        let amount = arith::mul(level.data[0], damage);
+        let word = targs_word("ground,enemy,neutral");
+        let mut killed = Vec::new();
+        for k in crate::natives::group::circle_candidates(self, cx, cy, level.area) {
+            if k == target {
+                continue;
+            }
+            {
+                let u = self.unit(k);
+                if u.removed || u.hidden || u.dead {
+                    continue;
+                }
+            }
+            if !crate::orc::area_predicate(self, attacker, k, word) {
+                continue;
+            }
+            if let Some(t) = self.unit_damage_target(attacker, k, amount, false, false, 0, CLEAVE_DAMAGE_TYPE) {
+                killed.push(t);
+            }
+        }
+        killed
     }
 }

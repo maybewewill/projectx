@@ -799,7 +799,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
-        _ => None,
+        _ => crate::neutral_spells::target_error(gm, caster, base, target),
     }
 }
 
@@ -1257,7 +1257,7 @@ pub fn purge_attack_update(value: F32, step: F32) -> Option<(F32, F32, F32)> {
 }
 
 impl Game {
-    fn soft_div(&self, a: F32, b: F32) -> F32 {
+    pub(crate) fn soft_div(&self, a: F32, b: F32) -> F32 {
         match self.order_tables() {
             Some(t) => arith::div(a, b, t),
             // Without the soft-float tables (unit tests) a plain division stands in.
@@ -1267,7 +1267,7 @@ impl Game {
 
     /// Removes the buff with code `base` from `unit` (the removal routine `0x6F079CC0`): timers cancelled and effects
     /// undone.
-    fn remove_buff_code(&mut self, unit: ObjKey, base: u32) {
+    pub(crate) fn remove_buff_code(&mut self, unit: ObjKey, base: u32) {
         if let Some(i) = self.buff_position(unit, base) {
             let mut b = self.unit_mut(unit).buffs.remove(i);
             self.finish_buff(unit, &mut b);

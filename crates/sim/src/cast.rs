@@ -422,7 +422,7 @@ impl Game {
         self.spells.levels.get(&ab.source)?.get(i).copied()
     }
 
-    fn spell_level(&self, unit: ObjKey, base: u32) -> SpellLevel {
+    pub(crate) fn spell_level(&self, unit: ObjKey, base: u32) -> SpellLevel {
         let (idx, source) = self
             .unit(unit)
             .abilities
@@ -725,7 +725,7 @@ pub fn begin_cast(
             Some(a) if !a.is_removed() => {}
             _ => return Err(CastError::NoAbility),
         }
-        if gm.is_stunned(caster) {
+        if gm.is_stunned(caster) || gm.is_silenced(caster) {
             return Err(CastError::Stunned);
         }
         let level = gm.spell_level(caster, base);
@@ -767,6 +767,7 @@ pub fn begin_cast(
                     && !crate::human_heroes::is_immediate_spell(class)
                     && !crate::undead_ne::is_immediate(class)
                     && !crate::item_abilities::takes_no_target(&gm, base)
+                    && !crate::neutral_spells::takes_no_target(class)
                 {
                     return Err(CastError::BadTarget);
                 }
@@ -808,7 +809,7 @@ fn waits(delay: F32) -> bool {
 fn recheck(game: &RefCell<Game>, id: u32) -> Option<CastRec> {
     let gm = game.borrow();
     let rec = *gm.spells.casts.get(&id)?;
-    if !gm.alive(rec.caster) || gm.is_stunned(rec.caster) {
+    if !gm.alive(rec.caster) || gm.is_stunned(rec.caster) || gm.is_silenced(rec.caster) {
         return None;
     }
     if let CastTarget::Unit(t) = rec.target {
@@ -1031,6 +1032,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastR
         return;
     }
     if crate::unit_spells::run_effect(game, rt, rec) {
+        return;
+    }
+    if crate::neutral_spells::run_effect(game, rt, rec) {
         return;
     }
     if crate::item_abilities::run_effect(game, item_rec) {
