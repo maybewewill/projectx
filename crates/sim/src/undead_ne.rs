@@ -131,6 +131,9 @@ pub struct State {
     frost_misc: (F32, F32),
     /// Units hit by Carrion Swarm, `(caster, victim, damage)` in hit order (for tests and the host).
     pub swarm_hits: Vec<(ObjKey, ObjKey, F32)>,
+    /// Running swath missiles (Carrion Swarm, S37): id -> record.
+    swarms: BTreeMap<u32, Swarm>,
+    next_swarm: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -162,6 +165,10 @@ pub const TICK_IMMOLATION: u8 = 2;
 pub const TICK_STRIKE_HIT: u8 = 3;
 /// A Shadow Strike damage tick (`aux` = the buff serial).
 pub const TICK_STRIKE_DOT: u8 = 4;
+/// A swath missile tick (`aux` = the swarm id), S37.
+pub const TICK_SWARM: u8 = 5;
+/// A swath missile arrives (`aux` = the swarm id), S37.
+pub const TICK_SWARM_ARRIVE: u8 = 6;
 
 /// Whether the level's `Cast` field of `base` is not a cast-time delay: Shadow Strike's Cast (3 s in the stock data)
 /// is the pulse period of its buff (S33, CONFIRMED by the property flow of the launcher and the buff init), so the
@@ -653,13 +660,22 @@ pub const SWATH_MAX_UNITS: usize = 64;
 // ---------------------------------------------------------------------------------------------------------------
 // Carrion Swarm
 
-/// `CAbilityCarrionSwarm` effect (`0x6F1DD4F0`, argument roles CONFIRMED, geometry and hit order UNSURE). The caster
-/// launches a swarm missile along `normalize(point - caster)` (the caster's facing when the point is closer than 20
-/// units: the compare against the constant `0x6FAB35F4` = 20.0), with Area as the width at the start, DataC as the
-/// width at the end, DataB the distance, DataA the damage to each unit and DataD the maximum total damage. The
-/// missile class `CMissileCarrionSwarm` (`0x6F8FBAAC`) does the hits; its walk is not decoded, so the model hits
-/// every live enemy non-structure unit in the swept trapezoid once, in order of distance along the line, and stops
-/// when DataD is used up (the last hit is cut to what is left). Damage class: the spell class `0x200`.
+/// `CAbilityCarrionSwarm` effect (`0x6F1DD4F0`, S37). CONFIRMED (Unicorn, `tools/emu/undead_ne4_emu.py`): the
+/// launcher ([`swath_launch`]) builds the start point (`Area` units in front of the caster along `normalize(point -
+/// caster)`, the caster's facing when the point is closer than 20) and the end point (`DataC` further), and creates
+/// `CMissileCarrionSwarm` (`0x6F8FBAAC`) whose setup `0x6F1F28C0` stores Area = start width, DataD = final width,
+/// DataA = damage, DataB = total cap, DataC = distance. The setup runs one tick at once (at the start point); the tick
+/// ([`swarm_tick`]) re-arms itself every 0.1 s while the remaining cap exceeds 0.01, and the arrival of the missile
+/// at the end point runs one last tick when the cap is above 0.001 (`0x6F1F2A20`).
+///
+/// A tick queries the circle around the missile (radius from [`swath_radius`], shape 11, mask `0x1F`; the callback
+/// `0x6F1E7B00` keeps at most 64 units that pass the enemy-only target acceptance with the ability's `targs` and are
+/// not marked), gives each unit `min(DataA, cap / n)` ([`swath_damage_each`]) as a record of class `0x8000`
+/// (record flags `0x41`, `0x51` for a blocked unit) and lowers the cap by the life each unit really lost. Each hit
+/// unit gets the marker buff `'BUcs'` for `0.1 + 0.02` s; the callback refreshes the marker of a unit it meets again
+/// and rejects it, so a unit that stays in the swath is hit once (LIKELY: callback `0x6F1E79E0` read, not run).
+/// UNSURE: the missile's flight (the model moves it linearly at the ability's `Missilespeed` from the start to the
+/// end point) and the damage record's class mapping of the sim.
 fn carrion_swarm(
     game: &RefCell<Game>,
     rt: &mut dyn ScriptRuntime,
@@ -668,66 +684,212 @@ fn carrion_swarm(
     x: F32,
     y: F32,
 ) {
-    let mut deaths = Vec::new();
-    {
+    swath_cast(game, rt, caster, level, (x, y), SWARM_TARGS, SWATH_DAMAGE_TYPE, CARRION_SWARM);
+}
+
+/// `targs` of `AUcs`: ground, air, organic (`AbilityData.slk`); the relation `enemy` is part of the callback.
+pub const SWARM_TARGS: u32 = 0x2 | 0x4 | 0x0400_0000;
+/// The damage record class of the swath hits: `0x8000` = bit 15 (the sim's damage type numbering is the bit index).
+pub const SWATH_DAMAGE_TYPE: u32 = 15;
+/// Lifetime of the marker buff: `0.1 + 0.02` (`0x6F1E79E0`).
+const SWATH_MARK_SECONDS: f32 = 0.12;
+
+/// Starts a swath missile for `caster` (shared by Carrion Swarm and, for the orc lane, Shockwave): the level data are
+/// Area (start width), DataA damage, DataB total cap, DataC distance, DataD final width.
+#[allow(clippy::too_many_arguments)]
+pub fn swath_cast(
+    game: &RefCell<Game>,
+    rt: &mut dyn ScriptRuntime,
+    caster: ObjKey,
+    level: &SpellLevel,
+    point: (F32, F32),
+    targs: u32,
+    damage_type: u32,
+    base: u32,
+) {
+    let id = {
         let mut gm = game.borrow_mut();
         if !gm.object_is_live_unit(caster) {
             return;
         }
-        let (cx, cy, facing) = (gm.unit(caster).x.to_f32(), gm.unit(caster).y.to_f32(), gm.unit(caster).facing.to_f32());
-        let (mut dx, mut dy) = (x.to_f32() - cx, y.to_f32() - cy);
-        if dx * dx + dy * dy < 400.0 {
-            let a = facing.to_radians();
-            (dx, dy) = (a.cos(), a.sin());
-        }
-        let len = (dx * dx + dy * dy).sqrt();
-        if len == 0.0 {
+        let c = (gm.unit(caster).x, gm.unit(caster).y);
+        let facing = gm.unit(caster).facing;
+        let (area, distance) = (level.area, level.data[2]);
+        let launch = match gm.order_tables() {
+            Some(t) => swath_launch(c, point, facing, area, distance, t),
+            None => swath_launch_plain(c, point, facing, area, distance),
+        };
+        let speed = gm.spell_missile_speed(base).to_f32();
+        let data = SwathData {
+            start: launch.start,
+            distance,
+            width0: area,
+            width1: level.data[3],
+            damage: level.data[0],
+            cap: level.data[1],
+        };
+        let st = gm.spells_hero_state_mut();
+        st.next_swarm += 1;
+        let id = st.next_swarm;
+        st.swarms.insert(
+            id,
+            Swarm { caster, data, end: launch.end, speed, tick: 0, marks: BTreeMap::new(), targs, damage_type },
+        );
+        id
+    };
+    // The setup runs the first tick at once (at the start point); the arrival is a timer at distance / speed.
+    swarm_tick(game, rt, id);
+    let mut gm = game.borrow_mut();
+    if !gm.spells_hero_state_mut().swarms.contains_key(&id) {
+        return;
+    }
+    let sw = gm.spells_hero_state_mut().swarms[&id].clone();
+    let flight = if sw.speed > 0.0 { sw.data.distance.to_f32() / sw.speed } else { 0.0 };
+    gm.timers_start_hero(flight, TICK_SWARM_ARRIVE, sw.caster, id);
+}
+
+/// The plain `f32` launch geometry for hosts without the soft-float tables (UNSURE bits).
+fn swath_launch_plain(caster: (F32, F32), target: (F32, F32), facing: F32, area: F32, distance: F32) -> SwathLaunch {
+    let (cx, cy) = (caster.0.to_f32(), caster.1.to_f32());
+    let (dx, dy) = (target.0.to_f32() - cx, target.1.to_f32() - cy);
+    let (ux, uy) = if dx * dx + dy * dy >= 400.0 {
+        let l = (dx * dx + dy * dy).sqrt();
+        (dx / l, dy / l)
+    } else {
+        (facing.to_f32().cos(), facing.to_f32().sin())
+    };
+    let (a, d) = (area.to_f32(), distance.to_f32());
+    let (sx, sy) = (cx + ux * a, cy + uy * a);
+    SwathLaunch {
+        start: (F32::from_bits(sx.to_bits()), F32::from_bits(sy.to_bits())),
+        end: (F32::from_bits((sx + ux * d).to_bits()), F32::from_bits((sy + uy * d).to_bits())),
+    }
+}
+
+/// A running swath missile.
+#[derive(Debug, Clone)]
+struct Swarm {
+    caster: ObjKey,
+    data: SwathData,
+    end: (F32, F32),
+    /// Missile speed in world units per second (0 = the missile arrives at once).
+    speed: f32,
+    /// Ticks run so far (the tick `k` happens `k * 0.1` s after the launch).
+    tick: u32,
+    /// Marker buffs: victim -> expiry in seconds since the launch.
+    marks: BTreeMap<ObjKey, f32>,
+    targs: u32,
+    damage_type: u32,
+}
+
+impl Swarm {
+    /// The missile position after `t` seconds of flight (UNSURE: linear at constant speed).
+    fn position(&self, t: f32) -> (F32, F32) {
+        let dist = self.data.distance.to_f32();
+        let travelled = if self.speed > 0.0 { (self.speed * t).min(dist) } else { dist };
+        let frac = if dist > 0.0 { travelled / dist } else { 0.0 };
+        let (sx, sy) = (self.data.start.0.to_f32(), self.data.start.1.to_f32());
+        let (ex, ey) = (self.end.0.to_f32(), self.end.1.to_f32());
+        let (px, py) = (sx + (ex - sx) * frac, sy + (ey - sy) * frac);
+        (F32::from_bits(px.to_bits()), F32::from_bits(py.to_bits()))
+    }
+}
+
+/// One tick (`0x6F1EF6D0`) at tick index `swarm.tick`, then the re-arm. The time of tick `k` is `k * 0.1` s.
+fn swarm_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
+    let t = game.borrow_mut().spells_hero_state_mut().swarms.get(&id).map_or(0.0, |s| s.tick as f32 * 0.1);
+    swarm_run(game, rt, id, t, false);
+}
+
+/// Runs one hit pass of swarm `id` at flight time `t` (the arrival pass uses the end point regardless of `t`).
+fn swarm_run(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, t: f32, arrival: bool) {
+    let mut deaths = Vec::new();
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(mut sw) = gm.spells_hero_state_mut().swarms.get(&id).cloned() else {
             return;
-        }
-        let (ux, uy) = (dx / len, dy / len);
-        let dist = level.data[1].to_f32();
-        let (w0, w1) = (level.area.to_f32(), level.data[2].to_f32());
-        let c_owner = gm.unit(caster).owner;
-        let reach = dist + w0.max(w1);
-        let mut hits: Vec<(f32, ObjKey)> =
-            circle_candidates(&gm, F32::from_bits(cx.to_bits()), F32::from_bits(cy.to_bits()), F32::from_bits(reach.to_bits()))
-                .into_iter()
-                .filter(|&k| gm.object_is_live_unit(k) && gm.is_enemy(c_owner, gm.unit(k).owner))
-                .filter(|&k| !gm.unit_types().is_building(gm.unit(k).type_id))
-                .filter_map(|k| {
-                    let (px, py) = (gm.unit(k).x.to_f32() - cx, gm.unit(k).y.to_f32() - cy);
-                    let along = px * ux + py * uy;
-                    let side = (px * -uy + py * ux).abs();
-                    if !(0.0..=dist).contains(&along) {
-                        return None;
-                    }
-                    let width = if dist > 0.0 { w0 + (w1 - w0) * along / dist } else { w0 };
-                    (side <= width).then_some((along, k))
-                })
-                .collect();
-        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut left = level.data[3];
-        let unlimited = left.to_f32() <= 0.0;
-        for (_, k) in hits {
-            if !unlimited && !arith::lt(F32::ZERO, left) {
-                break;
+        };
+        caster = sw.caster;
+        let pos = if arrival { sw.end } else { sw.position(t) };
+        let radius = match gm.order_tables() {
+            Some(tb) => swath_radius(&sw.data, pos, tb),
+            None => {
+                let (dx, dy) = (pos.0.to_f32() - sw.data.start.0.to_f32(), pos.1.to_f32() - sw.data.start.1.to_f32());
+                let frac = if sw.data.distance.to_f32() != 0.0 { (dx * dx + dy * dy).sqrt() / sw.data.distance.to_f32() } else { 1.0 };
+                let (w0, w1) = (sw.data.width0.to_f32(), sw.data.width1.to_f32());
+                F32::from_bits((w0 + (w1 - w0) * frac).to_bits())
             }
-            let dmg = if unlimited || !arith::lt(left, level.data[0]) { level.data[0] } else { left };
-            if gm.unit_is_invulnerable(k) {
-                continue;
-            }
-            gm.spells_hero_state_mut().swarm_hits.push((caster, k, dmg));
-            if let Some(d) = gm.unit_damage_target(caster, k, dmg, false, false, 0, FROST_NOVA_DAMAGE_TYPE) {
-                deaths.push(d);
-            }
-            if !unlimited {
-                left = arith::sub(left, dmg);
+        };
+        let owner = if gm.object_is_live_unit(caster) { Some(gm.unit(caster).owner) } else { None };
+        let mut list: Vec<ObjKey> = Vec::new();
+        if let Some(owner) = owner {
+            for k in circle_candidates(&gm, pos.0, pos.1, radius) {
+                if list.len() >= SWATH_MAX_UNITS {
+                    break;
+                }
+                if !gm.object_is_live_unit(k) || !gm.is_enemy(owner, gm.unit(k).owner) {
+                    continue;
+                }
+                if crate::target_accept::predicate(gm.target_flag_word(k), sw.targs) != 0 {
+                    continue;
+                }
+                if sw.marks.get(&k).is_some_and(|&expiry| expiry > t) {
+                    // The marker is alive: refreshed, the unit is not hit again.
+                    sw.marks.insert(k, t + SWATH_MARK_SECONDS);
+                    continue;
+                }
+                list.push(k);
             }
         }
+        if !list.is_empty() {
+            let each = match gm.order_tables() {
+                Some(tb) => swath_damage_each(&sw.data, list.len(), tb),
+                None => {
+                    let share = sw.data.cap.to_f32() / list.len() as f32;
+                    if share > sw.data.damage.to_f32() { sw.data.damage } else { F32::from_bits(share.to_bits()) }
+                }
+            };
+            let mut cap = sw.data.cap;
+            for k in list {
+                sw.marks.insert(k, t + SWATH_MARK_SECONDS);
+                let before = gm.unit(k).life;
+                gm.spells_hero_state_mut().swarm_hits.push((caster, k, each));
+                if let Some(d) = gm.unit_damage_target(caster, k, each, false, false, 0, sw.damage_type) {
+                    deaths.push(d);
+                }
+                let after = gm.unit(k).life;
+                cap = swath_cap_after(cap, before, after);
+            }
+            sw.data.cap = cap;
+        }
+        let rearm = !arrival && swath_rearm(sw.data.cap);
+        sw.tick += 1;
+        gm.spells_hero_state_mut().swarms.insert(id, sw);
+        if rearm {
+            gm.timers_start_hero(f32::from_bits(SWATH_TICK_BITS), TICK_SWARM, caster, id);
+        }
     }
-    for t in deaths {
-        dispatch_unit_death_by(game, rt, t, Some(caster));
+    for d in deaths {
+        dispatch_unit_death_by(game, rt, d, Some(caster));
     }
+}
+
+/// The arrival of the swath missile (`0x6F1F2A20`): one last tick at the end point when the cap is above 0.001, then
+/// the missile is gone.
+fn swarm_arrive(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
+    let (t, last) = {
+        let mut gm = game.borrow_mut();
+        let Some(sw) = gm.spells_hero_state_mut().swarms.get(&id) else {
+            return;
+        };
+        let flight = if sw.speed > 0.0 { sw.data.distance.to_f32() / sw.speed } else { 0.0 };
+        (flight, gt_eps(sw.data.cap, F32::ZERO))
+    };
+    if last {
+        swarm_run(game, rt, id, t, true);
+    }
+    game.borrow_mut().spells_hero_state_mut().swarms.remove(&id);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -946,6 +1108,8 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_IMMOLATION => immolation_tick(game, rt, unit, aux),
         TICK_STRIKE_HIT => strike_hit(game, rt, aux),
         TICK_STRIKE_DOT => strike_dot(game, rt, unit, aux),
+        TICK_SWARM => swarm_tick(game, rt, aux),
+        TICK_SWARM_ARRIVE => swarm_arrive(game, rt, aux),
         _ => {}
     }
 }
