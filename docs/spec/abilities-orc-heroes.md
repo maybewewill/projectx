@@ -89,20 +89,34 @@ Dur/HeroDur rule. Model: `orc::war_stomp`. UNSURE: the relation filter (enemies)
 exact ground/organic tests. Numeric cores: none new (the arithmetic is the verified soft-float add and the Storm Bolt
 duration rule).
 
-## 4. Chain Lightning (`AOcl`, `CAbilityChainLightning`, vtable `0x6F8B0E74`)
+## 4. Chain Lightning (`AOcl`, `CAbilityChainLightning`, vtable `0x6F8B0E74`) - task S29
 
-Data: `DataA` damage (100/140/180), `DataB` units hit (4/6/8), `DataC` reduction 0.15, `Area` 500 bounce radius, `Rng` 700.
-Slot `0x424` = `0x6F1CB550` sets the relation flags (`0x80000` when the target is an enemy, `0x100000` when
-`target+0xEC > 0`), resets the factor cell (`+0x128`, value at `+0x12C`) to 1.0 and starts the hop body `0x6F1C2F50`
-(CONFIRMED): hop damage = `mul(DataA, factor)`, then `factor := mul(factor, sub(1.0, DataC))`; the unit is appended to the hit
-list (`+0x134`, 12-byte entries, count `+0x124`); damage record flags `0x400` (never miss) to the source's damage slot.
-Next target: `0x6F1B6F30` = group builder around the unit just hit with `Area`, callback `0x6F1B0780`: in the distance mode it
-keeps a candidate only when `lt(distance, best)` (strict, `0x6F00C110`), so the NEAREST valid unit wins and the first of equal
-distances stays; validity `0x6F1B06F0`: attackable by the owner (`0x6F284EE0(owner, unit, 0, 4)`), not rejected by slot
-`0x3F0`, not immune (`0x6F28D750`), not already hit (`0x6F1A2110`), and the `+0xEC` count rule. Model: `orc::chain_lightning`
-(no hop delay: UNSURE; the damage class and the exact relation filter UNSURE). The arithmetic composes already
-Unicorn-checked soft-float helpers (mul `0x6F6EEE20`, sub `0x6F6EEEF0`); the hop function itself was not run (it needs the
-agile cell objects).
+Data: `DataA` damage (100/140/180), `DataB` units hit (4/6/8), `DataC` reduction 0.15, `Area` 500, `Rng` 700.
+Cast slot `0x424` = `0x6F1CB550` sets the ability flags (`0x80000` enemy, `0x100000` target `+0xEC > 0`), the factor cell
+(`+0x128`, value `+0x12C`) to 1.0, count `+0x124` to 0, then hops at once.
+
+* **Unicorn (CONFIRMED, `tools/emu/chain_emu.py`, `tests/data/orc/chain.txt`, `tests/orc_chain.rs`; the real hop body
+  `0x6F1C2F50` and the real next-hop gate `0x6F1C3200` run on a fake ability with the real level getters; stubs for the
+  handle helpers, the record builder, the effect constructors and the agile cell setter; 400 hop cases + 400 gate cases,
+  0 mismatches):** damage = `mul(DataA, factor)`; record flags `0x400` (never miss); factor := `mul(factor, sub(1.0,
+  DataC))` through the cell setter; the hit count `+0x124` grows by one; the bolt effect (`vtable + 0xA4`, `0x6F1B09C0`)
+  is started with the delay pointers 0.25 (`0x6FAAE4B8`) and 1.0; the gate lets a hop through only while
+  `count < F2I(DataB)`; the flag word given to the next-target slot `0x43C` is `(targs & 0xFFFE0FFF) | 0x10000 |
+  (0x8000 if ability flag 0x80000)` (slot `0x42C` returns 0 for this class).
+* **Timing (CONFIRMED by disassembly):** the bolt effect (`CEffectChainLightning`, vtable `0x6F8FBD74`) starts the timer
+  message `0xD01D2` after 0.25 s and `0xD01D3` (destroy) after 1.0 s. Handler: slot 3 `0x6F1A2210`; `0xD01D2` -> effect slot
+  `0x84` = `0x6F1C3360` -> `0x6F1C3200` (the gate, then slot `0x43C` and a new hop with the found unit). So hops are 0.25 s
+  apart. The damage source of every hop is the caster (the hop arg1 is only the origin of the bolt).
+* Next target (CONFIRMED by disassembly): slot `0x43C` = `0x6F1B6F30` builds the area set with the callback `0x6F1B0780`;
+  slot `0x434` returns 0 and `0x438` returns 1 (distance mode), so the NEAREST candidate wins, kept only when its distance
+  is strictly smaller (soft `lt`), the first of equal distances stays. Validity `0x6F1B06F0`: relation check
+  `0x6F284EE0(owner, unit, 0, 4)` and slot `0x3F0`. The distance is `0x6F476860` with flag 1: the squared distance
+  (`0x6F6EF3B0`) from the hit unit's point to the candidate's footprint point (`0x6F497460` + `0x6F38B0B0`), not the centre.
+* UNSURE / NOT FOUND: the instant the damage lands (the effect has a repeating 0.1 s fade timer `0xD01A3` -> slot `0x98`
+  `0x6F2BD210`, which only fades the lightning art; the code that applies the record was not found; the model damages at
+  the hop), the footprint distance (model: centre distance), the relation filter and target-flag mask builder
+  (`0x6F25D830`, class mask `0xFD0000` family, decoded but not applied), the damage class.
+* Model: `orc::chain_lightning` / `chain_hop` / `chain_next` (timer kind `0x82`).
 
 ## 5. Shockwave (`AOsh`, `CAbilityShockwave`, vtable `0x6F92075C`)
 
@@ -176,7 +190,7 @@ Model: a visible-state fog modifier over the circle for the owner, stopped with 
 |---|---|---|---|
 | Critical Strike | yes (roll, PRD, damage) | yes, 800 cases, 0 mismatches | yes (`start_swing`, `SpecDamage::roll`) |
 | War Stomp | structure CONFIRMED | no new core | yes |
-| Chain Lightning | hop arithmetic and selection rule read | components only | yes (no hop delay) |
+| Chain Lightning | hop, gate, timing, selection rule | yes: hop body + gate run for real (800 cases, 0 mismatches) | yes (0.25 s hops; damage instant, footprint distance UNSURE) |
 | Shockwave | data + launcher only | no | MODEL |
 | Wind Walk | effect read | no | MODEL |
 | Mirror Image | cast effect, delayed handler, RNG stream 12, polygon | yes: pick, offset, rotation, transform (4 x 400, 0 mismatches) | yes (hero swap LIKELY) |

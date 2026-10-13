@@ -149,6 +149,8 @@ const SPELL_DAMAGE_TYPE: u32 = 15;
 /// Timer kinds of [`crate::cast::SpellMsg::HeroSpell`] used by the orc spells (the undead / night elf spells use
 /// the small numbers).
 pub const TICK_MIRROR: u8 = 0x81;
+/// The next-hop timer of Chain Lightning.
+pub const TICK_CHAIN: u8 = 0x82;
 
 /// Order ids (UNSURE: the public order-id list, like the three spells of `cast.rs`).
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -189,6 +191,9 @@ pub struct OrcState {
     /// Mirror Image casts waiting for the `DataD` delay: caster -> (cast serial, level record).
     mirror_pending: BTreeMap<ObjKey, (u32, SpellLevel)>,
     mirror_serial: u32,
+    /// Chain Lightning chains in flight, by serial.
+    chains: BTreeMap<u32, ChainState>,
+    chain_serial: u32,
 }
 
 impl OrcState {
@@ -335,43 +340,127 @@ fn war_stomp(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     }
 }
 
-/// Chain Lightning (class `0x6F8B0E74`; hop body `0x6F1C2F50`, next-target search `0x6F1B6F30`, CONFIRMED structure):
-/// the hop damage is `DataA * m` with `m` starting at 1.0, and after each hop `m := m * (1 - DataC)` (soft mul/sub, the
-/// factor cell at `+0x12C`). `DataB` is the number of units hit. The next unit is the NEAREST valid unit to the unit
-/// just hit, inside `Area` (the best-of collector `0x6F1B0780` keeps a candidate only when its distance is strictly
-/// smaller, so the first of equals wins), never a unit already hit (list at `+0x134`). UNSURE: the delay between hops
-/// (none here), the relation filter (enemies, not magic immune, not structure/mechanical per `air,ground,enemy,
-/// neutral,organic`), the damage class.
+// ---- Chain Lightning numeric cores (CONFIRMED in Unicorn: `tools/emu/chain_emu.py`, `tests/data/orc/chain.txt`) ----
+
+/// The delay from the start of one bolt to the next hop: the bolt effect (`CEffectChainLightning`, start slot
+/// `0x6F1B09C0`) starts the timer message `0xD01D2` with the float at `0x6FAAE4B8` (0.25) and the destroy message
+/// `0xD01D3` with 1.0; the `0xD01D2` handler (effect slot `0x84` = `0x6F1C3360`) calls the ability's next-hop gate
+/// `0x6F1C3200` (Unicorn: the hop passes the 0.25 and 1.0 pointers, `H` rows of `chain.txt`).
+pub const CHAIN_HOP_DELAY_BITS: u32 = 0x3E80_0000;
+/// The damage record flags of a hop: `0x400` (never miss), written by the hop body at `0x6F1C30EF`.
+pub const CHAIN_RECORD_FLAGS: u32 = 0x400;
+
+/// The damage of a hop: `DataA * factor` (soft multiply, `DataA` first), `0x6F1C2FA6`.
+pub fn chain_hop_amount(data_a: F32, factor: F32) -> F32 {
+    arith::mul(data_a, factor)
+}
+
+/// The factor after a hop: `factor * (1.0 - DataC)` (soft sub then mul), written through the agile cell setter
+/// (`0x6F1C2FDA`..`0x6F1C2FEE`).
+pub fn chain_next_factor(factor: F32, data_c: F32) -> F32 {
+    arith::mul(factor, arith::sub(F32::ONE, data_c))
+}
+
+/// The next-hop gate `0x6F1C3200`: another hop only while `count < F2I(DataB)` (signed compare, `jge` ends the chain).
+pub fn chain_gate_open(count: i32, data_b: F32) -> bool {
+    count < conv::f2i(data_b)
+}
+
+/// The flag word handed to the next-target search (slot `0x43C`) by `0x6F1C3200`: the ability's target word
+/// (`+0x4C`) with bits 12..16 cleared, bit 16 set, and bit 15 set when the ability flag `0x80000` (enemy cast) is on
+/// (`0x6F1C3253`..`0x6F1C327E`; the slot `0x42C` is 0 for this class).
+pub fn chain_next_flags(targs: u32, ability_flags: u32) -> u32 {
+    let mut w = (targs & 0xFFFE_0FFF) | 0x1_0000;
+    if ability_flags & 0x8_0000 != 0 {
+        w |= 0x8000;
+    }
+    w
+}
+
+/// The state of one running Chain Lightning (the ability's factor cell `+0x128/+0x12C`, hit count `+0x124`, hit list
+/// `+0x134`).
+#[derive(Debug, Clone)]
+pub(crate) struct ChainState {
+    caster: ObjKey,
+    level: SpellLevel,
+    factor: F32,
+    hits: Vec<ObjKey>,
+}
+
+/// Chain Lightning (class `0x6F8B0E74`; cast slot `0x424` = `0x6F1CB550`, hop body `0x6F1C2F50`, next-hop gate
+/// `0x6F1C3200`, next-target search `0x6F1B6F30`; spec section 4).
+///
+/// CONFIRMED (Unicorn, the real hop body and gate on a fake ability: 400 + 400 cases, 0 mismatches): the cast sets the
+/// factor cell to 1.0 and the hit count to 0 and hops once at once; a hop's damage is `DataA * factor`, the record flags
+/// `0x400`, the factor becomes `factor * (1 - DataC)`, the target is appended to the hit list, and the bolt effect
+/// starts the next-hop timer of 0.25 s. The gate: another hop only while `count < F2I(DataB)`.
+/// CONFIRMED by disassembly only: the next target is the NEAREST valid unit (the collector `0x6F1B0780` keeps a
+/// candidate only when its distance is strictly smaller, distance mode because slot `0x438` returns 1 and slot `0x434`
+/// returns 0), never one already hit; the damage source of every hop is the caster. UNSURE: the instant the damage lands
+/// (here at the hop; the bolt effect has a 0.1 s repeating fade timer `0xD01A3`, but the code that applies the record
+/// was not found), the distance (the original measures to the candidate's footprint point, `0x6F476860` with flag 1,
+/// here the centre distance), the relation filter (`0x6F1B06F0`: `0x6F284EE0(owner, unit, 0, 4)`; here enemy, not magic
+/// immune, not structure or mechanical), the damage class, the vanishing of the chain when the last target is removed
+/// (modelled: it ends).
 fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     let CastTarget::Unit(first) = rec.target else {
         return;
     };
-    let mut killed = Vec::new();
-    {
+    let serial = {
         let mut gm = game.borrow_mut();
-        let owner = gm.unit(rec.caster).owner;
-        let hops = conv::f2i(rec.level.data[1]).max(0);
-        let keep = arith::sub(F32::ONE, rec.level.data[2]);
-        let mut mult = F32::ONE;
-        let mut hit: Vec<ObjKey> = Vec::new();
-        let mut current = first;
-        for _ in 0..hops {
-            if !gm.alive(current) {
-                break;
-            }
-            let amount = arith::mul(rec.level.data[0], mult);
-            if let Some(t) = gm.unit_damage_target(rec.caster, current, amount, false, false, 0, SPELL_DAMAGE_TYPE) {
-                killed.push(t);
-            }
-            hit.push(current);
-            mult = arith::mul(mult, keep);
+        gm.orc.chain_serial = gm.orc.chain_serial.wrapping_add(1);
+        let serial = gm.orc.chain_serial;
+        gm.orc.chains.insert(
+            serial,
+            ChainState { caster: rec.caster, level: rec.level, factor: F32::ONE, hits: Vec::new() },
+        );
+        serial
+    };
+    chain_hop(game, rt, serial, first);
+}
+
+/// One hop at `target`: damage, factor, hit list, and the timer of the next hop.
+fn chain_hop(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32, target: ObjKey) {
+    let killed = {
+        let mut gm = game.borrow_mut();
+        let Some(st) = gm.orc.chains.get_mut(&serial) else {
+            return;
+        };
+        let amount = chain_hop_amount(st.level.data[0], st.factor);
+        st.factor = chain_next_factor(st.factor, st.level.data[2]);
+        st.hits.push(target);
+        let caster = st.caster;
+        gm.timers_start_hero(f32::from_bits(CHAIN_HOP_DELAY_BITS), TICK_CHAIN, caster, serial);
+        gm.unit_damage_target(caster, target, amount, false, false, 0, SPELL_DAMAGE_TYPE)
+    };
+    if let Some(t) = killed {
+        let caster = game.borrow().orc.chains.get(&serial).map(|s| s.caster);
+        dispatch_unit_death_by(game, rt, t, caster);
+    }
+}
+
+/// The next-hop timer (`0xD01D2`, handler `0x6F1C3360` -> gate `0x6F1C3200`).
+fn chain_next(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
+    let next = {
+        let gm = game.borrow();
+        let Some(st) = gm.orc.chains.get(&serial) else {
+            return;
+        };
+        let last = st.hits.last().copied();
+        let open = last.is_some_and(|l| !gm.unit(l).removed)
+            && chain_gate_open(i32::try_from(st.hits.len()).unwrap_or(i32::MAX), st.level.data[1]);
+        if !open {
+            None
+        } else {
+            let last = last.expect("checked");
+            let owner = gm.unit(st.caster).owner;
             let (cx, cy) = {
-                let u = gm.unit(current);
+                let u = gm.unit(last);
                 (u.x, u.y)
             };
             let mut best: Option<(ObjKey, F32)> = None;
-            for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
-                if hit.contains(&k) || k == rec.caster || !spell_target_ok(&gm, owner, k) {
+            for k in crate::natives::group::circle_candidates(&gm, cx, cy, st.level.area) {
+                if st.hits.contains(&k) || k == st.caster || !spell_target_ok(&gm, owner, k) {
                     continue;
                 }
                 let u = gm.unit(k);
@@ -383,14 +472,14 @@ fn chain_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastR
                     best = Some((k, d));
                 }
             }
-            match best {
-                Some((k, _)) => current = k,
-                None => break,
-            }
+            best.map(|(k, _)| k)
         }
-    }
-    for t in killed {
-        dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    };
+    match next {
+        Some(k) => chain_hop(game, rt, serial, k),
+        None => {
+            game.borrow_mut().orc.chains.remove(&serial);
+        }
     }
 }
 
@@ -586,8 +675,10 @@ fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey,
 
 /// Timer dispatch of the orc spells (`SpellMsg::HeroSpell` kinds from `0x80`).
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, aux: u32) {
-    if kind == TICK_MIRROR {
-        mirror_fire(game, rt, unit, aux);
+    match kind {
+        TICK_MIRROR => mirror_fire(game, rt, unit, aux),
+        TICK_CHAIN => chain_next(game, rt, aux),
+        _ => {}
     }
 }
 
