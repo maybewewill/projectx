@@ -924,6 +924,7 @@ impl Game {
             self.start_aura(unit, b);
         }
         self.sync_unit_spells(unit);
+        self.sync_neutral_spells(unit);
     }
 
     /// The 2.0 s timer (message `0xD01C1`): apply the aura to the owner again.

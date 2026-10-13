@@ -484,8 +484,10 @@ pub(crate) fn build(
         }
     }
     for &id in &ty.abilities {
-        if !abilities.contains(id) {
-            abilities.attach(Ability::new(id, gm.ability_types().get(id).copied()));
+        // A creep / neutral alias row is attached as the modelled ability it stands for (`neutral_spells.rs`).
+        let base = gm.spell_alias_base(id);
+        if !abilities.contains(base) {
+            abilities.attach(Ability::aliased(base, id, gm.ability_types().get(id).copied()));
         }
     }
     let unit = UnitObj {

@@ -258,6 +258,8 @@ pub struct SpellSystem {
     pub unit: crate::unit_spells::State,
     /// State of the item abilities (`item_abilities.rs`).
     pub item: crate::item_abilities::State,
+    /// Creep / neutral alias abilities (`neutral_spells.rs`).
+    pub neutral: crate::neutral_spells::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -345,6 +347,7 @@ impl SpellSystem {
         s.order_ids.insert(852_075, SLOW);
         crate::orc::register_orders(&mut s.order_ids);
         crate::unit_spells::register_orders(&mut s.order_ids);
+        crate::neutral_spells::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
             s.order_ids.insert(id, base);
         }
@@ -416,18 +419,18 @@ impl Game {
     pub(crate) fn ability_level_record(&self, unit: ObjKey, base: u32) -> Option<SpellLevel> {
         let ab = self.unit(unit).abilities.get(base)?;
         let i = usize::try_from(ab.level_index).ok()?;
-        self.spells.levels.get(&base)?.get(i).copied()
+        self.spells.levels.get(&ab.source)?.get(i).copied()
     }
 
     fn spell_level(&self, unit: ObjKey, base: u32) -> SpellLevel {
-        let idx = self
+        let (idx, source) = self
             .unit(unit)
             .abilities
             .get(base)
-            .map_or(0, |a| a.level_index);
+            .map_or((0, base), |a| (a.level_index, a.source));
         usize::try_from(idx)
             .ok()
-            .and_then(|i| self.spells.levels.get(&base).and_then(|l| l.get(i)))
+            .and_then(|i| self.spells.levels.get(&source).and_then(|l| l.get(i)))
             .copied()
             .unwrap_or_default()
     }
