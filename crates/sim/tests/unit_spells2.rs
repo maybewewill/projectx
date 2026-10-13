@@ -62,6 +62,9 @@ endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
 endfunction
+function shield_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852110, grunt)
+endfunction
 function purge_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852111, foe)
 endfunction
@@ -277,6 +280,57 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     call(&mut h2, "foe_attacks");
     run(&mut h2, 80);
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
+}
+
+// ---- Lightning Shield ----
+
+fn with_shield(h: &ScriptHost, dur: f32) {
+    let k = {
+        let id = h.vm().global("shaman").and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    g.ability_types_mut().insert(LIGHTNING_SHIELD, AbilityType { max_level: Some(1) });
+    // Lightning Shield: cost 100, range 600, Area 160, DataA 20 damage per second, Dur 20 (shortened for the test).
+    g.set_spell_levels(
+        LIGHTNING_SHIELD,
+        vec![SpellLevel {
+            cost: 100,
+            cool: f(3.0),
+            dur: f(dur),
+            hero_dur: f(dur),
+            area: f(160.0),
+            rng: f(600.0),
+            data: data(&[(0, 20.0)]),
+            ..Default::default()
+        }],
+    );
+    g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(LIGHTNING_SHIELD, None));
+}
+
+#[test]
+fn lightning_shield_hurts_everyone_around_the_shielded_unit_but_not_itself_every_half_second() {
+    let mut h = started();
+    with_shield(&h, 3.0);
+    let (grunt, grunt2, foe, foe2, hero) = (unit(&h, "grunt"), unit(&h, "grunt2"), unit(&h, "foe"), unit(&h, "foe2"), unit(&h, "hero_foe"));
+    call(&mut h, "shield_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, grunt, BUFF_LIGHTNING_SHIELD));
+    // Ticks at 0.01, 0.51, 1.01 ... s: after 1.1 s three ticks of DataA / 2 = 10.
+    run(&mut h, 10);
+    assert_eq!(life(&h, foe), 470.0);
+    assert_eq!(life(&h, foe2), 470.0);
+    assert_eq!(life(&h, grunt2), 470.0, "friends in the area are hit too");
+    assert_eq!(life(&h, grunt), 500.0, "the shielded unit itself is skipped");
+    assert_eq!(life(&h, hero), 800.0, "out of the 160 radius");
+    // The buff lasts 3.0 s (+ 0.01): after that no more ticks.
+    run(&mut h, 40);
+    let after = life(&h, foe);
+    assert!(!has_buff(&h, grunt, BUFF_LIGHTNING_SHIELD));
+    run(&mut h, 20);
+    assert_eq!(life(&h, foe), after);
+    assert!(after <= 440.0, "about six ticks landed: {after}");
 }
 
 // ---- Purge ----

@@ -82,6 +82,8 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+pub const LIGHTNING_SHIELD: u32 = code(b"Alsh");
+pub const BUFF_LIGHTNING_SHIELD: u32 = code(b"Blsh");
 pub const PURGE: u32 = code(b"Aprg");
 pub const BUFF_PURGE: u32 = code(b"Bprg");
 /// Anti-magic Shell's buff code, the one the dispel worker looks for (`0x6F110530` returns `0x42616D73`).
@@ -100,6 +102,8 @@ pub const KIND_TICK_FIRST: u8 = 3;
 /// Purge's movement update (message `0xD01C1` on the buff) and attack update (`0xD01C3`), repeating timers.
 pub const KIND_PURGE_MOVE: u8 = 4;
 pub const KIND_PURGE_ATTACK: u8 = 5;
+/// Lightning Shield's tick timer (message `0xD01C1` on the buff; a one-shot re-armed by each tick).
+pub const KIND_SHIELD: u8 = 6;
 /// The tick period (`CBuffDoT` slot `0x35C` = `0x6F0ADBE0`: the constant `0x6FAAE4F4` = 1.0).
 const TICK_PERIOD: f32 = 1.0;
 /// The first-tick delay (`0x6F0ADBD0`: the constant `0x6FAAE480`).
@@ -118,7 +122,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 12] = [
+pub const SPELL_ORDERS: [(u32, u32); 13] = [
+    (852_110, LIGHTNING_SHIELD),
     (852_111, PURGE),
     (852_190, CURSE),
     (852_164, ROAR),
@@ -286,6 +291,17 @@ struct TickRec {
     timer: Option<TimerId>,
 }
 
+/// One Lightning Shield: the caster (damage source), the per-tick damage (`DataA / 2`), the tick period (0.5 s), the
+/// damage radius (`Area`) and the pending tick timer.
+#[derive(Debug, Clone, Copy)]
+struct ShieldRec {
+    source: ObjKey,
+    amount: F32,
+    period: F32,
+    area: F32,
+    timer: Option<TimerId>,
+}
+
 /// The decaying slow of one Purge buff (the fields of `CBuffPurge`): the current slow magnitudes of the movement and
 /// attack speed sinks (`+0xDC`, `+0xE4`), their steps (`+0xEC`, `+0xF4`, the soft reciprocal of `DataA` / `DataB`) and the
 /// repeating update timers.
@@ -320,6 +336,8 @@ pub struct State {
     pub invuln_summon_dispel_damage: bool,
     /// The decaying slows of Purge buffs by buff serial.
     purge: BTreeMap<u32, PurgeRec>,
+    /// Lightning Shield buffs by serial.
+    shield: BTreeMap<u32, ShieldRec>,
     /// Misc `EtherealHealBonus` (a missing key reads 0.0).
     pub ethereal_heal_bonus: F32,
     /// Misc `IllusionsCanRestoreLife` / `IllusionsGetAutocast` (missing = off).
@@ -644,6 +662,14 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        LIGHTNING_SHIELD => {
+            // targs: ground,friend,enemy,neutral (any ground unit, no structures: the kind group names only ground).
+            let w = targs_word("ground,friend,enemy,neutral");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         PURGE => {
             // targs: air,ground,ward,vuln,invu,tree (no relation: friends can be purged too).
             let w = targs_word("air,ground,ward,vuln,invu,tree");
@@ -712,6 +738,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         PURGE => {
             if let CastTarget::Unit(t) = rec.target {
                 purge(game, rt, rec, t);
+            }
+            true
+        }
+        LIGHTNING_SHIELD => {
+            if let CastTarget::Unit(t) = rec.target {
+                lightning_shield(game, rec, t);
             }
             true
         }
@@ -1078,6 +1110,111 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     };
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+/// Lightning Shield (`Alsh`, `CAbilityLightningShield` vtable `0x6F8DB48C`, effect slot `0x424` = `0x6F13C690`):
+/// the hero rule duration of the target, `DataA` (damage per second, 20) halved into the per-tick damage
+/// (`div(DataA, 2.0)`, tick period `recip(2.0)` = 0.5 s: CONFIRMED by the operands of the soft float calls in the
+/// effect), `Area` (160). The buff `Blsh` is found by its code and refreshed (slot `0x35C`: never-shorten duration,
+/// the holders `+0xD0/+0xD8/+0xE0` replaced) or created (slot `0x354`); its apply slot `0x358` arms a ONE-SHOT timer
+/// `0xD01C1` with `0.01 s` (the constant `0x6FAAE480`); the handler (`0x6F110190`) re-arms the timer with the period
+/// and runs the tick slot `0x360` (`0x6F1249A0`): the group of units in `Area` around the shielded unit goes through
+/// the per-victim slot `0x364` (`0x6F13C410`, CONFIRMED structure): the shielded unit itself is skipped, a victim
+/// that is blocked from the ability (`0x6F28D750`, taken as magic immune) is skipped, the others take the effect
+/// (`0x6F053040`, the damage runs through the `Blsa` area buff `CBuffLightningShieldAoe`, whose `CBuffAoe` base is
+/// not decoded: UNSURE). Model: `amount` of magic damage (type 14, UNSURE class) from the caster to every living
+/// unit in `Area` of the shielded unit except itself, at 0.01, 0.51, 1.01 ... s. The `Blsa` marker that keeps two
+/// shields from hitting one victim in the same tick is not modelled.
+fn lightning_shield(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let amount = gm.soft_div(rec.level.data[0], F32::from_bits(0x4000_0000));
+    let period = gm.soft_div(F32::ONE, F32::from_bits(0x4000_0000));
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_LIGHTNING_SHIELD)
+    };
+    let existing = gm.buff_position(target, BUFF_LIGHTNING_SHIELD).map(|i| gm.unit(target).buffs[i].serial);
+    let serial = gm.apply_mods_buff(target, BUFF_LIGHTNING_SHIELD, preds, UnitMods::default(), dur);
+    if let (Some(old), true) = (existing, existing == Some(serial)) {
+        if let Some(r) = gm.spells.unit.shield.get_mut(&old) {
+            r.source = rec.caster;
+            r.amount = amount;
+            r.period = period;
+            r.area = rec.level.area;
+            return;
+        }
+    }
+    let timer = gm.timers.start(
+        F32::from_bits(TICK_FIRST_DELAY_BITS).to_f32(),
+        false,
+        Payload::Spell(SpellMsg::UnitSpell {
+            kind: KIND_SHIELD,
+            unit: target,
+            base: 0,
+            aux: serial,
+        }),
+    );
+    gm.spells.unit.shield.insert(
+        serial,
+        ShieldRec {
+            source: rec.caster,
+            amount,
+            period,
+            area: rec.level.area,
+            timer: Some(timer),
+        },
+    );
+}
+
+/// A Lightning Shield tick: damages the units around the shielded unit and re-arms the one-shot timer.
+fn shield_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, serial: u32) {
+    let mut killed = Vec::new();
+    let source;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(mut rec) = gm.spells.unit.shield.get(&serial).copied() else {
+            return;
+        };
+        source = rec.source;
+        let alive = gm.alive(unit) && gm.unit(unit).buffs.iter().any(|b| b.serial == serial);
+        if !alive {
+            gm.spells.unit.shield.remove(&serial);
+            return;
+        }
+        rec.timer = Some(gm.timers.start(
+            rec.period.to_f32(),
+            false,
+            Payload::Spell(SpellMsg::UnitSpell {
+                kind: KIND_SHIELD,
+                unit,
+                base: 0,
+                aux: serial,
+            }),
+        ));
+        gm.spells.unit.shield.insert(serial, rec);
+        let (cx, cy) = (gm.unit(unit).x, gm.unit(unit).y);
+        for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.area) {
+            if k == unit || !gm.alive(k) || gm.unit(k).hidden || gm.unit(k).magic_immune > 0 {
+                continue;
+            }
+            if let Some(t) = gm.unit_damage_target(rec.source, k, rec.amount, false, false, 0, DAMAGE_TYPE_MAGIC) {
+                killed.push(t);
+            }
+        }
+    }
+    for t in killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(source));
     }
 }
 
@@ -1522,6 +1659,10 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     }
     if kind == KIND_PURGE_MOVE || kind == KIND_PURGE_ATTACK {
         purge_tick(game, kind, unit, aux);
+        return;
+    }
+    if kind == KIND_SHIELD {
+        shield_tick(game, rt, unit, aux);
         return;
     }
     if kind != KIND_AUTOCAST {
