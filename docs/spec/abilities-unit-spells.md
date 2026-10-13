@@ -193,3 +193,26 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   that casts when corpses are in reach and the caster is idle or attacking. UNSURE: the corpse list order and filters,
   the unit placement (the original searches a free spot), the second level's `DataD` type from the data (model:
   default `uskm`), the default autocast flag.
+
+## 10. Roar (`Aroa`, `CAbilityRoar` vtable `0x6F8A21BC`, 252 slots, not an AutoTargetSpell)
+
+* Data: cost 100, Area 500, Dur 45 / HeroDur 45, `DataA` 0.25 (damage increase), buff `Broa`; targets air, ground, friend,
+  self. Labels: ROA1 damage increase, ROA2 defense increase, ROA3 life regeneration, ROA4 mana regeneration.
+* An instant spell: overrides the effect slot `0x3C0` (`0x6F1EED60`), the readiness slot `0x3DC` (`0x6F1EEBF0`) and the
+  group slots `0x3E8` / `0x3EC`. `CBuffRoar` shares the Inner Fire buff base (armor sink, attack-record modifiers).
+* Model: friends (own/allied units and the caster) within `Area` of the caster, not structures, get `Broa` with
+  `damage_pct = DataA`, `armor = DataB`, `life_regen = DataC` for the hero-rule duration. The readiness rule of
+  `0x6F1EEBF0` (likely "some friendly unit in reach") is NOT DONE; the data's later fields are not modelled.
+
+## 11. Not done, with what was found
+
+| Ability | Class / vtable | Found | Missing |
+|---|---|---|---|
+| Purge `Aprg` | `CAbilityPurge` `0x6F8C46CC`, effect `0x6F107E10`, worker `0x6F0EEF00` | labels: A/B movement/attack update frequency, C summoned damage 400, D/E pause durations, F mana loss; Dur 15 / HeroDur 5 | the decaying slow schedule (`0x6F107CC0`), dispel part shared with Dispel |
+| Polymorph `Aply` | `CAbilityPolymorph` `0x6F8A922C`, effect `0x6F12F560`, buff `CBuffPolymorph` | A max creep level 5, B..E morph unit lists; target filter refuses illusions (`+0x5C & 0x40000000`) and heroes | the morph (type swap) machinery |
+| Lightning Shield `Alsh` | `CAbilityLightningShield` `0x6F8DB48C`, buff `0x6F8CF344` | DPS `DataA` 20 halved per 0.5 s tick (`DataA / 2.0`, period `recip(2.0)` CONFIRMED), first tick 0.01 s, per-victim marker buff `Blsa`, Area 160 | the tick's victim filter and damage class (`0x6F124800` / `0x6F13C410`) |
+| Ensnare `Aens`, Web `Aweb` | `CAbilityEnsnare` `0x6F8A5B4C`, `CAbilityWeb` (AutoTargetSpell) `0x6F8A5F7C`; effect creates a net missile, `CBuffEnsnare*` | labels: A air unit lower duration, B height, C melee attack range; Dur 12 / HeroDur 3 (Ensnare) | the net missile, the root buff effect |
+| Curse `Acrs` | `CAbilityCurse` `0x6F8A9694` (AutoTargetSpell), effect `0x6F0B8450`, filter `0x6F09BF80` | A chance to miss 0.33, Dur 120 / 60 | the attacker-side miss roll (combat has only the target-side evasion walk) |
+| Healing Ward `Ahwd`, Stasis Trap `Asta`, Serpent Ward `Aeye` | `CAbilityHealingWard` `0x6F8B0A44` (summon `ohwd`, buff `Bhwd`), `CAbilityWard` | summon spells with a unit type per level | the ward's own healing aura ability, placement |
+| Abolish Magic `Aadm` | `CAbilityAutoDispelMagic` `0x6F8C35AC` | autocast pair 852133/852134, cast 852132, A mana loss, B summoned damage 300, C 1 | the autocast filter `0x6F0E2B90` and the dispel worker |
+| Huntress Sentinel `Aesn`, Disease Cloud `Aap1`, Dryad immunity | `CAbilitySentinel` `0x6F91EE04` (summon-like with a tree target) | data rows | not read |

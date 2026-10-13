@@ -76,6 +76,8 @@ pub const RAISE_DEAD: u32 = code(b"Arai");
 pub const BUFF_RAISE_DEAD: u32 = code(b"Brai");
 /// The default second summon of Raise Dead's second level (`DataD` of the data, the skeletal mage).
 pub const SKELETAL_MAGE: u32 = code(b"uskm");
+pub const ROAR: u32 = code(b"Aroa");
+pub const BUFF_ROAR: u32 = code(b"Broa");
 pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 
@@ -107,7 +109,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 9] = [
+pub const SPELL_ORDERS: [(u32, u32); 10] = [
+    (852_164, ROAR),
     (852_197, RAISE_DEAD),
     (852_057, DISPEL_MAGIC),
     (852_160, REJUVENATION),
@@ -135,7 +138,7 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// Abilities cast without a target.
 pub fn takes_no_target(base: u32) -> bool {
-    base == RAISE_DEAD
+    base == RAISE_DEAD || base == ROAR
 }
 
 /// Whether `base` is an autocast ability of this module.
@@ -569,6 +572,10 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             raise_dead(game, rec);
             true
         }
+        ROAR => {
+            roar(game, rec);
+            true
+        }
         INNER_FIRE | BLOODLUST | CRIPPLE | FAERIE_FIRE => {
             if let CastTarget::Unit(t) = rec.target {
                 buff_spell(game, rec, t);
@@ -645,6 +652,49 @@ fn raise_dead(game: &RefCell<Game>, rec: &CastRec) {
                 gm.apply_timed_life(k, BUFF_RAISE_DEAD, dur);
             }
         }
+    }
+}
+
+/// Roar (`Aroa`, `CAbilityRoar` vtable `0x6F8A21BC`; instant effect slot `0x3C0` = `0x6F1EED60`, readiness `0x6F1EEBF0`):
+/// every friendly ground or air unit (not structures) within `Area` of the caster, the caster included, gets the buff
+/// `Broa` for the hero-rule duration. `CBuffRoar` shares the Inner Fire buff base (armor sink and the attack record
+/// modifiers): `DataA` damage fraction, `DataB` armor, `DataC` life regeneration (editor labels ROA1..3). The group
+/// order is the circle query order (LIKELY). The 1.26a data of the later fields (mana regeneration, prefer hostiles,
+/// max units) is not modelled.
+fn roar(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    let (cx, cy, owner) = {
+        let c = gm.unit(rec.caster);
+        (c.x, c.y, c.owner)
+    };
+    let d = &rec.level.data;
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_ROAR)
+    };
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        if !gm.alive(k) || gm.unit(k).hidden {
+            continue;
+        }
+        let u = gm.unit(k);
+        let ally = k == rec.caster || u.owner == owner || !gm.is_enemy(owner, u.owner);
+        if !ally || is_unit_type(&gm, u, ty::STRUCTURE) {
+            continue;
+        }
+        let hero = gm.target_hero(k);
+        let dur = effect_duration(&rec.level, hero, F32::ZERO);
+        if !arith::lt(F32::ZERO, dur) {
+            continue;
+        }
+        let mods = UnitMods {
+            damage_pct: d[0],
+            armor: d[1],
+            life_regen: d[2],
+            ..UnitMods::default()
+        };
+        gm.apply_mods_buff(k, BUFF_ROAR, preds, mods, dur);
     }
 }
 

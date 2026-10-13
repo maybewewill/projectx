@@ -62,6 +62,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(shaman, 'Arej')
     call UnitAddAbility(shaman, 'Adis')
     call UnitAddAbility(shaman, 'Arai')
+    call UnitAddAbility(shaman, 'Aroa')
     call SetUnitState(shaman, 2, 300.0)
     set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
     set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
@@ -101,6 +102,9 @@ endfunction
 function kill_grunts takes nothing returns nothing
     call SetWidgetLife(grunt, 0.0)
     call SetWidgetLife(grunt2, 0.0)
+endfunction
+function roar takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shaman, 852164)
 endfunction
 function lust_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852101, grunt)
@@ -282,6 +286,23 @@ fn host() -> ScriptHost {
                     d
                 },
                 unit_id: SKELETON,
+                ..Default::default()
+            }],
+        );
+        g.ability_types_mut().insert(ROAR, AbilityType { max_level: Some(1) });
+        g.set_spell_levels(
+            ROAR,
+            vec![SpellLevel {
+                cost: 100,
+                cool: f(1.0),
+                dur: f(5.0),
+                hero_dur: f(5.0),
+                area: f(500.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(0.25);
+                    d
+                },
                 ..Default::default()
             }],
         );
@@ -807,4 +828,22 @@ fn raise_dead_autocast_raises_when_corpses_are_in_reach() {
     call(&mut h, "raise_on");
     run(&mut h, 5);
     assert_eq!(count_units(&h, SKELETON, true), 2);
+}
+
+#[test]
+fn roar_buffs_friends_in_the_area_including_the_caster_and_not_enemies() {
+    let mut h = started_manual();
+    let (shaman, grunt, grunt2, foe2, far) = (unit(&h, "shaman"), unit(&h, "grunt"), unit(&h, "grunt2"), unit(&h, "foe2"), unit(&h, "far"));
+    call(&mut h, "roar");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 200.0);
+    for k in [shaman, grunt, grunt2] {
+        assert!(has_buff(&h, k, BUFF_ROAR));
+        assert!((h.game().unit(k).bonuses.damage_pct.to_f32() - 0.25).abs() < 1e-6);
+    }
+    assert!(!has_buff(&h, foe2, BUFF_ROAR));
+    assert!(!has_buff(&h, far, BUFF_ROAR), "out of the area");
+    run(&mut h, 55);
+    assert_eq!(h.game().unit(grunt).bonuses.damage_pct.to_f32(), 0.0);
 }
