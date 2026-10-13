@@ -63,6 +63,15 @@ endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
 endfunction
+function abolish_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852132, grunt)
+endfunction
+function abolish_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852132, foe)
+endfunction
+function abolish_on takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shaman, 852133)
+endfunction
 function foe_walks takes nothing returns nothing
     call IssuePointOrder(foe, "move", 6500.0, 0.0)
 endfunction
@@ -295,6 +304,78 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
 }
 
+// ---- Abolish Magic ----
+
+fn with_abolish(h: &ScriptHost) {
+    let k = {
+        let id = h.vm().global("shaman").and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    g.ability_types_mut().insert(ABOLISH_MAGIC, AbilityType { max_level: Some(1) });
+    // Abolish Magic: cost 50, range 500, DataB 300 (summoned damage), DataC 1.
+    g.set_spell_levels(
+        ABOLISH_MAGIC,
+        vec![SpellLevel {
+            cost: 50,
+            cool: f(1.0),
+            rng: f(500.0),
+            data: data(&[(1, 300.0), (2, 1.0)]),
+            ..Default::default()
+        }],
+    );
+    g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(ABOLISH_MAGIC, None));
+}
+
+fn pos() -> sim::abilities::BuffPredicates {
+    sim::abilities::BuffPredicates { positive: true, magic: true, dispellable: true, ..Default::default() }
+}
+
+fn neg() -> sim::abilities::BuffPredicates {
+    sim::abilities::BuffPredicates { negative: true, magic: true, dispellable: true, ..Default::default() }
+}
+
+#[test]
+fn abolish_magic_removes_negative_buffs_from_friends_and_positive_ones_from_enemies() {
+    let mut h = started();
+    with_abolish(&h);
+    let (grunt, foe) = (unit(&h, "grunt"), unit(&h, "foe"));
+    {
+        let mut g = h.game_mut();
+        g.apply_mods_buff(grunt, BUFF_CRIPPLE, neg(), UnitMods::default(), f(60.0));
+        g.apply_mods_buff(grunt, BUFF_BLOODLUST, pos(), UnitMods::default(), f(60.0));
+        g.apply_mods_buff(foe, BUFF_CRIPPLE, neg(), UnitMods::default(), f(60.0));
+        g.apply_mods_buff(foe, BUFF_BLOODLUST, pos(), UnitMods::default(), f(60.0));
+    }
+    call(&mut h, "abolish_grunt");
+    run(&mut h, 12);
+    assert!(accepted(&h));
+    assert!(!has_buff(&h, grunt, BUFF_CRIPPLE) && has_buff(&h, grunt, BUFF_BLOODLUST));
+    call(&mut h, "abolish_foe");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, foe, BUFF_CRIPPLE) && !has_buff(&h, foe, BUFF_BLOODLUST));
+    assert_eq!(h.game().unit(unit(&h, "shaman")).mana.to_f32(), 200.0);
+}
+
+#[test]
+fn abolish_magic_autocast_picks_a_friend_with_a_negative_buff() {
+    let mut h = started();
+    with_abolish(&h);
+    let (grunt, grunt2) = (unit(&h, "grunt"), unit(&h, "grunt2"));
+    {
+        let mut g = h.game_mut();
+        g.apply_mods_buff(grunt2, BUFF_CRIPPLE, neg(), UnitMods::default(), f(60.0));
+        g.apply_mods_buff(grunt, BUFF_BLOODLUST, pos(), UnitMods::default(), f(60.0));
+    }
+    call(&mut h, "abolish_on");
+    run(&mut h, 2);
+    assert!(accepted(&h));
+    run(&mut h, 30);
+    assert!(!has_buff(&h, grunt2, BUFF_CRIPPLE), "the autocast cleansed the crippled friend");
+    assert!(has_buff(&h, grunt, BUFF_BLOODLUST), "a friend's positive buff is left alone");
+}
+
 // ---- Ensnare / Web ----
 
 fn with_nets(h: &ScriptHost, speed: f32) {
@@ -474,7 +555,7 @@ fn purge_slows_an_enemy_fully_then_decays_linearly_over_its_duration() {
 }
 
 #[test]
-fn purge_removes_positive_buffs_of_enemies_and_spares_allies_from_the_slow_and_the_summoned_damage() {
+fn purge_removes_magic_buffs_and_slows_only_enemies_and_the_summoned_damage_needs_an_enemy() {
     let mut h = started();
     with_purge(&h, 15.0, 5.0);
     let (foe, grunt) = (unit(&h, "foe"), unit(&h, "grunt"));
@@ -487,14 +568,14 @@ fn purge_removes_positive_buffs_of_enemies_and_spares_allies_from_the_slow_and_t
     }
     call(&mut h, "purge_foe");
     run(&mut h, 1);
-    assert!(!has_buff(&h, foe, BUFF_BLOODLUST), "an enemy loses its positive buffs");
+    assert!(!has_buff(&h, foe, BUFF_BLOODLUST), "the magic buff is gone");
     assert!(has_buff(&h, foe, BUFF_PURGE));
     run(&mut h, 12); // the 1 s cooldown
     call(&mut h, "purge_grunt");
     run(&mut h, 30);
     assert!(accepted(&h), "no relation token in targs: allies can be purged");
     assert_eq!(life(&h, grunt), 500.0, "the summoned damage needs rel != 0 (an enemy); an ally takes none");
-    assert!(has_buff(&h, grunt, BUFF_BLOODLUST), "an ally loses only negative buffs");
+    assert!(!has_buff(&h, grunt, BUFF_BLOODLUST), "the caller pushes positive = negative = 1: allies lose magic buffs too");
     assert!(!has_buff(&h, grunt, BUFF_PURGE), "no slow for a passively allied unit");
 }
 

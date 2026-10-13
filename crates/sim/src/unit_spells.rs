@@ -82,6 +82,7 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+pub const ABOLISH_MAGIC: u32 = code(b"Aadm");
 pub const ENSNARE: u32 = code(b"Aens");
 pub const BUFF_ENSNARE_AIR: u32 = code(b"Bena");
 pub const BUFF_ENSNARE_GROUND: u32 = code(b"Beng");
@@ -130,7 +131,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 15] = [
+pub const SPELL_ORDERS: [(u32, u32); 16] = [
+    (852_132, ABOLISH_MAGIC),
     (852_106, ENSNARE),
     (852_211, WEB),
     (852_110, LIGHTNING_SHIELD),
@@ -149,7 +151,8 @@ pub const SPELL_ORDERS: [(u32, u32); 15] = [
 ];
 
 /// `(autocast on order, autocast off order, ability)`.
-const TOGGLES: [(u32, u32, u32); 6] = [
+const TOGGLES: [(u32, u32, u32); 7] = [
+    (852_133, 852_134, ABOLISH_MAGIC),
     (852_212, 852_213, WEB),
     (852_191, 852_192, CURSE),
     (852_198, 852_199, RAISE_DEAD),
@@ -715,6 +718,15 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        ABOLISH_MAGIC => {
+            // targs: air,ground,ward,invu,vuln,tree (no relation). The extra slot `0x3F4` (`0x6F0E2B60`) wants bit `0x80`
+            // of a flag word of its argument: not decoded (UNSURE), not modelled.
+            let w = targs_word("air,ground,ward,invu,vuln,tree");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         PURGE => {
             // targs: air,ground,ward,vuln,invu,tree (no relation: friends can be purged too).
             let w = targs_word("air,ground,ward,vuln,invu,tree");
@@ -795,6 +807,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         ENSNARE | WEB => {
             if let CastTarget::Unit(t) = rec.target {
                 net_spell(game, rec, t);
+            }
+            true
+        }
+        ABOLISH_MAGIC => {
+            if let CastTarget::Unit(t) = rec.target {
+                abolish_magic(game, rt, rec, t);
             }
             true
         }
@@ -1089,6 +1107,27 @@ impl Game {
     }
 }
 
+/// Abolish Magic (`Aadm`, `CAbilityAutoDispelMagic` vtable `0x6F8C35AC`, an AutoTargetSpell; effect slot `0x424` =
+/// `0x6F0EF0F0`, CONFIRMED structure): the target goes through the dispel worker with the summoned-unit damage `DataB`
+/// (300), the mana loss `DataA` and, in smart mode, positive buffs removed from enemies and negative ones from the
+/// others (see [`dispel_one`]). Targets: air, ground, ward, invulnerable, vulnerable, tree (no relation). The
+/// autocast filter (slot `0x450` = `0x6F0E2B90`, CONFIRMED structure): the base filter, a class word rule, then the
+/// candidate must have a removable buff of the polarity its relation asks for (allies: negative, enemies: positive,
+/// through the buff scan `0x6F076D00` with the same arguments as the remover).
+fn abolish_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target: ObjKey) {
+    let killed = {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(target) {
+            return;
+        }
+        let a7 = u32::from(arith::lt(F32::ZERO, rec.level.data[8]));
+        dispel_one(&mut gm, rec.caster, target, rec.level.data[1], rec.level.data[0], true, a7)
+    };
+    if let Some(t) = killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
 /// Purge (`Aprg`, `CAbilityPurge` vtable `0x6F8C46CC`, effect slot `0x424` = `0x6F107E10`, CONFIRMED flow):
 /// 1. the target goes through the dispel worker (`0x6F0EEF00`, [`dispel_worker`]) with the summoned-unit damage `DataC`
 ///    (400) and the mana loss `DataF`;
@@ -1107,7 +1146,7 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
         if !gm.alive(target) {
             return;
         }
-        let killed = dispel_one(&mut gm, rec.caster, target, rec.level.data[2], rec.level.data[5]);
+        let killed = dispel_one(&mut gm, rec.caster, target, rec.level.data[2], rec.level.data[5], false, 1);
         if killed.is_none() && gm.alive(target) {
             let owner = gm.unit(rec.caster).owner;
             if gm.is_enemy(owner, gm.unit(target).owner) {
@@ -1409,7 +1448,7 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
             if !gm.alive(k) || gm.unit(k).hidden {
                 continue;
             }
-            if let Some(t) = dispel_one(&mut gm, rec.caster, k, rec.level.data[1], rec.level.data[0]) {
+            if let Some(t) = dispel_one(&mut gm, rec.caster, k, rec.level.data[1], rec.level.data[0], false, 1) {
                 killed.push(t);
             }
         }
@@ -1422,14 +1461,22 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
 /// One unit of a dispel: builds the worker inputs from the model and carries out the calls of
 /// [`dispel_worker`] (CONFIRMED control flow). Returns the unit if the summoned-unit damage killed it.
 ///
+/// The worker's arguments 4..7 come from the caller's stack pushes (CONFIRMED by reading the three callers):
+/// Dispel Magic (`0x6F0EF210`) and Purge (`0x6F107E10`) push the constants `(positive 1, negative 1, a6 0, a7 1)`, so they
+/// remove the magic buffs of BOTH polarities from every unit they touch, friend or foe; Abolish Magic (`0x6F0EF0F0`) in
+/// its "smart" mode passes `(enemy, not enemy, a6 1, a7)`: positive buffs from enemies, negative ones from the others.
+/// (`smart` is `Misc AbolishMagicDispelSmart` ? `DataC != 0` : ability flag bit `0x200000`; the key is in none of the
+/// game's Misc files, the flag's writer was not found, the model takes smart as true for Abolish: UNSURE.) The buff
+/// remover `0x6F079FE0` (9 arguments, CONFIRMED by reading) removes buffs that are magic (argument 2 = 1), not timed
+/// life and not aura (arguments 3, 4 = 0), whose polarity matches (arguments 6 positive, 7 negative), and, when argument 5
+/// is set, that pass the buff's slot `0x330` with the source (modelled as the dispellable predicate).
+///
 /// Input mapping (LIKELY): `rel` = the target's owner is an enemy of the caster's player, `bams` = the target carries
-/// `Bams`, `v11c` = the target is magic immune, the buff remover flags = positive buffs for an enemy and negative ones
-/// for anyone else (the callbacks' flag source `0x6F0EF210` slot `0x348` is not decoded), `target_flag8` = the target
-/// is invulnerable (the worker skips the mana loss and the ability notification for it). The dispel record (amount 0,
-/// record flag `0x10`) is applied by the target's damage handler, which is not decoded: it is modelled as the removal
-/// of the positive dispellable buffs (the same removal the explicit buff remover step makes). The mana loss takes
-/// `min(mana, amount)` (UNSURE).
-fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32) -> Option<ObjKey> {
+/// `Bams`, `v11c` = the target is magic immune, `target_flag8` = the target is invulnerable (the worker skips the mana
+/// loss and the ability notification for it). The dispel record (amount 0, record flag `0x10`, enemies only) is applied by
+/// the target's damage handler, which is not decoded: no effect in the model. The mana loss takes `min(mana, amount)`
+/// (UNSURE).
+fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32, smart: bool, a7: u32) -> Option<ObjKey> {
     let owner = gm.unit(caster).owner;
     let (enemy, summoned, illusion, immune) = {
         let u = gm.unit(k);
@@ -1447,10 +1494,10 @@ fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32) 
         misc: u32::from(gm.spells.unit.invuln_summon_dispel_damage),
         a2: 0,
         ability: 1,
-        positive: u32::from(enemy),
-        negative: u32::from(!enemy),
-        a6: 0,
-        a7: 0,
+        positive: if smart { u32::from(enemy) } else { 1 },
+        negative: if smart { u32::from(!enemy) } else { 1 },
+        a6: u32::from(smart),
+        a7,
         damage_bits: damage.to_bits(),
         mana_bits: mana.to_bits(),
         flags: 0,
@@ -1465,24 +1512,17 @@ fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32) 
                     return Some(t);
                 }
             }
-            WorkerStep::Damage(..) => {
-                gm.remove_buffs(
-                    k,
-                    crate::abilities::BuffSelect {
-                        remove_positive: true,
-                        dispellable: true,
-                        ..Default::default()
-                    },
-                );
-            }
             WorkerStep::Buffs(a) => {
                 gm.remove_buffs(
                     k,
                     crate::abilities::BuffSelect {
                         remove_positive: a[5] != 0,
                         remove_negative: a[6] != 0,
-                        dispellable: true,
-                        ..Default::default()
+                        magic: a[1] != 0,
+                        physical: a[0] != 0,
+                        timed_life: a[2] != 0,
+                        aura: a[3] != 0,
+                        dispellable: a[4] != 0,
                     },
                 );
             }
@@ -1951,6 +1991,17 @@ fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
                 }
             }
             true
+        }
+        ABOLISH_MAGIC => {
+            // `0x6F0E2B90` (CONFIRMED structure). The first class-word rule (the caster's `+0x5C & 4`, the candidate's
+            // `+0x248 & 0x200`) is not decoded and not modelled. An ally (the shared-spells row, here: not an enemy)
+            // needs a negative buff, an enemy a positive one; the scan asks for magic, not timed life, not aura,
+            // dispellable buffs.
+            let enemy = gm.is_enemy(gm.unit(unit).owner, gm.unit(k).owner);
+            gm.unit(k).buffs.iter().any(|b| {
+                let p = &b.predicates;
+                p.magic && !p.timed_life && !p.aura && p.dispellable && if enemy { p.positive } else { p.negative }
+            })
         }
         WEB => {
             // `0x6F07F220` (CONFIRMED structure): the base filter, then the candidate must not have an ability whose slot
