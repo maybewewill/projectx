@@ -279,6 +279,8 @@ pub struct OrcState {
     /// Bladestorms in progress, by serial.
     blades: BTreeMap<u32, BladeState>,
     blade_serial: u32,
+    /// The `targs` word of each level of an ability (host data); absent = the shipped default.
+    targs: BTreeMap<u32, Vec<u32>>,
 }
 
 impl OrcState {
@@ -288,6 +290,22 @@ impl OrcState {
 }
 
 impl Game {
+    /// Installs the `targs` words of an ability's levels (the parsed `targs` column).
+    pub fn set_orc_targs(&mut self, base: u32, words: Vec<u32>) {
+        self.orc.targs.insert(base, words);
+    }
+
+    /// The `targs` word of a level (`level_index` 0-based, clamped to the last level), or the shipped default.
+    pub(crate) fn orc_targs(&self, base: u32, level_index: usize) -> u32 {
+        match self.orc.targs.get(&base) {
+            Some(v) if !v.is_empty() => v[level_index.min(v.len() - 1)],
+            _ => match base {
+                WAR_STOMP => STOMP_TARGS_DEFAULT,
+                _ => 0,
+            },
+        }
+    }
+
     /// Installs the summoned unit types of an ability (`UnitID` per level).
     pub fn set_summon_units(&mut self, base: u32, units: Vec<u32>) {
         self.orc.summon_units.insert(base, units);
@@ -407,36 +425,110 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
     true
 }
 
-/// War Stomp (`0x6F1608B0` instant slot, per-unit effect `0x6F1607B0`, CONFIRMED structure): every unit of the area
-/// around the caster that the group builder lets through takes `DataA` damage (class `0x8000`), and a unit that is
-/// still alive is stunned for `HeroDur` (hero) or `Dur` (slot `0x430` = `0x6F18ABF0`, same duration rule as Storm
-/// Bolt). A unit the immunity test `0x6F28D750` rejects gets a zero-damage record and no stun (modelled as untouched).
-/// The units come in the area query's order (x-major cells). UNSURE: the builder's relation filter (enemies of the
-/// caster's owner here), the ground/organic target flags (`ground,organic`: no air, structures, mechanical).
+/// The target flag word the stomp area builder uses (`0x6F176CD0`, slot `0x434` shared with Thunder Clap and Storm Bolt;
+/// CONFIRMED by reading): `(targs & 0xFFFF0FFF) | 0x10000`, and `| 0x8000` when the third argument is non-zero, which
+/// the stomp's instant slot `0x6F1608B0` passes as 1. So the relation bits are enemy and neutral only (self, player
+/// and ally are cleared), and the rest of the ability's `targs` goes to the predicate unchanged.
+pub fn stomp_word(targs: u32) -> u32 {
+    (targs & 0xFFFF_0FFF) | 0x1_0000 | 0x8000
+}
+
+/// The `targs` text of War Stomp in the 1.26a AbilityData (`ground,organic`) as a word (`ground` 0x2, `organic`
+/// `0x4000000`), used when the host gives none (`Game::set_orc_targs`).
+pub const STOMP_TARGS_DEFAULT: u32 = 0x0400_0002;
+
+/// What the per-unit body of War Stomp (`0x6F1607B0`) does with one unit that the area builder let through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StompUnit {
+    /// The damage record is sent with the zero amount (the unit is invulnerable by slot `0x11C` or the spell
+    /// immunity test `0x6F28D750` refused it); its flags are `0x50` instead of `0x40`.
+    pub zero_record: bool,
+    /// The unit is put into the ability's hit array (`array[owner index + 1]`), when the handle resolves.
+    pub hit_slot: Option<u32>,
+    /// The stun slot `0x430` runs.
+    pub stun: bool,
+}
+
+/// The damage record flags of the stomp: `0x40`, plus `0x10` on the zero-damage path. CONFIRMED (Unicorn).
+pub fn stomp_record_flags(zero_record: bool) -> u32 {
+    0x40 | if zero_record { 0x10 } else { 0 }
+}
+
+/// `0x6F1607B0` after the damage: `resolved` = the handle resolver `0x6F282F60` still returns the unit (valid, not
+/// removed, not dead), `target_type` = the unit's slot `0x114` result (`unit+0x24C`: bit 8 = structure). The stun runs
+/// only for a resolved, non-structure unit on the normal path. CONFIRMED by Unicorn (`tests/data/orc/stomp.txt`).
+pub fn stomp_unit(zero_record: bool, resolved: bool, target_type: u32, owner_index: u32) -> StompUnit {
+    StompUnit {
+        zero_record,
+        hit_slot: resolved.then_some(owner_index),
+        stun: resolved && target_type & 8 == 0 && !zero_record,
+    }
+}
+
+/// The candidate facts of a unit for the splash / area predicate (same construction as the bounce picker).
+pub(crate) fn splash_candidate(gm: &Game, k: ObjKey) -> crate::splash::Candidate {
+    let u = gm.unit(k);
+    crate::splash::Candidate {
+        dead: u.dead,
+        invulnerable_flag: gm.unit_is_invulnerable(k),
+        targ_type: gm.target_flag_word(k) & 0x1E,
+        type_char: (u.type_id >> 24) as u8,
+        class_word: u.class_flags,
+        ethereal: u.ethereal,
+        magic_immune: u.magic_immune,
+        invulnerable: gm.unit_is_invulnerable(k),
+        owner: u.owner,
+    }
+}
+
+/// The area builder's candidate test for the `0x1D` tag (predicate `0x6F26E510` -> `0x6F25D6F0(unit, word, source,
+/// -1)`, CONFIRMED by reading): the splash candidate filter without the attack-type gates.
+pub(crate) fn area_predicate(gm: &Game, caster: ObjKey, k: ObjKey, word: u32) -> bool {
+    let cand = splash_candidate(gm, k);
+    let owner = gm.unit(caster).owner;
+    let src = if k == caster { crate::splash::Source::Itself } else { crate::splash::Source::Other(owner) };
+    let passive = |a: u32, b: u32| a < 16 && b < 16 && gm.player(a).alliances[0] & (1 << b) != 0;
+    let shared = |a: u32, b: u32| a < 16 && b < 16 && gm.player(a).alliances[4] & (1 << b) != 0;
+    crate::splash::candidate_filter(&cand, word, src, owner, false, false, passive, shared)
+}
+
+/// War Stomp (`0x6F1608B0` instant slot, per-unit body `0x6F1607B0`, CONFIRMED by reading and Unicorn): the area
+/// builder (`0x6F2A3270` with the tags area, `0x1D` word [`stomp_word`], mode 0xF) walks the circle around the CASTER in
+/// the area query's order and keeps the units the predicate `0x6F25D6F0` accepts (alive, vulnerable, kind and
+/// organic/mechanical from the `targs`, relation enemy or neutral). The body sends `DataA` (class `0x8000`, flags
+/// `0x40`) to every unit; a unit that is invulnerable by slot `0x11C` or fails the spell immunity test gets the zero
+/// record (flags `0x50`) and no stun. A unit still alive and not a structure (`targType` bit 8) is stunned `HeroDur`
+/// (hero) or `Dur` (+ `+0x9C`, slot `0x430` = `0x6F18ABF0`, the Storm Bolt rule).
 fn war_stomp(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     let mut killed = Vec::new();
     {
         let mut gm = game.borrow_mut();
-        let (cx, cy, owner) = {
+        let (cx, cy) = {
             let u = gm.unit(rec.caster);
-            (u.x, u.y, u.owner)
+            (u.x, u.y)
         };
+        let level_index =
+            usize::try_from(gm.unit(rec.caster).abilities.get(WAR_STOMP).map_or(0, |a| a.level_index)).unwrap_or(0);
+        let word = stomp_word(gm.orc_targs(WAR_STOMP, level_index));
         for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
-            if k == rec.caster || !spell_target_ok(&gm, owner, k) {
-                continue;
-            }
-            let u = gm.unit(k);
-            if !is_unit_type(&gm, u, ty::GROUND)
-                || is_unit_type(&gm, u, ty::STRUCTURE)
-                || is_unit_type(&gm, u, ty::MECHANICAL)
             {
+                let u = gm.unit(k);
+                if u.removed || u.hidden {
+                    continue;
+                }
+            }
+            if !area_predicate(&gm, rec.caster, k, word) {
                 continue;
             }
-            if let Some(t) = gm.unit_damage_target(rec.caster, k, rec.level.data[0], false, false, 0, SPELL_DAMAGE_TYPE) {
+            let zero_record = gm.unit_is_invulnerable(k) || is_unit_type(&gm, gm.unit(k), ty::MAGIC_IMMUNE);
+            let amount = if zero_record { F32::ZERO } else { rec.level.data[0] };
+            if let Some(t) = gm.unit_damage_target(rec.caster, k, amount, false, false, 0, SPELL_DAMAGE_TYPE) {
                 killed.push(t);
-                continue;
             }
-            if gm.alive(k) {
+            let target_type = gm.target_flag_word(k) & 0x1E;
+            let resolved = gm.alive(k);
+            let out = stomp_unit(zero_record, resolved, target_type, gm.unit(k).owner);
+            if out.stun {
                 let hero = gm.target_hero(k);
                 let dur = effect_duration(&rec.level, hero, F32::ZERO);
                 gm.add_spell_buff(k, BUFF_STUN, BuffEffect::Stun, dur);
