@@ -329,6 +329,9 @@ pub struct StatBonuses {
     pub damage: i32,
     /// The number of stun buffs on the unit.
     pub stun: u32,
+    /// The sum of the percentage damage modifiers of buffs (Inner Fire +, Cripple -): the attack's raw damage is
+    /// multiplied by `1 + damage_pct` (`unit_spells.rs`, UNSURE order against the other record modifiers).
+    pub damage_pct: F32,
 }
 
 impl Default for StatBonuses {
@@ -341,6 +344,7 @@ impl Default for StatBonuses {
             mana_regen: F32::ZERO,
             damage: 0,
             stun: 0,
+            damage_pct: F32::ZERO,
         }
     }
 }
@@ -395,6 +399,8 @@ pub enum BuffEffect {
     },
     /// Divine Shield (`CBuffDivineShield`): one invulnerability count and one magic immunity count.
     DivineShield,
+    /// A spell buff that adds stat modifiers (`unit_spells.rs`): undone exactly on removal.
+    Mods(crate::unit_spells::UnitMods),
 }
 
 /// The state of one running aura emitter (a unit's aura ability).
@@ -480,13 +486,13 @@ impl Game {
         u.bonuses.armor = arith::add(u.bonuses.armor, delta);
     }
 
-    fn add_move(&mut self, unit: ObjKey, delta: F32) {
+    pub(crate) fn add_move(&mut self, unit: ObjKey, delta: F32) {
         let u = self.unit_mut(unit);
         u.bonuses.move_mult = snap_to_one(arith::add(u.bonuses.move_mult, delta));
         self.mover_speed_changed(unit);
     }
 
-    fn add_attack_speed(&mut self, unit: ObjKey, delta: F32) {
+    pub(crate) fn add_attack_speed(&mut self, unit: ObjKey, delta: F32) {
         // With the soft-float tables the bonus also rescales the pending swing timers (`0x6F0C9090`).
         if self.combat_add_attack_speed(unit, delta) {
             return;
@@ -495,12 +501,12 @@ impl Game {
         u.bonuses.attack_mult = snap_to_one(arith::add(u.bonuses.attack_mult, delta));
     }
 
-    fn add_life_regen(&mut self, unit: ObjKey, delta: F32) {
+    pub(crate) fn add_life_regen(&mut self, unit: ObjKey, delta: F32) {
         let u = self.unit_mut(unit);
         u.bonuses.life_regen = arith::add(u.bonuses.life_regen, delta);
     }
 
-    fn add_mana_regen(&mut self, unit: ObjKey, delta: F32) {
+    pub(crate) fn add_mana_regen(&mut self, unit: ObjKey, delta: F32) {
         let u = self.unit_mut(unit);
         u.bonuses.mana_regen = arith::add(u.bonuses.mana_regen, delta);
     }
@@ -657,6 +663,7 @@ impl Game {
                 u.invuln_count -= 1;
                 u.magic_immune -= 1;
             }
+            Some(BuffEffect::Mods(m)) => self.undo_mods(unit, &m),
             None => {}
         }
     }

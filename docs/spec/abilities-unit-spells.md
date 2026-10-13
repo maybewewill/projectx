@@ -65,3 +65,36 @@ non-ancient, neutral.
 * Model: `unit_spells.rs` (`heal`, `heal_prefers`, `pick_target`, the autocast timer), the `healon`/`healoff`
   immediate orders, behaviour tests (amount, cap, mana, cooldown, marker lifetime 2.01 s, refusals, autocast target
   choice, foreign marker, toggling).
+
+## 3. Inner Fire (`Ainf`, `CAbilityInnerFire` vtable `0x6F8DC54C`) and Bloodlust (`Ablo`, `CAbilityBloodlust` `0x6F90EE4C`)
+
+Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`) and a unique autocast filter (slot
+`0x450`); both use the shared comparator (below).
+
+* Data of the first level: Inner Fire cost 35, range 500, Dur 60 (hero 60), `DataA` 0.1, `DataB` 5, `DataC` 500, buff
+  `Binf`, targets air, ground, friend, neutral, self. Bloodlust cost 40, range 600, Dur 60 (hero 60), `DataA` 0.4,
+  `DataB` 0.25, `DataC` 0.3, buff `Bblo`, targets air, ground, friend, organic, self, neutral.
+* Effect slots (CONFIRMED structure): Inner Fire `0x6F13BFA0` reads `DataA, DataB, DataD, DataE`; Bloodlust
+  `0x6F1CB080` reads `DataB, DataA`; both pick `HeroDur` for a hero target (`0x6F1D2660`), `Dur + extra` otherwise,
+  look for the buff by its code (`0x6F10F480` / the Bloodlust getter): found = the buff's apply slot `0x358` (runs the
+  set-duration slot `0x6F0D4EF0` first, never shorten, then rebuilds the effects), not found = a new buff.
+* Buff effects (CONFIRMED sinks by scanning the buff classes' apply slots): `CBuffBloodlust` -> attack speed
+  (`0x6F0C9090`) and movement (`0x6F202FF0`) sinks; `CBuffInnerFire` -> the armor sink (`0x6F2769C0`) and the
+  attack-record modifiers (record `+4/+8` for the weapons, `+0x24`) plus two regeneration modifiers. Field meanings are
+  the editor's (LIKELY): Inner Fire `DataA` damage fraction, `DataB` armor, `DataD` life regeneration, `DataE` mana
+  regeneration, `DataC` the autocast range; Bloodlust `DataA` attack speed, `DataB` movement, `DataC` scale.
+* Model: `UnitMods` (armor, move/attack deltas, a new percentage damage modifier `bonuses.damage_pct` multiplying the
+  attack's raw damage by `1 + pct` in `damage.rs`, regeneration), `Game::apply_mods_buff` (replace on refresh), undone
+  exactly on removal (`BuffEffect::Mods`). UNSURE: the damage modifier is applied to the raw damage after the dice
+  (the original keeps it in the record modifiers, order against Critical Strike not read); the `Dur` extra term is 0.
+* Autocast filters (CONFIRMED, static): Bloodlust `0x6F1AFF10` and Inner Fire `0x6F123DC0` accept a candidate only if
+  it has the attack ability and a current attack target that is hostile to its player (`0x6F285AC0` is the passive
+  alliance mask test), does not have the buff, and has life fraction above 0.1 (`0x6FAAE4A0`); with the fraction below
+  0.5 (Bloodlust, `0x6FAAE4D0`) or 0.3 (Inner Fire, `0x6FAAE4BC`) the caster must be at full mana (the compare of
+  `0x6F02DCA0` current mana against `0x6F020730` max mana). Inner Fire further needs the candidate in reach of its
+  target (`0x6F0CBAE0` + `0x6F0207A0`; LIKELY reading as an attack range test) and a final call `0x6F1452A0` when the
+  ability flag 2 is set (not decoded, taken as true). Neither spell defaults to autocast on in the model (UNSURE).
+* Shared comparator `0x6F023400` (**Unicorn 600 cases, 0 mismatches**): a candidate in range (`V <= T`) beats an
+  out-of-range best; two in-range units: the best stays if `Vb > Vc`, so the original keeps the FARTHER of two
+  in-range units and replaces it only by one that is not strictly nearer; two out-of-range units: the strictly nearer
+  wins. (Slot `0x464` is 0 for these spells.)

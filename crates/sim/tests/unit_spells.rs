@@ -22,6 +22,7 @@ native SetUnitState takes unit whichUnit, integer whichState, real newVal return
 native SetWidgetLife takes widget wid, real newLife returns nothing
 native IssueTargetOrderById takes unit whichUnit, integer order, widget target returns boolean
 native IssueImmediateOrderById takes unit whichUnit, integer order returns boolean
+native IssueTargetOrder takes unit whichUnit, string order, widget target returns boolean
 "#;
 
 const SRC: &str = r#"
@@ -33,6 +34,10 @@ globals
     unit foe = null
     unit far = null
     unit priest2 = null
+    unit shaman = null
+    unit grunt = null
+    unit grunt2 = null
+    unit foe2 = null
     boolean accepted = false
 endglobals
 function setup takes nothing returns nothing
@@ -48,10 +53,38 @@ function setup takes nothing returns nothing
     call SetWidgetLife(foe, 100.0)
     set far = CreateUnit(Player(0), 'hfoo', 1000.0, 0.0, 0.0)
     call SetWidgetLife(far, 10.0)
+    set shaman = CreateUnit(Player(0), 'hprt', 5000.0, 0.0, 0.0)
+    call UnitAddAbility(shaman, 'Ablo')
+    call UnitAddAbility(shaman, 'Ainf')
+    call SetUnitState(shaman, 2, 300.0)
+    set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
+    set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
+    set foe2 = CreateUnit(Player(1), 'hfoo', 5140.0, 0.0, 0.0)
 endfunction
 function setup_manual takes nothing returns nothing
     call setup()
     call IssueImmediateOrderById(priest, 852065)
+endfunction
+function lust_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852101, grunt)
+endfunction
+function fire_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852066, grunt)
+endfunction
+function lust_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852101, foe2)
+endfunction
+function fight takes nothing returns nothing
+    call IssueTargetOrder(grunt, "attack", foe2)
+endfunction
+function fight2 takes nothing returns nothing
+    call IssueTargetOrder(grunt2, "attack", foe2)
+endfunction
+function lust_on takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shaman, 852102)
+endfunction
+function fire_on takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(shaman, 852067)
 endfunction
 function heal_hurt takes nothing returns nothing
     set accepted = IssueTargetOrderById(priest, 852063, hurt)
@@ -97,6 +130,65 @@ fn host() -> ScriptHost {
             );
         }
         g.ability_types_mut().insert(HEAL, AbilityType { max_level: Some(1) });
+        g.ability_types_mut().insert(BLOODLUST, AbilityType { max_level: Some(1) });
+        g.ability_types_mut().insert(INNER_FIRE, AbilityType { max_level: Some(1) });
+        g.set_type_orders(
+            FOOT,
+            sim::orders::TypeOrderData {
+                abilities: vec![sim::orders::AbilityKind::Move, sim::orders::AbilityKind::Attack],
+            },
+        );
+        g.set_attack_type(
+            FOOT,
+            sim::combat::AttackType {
+                cooldown: f(1.0),
+                damage_point: f(0.5),
+                backswing: f(0.5),
+                range: f(100.0),
+                collision: f(0.5),
+                damage: f(10.0),
+                missile_speed: None,
+                ..Default::default()
+            },
+        );
+        // Bloodlust: cost 40, range 600, attack speed +0.4, movement +0.25, Dur 5 (test value).
+        g.set_spell_levels(
+            BLOODLUST,
+            vec![SpellLevel {
+                cost: 40,
+                cool: f(1.0),
+                dur: f(5.0),
+                hero_dur: f(5.0),
+                rng: f(600.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(0.4);
+                    d[1] = f(0.25);
+                    d[2] = f(0.3);
+                    d
+                },
+                ..Default::default()
+            }],
+        );
+        // Inner Fire: cost 35, range 500, damage +0.1, armor +5, autocast range 500, Dur 5 (test value).
+        g.set_spell_levels(
+            INNER_FIRE,
+            vec![SpellLevel {
+                cost: 35,
+                cool: f(1.0),
+                dur: f(5.0),
+                hero_dur: f(5.0),
+                rng: f(500.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(0.1);
+                    d[1] = f(5.0);
+                    d[2] = f(500.0);
+                    d
+                },
+                ..Default::default()
+            }],
+        );
         // Heal: cost 5, cooldown 1, range 250, DataA 25.
         g.set_spell_levels(
             HEAL,
@@ -259,4 +351,126 @@ fn heal_comparator_matches_the_original_vectors() {
         n += 1;
     }
     assert_eq!(n, 600);
+}
+
+/// 600 cases of the shared comparator 0x6F023400 (Unicorn): derived values only.
+#[test]
+fn default_comparator_matches_the_original_vectors() {
+    let text = include_str!("data/unit_spells/comparator_default.txt");
+    let mut n = 0;
+    for line in text.lines() {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        let b = |i: usize| F32::from_bits(u32::from_str_radix(w[i], 16).unwrap());
+        let got = default_prefers(b(0), b(2), b(4));
+        assert_eq!(got, w[5] == "1", "case {n}: {line}");
+        n += 1;
+    }
+    assert_eq!(n, 600);
+}
+
+// ---- Inner Fire and Bloodlust ----
+
+fn buffs_gone(h: &ScriptHost, k: ObjKey, code: u32) -> bool {
+    !has_buff(h, k, code)
+}
+
+#[test]
+fn bloodlust_adds_attack_and_move_speed_and_takes_them_back() {
+    let mut h = started_manual();
+    let (shaman, grunt) = (unit(&h, "shaman"), unit(&h, "grunt"));
+    call(&mut h, "lust_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, grunt, BUFF_BLOODLUST));
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 260.0);
+    assert_eq!(h.game().effective_move_speed(grunt).to_f32(), 337.5, "270 * (1 + 0.25)");
+    let mult = h.game().unit(grunt).bonuses.attack_mult.to_f32();
+    assert!((mult - 1.4).abs() < 1e-5, "attack speed factor {mult}");
+    run(&mut h, 50);
+    assert!(buffs_gone(&h, grunt, BUFF_BLOODLUST));
+    assert_eq!(h.game().effective_move_speed(grunt).to_f32(), 270.0);
+    assert_eq!(h.game().unit(grunt).bonuses.attack_mult.to_f32(), 1.0);
+}
+
+#[test]
+fn bloodlust_refuses_enemies_and_a_second_cast_refreshes_instead_of_stacking() {
+    let mut h = started_manual();
+    let grunt = unit(&h, "grunt");
+    call(&mut h, "lust_foe");
+    run(&mut h, 1);
+    assert!(!accepted(&h));
+    call(&mut h, "lust_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    run(&mut h, 15); // cooldown over
+    call(&mut h, "lust_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().effective_move_speed(grunt).to_f32(), 337.5, "replaced, not stacked");
+    assert_eq!(h.game().buffs(grunt).iter().filter(|b| b.base == BUFF_BLOODLUST).count(), 1);
+}
+
+#[test]
+fn inner_fire_adds_armor_and_a_damage_fraction_and_expires() {
+    let mut h = started_manual();
+    let (shaman, grunt) = (unit(&h, "shaman"), unit(&h, "grunt"));
+    call(&mut h, "fire_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    {
+        let g = h.game();
+        let u = g.unit(grunt);
+        assert_eq!(u.bonuses.armor.to_f32(), 5.0);
+        assert!((u.bonuses.damage_pct.to_f32() - 0.1).abs() < 1e-6);
+        assert_eq!(g.unit(shaman).mana.to_f32(), 265.0);
+    }
+    run(&mut h, 50);
+    let g = h.game();
+    assert!(!has_buff(&h, grunt, BUFF_INNER_FIRE));
+    assert_eq!(g.unit(grunt).bonuses.armor.to_f32(), 0.0);
+    assert_eq!(g.unit(grunt).bonuses.damage_pct.to_f32(), 0.0);
+}
+
+#[test]
+fn bloodlust_autocast_picks_a_unit_that_is_fighting_an_enemy() {
+    let mut h = started_manual();
+    let (grunt, grunt2) = (unit(&h, "grunt"), unit(&h, "grunt2"));
+    call(&mut h, "fight");
+    call(&mut h, "lust_on");
+    run(&mut h, 5);
+    assert!(has_buff(&h, grunt, BUFF_BLOODLUST), "the fighting unit gets Bloodlust");
+    assert!(!has_buff(&h, grunt2, BUFF_BLOODLUST), "an idle unit does not");
+    // The buff is already on it: the next scans (every 3 s or after the cooldown) do not cast again.
+    run(&mut h, 20);
+    assert_eq!(h.game().unit(unit(&h, "shaman")).mana.to_f32(), 260.0);
+}
+
+#[test]
+fn bloodlust_autocast_needs_full_mana_for_a_wounded_unit_and_refuses_a_nearly_dead_one() {
+    let mut h = started_manual();
+    let (shaman, grunt, grunt2) = (unit(&h, "shaman"), unit(&h, "grunt"), unit(&h, "grunt2"));
+    call(&mut h, "fight");
+    call(&mut h, "fight2");
+    h.game_mut().write_life(grunt, f(200.0)); // 40 percent: below 0.5
+    h.game_mut().write_life(grunt2, f(40.0)); // 8 percent: never
+    h.game_mut().write_mana(shaman, f(250.0)); // not full
+    call(&mut h, "lust_on");
+    run(&mut h, 5);
+    assert!(!has_buff(&h, grunt, BUFF_BLOODLUST), "below 50 percent life only at full mana");
+    h.game_mut().write_mana(shaman, f(300.0));
+    run(&mut h, 35); // the next scan comes at 3.0 s
+    assert!(has_buff(&h, grunt, BUFF_BLOODLUST), "full mana: allowed");
+    assert!(!has_buff(&h, grunt2, BUFF_BLOODLUST), "at most 10 percent life: refused");
+}
+
+#[test]
+fn inner_fire_autocast_needs_a_unit_in_reach_of_its_enemy() {
+    let mut h = started_manual();
+    let (grunt, grunt2) = (unit(&h, "grunt"), unit(&h, "grunt2"));
+    // grunt2 stands 100 away from the line to the enemy but is ordered to attack: it walks; grunt is in reach at once.
+    call(&mut h, "fight");
+    call(&mut h, "fire_on");
+    run(&mut h, 5);
+    assert!(has_buff(&h, grunt, BUFF_INNER_FIRE));
+    assert!(!has_buff(&h, grunt2, BUFF_INNER_FIRE), "no attack target: refused");
 }

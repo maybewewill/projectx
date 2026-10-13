@@ -4,7 +4,10 @@ Runs the ORIGINAL function from the user's Game.dll; the only stub is the life-f
 (replaced by a table lookup so the object model is not needed). Rows: candidate V, candidate fraction, best V, best
 fraction, threshold T (float bits, hex) and 1 when the candidate wins, 0 when the best is kept.
 
-Usage: GAME_DLL=/path/Game.dll py tools/emu/unit_spells_emu.py CASES SEED OUT.txt
+Usage: GAME_DLL=/path/Game.dll py tools/emu/unit_spells_emu.py CASES SEED OUT.txt [heal|default]
+
+Mode `default` runs the shared comparator 0x6F023400 of CAbilityAutoTargetSpell (used by Inner Fire, Bloodlust and
+the other autocast spells) with its slot 0x464 (always 0 for them) served by a fake vtable.
 """
 import os, sys, random, struct
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -13,11 +16,16 @@ from unicorn import UC_HOOK_CODE
 from unicorn.x86_const import *
 mu = emu.mu
 DATA = emu.DATA
-F_CMP = 0x6F0DADD0
+MODE = sys.argv[4] if len(sys.argv) > 4 else 'heal'
+F_CMP = 0x6F0DADD0 if MODE == 'heal' else 0x6F023400
 F_FRAC = 0x6F020640
 CAND, BEST = 0x1111, 0x2222
 VC, VB, TT = DATA + 0x100, DATA + 0x104, DATA + 0x108
 fr = {}
+OBJ, VT, STUBC = DATA + 0x200, DATA + 0x300, DATA + 0x2000
+mu.mem_write(STUBC, bytes([0x31, 0xC0, 0xC3]))
+mu.mem_write(OBJ, struct.pack('<I', VT))
+mu.mem_write(VT + 0x464, struct.pack('<I', STUBC))
 def hook(uc, addr, size, user):
     ecx = uc.reg_read(UC_X86_REG_ECX)
     esp = uc.reg_read(UC_X86_REG_ESP)
@@ -42,7 +50,7 @@ for _ in range(int(sys.argv[1])):
     if r.random() < 0.2: t = vc
     mu.mem_write(VC, struct.pack('<I', vc)); mu.mem_write(VB, struct.pack('<I', vb)); mu.mem_write(TT, struct.pack('<I', t))
     fr[CAND] = fc; fr[BEST] = fbb
-    res = emu.call(F_CMP, ecx=0x7777, stack_args=(CAND, VC, BEST, VB, TT))
+    res = emu.call(F_CMP, ecx=OBJ if MODE != 'heal' else 0x7777, stack_args=(CAND, VC, BEST, VB, TT))
     rows.append((vc, fc, vb, fbb, t, 1 if res == CAND else (0 if res == BEST else 9)))
 out = sys.argv[3]
 with open(out, 'w') as fh:

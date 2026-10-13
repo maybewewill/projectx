@@ -52,7 +52,7 @@ use std::collections::BTreeMap;
 use softfloat::{arith, F32};
 
 use crate::abilities::{buff_predicates, code, Buff};
-use crate::cast::{begin_cast, CastError, CastRec, CastTarget, SpellMsg};
+use crate::cast::{begin_cast, effect_duration, CastError, CastRec, CastTarget, SpellMsg};
 use crate::natives::game::{Game, ObjKey, Payload};
 use crate::natives::unit_attr::is_unit_type;
 use crate::natives::{set_life, ScriptRuntime};
@@ -61,6 +61,10 @@ use crate::unitclass::ty;
 
 pub const HEAL: u32 = code(b"Ahea");
 pub const BUFF_HEAL: u32 = code(b"Bhea");
+pub const INNER_FIRE: u32 = code(b"Ainf");
+pub const BUFF_INNER_FIRE: u32 = code(b"Binf");
+pub const BLOODLUST: u32 = code(b"Ablo");
+pub const BUFF_BLOODLUST: u32 = code(b"Bblo");
 
 pub const ORDER_HEAL: u32 = 852_063;
 pub const ORDER_HEAL_ON: u32 = 852_064;
@@ -79,10 +83,14 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 1] = [(ORDER_HEAL, HEAL)];
+pub const SPELL_ORDERS: [(u32, u32); 3] = [(ORDER_HEAL, HEAL), (852_066, INNER_FIRE), (852_101, BLOODLUST)];
 
 /// `(autocast on order, autocast off order, ability)`.
-const TOGGLES: [(u32, u32, u32); 1] = [(ORDER_HEAL_ON, ORDER_HEAL_OFF, HEAL)];
+const TOGGLES: [(u32, u32, u32); 3] = [
+    (ORDER_HEAL_ON, ORDER_HEAL_OFF, HEAL),
+    (852_067, 852_068, INNER_FIRE),
+    (852_102, 852_103, BLOODLUST),
+];
 
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     for (id, base) in SPELL_ORDERS {
@@ -103,6 +111,114 @@ pub fn is_autocast(base: u32) -> bool {
 /// Whether the ability starts with autocast on (UNSURE: the default flag source is not found).
 fn default_autocast_on(base: u32) -> bool {
     base == HEAL
+}
+
+/// The stat modifiers a spell buff adds (deltas; the sinks of `auras.rs`). Undone exactly on removal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnitMods {
+    pub armor: F32,
+    /// Added to the movement multiplier (`0x6F202FF0`).
+    pub move_delta: F32,
+    /// Added to the attack speed multiplier (`0x6F0C9090`).
+    pub attack_delta: F32,
+    /// Added to the percentage damage modifier.
+    pub damage_pct: F32,
+    pub life_regen: F32,
+    pub mana_regen: F32,
+}
+
+impl Default for UnitMods {
+    fn default() -> Self {
+        UnitMods {
+            armor: F32::ZERO,
+            move_delta: F32::ZERO,
+            attack_delta: F32::ZERO,
+            damage_pct: F32::ZERO,
+            life_regen: F32::ZERO,
+            mana_regen: F32::ZERO,
+        }
+    }
+}
+
+fn nonzero(x: F32) -> bool {
+    x.to_bits() & 0x7FFF_FFFF != 0
+}
+
+impl Game {
+    fn apply_mods(&mut self, unit: ObjKey, m: &UnitMods) {
+        if nonzero(m.armor) {
+            self.add_armor(unit, m.armor);
+        }
+        if nonzero(m.move_delta) {
+            self.add_move(unit, m.move_delta);
+        }
+        if nonzero(m.attack_delta) {
+            self.add_attack_speed(unit, m.attack_delta);
+        }
+        if nonzero(m.damage_pct) {
+            let u = self.unit_mut(unit);
+            u.bonuses.damage_pct = arith::add(u.bonuses.damage_pct, m.damage_pct);
+        }
+        if nonzero(m.life_regen) {
+            self.add_life_regen(unit, m.life_regen);
+        }
+        if nonzero(m.mana_regen) {
+            self.add_mana_regen(unit, m.mana_regen);
+        }
+    }
+
+    /// Takes the modifiers of a removed buff off `unit`.
+    pub(crate) fn undo_mods(&mut self, unit: ObjKey, m: &UnitMods) {
+        let neg = UnitMods {
+            armor: arith::neg(m.armor),
+            move_delta: arith::neg(m.move_delta),
+            attack_delta: arith::neg(m.attack_delta),
+            damage_pct: arith::neg(m.damage_pct),
+            life_regen: arith::neg(m.life_regen),
+            mana_regen: arith::neg(m.mana_regen),
+        };
+        self.apply_mods(unit, &neg);
+    }
+
+    /// Applies (or refreshes) the buff `base` with the stat modifiers `mods` for `duration` seconds. An existing buff
+    /// of the same code gets its modifiers replaced and its duration set by the never-shorten rule (CONFIRMED for
+    /// Inner Fire: the creator finds the buff by its code and calls its apply slot `0x358`, which runs the
+    /// set-duration slot first and rebuilds the effects).
+    pub fn apply_mods_buff(
+        &mut self,
+        unit: ObjKey,
+        base: u32,
+        predicates: crate::abilities::BuffPredicates,
+        mods: UnitMods,
+        duration: F32,
+    ) -> u32 {
+        let serial = match self.buff_position(unit, base) {
+            Some(i) => {
+                let serial = self.unit(unit).buffs[i].serial;
+                self.set_buff_duration(unit, serial, duration);
+                if let Some(crate::auras::BuffEffect::Mods(old)) = self.unit(unit).buffs[i].effect.clone() {
+                    self.undo_mods(unit, &old);
+                }
+                serial
+            }
+            None => {
+                let serial = self.next_buff_serial();
+                self.unit_mut(unit).buffs.push(Buff {
+                    serial,
+                    base,
+                    predicates,
+                    ..Buff::default()
+                });
+                self.set_buff_duration(unit, serial, duration);
+                serial
+            }
+        };
+        self.apply_mods(unit, &mods);
+        if let Some(i) = self.unit(unit).buffs.iter().position(|b| b.serial == serial) {
+            self.unit_mut(unit).buffs[i].effect = Some(crate::auras::BuffEffect::Mods(mods));
+        }
+        serial
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -284,6 +400,20 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        INNER_FIRE | BLOODLUST => {
+            let t = gm.unit(target);
+            // targs: air,ground,friend,neutral,self (Bloodlust adds organic); no invulnerable targets.
+            if !(is_ally(gm, caster, target) || t.owner >= 12) || t.removed || gm.unit_is_invulnerable(target) {
+                return Some(CastError::BadTarget);
+            }
+            if is_unit_type(gm, t, ty::STRUCTURE) {
+                return Some(CastError::BadTarget);
+            }
+            if base == BLOODLUST && is_unit_type(gm, t, ty::MECHANICAL) {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -297,7 +427,60 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             }
             true
         }
+        INNER_FIRE | BLOODLUST => {
+            if let CastTarget::Unit(t) = rec.target {
+                buff_spell(game, rec, t);
+            }
+            true
+        }
         _ => false,
+    }
+}
+
+/// Inner Fire (`0x6F13BFA0`) and Bloodlust (`0x6F1CB080`), CONFIRMED structure: the duration is `HeroDur` for a hero
+/// target, `Dur` plus the unknown extra otherwise; the buff is found by its code (refresh) or created, and gets the
+/// level's data. Inner Fire: `DataA` damage fraction, `DataB` armor, `DataD` life regeneration, `DataE` mana
+/// regeneration (`DataC` is the autocast range, read by the scan); Bloodlust: `DataA` attack speed, `DataB` movement
+/// speed (`DataC` is the model scale, presentation). The meaning of each field is LIKELY (the editor labels), the
+/// sinks are CONFIRMED (Inner Fire: armor sink `0x6F2769C0` and the attack record modifiers; Bloodlust: the attack
+/// speed and movement sinks).
+fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    let d = &rec.level.data;
+    let (code, mods) = if rec.base == INNER_FIRE {
+        (
+            BUFF_INNER_FIRE,
+            UnitMods {
+                damage_pct: d[0],
+                armor: d[1],
+                life_regen: d[3],
+                mana_regen: d[4],
+                ..UnitMods::default()
+            },
+        )
+    } else {
+        (
+            BUFF_BLOODLUST,
+            UnitMods {
+                attack_delta: d[0],
+                move_delta: d[1],
+                ..UnitMods::default()
+            },
+        )
+    };
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(code)
+    };
+    if arith::lt(F32::ZERO, dur) {
+        gm.apply_mods_buff(target, code, preds, mods, dur);
     }
 }
 
@@ -424,40 +607,116 @@ pub fn heal_prefers(vc: F32, fc: F32, vb: F32, fb: F32, t: F32) -> bool {
     }
 }
 
+/// The shared comparator `0x6F023400` (`CAbilityAutoTargetSpell`, used by Inner Fire, Bloodlust ...; Unicorn 600
+/// cases, slot `0x464` is 0 for them): an in-range candidate beats an out-of-range best, an out-of-range one loses;
+/// two in-range units: the NEARER wins only if it is not strictly nearer than the best (the original keeps the
+/// farther of two in-range units: `Vb > Vc` returns the best); two out-of-range units: the strictly nearer wins.
+pub fn default_prefers(vc: F32, vb: F32, t: F32) -> bool {
+    let g = |x: F32| f64::from(x.to_f32());
+    let a = g(vc) <= g(t);
+    let b = g(vb) <= g(t);
+    match (a, b) {
+        (true, false) => true,
+        (false, true) => false,
+        (true, true) => !(g(vb) > g(vc)),
+        (false, false) => g(vb) > g(vc),
+    }
+}
+
+/// The life fraction below which Inner Fire / Bloodlust refuse (`0x6FAAE4A0` = 0.1); the mana rule thresholds are
+/// `0x6FAAE4BC` = 0.3 (Inner Fire) and `0x6FAAE4D0` = 0.5 (Bloodlust).
+const FRACTION_REFUSE: f32 = 0.1;
+
+/// The class filters of slot `0x450` (CONFIRMED, static): Heal `0x6F0F0370`, Inner Fire `0x6F123DC0`, Bloodlust
+/// `0x6F1AFF10`. Common to all: the base filter `0x6F030730` and the illusion rule. Bloodlust and Inner Fire accept
+/// only a candidate that has the attack ability, is attacking a unit that is not a friend of the candidate's player
+/// (`0x6F285AC0`, the passive-alliance mask), does not carry the buff yet, and whose life fraction `f` is above
+/// 0.1; below the mana threshold (0.5 Bloodlust, 0.3 Inner Fire) the caster must also be at full mana. Inner Fire
+/// further needs the candidate to be within its attack reach of that target (`0x6F0CBAE0` + `0x6F0207A0`, LIKELY
+/// reading) and ends in the call `0x6F1452A0` when the ability's flag 2 is set (not decoded, taken as true).
+fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
+    if gm.unit(k).illusion && !gm.spells.unit.illusions_get_autocast {
+        return false;
+    }
+    match base {
+        HEAL => {
+            if let Some(src) = gm.heal_mark_source(k) {
+                if src != Some(unit) {
+                    return false;
+                }
+            }
+            true
+        }
+        INNER_FIRE | BLOODLUST => {
+            let (buff, threshold) = if base == INNER_FIRE {
+                (BUFF_INNER_FIRE, 0.3f32)
+            } else {
+                (BUFF_BLOODLUST, 0.5f32)
+            };
+            if gm.buff_position(k, buff).is_some() {
+                return false;
+            }
+            let Some(target) = gm.attack_view(k).and_then(|v| v.target) else {
+                return false;
+            };
+            if !gm.alive(target) {
+                return false;
+            }
+            // `0x6F285AC0` is true for a passive-friendly player: the attack target must be hostile.
+            if !gm.is_enemy(gm.unit(k).owner, gm.unit(target).owner) {
+                return false;
+            }
+            let f = f64::from(life_fraction(gm, k).to_f32());
+            if f <= f64::from(FRACTION_REFUSE) {
+                return false;
+            }
+            if f < f64::from(threshold) {
+                let c = gm.unit(unit);
+                if f64::from(c.mana.to_f32()) != f64::from(c.max_mana.to_f32()) {
+                    return false;
+                }
+            }
+            if base == INNER_FIRE {
+                let ty = gm.attack_type(gm.unit(k).type_id);
+                if !gm.in_attack_range(k, target, &ty) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Slots `0x44C` / `0x450` / `0x458`: walks the candidates in the circle query's order and keeps the best.
 fn pick_target(gm: &Game, unit: ObjKey, base: u32) -> Option<ObjKey> {
-    if base != HEAL {
+    if !is_autocast(base) {
         return None;
     }
     let level = gm.ability_level_record(unit, base)?;
-    let (cx, cy, owner) = {
+    let (cx, cy) = {
         let u = gm.unit(unit);
-        (u.x, u.y, u.owner)
+        (u.x, u.y)
     };
-    let _ = owner;
     let t = arith::mul(level.rng, level.rng);
     let mut best: Option<(ObjKey, F32)> = None;
     for k in crate::natives::group::circle_candidates(gm, cx, cy, level.rng) {
         if !gm.alive(k) || gm.unit(k).hidden {
             continue;
         }
-        if target_error(gm, unit, base, k).is_some() {
+        if target_error(gm, unit, base, k).is_some() || !class_filter(gm, unit, base, k) {
             continue;
-        }
-        // Slot 0x450 (0x6F0F0370): illusions, and a marker buff made by another healer.
-        if gm.unit(k).illusion && !gm.spells.unit.illusions_get_autocast {
-            continue;
-        }
-        if let Some(src) = gm.heal_mark_source(k) {
-            if src != Some(unit) {
-                continue;
-            }
         }
         let v = dist2(gm, unit, k);
         best = match best {
             None => Some((k, v)),
             Some((b, vb)) => {
-                if heal_prefers(v, life_fraction(gm, k), vb, life_fraction(gm, b), t) {
+                let wins = if base == HEAL {
+                    heal_prefers(v, life_fraction(gm, k), vb, life_fraction(gm, b), t)
+                } else {
+                    default_prefers(v, vb, t)
+                };
+                if wins {
                     Some((k, v))
                 } else {
                     Some((b, vb))
