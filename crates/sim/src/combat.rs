@@ -1380,6 +1380,8 @@ impl Game {
     /// died, in order.
     fn arrive(&mut self, unit: ObjKey, target: ObjKey, damage: F32, raw: F32, weapon: usize) -> Vec<ObjKey> {
         let mut died: Vec<ObjKey> = self.hit_with_bash(unit, target, damage).into_iter().collect();
+        // Frost Armor / Thorns retaliation of the victim (`undead_ne.rs`).
+        died.extend(self.apply_retaliation(unit, target, damage));
         let tid = self.unit(unit).type_id;
         let Some(extra) = self.weapon_extra(tid, weapon) else {
             return died;
