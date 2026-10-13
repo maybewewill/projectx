@@ -69,6 +69,7 @@ use super::player::raw_at;
 use super::trigger::eval_boolexpr;
 use super::unit_attr::{NativeEntry, Support};
 use super::ScriptRuntime;
+use crate::cast::CastTarget;
 
 /// The RNG stream of the item selection (spec 7.3, `0x23`).
 const ITEM_STREAM: usize = 35;
@@ -381,30 +382,27 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
     });
 
     let g = Rc::clone(game);
-    reg.register("UnitUseItem", move |_, a| {
-        let mut gm = g.borrow_mut();
-        let ok = queue_use(&mut gm, a, ItemOrderKind::UseImmediate);
+    reg.register("UnitUseItem", move |ctx, a| {
+        let ok = use_native(&g, ctx, a, ItemOrderKind::UseImmediate, CastTarget::None);
         NativeResult::Return(Value::Boolean(ok))
     });
 
     let g = Rc::clone(game);
-    reg.register("UnitUseItemPoint", move |_, a| {
-        let mut gm = g.borrow_mut();
-        let kind = ItemOrderKind::UsePoint {
-            x: real_at(a, 2),
-            y: real_at(a, 3),
-        };
-        let ok = queue_use(&mut gm, a, kind);
+    reg.register("UnitUseItemPoint", move |ctx, a| {
+        let (x, y) = (real_at(a, 2), real_at(a, 3));
+        let ok = use_native(&g, ctx, a, ItemOrderKind::UsePoint { x, y }, CastTarget::Point(x, y));
         NativeResult::Return(Value::Boolean(ok))
     });
 
     let g = Rc::clone(game);
-    reg.register("UnitUseItemTarget", move |_, a| {
-        let mut gm = g.borrow_mut();
+    reg.register("UnitUseItemTarget", move |ctx, a| {
         // The widget must resolve (0x6F3BE5B0). Only units are modelled as widgets here (UNSURE for the others).
         let target = handle_arg(a, 2);
-        let ok = gm.unit_of_handle(target).is_some()
-            && queue_use(&mut gm, a, ItemOrderKind::UseTarget { target });
+        let t = g.borrow().unit_of_handle(target);
+        let ok = match t {
+            Some(t) => use_native(&g, ctx, a, ItemOrderKind::UseTarget { target }, CastTarget::Unit(t)),
+            None => false,
+        };
         NativeResult::Return(Value::Boolean(ok))
     });
 
@@ -610,7 +608,7 @@ fn give_handle(gm: &mut Game, item: ObjKey) -> u32 {
 
 /// `RemoveItem` (spec 4 and 5.5): detaches the item from its holder (without moving it), marks it removed and
 /// releases its creation reference.
-fn remove_item(gm: &mut Game, item: ObjKey) {
+pub(crate) fn remove_item(gm: &mut Game, item: ObjKey) {
     detach(gm, item, false);
     let it = gm.item_mut(item);
     it.removed = true;
@@ -701,6 +699,7 @@ fn put(gm: &mut Game, unit: ObjKey, slot: usize, item: ObjKey) {
     }
     pack[slot] = Some(item);
     gm.item_mut(item).holder = Some(unit);
+    crate::item_abilities::on_pack_add(gm, unit, item);
 }
 
 /// Takes `item` out of its holder's pack, clearing the slot. With `to_ground` the item is placed at the
@@ -709,6 +708,7 @@ fn detach(gm: &mut Game, item: ObjKey, to_ground: bool) {
     let Some(unit) = gm.item(item).holder else {
         return;
     };
+    crate::item_abilities::on_pack_remove(gm, unit, item);
     if let Some(pack) = gm.packs.get_mut(&unit) {
         for slot in pack.iter_mut() {
             if *slot == Some(item) {
@@ -734,6 +734,7 @@ fn add_to_unit(gm: &mut Game, unit: ObjKey, item: ObjKey) -> bool {
     }
     detach(gm, item, true);
     if powerup {
+        crate::item_abilities::on_powerup(gm, unit, item);
         remove_item(gm, item);
         return true;
     }
@@ -755,6 +756,7 @@ fn add_to_slot(gm: &mut Game, unit: ObjKey, item: ObjKey, slot: i32) -> bool {
         return false;
     }
     if powerup {
+        crate::item_abilities::on_powerup(gm, unit, item);
         remove_item(gm, item);
         return true;
     }
@@ -796,6 +798,33 @@ fn queue_use(gm: &mut Game, a: &[Value], kind: ItemOrderKind) -> bool {
     }
     gm.push_item_order(ItemOrder { unit, item, kind });
     true
+}
+
+/// The common body of the three use natives: the pack checks and the recorded order ([`queue_use`]), then the
+/// item ability cast (`crate::item_abilities::start_use`) when the item type has item abilities registered. The result
+/// is the cast start for such an item (the order validator of the original), else the checks' result.
+fn use_native(
+    g: &Rc<RefCell<Game>>,
+    ctx: &mut dyn super::ScriptRuntime,
+    a: &[Value],
+    kind: ItemOrderKind,
+    target: CastTarget,
+) -> bool {
+    let ok = {
+        let mut gm = g.borrow_mut();
+        queue_use(&mut gm, a, kind)
+    };
+    if !ok {
+        return false;
+    }
+    let (unit, item) = {
+        let gm = g.borrow();
+        (unit_at(&gm, a, 0), item_at(&gm, a, 1))
+    };
+    match (unit, item) {
+        (Some(unit), Some(item)) => crate::item_abilities::start_use(g, ctx, unit, item, target).unwrap_or(true),
+        _ => ok,
+    }
 }
 
 /// The candidate items of `EnumItemsInRect`, in creation order (UNSURE, spec 6.1: the walker is not read). Only

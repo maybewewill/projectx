@@ -341,3 +341,212 @@ Thunder Clap (target set filter `targs`, the per-owner array), Divine Shield (th
 the cancel test), Avatar (the first-activation dispel) and Water Elemental (placement `0x6F1D26B0` / `0x6F4AFCD0`) keep the
 labels of sections 1 to 6; the time went into Blizzard, Mass Teleport and the Resurrection sort. Nothing in them changed
 except the order ids of section 8.
+
+## 14. The shared channel lifecycle (S35)
+
+Read from the machine code (CONFIRMED = read in disassembly; Unicorn numbers where a count is given). Implemented once
+in `cast.rs` (`channel_time`, `complete_cast`, `end_cast`, `process_interrupts`) and used by Blizzard and Mass Teleport.
+
+**Flags of the ability word `+0x20`** (names are mine): `0x1` cast active, `0x4` the unit's order queue is held,
+`0x800` the cast animation runs, `0x1000` channel hook active, `0x2000` casting by order (selects the order id getter
+`0x368` instead of `0x348`: slot `0x314` is just this bit), `0x4000` ENDCAST pending, `0x40000` finish succeeded,
+`0x40000000` backswing/channel phase.
+
+**Stage 1** (`0x6F071570`): sets `0x1000`, clears `0x4000`, posts CHANNEL (`0x6F29A0F0`), then calls slot `0x384` (class
+channel-start hook; the default is a `ret`, only `ANcl` implements it), then the readiness check. The stage-1 delay is
+the property at `+0x80`: its value is the level's `Cast` (base init `0x6F05C6C0` through `0x6F01F850`) -- **Blizzard
+overwrites it with 0.0** at the end of its level init `0x6F197E90`, so a Blizzard cast starts at once and its `Cast` is
+only the wave interval (the model had waited `Cast` seconds before; fixed, CONFIRMED by disassembly).
+
+**Stage 3 tail** (`0x6F063760`, CONFIRMED): after EFFECT and the effect body (mana, class effect, cooldown) the property
+at `+0x90` (value cell `+0x94`) is the **channel time**:
+
+| Source | Value |
+|---|---|
+| default (base init `0x6F05C6C0`, when slot `0x35C` is 0) | the unit type's `castbsw` (`0x6F29BD70`, unit type record `+0x70`) |
+| Blizzard (`0x6F1B9E90`, end) | `mul(I2R(f2i(DataA)), Cast)` = waves times the interval (**Unicorn 400/400**, `human_heroes::blizzard_channel_time`) |
+| Mass Teleport (level init `0x6F060AE0`, slot `0x35C` returns 1) | `DataB` |
+
+`0x6F022270` (value above 0.0: ordered `c < p` as an x87 compare, then not `0.001 > |p - c|`) and `0x6F022340`
+(differs from `FLT_MAX` = `0x6FAAE624`: not `0.001 > |c - p|`) decide: not above zero -> slot `0x39C(1)` at once
+(**Unicorn 400/400** each, `cast::prop_above`, `cast::prop_differs`); otherwise slot `0x398` (default `0x6F050A60`: sets
+bit 8 of the flag word of the object the unit's `+0x19C` handle names; no simulation effect found), then, unless the
+value is `FLT_MAX`, a `0xD01BD` timer of that many seconds on the cast's stage timer (`+0xBC`). The FINISH event of a
+spell therefore comes `castbsw` after the effect for an ordinary spell (the earlier model fired it with the effect; the
+`spell_cast.rs` test is updated), and `waves * Cast` after the effect for Blizzard.
+
+**Message `0xD01BD`** (dispatch table at `0x6F074E00`, handler list `0x6F074C60`): slot `0x39C(1)`. Mass Teleport's
+class override `0x6F069D60` teleports and then falls into the default `0x6F05BCD0` (success path: tells the unit the
+order finished with `0xD015F`/`0xD0160`, then `0x6F050AF0`): **FINISH event (`0x6F29A5A0`), the channel-end hook (slot
+`0x388` when flag `0x1` is set), the unit's order drain**. The hooks: default `ret`; Blizzard `0x6F1AFBE0` (resets the
+unit animation, destroys the effect through the handle at `+0x134`, cancels the autocast timer, then posts ENDCAST
+`0x6F050950`); Mass Teleport `0x6F056AC0` (ENDCAST first, then clears flags `0x80000`/`0x100000` on the caster and the
+destination and ends the teleport art). ENDCAST for the other classes is not posted by a visible hook (`0x6F050950` has
+34 callers, mostly class overrides): the model keeps firing it after FINISH (LIKELY).
+
+**Interruption** (message `0xD0144` -> slot `0x3A0` = `0x6F05C020` -> `0x6F050BE0`, CONFIRMED structure): the message
+carries an order object; its id (`+0x34`) is compared with the ability's own order id (`0x368` when flag `0x2000`, else
+`0x348`). When it **differs**: flag `0x1000` is cleared and slot `0x388` runs, the stage timer `+0xBC` is cancelled, the
+casting flags are cleared and the animation is reset. The same id leaves the cast alone. No FINISH is posted on this
+path; the hook posts ENDCAST. Where the unit posts `0xD0144` is the order dispatcher (`orders.md` section 5: every
+replacing order and stop). The model (`note_order_replaced`, `process_interrupts`): a replacing order (including stop)
+of another id ends the cast; **death or removal of the caster and a stun of a channelling caster** end it (LIKELY from
+game behaviour; the buff-side calls were not read); **silence does not** end a started channel (LIKELY). The processing
+runs after every timer event and tick (the original reacts inside the order call; the difference is at most one tick).
+
+Open: the unit-side meaning of slot `0x398`; who posts ENDCAST for classes without a hook; whether a re-issue of the same
+order id restarts a channel in the original (the model restarts the cast, ending the old one).
+
+## 15. Blizzard damage delivery (S35)
+
+**Data of the shipped 1.26a patch** (`War3Patch.mpq`, `Units\AbilityData.slk`; the older archives differ): `AHbz`:
+`targs` `_`, `Cast` 1, `Dur`/`HeroDur` 0, `BuffID` `BHbd,BHbz`, `EfctID` `XHbz`. `AHmt`: ability `targs`
+`ground,structure,vuln,invu,player,neutral,ally`.
+
+**Argument capture** (Unicorn: the real `0x6F1B9DB0` against a fake effect, `tools/emu/human_heroes3_emu.py`): the damage
+wave calls the area helper `0x6F2C31D0` with: a shape list `{area (+0x74), value (+0x8C)}` (count 1), the damage class
+`0x200` (effect slot `0x88`), **the effect's flag word `+0xC0`** (= the ability's flag word `+0x4C`), the caster, the
+owner index `+0xBC`, the callback `0x6F1B6CB0` and the effect as context; the circle centre is `(+0x64, +0x6C)` (x, y).
+
+**The flag word** (`targs` table in the file at `0x6FA6F478..0x6FA6F608`, 8-byte records name/value; values read as data):
+air `0x4`, alive `0x1000000`, ally `0x4000`, ancient `0x80000000`, bridge `0x400`, dead `0x2000000`, debris `0x100`,
+decoration `0x200`, enemy `0x10000`, friend `0x6000`, ground `0x2`, hero `0x400000`, invulnerable `0x200000`, item `0x20`,
+mechanical `0x8000000`, neutral `0x8000`, none `0x1`, nonancient `0x40000000`, nonhero `0x800000`, nonsapper `0x10000000`,
+notself `0x1E000`, organic `0x4000000`, player `0x2000`, sapper `0x20000000`, self `0x1000`, structure `0x8`, totem/ward
+`0x10`, tree `0x40`, vulnerable `0x100000`, wall `0x80`. The normaliser `0x6F2552F0` adds the default of every group the
+word leaves empty (relations: all; alive/dead: alive; classes: ground+air+structure; vulnerable/invulnerable:
+vulnerable; hero, ancient, sapper, organic/mechanical: both). So `_` = `0xFDD1F00E` means: **alive, vulnerable (not
+invulnerable), ground/air/structure, all relations including self and allies**. Where the original keeps allies out of a
+Blizzard is not found (the damage target side has a relation case, `attack-damage.md` section 11.6); the model hits
+enemies only (UNSURE). Mass Teleport's group filter `0x40303006` (nonancient, player, vulnerable, invulnerable, air,
+ground; item 17 of the op list `0x1D`) = **units of the caster's own player**, alive, not structures, not ancient,
+vulnerable or invulnerable alike.
+
+**The per-unit callback `0x6F1AF950`** (CONFIRMED structure; numbers **Unicorn 400/400** against the real function with a
+fake effect, target and buff, `human_heroes::blizzard_unit_damage`, `blizzard_buff_replaces`): arguments (unit, `n`, pointer
+to the value `d`).
+1. A non-immune target (`unit+0x15C <= 0`) with a non-zero optional debuff duration (`HeroDur` for heroes, else `Dur`;
+   0 for the stock ability) gets the `BHbd` debuff through effect slot `0x80` (not modelled; the stock ability skips it).
+2. **Cap**: `DataF != 0` (NaN counts as non-zero) and `cap < mul(I2R(n), d)` (ordered) -> `d = div(cap, I2R(n))`.
+3. The sign flips when effect slot `0x8C` is true (0 for Blizzard).
+4. **Building factor**: a structure (`unit+0x5C` bit 16, test `0x6F26DE50`) or a unit with `unit+0x20` bit `0x200000`
+   (`0x6F26DE80`, meaning unknown; the model treats it as false) takes `mul(DataD, d)`.
+5. Effect slot `0x84` (`0x6F1CADD0`) gets or creates the **`BHbz` marker buff** on the unit (duration `interval - 0.01`,
+   `0x6F0D6040`: `sub(interval, 0.01)` when the interval is above zero, else a zero-length buff that ends at once). A
+   **new** marker makes the callback return **1** (slot `0x84` returned 0); an **existing** one keeps its
+   value unless `existing < d` (ordered), in which case the stored value (`+0xD0`) is replaced and the duration refreshed
+   through slot `0x350`; the callback returns **0**.
+6. The area helper applies the damage only when the callback returned non-zero (`0x6F2C3597`: `test eax, eax`, then the
+   record builder `0x6F2556E0` and the target's damage slot `0x120`; `0x6F2BFED0`): **a unit that already carries `BHbz`
+   takes no damage from this wave**. Consequences: two overlapping Blizzards do not stack within the marker window
+   (`interval - 0.01`); successive waves of one Blizzard (`interval` apart) each hit.
+7. Damage record: amount `d`, class word `0x200` (type 9) from the effect (slot `0x88`), plus bit `0x10` when `d == 0.0`
+   exactly; a negative `d` takes the heal path (`0x6F277C20`, `-d`; not modelled). The record goes through the target side
+   `0x6F2A40D0` (`attack-damage.md` section 11): class `0x200` is not the armor class `0x10`, so only the type table and
+   the min-1 rule apply.
+
+`BHbz` itself (`CBuffAoe` slots: `0x354` returns 1, so its apply/remove hooks `0x6F0AE0B0`/`0x6F0AE0D0` do nothing; the
+`0x44/0x48/0x4C` overrides are save/load of the stored value) deals **no damage of its own** (the earlier "life loss from
+the buff" question is answered: there is none). `n` in step 2 is the number of enumerated units of the same relation kind
+(the area helper's kind buckets `+0x4C..+0x54`, kind from the record `+8`); the model uses the number of enemy targets
+(UNSURE).
+
+Model: `human_heroes::blizzard_damage` (marker map `State::markers`, spell buff `BHbz`), tests
+`two_blizzards_do_not_stack_and_invulnerable_units_are_skipped`, `human_heroes3_vectors.rs`.
+
+## 16. Mass Teleport: delay, filter, placement (S35)
+
+* **Channel delay** (CONFIRMED, **Unicorn 400/400**: the real level init `0x6F060AE0` with the base init stubbed): the
+  property at ability `+0x90` (the channel time of section 14) is set to the level's **`DataB`** unchanged. The teleport
+  runs when that `0xD01BD` timer ends (completion `0x6F069D60`), so it is cancelled by an order, a stun or the caster's
+  death before that (section 14). The completion also requires flag `0x80000` on the ability (set at the start), a live
+  destination whose `+0x5C` bit `0x100` is clear, and `0x6F0485F0(caster)` to accept the caster; otherwise it only
+  finishes.
+* **Group filter** (CONFIRMED: argument capture of the call at `0x6F069E95`, the `targs` table of section 15): the group
+  builder `0x6F2A3270` gets op `0x1D` with the word `0x40303006` (nonancient, player, self, vulnerable, invulnerable, air,
+  ground), the caster as reference and player -1. The normaliser `0x6F2552F0` (**Unicorn 400/400**,
+  `human_heroes::targs_normalise`) turns it into `0x7DF03006`: **units of the caster's own player** (and the caster itself,
+  which the callback `0x6F056890` skips), alive, **no structures** (the class group is given, so structure is not
+  defaulted in), not ancient, invulnerable ones included. Allied units of other players are NOT taken (the earlier model
+  took allies). The per-unit callback also asks `0x6F0485F0` (the "can be moved" test: not owned by someone else, not a
+  unit with a channelling order id `0xD0278`, not flag `+0x60 & 0x200` = already being teleported, not a ward/structure
+  class; error codes `0xDD`, `0x6C`, `0xBA`, `0x5C`, `0x95`, `0x69`) -- only the owner and structure parts are modelled.
+* **Selection**: the limit `f2i(DataA) - 1`, the record layout and the comparator are section 12 (unchanged, Unicorn 400).
+* **Placement** (CONFIRMED structure by running the real `0x6F056980` with the move call captured): with the cluster
+  flag every unit is handed the **destination position pair itself** (`0x6F048AE0(unit, &dest, &dest, 0, ...)`), so they
+  stack on the destination; without it the unit gets an offset-based pair (`*A2 + *A4` of the helper's arguments; the
+  formula behind them was not decoded: the model keeps the caster-relative offset, UNSURE). **The cluster flag** is Misc
+  `MassTeleportCluster` (read with default 0, `0x6F009F90` with `push 0`) **and** `DataC != 0` (`0x6F0327E0`); the key is
+  not in the shipped `MiscData.txt`, so in the stock game clustering is OFF whatever `DataC` says (the earlier model
+  clustered on `DataC` alone and kept offsets for it, the opposite). `Game::set_mass_teleport_cluster` carries the key.
+  The move itself (`0x6F048AE0`, 14 arguments: pathing-aware placement, the transported unit's order cleanup) is not
+  decoded; the model clamps to the playable area and stores the position.
+* Order: the caster is moved first, then the sorted records (`0x6F06A023..0x6F06A063`, stride 20 bytes).
+
+## 17. Resurrection, the magic-immunity apply, Banish, Phoenix and what stays open (S35)
+
+**Resurrection corpse records** (`0x6F1D1720` callback, record builder `0x6F1C1B90`, CONFIRMED by reading; the distance
+Unicorn 400/400): a non-hero unit (type id first character not `A`..`Z`) accepted by the ability's flag word
+(`air,ground,dead,friend`) becomes a 20-byte record `{unit, key, real, flag, owner}`: `key` (`+4`) = `0x6F29DCA0(unit)` =
+the type's `level` (0 when not positive, at most Misc `MaxUnitLevel`), `real` (`+8`) = the **squared 2D distance to the
+caster** (`0x6F020210` 3D difference then `0x6F020000` = `x*x + y*y`, both soft arithmetic), `flag` (`+0xC`) = 0, owner
+index (`+0x10`) = the caster's player. The sort comparator of section 5 therefore orders: the caster's own corpses first,
+then **higher unit level first, then nearer first**, then the larger agent id. The model uses exactly this (the earlier
+"all keys equal, larger agent id first" order was wrong; the `human_heroes.rs` test is updated). Hero corpses take another
+path through the `Acar` corpse buff (`0x6F1CFF70` -> `0x6F1C9780` over up to ten buff references) and are not modelled: the
+model skips heroes (UNSURE whether the stock game can revive them).
+
+**Divine Shield apply** (`CBuffDivineShield` slot `0x31C` = `0x6F07D180`, CONFIRMED by reading; `0x6F0D9B60` = `'Bprg'`):
+base apply (slot `0x320`), then the purge debuff `Bprg` is removed, then the dispel walker `0x6F079FE0`, then
+`0x6F0796F0` (invulnerability count `+0xE8`, bit `0x8` of the flag word) and `0x6F07A3A0(unit, 1)` (magic immunity counts
+`+0x15C`/`+0x160`; on the first count the same purge removal and dispel run again). **Avatar** runs the same removal and
+dispel on its first immunity count (`0x6F07A3A0`). The walker (Unicorn: the real function against fake buff objects with
+random predicate answers, **400/400**, `human_heroes::dispel_selects`): the nine stack arguments are physical, magic,
+undispellable-ok, aura-ok, typed, positive, negative, type-arg, timed-ok; Divine Shield and Avatar call it with
+`(0,1,0,0,0,1,1,0,1)`: **magical buffs of both polarities, no auras, nothing undispellable, timed life included**.
+`Game::magic_immunity_dispel` applies it (the sim knows the predicates of stun, slow and Thunder Clap slow only, as
+negative magical buffs: UNSURE for other codes). **Cancel**: slot `0x318` of `CAbilityDivineShield` (`0x6F0AE2C0`)
+returns **852091** (`0xD007B`) when `0x6F089A50` allows it (so the earlier id 852056, which is `undefend`, was wrong), and
+`0x6F089A50` needs `DataA != 0` **and** Misc `CanDeactivateDivineShield` (default 0, absent from `MiscData.txt`): in the
+stock game the shield cannot be cancelled. `Game::set_can_deactivate_divine_shield` carries the key.
+
+**Thunder Clap** (patch data: `targs` `ground,neutral,organic`, `Dur` 5, `HeroDur` 3, `BuffID` `BHtc`): the flag word
+normalises to ground-only classes (no air, no structure), organic, relation `neutral`; what `neutral` means against the
+player alliance masks in `0x6F25D480` (a mask pair at `+0x38`/`+0x78` of the player object) was not decoded, so the
+enemy rule of the model stays UNSURE. The slow application (`0x6F18A930`): duration hero test then `HeroDur` / `Dur + (+0x9C)`
+(section 1), movement `-DataC`, attack speed `-DataD`; an existing `BHtc` is refreshed through its slot `0x358`, a new
+one is created and applied through slot `0x354`.
+
+**Water Elemental placement** (`0x6F163390` loop, `0x6F1D27A0`, `0x6F1D26B0`, `0x6F4AFCD0`, read, not Unicorn-run):
+each unit is created by `0x6F29F990` with facing = the caster's facing (or Misc `BuildingAngle` times pi/180 when the
+flag argument is zero) at a position `0x6F1D26B0` computes as the caster's position plus a rotated offset
+(`0x6F4AFCD0` builds a rotation from an angle and the axis `(0,0,1)`); the offset argument comes from the caller's
+vector call and was not resolved, so the model keeps the caster's position (UNSURE). Registration flags `0x502`
+(duration 0) / `0x2`.
+
+**Banish** (`AHbn`, order **852486**, unit target; patch data `Dur` 12/24/36, `HeroDur` 5/7/9, `DataA` 0.5): unit effect
+`0x6F1CA2B0`; values **Unicorn 400/400** (`human_heroes::banish_values`): duration = `HeroDur` for a hero else
+`add(Dur, +0x9C)`, movement factor `-DataA`, attack factor `-DataB`. Buff `BHbn` (`CBuffBanish` < `CBuffEthereal` <
+`CBuffSpeed`): apply = speed apply (`0x6F0D6460`), remember the caster, stop a running attack (`0x6F2A4B80`), ethereal
+counter +1 (`0x6F07A340`); removal: counter -1 and a zero-damage hit of class `0x210` from the caster. Model: spell buff
+`BHbn` (slow factors) + `ethereal += 1` + `combat_end`; the removal lowers the counter.
+
+**Summon Phoenix** (`AHpx`, order **852489**, no target): `CAbilitySummonPhoenix` is a `CAbilityWaterElemental`; the
+effect `0x6F11BA10` only registers a callback and enters the Water Elemental summon loop; the post-create hook
+`0x6F128BE0` stores the summoner in a buff of the new unit and starts **no** timed life. With `Dur` 0 in the data the
+Phoenix is permanent. Model: `human_heroes::phoenix` = the shared `summon` body.
+
+**Siphon Mana** (`AHdr`, order **852487**, unit target) and **Flame Strike** (`AHfs`, order **852488**, point target)
+are decoded only structurally and are NOT modelled: Siphon Mana is a channel (`Dur`/`HeroDur`, timer message `0xD01C1`,
+per tick the range test `0x6F4766E0` with `Area`, then slot `0x3EC` = `0x6F04F7A0`), whose transfer rules are driven by the
+Misc keys `DrainTransfersLife`, `DrainTransfersMana`, `DrainGivesBonusLife`, `DrainGivesBonusMana` (all default 0, absent
+from the shipped `MiscData.txt`) and the level fields `DataA..DataG`; the per-unit effect is `0x6F0B6900` (read as far as
+the flag decoding, not the transfer arithmetic). Flame Strike creates the effect object `XHfs` (`CEffectFlameStrike`, a
+`CEffectDeathAndDecay`) and applies the damage-over-time buff `BHfs` (`CBuffFlameStrike` < `CBuffLifeDoT`); `Cast` 1.33 is
+its stage-1 delay as for ordinary spells, `DataA` damage, `DataB` interval 0.33 (LIKELY meanings). **Brilliance Aura**
+(`AHab`) and **Devotion Aura** (`AHad`) are passive aura emitters already modelled in `auras.rs` (buffs.md sections 4 and
+5: armor `DataA` and mana regeneration `DataA` through the aura buffs `BHad`/`BHab`); S35 added no change.
+
+**Open**: the offset placement of Mass Teleport units and Water Elemental summons, what `neutral` selects in the
+relation masks, the Acar hero-corpse path of Resurrection, the Siphon Mana and Flame Strike arithmetic, the unit-side
+meaning of slot `0x398`.

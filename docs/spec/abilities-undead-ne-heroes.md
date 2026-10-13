@@ -211,3 +211,83 @@ AUdr 852219, AUdd 852221, AUin 852224, AEme 852180, AEsf 852183, AEtq 852184. At
 Frost Nova slow source and sign (Unicorn 400), Frost Nova call order and the buff-less primary routine, Roots pulse period, first delay, amount, class and skip rules (Unicorn 600 plus the effect-argument run),
 Shadow Strike data roles and the Cast pulse period (Unicorn property flow), Sleep keeper buff and DataA, Dark Ritual = Death Pact effect, Death Pact DataE branch is dead data, Immolation
 mana drain = regen modifier of minus DataB and the off-below-1-mana rule, the identity of Vampiric's `0x6F28D750` check.
+
+## S37: swath engine (Carrion Swarm / Shockwave), Immolation marker, Shadow Strike decay, Inferno, Death and Decay
+
+Harness `tools/emu/undead_ne4_emu.py` (`GAME_DLL=... CHECK=launch|tick|aoe|decay|apply|inferno|dnd py ... [--dump DIR] [N] [SEED]`), vectors
+`crates/sim/tests/data/undead_ne/{swarm_launch,swarm_tick,immo_marker,strike_decay,strike_apply,inferno_ctx,dnd_pulse}.txt`, tests
+`undead_ne_s37_vectors.rs`, `undead_ne_s37_strike.rs`, `undead_ne_s37_ctx.rs` (Unicorn vectors, `GAME_DLL` needed for the soft-float tables) and
+`undead_ne_s37.rs` (behaviour). Code `crates/sim/src/undead_ne.rs` (pure functions `safe_div`, `gt_eps`, `rescale`, `swath_*`, `strike_*`,
+`inferno_ctx`, `dnd_pulse_amount`, `aoe_marker_duration`) plus `Game::set_spell_buff_slow` in `cast.rs`. Order ids (original getters,
+`ability_orders.py --verify`): AUin 852224, AUdd 852221, AEsf 852183, AEtq 852184, AEme 852180, AUfa 852225 (AUfu autocast on/off 852458/852459),
+AUim 852555, AUcb cast 852551 (autocast 852552/852553), AUls 852556, AEfk 852526, AEmb 852179, AEst 852181, AEsv 852528, AHfa cast 852173
+(autocast 852174/852175).
+
+### Level data roles corrected (CONFIRMED by the missile setup `0x6F1F28C0` run in Unicorn and by the stock rows)
+`AUcs`/`AOsh`: `Area` = start width, `DataA` = damage per hit, `DataB` = **total cap** ("max damage"), `DataC` = **distance**, `DataD` = final
+width (stock AUcs 100 / 75,125,200 / 300,600,1000 / 800 / 300; AOsh 125 / 75,130,200 / 900,1560,2400 / 800 / 125). The S28 text above that calls DataB the
+distance and DataC the end width is wrong; the old model used those roles.
+
+### The swath engine (shared by `AUcs` and `AOsh`: `CMissileShockwave` derives from `CMissileCarrionSwarm` and overrides no tick/hit/setup code)
+* **Launch geometry** `0x6F1DD4F0` (CONFIRMED, Unicorn 400 cases, 0 mismatches, `sim::undead_ne::swath_launch`): `dx, dy` = point - caster (soft
+  sub), `d2 = dx*dx + dy*dy` (soft mul/add). If `d2 >= 400.0` (`20.0` squared by the soft multiply; NaN and smaller take the other branch) the direction
+  vector is `(dx, dy)` rescaled to length `Area` by `0x6F07B870` (`k = Area * recip(sqrt(x*x + y*y))`, `(x*k, y*k)`, the same code Blink uses);
+  otherwise the polar vector `(Area*cos(f), Area*sin(f))` with `f` the caster's facing in radians (`0x6F10E370`: **cos for x, sin for y**).
+  `start = caster + v1` (the swarm starts `Area` units in front of the caster, not at the caster), `end = start + rescale(v1, DataC)`.
+* **Setup** `0x6F1F28C0` (CONFIRMED mapping by property logging): start x/y -> properties `+0x90/+0x98`, DataC -> `+0xA0`, Area -> `+0xC8`, DataD -> `+0xD0`,
+  DataA -> `+0xD8`, DataB -> `+0xE0`, constant `3.0` (`0x6FAB35FC`) -> `+0xEC`, caster handle, owner index, targs word `(ability+0x4C & 0xFFFF0FFF) | 0x10000`
+  (the relation bits replaced by "enemy"; with a unit target that is an enemy and not allied `0x8000` "neutral" is added). **The setup runs one tick at
+  once** (at the start point).
+* **Tick** `0x6F1EF6D0` (message `0xD01C1`; CONFIRMED numerics, Unicorn 600 cases, 0 mismatches, `swath_radius`, `swath_damage_each`, `swath_cap_after`,
+  `swath_rearm`): `dist = sqrt(dx^2 + dy^2)` from the start point to the missile position, `frac = safe_div(dist, DataC)` (`0x6F022530`: a plain soft divide
+  unless the divisor is 0.0; then 0/0 = 1.0, otherwise +-FLT_MAX by the numerator's sign), `radius = Area + (DataD - Area) * frac`. The group builder
+  (`0x6F2A3270`, shape `0xB` = circle, mask `0x1F`, args radius/x/y) is asked for the units around the **missile position**; the callback `0x6F1E7B00` keeps at
+  most **64** units that pass the target acceptance (`0x6F25D6F0` with the setup's targs word; enemy only for a point cast) and are not marked (below).
+  With `n` units: `share = safe_div(cap, I2R(n))` (`0x6F0223C0`); each unit gets `D = DataA` when `gt_eps(share, DataA)` else `share`
+  (`gt_eps` = `0x6F07C450`: `a > b` by the x87 compare **and** `|a - b| >= 0.001`). Per unit in list order: life before (unit slot `0x12C`), the hit
+  `0x6F1DD3A0` (a damage record of class `0x8000`, record flags `0x41`, `0x51` for a blocked unit, attacker = the caster handle), life after; **the cap
+  falls by the life really lost**: `cap = sub(cap, sub(before, after))`. Then `ec = ec - (0.1 + 0.02)` (property `+0xEC`, a countdown nothing reads),
+  and the timer `0xD01C1` is re-armed with 0.1 s (`0x6FAB35F8`) only while `gt_eps(cap, 0.01)`.
+* **Hit once**: each hit unit gets the marker buff `'BUcs'` (`0x6F1FB8E0`, duration `0.1 + 0.02`); the callback's per-ability predicate `0x6F1E79E0` refreshes
+  the marker of a unit it meets again and rejects it. So a unit that stays inside the swath at consecutive ticks is hit once; one that leaves for one tick is hit
+  again (LIKELY: read, not run).
+* **Arrival** slot `0xBC` (`0x6F1F2A20`): when `gt_eps(cap, 0.0)` one last tick runs at the end point, then the missile is destroyed.
+* **Not decoded (UNSURE)**: the flight itself (the model moves the missile linearly at the ability's `Missilespeed`: AUcs 1100, AOsh 1050 from start
+  to end), the first tick's relation to the creation instant, and the class mapping of the sim's damage path for class `0x8000` (bit 15 is passed as the damage
+  type). Orc lane: call `undead_ne::swath_cast(game, rt, caster, level, point, SHOCKWAVE_TARGS, SWATH_DAMAGE_TYPE, AOSH)`.
+
+### Immolation (`AEim`): the victim buff `'BEia'`
+`CBuffImmolationAoe` derives from `CBuffAoe` and overrides only the code getter, destructor and one id; `CBuffAoe` makes it a **duration-only marker** (slot `0x354`
+returns 1 so the base bonus apply/remove `0x6F0AE0B0/0xD0` do nothing). Its duration is `value - 0.01` when `0.0 < value` (apply `0x6F0D6040` and
+refresh `0x6F0D60A0`, both CONFIRMED, Unicorn 320 cases, `aoe_marker_duration`); the pulse callback `0x6F13B2A0` creates it with `Dur` or refreshes a live
+one. **Where the damage comes from was not found**: no call to the damage-record constructor `0x6F2556E0`, the damage slot `0x120`, AddLife or the
+target-damage routine appears within two call levels of any vtable function of `CBuffImmolation`, `CBuffLightningShield`, `CBuffImmolationAoe`, `CBuffAoe`
+(`scanfn` over the RTTI vtables), and the area collector `0x6F2C31D0` only collects. The model keeps the global pulse (DataA per `Dur` seconds to
+enemies in Area) and now also applies the marker. UNSURE: whether the original damages through a life-regeneration modifier on the victim.
+
+### Shadow Strike (`AEsh`): the slow decay (CONFIRMED numerics)
+Stock DataA 10 (pulse damage), DataB 0.5 (move slow), DataC absent (attack slow 0), DataD 3 (decay exponent), DataE 75 (initial damage), Cast 3 (pulse period),
+Dur 15.1. Slot `0x390` (`0x6F1DD190`, Unicorn 400 cases, `strike_decay_factor`): `f = pow(|T - Dur|, DataD) / pow(Dur, DataD)` (soft pow, soft divide), snapped to 0.0
+below 0.001 (`0x6F1D2A10`), 0.0 when the buff flag `0x80` is clear or `Dur` is within 0.001 of 0.0; `T` is the buff timer's slot `0x1C`. Slot `0x37C`
+(`0x6F11BBF0`, Unicorn 400 cases, `strike_slow_amounts`): the move amount `m*prev - m*f` and the attack amounts `a*prev`, `(-a)*f` (flag bit 26 of the buff
+flags) are ADDED to speed factors that start at 1.0 (`0x6F202FF0`, `0x6F0C9090`). The creation call uses `prev = 0, f = 1.0` (slow = `m`), afterwards `prev = 1.0`
+is stored and the 1.0 s timer `0xD01C3` (`0x6F1D53B0`, handler clamps `f` at 0.0) applies the differences, so the net slow is `m * f`. UNSURE: `T` as the elapsed
+time (the machine code of slot `0x1C` computes a difference of two timer cells that was not run; with the elapsed reading the slow starts at DataB and
+decays to 0 at the end, the physically sensible direction). Sim: `strike_slow_tick`, `Game::set_spell_buff_slow`.
+
+### Inferno (`AUin`): CONFIRMED context roles (Unicorn 320 cases, `inferno_ctx`)
+Effect `0x6F13BC60` -> `0x6F117B40` copies the level record into the landing context: targs word, `Area` (landing circle), `DataA` damage 50, `DataB` the Infernal's
+lifetime 180 (a timed life), `DataC` the **impact delay** 1.0 (the buff `CBuffInfernal` arms `0xD01C1` with it), `UnitID` `ninf`, first BuffID `BNin`, `Dur` 4 / `HeroDur`
+2 (stun), plus constants 110.0 / 100.0 / 1000.0. The effect creates the unit through `0x6F13BB20` (`0x6F29F990` CreateUnit) and the buff; after the delay the landing
+`0x6F142E60` queries the circle (shape `0xB`, mask `0x1F`; damage class `0x20000`) and per unit `0x6F13BCE0` builds the record (amount `DataA`, or 0.0 for a blocked
+unit; flags `0x40`, `0x50` when blocked), delivers it through slot `0x120` and gives the unit the stun buff with `HeroDur` for a hero (`0x6F1D2660`) else `Dur`
+(refreshing a live one). A second query (`0x6F2AE9E0`, callback `0x6F10F1F0`) handles debris (not modelled). Order 852224.
+
+### Death and Decay (`AUdd`): CONFIRMED victim pulse (Unicorn 320 cases, `dnd_pulse_amount`)
+`CBuffDeathAndDecayAoe` (`'BUdd'`, a `CBuffAoe`) handler `0x6F098180` (message `0xD01C1`): re-arms 1.0 s first, then `amount = DataA * max_life` (soft multiply, unit slot `0x130`
+= max life), a record of class `0x4000000` with attacker = the buff's source unit and flags 0 is delivered through slot `0x120` (also when the amount is 0.0), and the buff is
+removed when the victim's dead flag (`+0x5C & 0x100`) is set. The buff's init slot `0x35C` (`0x6F09FBF0`) starts the first pulse after a random delay: one draw of **RNG stream
+`0x16`** (`0x6F2853D0`, `U` in [0, 1)). The ability's effect `0x6F0A98F0` first removes the caster's earlier channel buffs (three buff kinds), queries destructables in
+Area (`0x6F2AE9E0`) and creates the effect object `XUdd` (`CEffectDeathAndDecay` < `CEffectTranquility` < `CEffectRangeListener`: the buff follows range-listener events).
+Model: local channel (Dur 35 s from the cast, `dnd_stop` for the lifecycle owner), a 0.1 s poll stands in for the range listener, enemies only (UNSURE), first pulse after the
+stream-22 draw, then every 1.0 s. DataB (stock 1) is not used by the pulse; role unknown.

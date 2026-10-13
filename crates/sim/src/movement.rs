@@ -205,16 +205,23 @@ impl Game {
     /// Stops the unit where it is: the position is re-based at the current time and the velocity becomes zero (the
     /// stop of `0x6F4956C0`). Does nothing for a unit that is not in motion.
     pub(crate) fn mover_halt(&mut self, unit: ObjKey) {
-        if !self.movers.get(&unit).is_some_and(|m| m.in_motion()) {
-            return;
-        }
         let Some(t) = self.orders.tables.take() else {
             return;
         };
+        self.mover_halt_with(unit, &t);
+        self.orders.tables = Some(t);
+    }
+
+    /// [`Self::mover_halt`] with the tables handed in: the movement walk (`tick_movement`) has taken them out of
+    /// `orders.tables` while it steps the units, so a stop from inside the walk (a stunned or rooted unit) needs them
+    /// passed (S38: before, a stun inside the walk found no tables and the unit kept its velocity).
+    pub(crate) fn mover_halt_with(&mut self, unit: ObjKey, t: &Tables) {
+        if !self.movers.get(&unit).is_some_and(|m| m.in_motion()) {
+            return;
+        }
         let g = self.layer();
         let mut kin = self.kin_of(unit);
-        kin.set_velocity(&g, (F32::ZERO, F32::ZERO), &t);
-        self.orders.tables = Some(t);
+        kin.set_velocity(&g, (F32::ZERO, F32::ZERO), t);
         self.commit_kin(unit, &kin);
         if let Some(rt) = self.movers.get_mut(&unit) {
             rt.listed = true;
