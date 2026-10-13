@@ -18,6 +18,8 @@ Row kinds (hex unless noted, `|` separates input from output):
   RS  a b factor                   | a' b'             the record scale 0x6F255800: both amounts times the factor
   FR  hero dur herodur ownill     | dur ill           Orb of Frost post-hit 0x6F108FC0: duration (hero rule) and illusion
                                                         bit handed to the buff apply of 'Bfro'
+  FG  dur extra area a b c d      | n (code count dur area)*n   Figurine summon body 0x6F0B8A00: two batches (DataC x f2i(DataA),
+                                                        DataD x f2i(DataB)) handed to the summon loop 0x6F0B8900
   VA  armed filt immune vict ownill victill misc amount v88 | healed heal fx
                                                         AIva post-damage handler 0x6F0F53A0: life adder gets DataA * damage
 
@@ -296,8 +298,42 @@ def case_fr(r):
     return 'FR %x %x %x %x | %x %x' % (hero, dur, herodur, ownill, got.get('dur', 0xdeadbeef), got.get('ill', 0xdead))
 
 
+VT_AIFS = 0x6F8AC9A4
+EMPTY = 0x5F5F5F5F
+
+
+def case_fg(r):
+    dur, extra, area = rand_real(r), rand_real(r), rand_real(r)
+    a = r.choice([fbits_i(r.randint(0, 6)), rand_real(r)])
+    b = r.choice([fbits_i(r.randint(0, 6)), rand_real(r)])
+    c = r.choice([0x6E736365, 0x6E667261, EMPTY])
+    d = r.choice([0x6E736361, EMPTY, EMPTY])
+    T.setup(VT_AIFS)
+    rec = bytearray(bytes(mu.mem_read(T.REC, 0x68)))
+    struct.pack_into('<I', rec, 0x08, dur)
+    struct.pack_into('<I', rec, 0x18, area)
+    struct.pack_into('<I', rec, 0x20, a)
+    struct.pack_into('<I', rec, 0x24, b)
+    mu.mem_write(T.REC, bytes(rec))
+    w32(T.ABIL + 0x9C, extra)
+    calls = []
+
+    def batch(uc, cc, dd, st):
+        calls.append((st[0], st[1], r32(st[2]), r32(st[3])))
+        return 0
+
+    T.trace_call(0x6F0B8A00, T.ABIL, (), stub_fn={0x6F08C400: lambda *x: c, 0x6F08C460: lambda *x: d, 0x6F0B8900: batch},
+                 span=0x200, cleanup={0x6F0B8900: 16})
+    out = ' '.join('%x %x %x %x' % (cd, cn & 0xffffffff, du, ar) for cd, cn, du, ar in calls)
+    return 'FG %x %x %x %x %x %x %x | %d %s' % (dur, extra, area, a, b, c, d, len(calls), out)
+
+
+def fbits_i(v):
+    return struct.unpack('<I', struct.pack('<f', float(v)))[0]
+
+
 GENS = [('GR', case_gr), ('VI', case_vi), ('RL', case_rl), ('RM', case_rm), ('RH', case_rh), ('SR', case_sr),
-        ('RS', case_rs), ('VA', case_va), ('FR', case_fr)]
+        ('RS', case_rs), ('VA', case_va), ('FR', case_fr), ('FG', case_fg)]
 
 
 def main():

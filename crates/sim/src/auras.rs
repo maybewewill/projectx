@@ -746,7 +746,7 @@ impl Game {
     /// Applies the aura ability `base` of `source` to `target` (`0x6F043770`): the gates, the target filter, then refresh
     /// the existing buff of the level's buff code or create it. Returns whether the target has the buff afterwards.
     pub fn apply_aura(&mut self, source: ObjKey, base: u32, target: ObjKey) -> bool {
-        let Some(kind) = AuraKind::of(base) else {
+        let Some(kind) = self.aura_kind(base) else {
             return false;
         };
         if !self.aura_source_active(source) {
@@ -871,10 +871,16 @@ impl Game {
         }
     }
 
+    /// The aura class of ability id `base`: the class code itself, or an item ability id registered for an aura class
+    /// (`item_abilities`: the item rows `AIae`, `AIba`, ... whose `code` is an aura ability).
+    pub(crate) fn aura_kind(&self, base: u32) -> Option<AuraKind> {
+        AuraKind::of(base).or_else(|| self.item_aura_kind(base))
+    }
+
     /// The aura ability `base` of `unit` has data and the unit has it: starts its emitter when it is not running
     /// (`0x6F053B30`): the 2.0 s repeating timer, the 0.5 s proximity scan, and an immediate apply to the owner.
     pub fn start_aura(&mut self, unit: ObjKey, base: u32) {
-        if AuraKind::of(base).is_none()
+        if self.aura_kind(base).is_none()
             || !self.aura_types.contains(base)
             || self.aura_emitters.contains_key(&(unit, base))
             || !self.unit(unit).abilities.contains(base)
@@ -907,7 +913,7 @@ impl Game {
             .abilities
             .iter()
             .map(|a| a.base)
-            .filter(|&b| AuraKind::of(b).is_some())
+            .filter(|&b| self.aura_kind(b).is_some())
             .collect();
         let running: Vec<u32> = self
             .aura_emitters

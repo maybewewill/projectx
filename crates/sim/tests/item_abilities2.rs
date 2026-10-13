@@ -5,6 +5,7 @@
 use jass::compile::compile;
 use jass::vm::NativeRegistry;
 use sim::cast::SpellLevel;
+use sim::abilities::code as code_of;
 use sim::item_abilities::*;
 use sim::natives::game::{item_flags, ItemType, ObjKey, UnitType};
 use sim::ScriptHost;
@@ -86,6 +87,21 @@ function setup_orbs takes nothing returns nothing
     set a = CreateItem('ofir', 0.0, 0.0)
     call UnitAddItem(u, a)
 endfunction
+function setup_fig takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set a = CreateItem('fgsk', 0.0, 0.0)
+    call UnitAddItem(u, a)
+endfunction
+function setup_aura takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set a = CreateItem('endu', 0.0, 0.0)
+endfunction
+function pick_a takes nothing returns nothing
+    call UnitAddItem(u, a)
+endfunction
+function drop_a takes nothing returns nothing
+    call UnitRemoveItem(u, a)
+endfunction
 function setup_ring takes nothing returns nothing
     set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
     set ring = CreateItem('rlif', 0.0, 0.0)
@@ -115,6 +131,11 @@ const OFIR: u32 = 0x6F66_6972; // 'ofir' Orb of Fire
 const OFRO: u32 = 0x6F66_726F; // 'ofro' Orb of Frost
 const A_FIRE: u32 = 0x4149_6662; // 'AIfb'
 const A_FROST: u32 = 0x4149_6F62; // 'AIob'
+const FGSK: u32 = 0x6667_736B; // 'fgsk' skeleton figurine
+const SKEL: u32 = 0x6E73_6365; // 'nsce' skeleton warrior
+const AFIG: u32 = 0x4149_6673; // 'AIfs'
+const ENDU: u32 = 0x656E_6475; // 'endu' an Endurance aura item
+const AENDU: u32 = 0x4149_6165; // 'AIae'
 const A_VAMP: u32 = 0x4149_7661; // 'AIva'
 const A_SR: u32 = 0x4149_7372; // 'AIsr'
 
@@ -164,6 +185,7 @@ fn host() -> ScriptHost {
                 max_mana: f(300.0),
                 move_speed: f(270.0),
                 inventory_size: 2,
+                movement: 1,
                 sight: f(1400.0),
                 night_sight: f(800.0),
                 ..Default::default()
@@ -202,7 +224,32 @@ fn host() -> ScriptHost {
         let mut frost = level(0.0, 3.0, 6.0);
         frost.hero_dur = f(1.0);
         add(OFRO, A_FROST, ORB_FROST, frost, &|_| {});
+        let mut fig = level(20.0, 120.0, 2.0);
+        fig.data[1] = f(0.0);
+        add(FGSK, AFIG, FIGURINE, fig, &|s| s.perishable = true);
+        data.unit_codes.insert(AFIG, [SKEL, 0]);
+        add(ENDU, AENDU, code_of(b"AOae"), level(0.0, 0.0, 0.0), &|_| {});
+        data.auras.insert(
+            AENDU,
+            vec![sim::auras::AuraLevel {
+                area: f(900.0),
+                data: [f(0.1), f(0.1), F32::ZERO, F32::ZERO],
+                buff: 0,
+                targs: "air,ground,friend,self,vuln,invu".to_string(),
+            }],
+        );
         g.install_item_abilities(&data);
+        g.unit_types_mut().insert(
+            SKEL,
+            UnitType {
+                name: "Skeleton".to_string(),
+                max_life: f(100.0),
+                move_speed: f(270.0),
+                ..Default::default()
+            },
+        );
+        g.item_types_mut().insert(FGSK, item_type(1, true));
+        g.item_types_mut().insert(ENDU, item_type(0, false));
         g.item_types_mut().insert(OFIR, item_type(0, false));
         g.item_types_mut().insert(OFRO, item_type(0, false));
         g.item_types_mut().insert(MDTH, item_type(0, false));
@@ -372,4 +419,46 @@ fn orb_of_frost_slows_the_victim_for_its_duration() {
     }
     let g = h.game();
     assert!(!g.unit(foe).buffs.iter().any(|b| b.base == sim::unit_spells::BUFF_FROST), "the 3 s buff ended");
+}
+
+#[test]
+fn skeleton_figurine_summons_timed_skeletons() {
+    let mut h = started("setup_fig");
+    call(&mut h, "use_a");
+    assert!(accepted(&h));
+    for _ in 0..5 {
+        h.step();
+    }
+    let g = h.game();
+    let u = global_unit(&h, "u");
+    let mine: Vec<_> = g.owned_units(g.unit(u).owner).into_iter().filter(|&k| g.unit(k).type_id == SKEL).collect();
+    assert_eq!(mine.len(), 2, "f2i(DataA) = 2 skeletons");
+    assert!(mine.iter().all(|&k| g.unit(k).summoned));
+    drop(g);
+    // The 120 s lifetime ends them.
+    for _ in 0..1300 {
+        h.step();
+    }
+    let g = h.game();
+    let u = global_unit(&h, "u");
+    let left = g.owned_units(g.unit(u).owner).into_iter().filter(|&k| g.unit(k).type_id == SKEL).count();
+    assert_eq!(left, 0, "BFig timed life");
+}
+
+#[test]
+fn item_aura_starts_while_carried_and_stops_with_the_item() {
+    let mut h = started("setup_aura");
+    let u = global_unit(&h, "u");
+    assert!(!h.game().unit(u).buffs.iter().any(|b| b.base == sim::abilities::code(b"BOae")));
+    call(&mut h, "pick_a");
+    assert!(
+        h.game().unit(u).buffs.iter().any(|b| b.base == sim::abilities::code(b"BOae")),
+        "the Endurance aura buff reached its carrier"
+    );
+    call(&mut h, "drop_a");
+    // The buff expires on its own 4 s timer once the emitter is gone.
+    for _ in 0..80 {
+        h.step();
+    }
+    assert!(!h.game().unit(u).buffs.iter().any(|b| b.base == sim::abilities::code(b"BOae")), "aura gone with the item");
 }

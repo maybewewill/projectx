@@ -171,3 +171,35 @@ fn orb_of_frost_duration_matches_the_original() {
         assert_eq!(ill, h(r[7]), "the illusion bit passed to the buff apply, row {r:?}");
     }
 }
+
+#[test]
+fn figurine_summon_batches_match_the_original() {
+    let rs = rows("FG");
+    assert!(rs.len() >= 300);
+    let mut batches = 0;
+    for r in &rs {
+        let (dur, extra, area, a, b, c, d) = (h(r[1]), h(r[2]), h(r[3]), h(r[4]), h(r[5]), h(r[6]), h(r[7]));
+        assert_eq!(r[8], "|");
+        let mut data = [F32::ZERO; 9];
+        data[0] = f(a);
+        data[1] = f(b);
+        let level = SpellLevel {
+            dur: f(dur),
+            area: f(area),
+            data,
+            ..Default::default()
+        };
+        let got = figurine_batches(&level, [c, d], f(extra));
+        let n: usize = r[9].parse().unwrap();
+        assert_eq!(got.len(), n, "batch count, row {r:?}");
+        for (i, (code, count, dur, area)) in got.iter().enumerate() {
+            let at = 10 + 4 * i;
+            assert_eq!(*code, h(r[at]), "row {r:?}");
+            assert_eq!(*count as u32, h(r[at + 1]), "row {r:?}");
+            assert_eq!(dur.to_bits(), h(r[at + 2]), "row {r:?}");
+            assert_eq!(area.to_bits(), h(r[at + 3]), "row {r:?}");
+        }
+        batches += n;
+    }
+    assert!(batches > 100, "the rows reach the summon loop");
+}

@@ -396,6 +396,38 @@ fn load_item_abilities(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), E
                 })
                 .collect();
             out.item_abilities.levels.insert(alias, levels);
+            // The figurines name their units in `DataC` / `DataD` (raw codes, not numbers).
+            let unit_code = |col: &str| -> u32 {
+                abilities
+                    .raw(&name, col)
+                    .map(|t| t.trim().trim_matches('"'))
+                    .filter(|t| t.len() == 4 && !t.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-'))
+                    .map_or(0, gamedata::abilitytype::raw_code)
+            };
+            let codes = [unit_code("DataC1"), unit_code("DataD1")];
+            if codes != [0, 0] {
+                out.item_abilities.unit_codes.insert(alias, codes);
+            }
+            // The aura classes read `Area`, `DataA..D`, `BuffID` and `targs` of the item row.
+            if out
+                .item_abilities
+                .bases
+                .get(&alias)
+                .is_some_and(|&b| sim::auras::AuraKind::of(b).is_some())
+            {
+                let f = |x: f32| F32::from_bits(x.to_bits());
+                let levels = def
+                    .levels
+                    .iter()
+                    .map(|l| sim::auras::AuraLevel {
+                        area: f(l.area),
+                        data: [f(l.data[0]), f(l.data[1]), f(l.data[2]), f(l.data[3])],
+                        buff: l.buff_ids.first().copied().unwrap_or(0),
+                        targs: l.targs.clone(),
+                    })
+                    .collect();
+                out.item_abilities.auras.insert(alias, levels);
+            }
         }
         if !spec.abilities.is_empty() || spec.uses != 0 || spec.powerup {
             out.item_abilities.specs.insert(code, spec);
