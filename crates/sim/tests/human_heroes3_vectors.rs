@@ -89,6 +89,93 @@ fn target_flag_normaliser_matches_the_original() {
 }
 
 #[test]
+fn dispel_walker_selection_matches_the_original() {
+    use sim::human_heroes::{dispel_selects, DispelArgs, DispelBuff, MAGIC_IMMUNITY_DISPEL};
+    let text = include_str!("data/human_heroes/dispel.txt");
+    let (mut rows, mut removed_total, mut ds_rows) = (0, 0, 0);
+    for l in text.lines().filter(|l| !l.trim().is_empty()) {
+        let v: Vec<u32> = l.split_whitespace().map(|w| u32::from_str_radix(w, 16).unwrap()).collect();
+        let a = DispelArgs {
+            physical: v[0] != 0,
+            magic: v[1] != 0,
+            undispellable_ok: v[2] != 0,
+            aura_ok: v[3] != 0,
+            typed: v[4] != 0,
+            positive: v[5] != 0,
+            negative: v[6] != 0,
+            type_arg: v[7] != 0,
+            timed_ok: v[8] != 0,
+        };
+        if a == MAGIC_IMMUNITY_DISPEL {
+            ds_rows += 1;
+        }
+        let n = v[9] as usize;
+        let mut mask = 0u32;
+        for i in 0..n {
+            let b = v[10 + i];
+            let buff = DispelBuff {
+                magic: b & 1 != 0,
+                physical: b & 2 != 0,
+                negative: b & 4 != 0,
+                positive: b & 8 != 0,
+                aura: b & 0x10 != 0,
+                undispellable: b & 0x20 != 0,
+                typed: b & 0x40 != 0,
+                timed: b & 0x80 != 0,
+            };
+            if dispel_selects(&a, &buff) {
+                mask |= 1 << i;
+            }
+        }
+        assert_eq!(mask, v[15], "removed mask, row {l}");
+        assert_eq!(mask.count_ones(), v[16], "returned count, row {l}");
+        rows += 1;
+        removed_total += mask.count_ones();
+    }
+    assert!(rows >= 300 && ds_rows > 40 && removed_total > 50, "{rows} {ds_rows} {removed_total}");
+}
+
+#[test]
+fn banish_values_match_the_original() {
+    let data = hex_rows(include_str!("data/human_heroes/banish.txt"));
+    assert!(data.len() >= 300);
+    let (mut heroes, mut others) = (0, 0);
+    for r in &data {
+        let level = SpellLevel {
+            dur: F32::from_bits(r[0]),
+            hero_dur: F32::from_bits(r[1]),
+            data: [F32::from_bits(r[2]), F32::from_bits(r[3]), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
+            ..SpellLevel::default()
+        };
+        let (dur, mv, atk) = sim::human_heroes::banish_values(&level, r[5] != 0, F32::from_bits(r[4]));
+        assert_eq!([dur.to_bits(), mv.to_bits(), atk.to_bits()], [r[6], r[7], r[8]], "row {:08x?}", r);
+        if r[5] != 0 {
+            heroes += 1;
+        } else {
+            others += 1;
+        }
+    }
+    assert!(heroes > 100 && others > 100);
+}
+
+#[test]
+fn corpse_distance_matches_the_original() {
+    use softfloat::arith;
+    let data = hex_rows(include_str!("data/human_heroes/corpse_distance.txt"));
+    assert!(data.len() >= 300);
+    let f = |x: u32| F32::from_bits(x);
+    for r in &data {
+        // out = A - B per component (`0x6F020210`), then x*x + y*y (`0x6F020000`), the corpse record's real `+8`.
+        let d: Vec<F32> = (0..3).map(|i| arith::sub(f(r[i]), f(r[3 + i]))).collect();
+        for i in 0..3 {
+            assert_eq!(d[i].to_bits(), r[6 + i], "component {i}, row {:08x?}", r);
+        }
+        let sq = arith::add(arith::mul(d[0], d[0]), arith::mul(d[1], d[1]));
+        assert_eq!(sq.to_bits(), r[9], "squared length, row {:08x?}", r);
+    }
+}
+
+#[test]
 fn mass_teleport_channel_time_is_data_b() {
     let data = hex_rows(include_str!("data/human_heroes/mt_init.txt"));
     assert!(data.len() >= 300);

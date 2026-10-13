@@ -604,6 +604,10 @@ impl Game {
         if b.code == BUFF_STUN || matches!(b.effect, BuffEffect::Sleep) {
             self.unit_mut(b.unit).bonuses.stun = self.unit(b.unit).bonuses.stun.saturating_sub(1);
         }
+        // Banish (`BHbn`, ethereal): the removal lowers the unit's ethereal counter (`0x6F07F630` -> `0x6F0796A0`).
+        if b.code == crate::human_heroes::BUFF_BANISH {
+            self.unit_mut(b.unit).ethereal -= 1;
+        }
         self.unit_mut(b.unit).buffs.retain(|x| x.serial != serial);
         crate::orc::on_buff_dropped(self, serial);
         self.refresh_slow(b.unit);
@@ -927,6 +931,17 @@ impl Game {
         if self.spells.current.contains_key(&unit) {
             self.spells.interrupts.push((unit, new_order));
         }
+    }
+
+    /// The spell buffs (serial, base code) currently on `unit`, in serial order (the dispel of Divine Shield and Avatar
+    /// walks them, `human_heroes::magic_immunity_dispel`).
+    pub(crate) fn spell_buffs_of(&self, unit: ObjKey) -> Vec<(u32, u32)> {
+        self.spells
+            .buffs
+            .iter()
+            .filter(|(_, b)| b.unit == unit)
+            .map(|(s, b)| (*s, b.code))
+            .collect()
     }
 
     /// The order id of the spell `base` (the reverse of the order table), if one is registered.

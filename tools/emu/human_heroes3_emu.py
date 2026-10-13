@@ -20,6 +20,8 @@ sys.path.insert(0, HERE)
 import abilities4_emu as A  # noqa: E402
 import emu  # noqa: E402
 import human_heroes2_emu as H2  # noqa: E402
+from unicorn import UC_HOOK_CODE  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EIP, UC_X86_REG_ESP  # noqa: E402
 
 mu = emu.mu
 wr, rd, f2u = A.wr, A.rd, A.f2u
@@ -204,6 +206,161 @@ def check_targs_normalise(cases, r, rows):
         rows.append((w, emu.call(F_NORM, ecx=w)))
 
 
+F_BANISH = 0x6F1CA2B0   # thiscall(ability), (target unit): the unit effect of Banish
+BN_ABIL, BN_TARGET, BN_NEWBUFF, BN_BVT, BN_CAP, BN_CODE = (DATA + 0xD800, DATA + 0xDA00, DATA + 0xDC00, DATA + 0xDE00,
+                                                         DATA + 0xDF00, DATA + 0xDF80)
+
+
+def check_banish(cases, r, rows):
+    """Banish's effect `0x6F1CA2B0`: duration (hero test through the real `0x6F1D2660`, then HeroDur or Dur + `+0x9C`), the
+    negated DataA and DataB, as they reach the apply slot `0x354` of a new buff. Rows: dur, herodur, DataA, DataB,
+    `+0x9C`, hero flag -> the three values read from the argument pointers."""
+    # stubs: existing-buff lookup (none), new-buff allocator (our fake object), register on the unit (ret 4)
+    A.patch_jump(0x6F0787D0, A.stub_ret(0x14, 0))
+    A.patch_jump(0x6F1C8050, A.stub_ret(0, BN_NEWBUFF))
+    A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+    # slot 0x324 (ret 4); slot 0x354: copy the pointees of the five arguments' pointer parameters, ret 0x14
+    mu.mem_write(BN_BVT, b"\0" * 0x400)
+    mu.mem_write(BN_CODE, b"\xC2\x04\x00")
+    wr(BN_BVT + 0x324, BN_CODE)
+    c = b""
+    for i, off in enumerate((0x8, 0xC, 0x10, 0x14)):     # [esp+4+4*k] k = 1..4 = P2..P5 ... read P2, P4, P5
+        pass
+    # P2 = [esp+8], P4 = [esp+0x10], P5 = [esp+0x14]; store *P2, *P4, *P5 into capture cells
+    code = (b"\x8B\x44\x24\x08\x8B\x00\xA3" + struct.pack("<I", BN_CAP)
+            + b"\x8B\x44\x24\x10\x8B\x00\xA3" + struct.pack("<I", BN_CAP + 4)
+            + b"\x8B\x44\x24\x14\x8B\x00\xA3" + struct.pack("<I", BN_CAP + 8)
+            + b"\xC2\x14\x00")
+    mu.mem_write(BN_CODE + 0x20, code)
+    wr(BN_BVT + 0x354, BN_CODE + 0x20)
+    for _ in range(cases):
+        dur, hdur, da, db, extra = rbits(r), rbits(r), rbits(r), rbits(r), rbits(r) if r.random() < 0.3 else 0
+        hero = r.random() < 0.5
+        A.make_ability(0x6F90F74C, 0x41486E62, 75)
+        L = A.LVL
+        wr(L + 0x08, dur)
+        wr(L + 0x0C, hdur)
+        wr(L + 0x20, da)
+        wr(L + 0x24, db)
+        wr(A.OBJ + 0x9C, extra)
+        mu.mem_write(BN_TARGET, b"\0" * 0x200)
+        mu.mem_write(BN_TARGET + 0x33, b"A" if hero else b"h")
+        wr(BN_TARGET + 4, 100)
+        mu.mem_write(BN_NEWBUFF, b"\0" * 0x200)
+        wr(BN_NEWBUFF, BN_BVT)
+        mu.mem_write(BN_CAP, b"\0" * 0x10)
+        emu.call(F_BANISH, ecx=A.OBJ, stack_args=(BN_TARGET,))
+        rows.append([dur, hdur, da, db, extra, int(hero), rd(BN_CAP), rd(BN_CAP + 4), rd(BN_CAP + 8)])
+
+
+F_DISPEL = 0x6F079FE0  # thiscall(unit), 9 stack arguments: walks the unit's buff list and removes the selected ones
+F_RESOLVE = 0x6F4786B0  # reference -> object
+F_REMOVE = 0x6F079CC0   # thiscall(unit), (buff): remove a buff
+DUNIT, DBUFF, DVT, DLOG, DCODE = DATA + 0xC200, DATA + 0xCC00, DATA + 0xC500, DATA + 0xC900, DATA + 0xCA00
+
+
+def check_dispel(cases, r, rows):
+    """The dispel walker `0x6F079FE0` (used by Divine Shield and Avatar on apply) against fake buff objects: each buff has
+    random predicate answers (vtable slots 0x1D8 magic, 0x1DC physical, 0x1E0 negative, 0x1E4 positive, 0x1E8 aura, 0x32C
+    undispellable, 0x330(arg) type test) and a flag word; the removal calls are logged. Rows: 9 arguments, then per buff
+    its 8 predicate bits, then the removal mask and the returned count."""
+    def getter(off):
+        # mov eax,[ecx+off]; ret
+        return b"\x8B\x81" + struct.pack("<I", off) + b"\xC3"
+    offs = {0x1D8: 0x100, 0x1DC: 0x104, 0x1E0: 0x108, 0x1E4: 0x10C, 0x1E8: 0x110, 0x32C: 0x114}
+    mu.mem_write(DVT, b"\0" * 0x400)
+    for i, (slot, field) in enumerate(offs.items()):
+        mu.mem_write(DCODE + 0x10 * i, getter(field))
+        wr(DVT + slot, DCODE + 0x10 * i)
+    # slot 0x330 takes one stack argument: mov eax,[ecx+0x118]; ret 4
+    mu.mem_write(DCODE + 0x80, b"\x8B\x81" + struct.pack("<I", 0x118) + b"\xC2\x04\x00")
+    wr(DVT + 0x330, DCODE + 0x80)
+    # the reference resolver 0x6F4786B0: the reference cell holds the object address twice
+    A.patch_jump(F_RESOLVE, DCODE + 0xA0)
+    mu.mem_write(DCODE + 0xA0, b"\x8B\x01\xC3")           # mov eax,[ecx]; ret
+    # the removal 0x6F079CC0: log the buff, unlink it from the unit's list (the walker re-reads the head afterwards)
+    def on_remove(uc, addr, size, user):
+        esp = uc.reg_read(UC_X86_REG_ESP)
+        buff = struct.unpack("<I", bytes(uc.mem_read(esp + 4, 4)))[0]
+        ret = struct.unpack("<I", bytes(uc.mem_read(esp, 4)))[0]
+        k = rd(DLOG)
+        wr(DLOG + 4 + 4 * k, buff)
+        wr(DLOG, k + 1)
+        head = rd(DUNIT + 0x1DC)
+        nxt = rd(buff + 0x24)
+        if head == buff:
+            wr(DUNIT + 0x1DC, nxt)
+            wr(DUNIT + 0x1E0, nxt)
+        else:
+            cur = head
+            while cur != 0xFFFFFFFF and rd(cur + 0x24) != buff:
+                cur = rd(cur + 0x24)
+            if cur != 0xFFFFFFFF:
+                wr(cur + 0x24, nxt)
+                wr(cur + 0x28, nxt)
+        uc.reg_write(UC_X86_REG_ESP, esp + 8)
+        uc.reg_write(UC_X86_REG_EIP, ret)
+        uc.reg_write(UC_X86_REG_EAX, 0)
+    if not getattr(check_dispel, "hooked", False):
+        mu.hook_add(UC_HOOK_CODE, on_remove, begin=F_REMOVE, end=F_REMOVE)
+        check_dispel.hooked = True
+    for _ in range(cases):
+        n = r.randint(0, 5)
+        args = [r.getrandbits(1) for _ in range(9)]
+        if r.random() < 0.2:
+            args = [0, 1, 0, 0, 0, 1, 1, 0, 1]
+        mu.mem_write(DUNIT, b"\0" * 0x300)
+        mu.mem_write(DLOG, b"\0" * 0x80)
+        bits = []
+        addrs = [DBUFF + 0x200 * i for i in range(n)]
+        for i, b in enumerate(addrs):
+            mu.mem_write(b, b"\0" * 0x200)
+            wr(b, DVT)
+            pb = [r.getrandbits(1) for _ in range(6)] + [r.getrandbits(1), r.getrandbits(1)]  # + 0x330 result, flag 0x2000_0000
+            for (slot, field), v in zip(offs.items(), pb[:6]):
+                wr(b + field, v)
+            wr(b + 0x118, pb[6])
+            wr(b + 0x20, 0x20000000 if pb[7] else 0)
+            nxt = addrs[i + 1] if i + 1 < n else 0xFFFFFFFF
+            wr(b + 0x24, nxt)
+            wr(b + 0x28, nxt)
+            bits.append(pb)
+        first = addrs[0] if n else 0xFFFFFFFF
+        wr(DUNIT + 0x1DC, first)
+        wr(DUNIT + 0x1E0, first)
+        try:
+            cnt = emu.call(F_DISPEL, ecx=DUNIT, stack_args=tuple(args))
+        except Exception:
+            print("dispel failed: args", args, "n", n, "bits", bits)
+            raise
+        removed = 0
+        for j in range(rd(DLOG)):
+            removed |= 1 << addrs.index(rd(DLOG + 4 + 4 * j))
+        ints = [sum(v << k for k, v in enumerate(pb)) for pb in bits] + [0] * (5 - n)
+        rows.append(args + [n] + ints + [removed, cnt])
+
+
+F_DIFF3 = 0x6F020210   # ECX = out vector (3 reals), EDX = A, stack = B: out = A - B per component
+F_SQLEN = 0x6F020000    # ECX = a pair (x, y): stores x*x + y*y at [ECX]
+V_A, V_B, V_O = DATA + 0xB400, DATA + 0xB440, DATA + 0xB480
+
+
+def check_corpse_distance(cases, r, rows):
+    """The corpse record's real (`+8`): `0x6F020210` (3D difference of two positions) then `0x6F020000` (squared length
+    of the first two components), exactly as `0x6F1C1B90` chains them."""
+    for _ in range(cases):
+        a = [rbits(r) if r.random() < 0.1 else f2u(r.uniform(-4000, 4000)) for _ in range(3)]
+        b = [rbits(r) if r.random() < 0.1 else f2u(r.uniform(-4000, 4000)) for _ in range(3)]
+        for i in range(3):
+            wr(V_A + 4 * i, a[i])
+            wr(V_B + 4 * i, b[i])
+            wr(V_O + 4 * i, 0)
+        emu.call(F_DIFF3, ecx=V_O, edx=V_A, stack_args=(V_B,))
+        d = [rd(V_O + 4 * i) for i in range(3)]
+        emu.call(F_SQLEN, ecx=V_O, stack_args=(V_O + 0x20,))   # the second argument is the scratch out pointer
+        rows.append(a + b + d + [rd(V_O + 0x20)])
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -217,9 +374,12 @@ def main():
     check_channel_time(cases, r, ch)
     check_prop_compare(cases, r, pc)
     check_wave_unit(cases, r, wv)
-    mt, nm = [], []
+    mt, nm, cd, dp, bn = [], [], [], [], []
+    check_dispel(cases, r, dp)
+    check_banish(cases, r, bn)
     check_mt_init(cases, r, mt)
     check_targs_normalise(cases, r, nm)
+    check_corpse_distance(cases, r, cd)
     print("channel time rows %d, property compare rows %d, wave unit rows %d, mt init %d, targs %d"
           % (len(ch), len(pc), len(wv), len(mt), len(nm)))
     for row in mt[:4] + nm[:12]:
@@ -237,6 +397,15 @@ def main():
                 fh.write(" ".join("%08x" % x for x in row) + "\n")
         with open(os.path.join(dump, "mt_init.txt"), "w") as fh:
             for row in mt:
+                fh.write(" ".join("%08x" % x for x in row) + "\n")
+        with open(os.path.join(dump, "banish.txt"), "w") as fh:
+            for row in bn:
+                fh.write(" ".join("%08x" % x for x in row) + "\n")
+        with open(os.path.join(dump, "dispel.txt"), "w") as fh:
+            for row in dp:
+                fh.write(" ".join("%x" % x for x in row) + "\n")
+        with open(os.path.join(dump, "corpse_distance.txt"), "w") as fh:
+            for row in cd:
                 fh.write(" ".join("%08x" % x for x in row) + "\n")
         with open(os.path.join(dump, "targs_normalise.txt"), "w") as fh:
             for row in nm:

@@ -482,3 +482,71 @@ Model: `human_heroes::blizzard_damage` (marker map `State::markers`, spell buff 
   The move itself (`0x6F048AE0`, 14 arguments: pathing-aware placement, the transported unit's order cleanup) is not
   decoded; the model clamps to the playable area and stores the position.
 * Order: the caster is moved first, then the sorted records (`0x6F06A023..0x6F06A063`, stride 20 bytes).
+
+## 17. Resurrection, the magic-immunity apply, Banish, Phoenix and what stays open (S35)
+
+**Resurrection corpse records** (`0x6F1D1720` callback, record builder `0x6F1C1B90`, CONFIRMED by reading; the distance
+Unicorn 400/400): a non-hero unit (type id first character not `A`..`Z`) accepted by the ability's flag word
+(`air,ground,dead,friend`) becomes a 20-byte record `{unit, key, real, flag, owner}`: `key` (`+4`) = `0x6F29DCA0(unit)` =
+the type's `level` (0 when not positive, at most Misc `MaxUnitLevel`), `real` (`+8`) = the **squared 2D distance to the
+caster** (`0x6F020210` 3D difference then `0x6F020000` = `x*x + y*y`, both soft arithmetic), `flag` (`+0xC`) = 0, owner
+index (`+0x10`) = the caster's player. The sort comparator of section 5 therefore orders: the caster's own corpses first,
+then **higher unit level first, then nearer first**, then the larger agent id. The model uses exactly this (the earlier
+"all keys equal, larger agent id first" order was wrong; the `human_heroes.rs` test is updated). Hero corpses take another
+path through the `Acar` corpse buff (`0x6F1CFF70` -> `0x6F1C9780` over up to ten buff references) and are not modelled: the
+model skips heroes (UNSURE whether the stock game can revive them).
+
+**Divine Shield apply** (`CBuffDivineShield` slot `0x31C` = `0x6F07D180`, CONFIRMED by reading; `0x6F0D9B60` = `'Bprg'`):
+base apply (slot `0x320`), then the purge debuff `Bprg` is removed, then the dispel walker `0x6F079FE0`, then
+`0x6F0796F0` (invulnerability count `+0xE8`, bit `0x8` of the flag word) and `0x6F07A3A0(unit, 1)` (magic immunity counts
+`+0x15C`/`+0x160`; on the first count the same purge removal and dispel run again). **Avatar** runs the same removal and
+dispel on its first immunity count (`0x6F07A3A0`). The walker (Unicorn: the real function against fake buff objects with
+random predicate answers, **400/400**, `human_heroes::dispel_selects`): the nine stack arguments are physical, magic,
+undispellable-ok, aura-ok, typed, positive, negative, type-arg, timed-ok; Divine Shield and Avatar call it with
+`(0,1,0,0,0,1,1,0,1)`: **magical buffs of both polarities, no auras, nothing undispellable, timed life included**.
+`Game::magic_immunity_dispel` applies it (the sim knows the predicates of stun, slow and Thunder Clap slow only, as
+negative magical buffs: UNSURE for other codes). **Cancel**: slot `0x318` of `CAbilityDivineShield` (`0x6F0AE2C0`)
+returns **852091** (`0xD007B`) when `0x6F089A50` allows it (so the earlier id 852056, which is `undefend`, was wrong), and
+`0x6F089A50` needs `DataA != 0` **and** Misc `CanDeactivateDivineShield` (default 0, absent from `MiscData.txt`): in the
+stock game the shield cannot be cancelled. `Game::set_can_deactivate_divine_shield` carries the key.
+
+**Thunder Clap** (patch data: `targs` `ground,neutral,organic`, `Dur` 5, `HeroDur` 3, `BuffID` `BHtc`): the flag word
+normalises to ground-only classes (no air, no structure), organic, relation `neutral`; what `neutral` means against the
+player alliance masks in `0x6F25D480` (a mask pair at `+0x38`/`+0x78` of the player object) was not decoded, so the
+enemy rule of the model stays UNSURE. The slow application (`0x6F18A930`): duration hero test then `HeroDur` / `Dur + (+0x9C)`
+(section 1), movement `-DataC`, attack speed `-DataD`; an existing `BHtc` is refreshed through its slot `0x358`, a new
+one is created and applied through slot `0x354`.
+
+**Water Elemental placement** (`0x6F163390` loop, `0x6F1D27A0`, `0x6F1D26B0`, `0x6F4AFCD0`, read, not Unicorn-run):
+each unit is created by `0x6F29F990` with facing = the caster's facing (or Misc `BuildingAngle` times pi/180 when the
+flag argument is zero) at a position `0x6F1D26B0` computes as the caster's position plus a rotated offset
+(`0x6F4AFCD0` builds a rotation from an angle and the axis `(0,0,1)`); the offset argument comes from the caller's
+vector call and was not resolved, so the model keeps the caster's position (UNSURE). Registration flags `0x502`
+(duration 0) / `0x2`.
+
+**Banish** (`AHbn`, order **852486**, unit target; patch data `Dur` 12/24/36, `HeroDur` 5/7/9, `DataA` 0.5): unit effect
+`0x6F1CA2B0`; values **Unicorn 400/400** (`human_heroes::banish_values`): duration = `HeroDur` for a hero else
+`add(Dur, +0x9C)`, movement factor `-DataA`, attack factor `-DataB`. Buff `BHbn` (`CBuffBanish` < `CBuffEthereal` <
+`CBuffSpeed`): apply = speed apply (`0x6F0D6460`), remember the caster, stop a running attack (`0x6F2A4B80`), ethereal
+counter +1 (`0x6F07A340`); removal: counter -1 and a zero-damage hit of class `0x210` from the caster. Model: spell buff
+`BHbn` (slow factors) + `ethereal += 1` + `combat_end`; the removal lowers the counter.
+
+**Summon Phoenix** (`AHpx`, order **852489**, no target): `CAbilitySummonPhoenix` is a `CAbilityWaterElemental`; the
+effect `0x6F11BA10` only registers a callback and enters the Water Elemental summon loop; the post-create hook
+`0x6F128BE0` stores the summoner in a buff of the new unit and starts **no** timed life. With `Dur` 0 in the data the
+Phoenix is permanent. Model: `human_heroes::phoenix` = the shared `summon` body.
+
+**Siphon Mana** (`AHdr`, order **852487**, unit target) and **Flame Strike** (`AHfs`, order **852488**, point target)
+are decoded only structurally and are NOT modelled: Siphon Mana is a channel (`Dur`/`HeroDur`, timer message `0xD01C1`,
+per tick the range test `0x6F4766E0` with `Area`, then slot `0x3EC` = `0x6F04F7A0`), whose transfer rules are driven by the
+Misc keys `DrainTransfersLife`, `DrainTransfersMana`, `DrainGivesBonusLife`, `DrainGivesBonusMana` (all default 0, absent
+from the shipped `MiscData.txt`) and the level fields `DataA..DataG`; the per-unit effect is `0x6F0B6900` (read as far as
+the flag decoding, not the transfer arithmetic). Flame Strike creates the effect object `XHfs` (`CEffectFlameStrike`, a
+`CEffectDeathAndDecay`) and applies the damage-over-time buff `BHfs` (`CBuffFlameStrike` < `CBuffLifeDoT`); `Cast` 1.33 is
+its stage-1 delay as for ordinary spells, `DataA` damage, `DataB` interval 0.33 (LIKELY meanings). **Brilliance Aura**
+(`AHab`) and **Devotion Aura** (`AHad`) are passive aura emitters already modelled in `auras.rs` (buffs.md sections 4 and
+5: armor `DataA` and mana regeneration `DataA` through the aura buffs `BHad`/`BHab`); S35 added no change.
+
+**Open**: the offset placement of Mass Teleport units and Water Elemental summons, what `neutral` selects in the
+relation masks, the Acar hero-corpse path of Resurrection, the Siphon Mana and Flame Strike arithmetic, the unit-side
+meaning of slot `0x398`.
