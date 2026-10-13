@@ -727,6 +727,11 @@ fn carrion_swarm(
 pub const SWARM_TARGS: u32 = 0x2 | 0x4 | 0x0400_0000;
 /// The damage record class of the swath hits: `0x8000` = bit 15 (the sim's damage type numbering is the bit index).
 pub const SWATH_DAMAGE_TYPE: u32 = 15;
+/// `targs` of `AOsh` (Shockwave): ground, structure. Shockwave's missile class `CMissileShockwave` derives from
+/// `CMissileCarrionSwarm` and overrides none of the tick, hit or setup code (only the code getter and four id getters,
+/// RTTI-checked), so the orc lane starts it with [`swath_cast`] and the same level mapping (Area start width, DataA damage,
+/// DataB cap, DataC distance, DataD final width, `Missilespeed` 1050).
+pub const SHOCKWAVE_TARGS: u32 = 0x2 | 0x8;
 /// Lifetime of the marker buff: `0.1 + 0.02` (`0x6F1E79E0`).
 const SWATH_MARK_SECONDS: f32 = 0.12;
 
