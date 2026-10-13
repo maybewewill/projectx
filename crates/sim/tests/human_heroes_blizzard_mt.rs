@@ -20,6 +20,8 @@ native UnitAddAbility takes unit whichUnit, integer abilityId returns boolean
 native SetUnitState takes unit whichUnit, integer whichState, real newVal returns nothing
 native IssuePointOrderById takes unit whichUnit, integer order, real x, real y returns boolean
 native IssueTargetOrderById takes unit whichUnit, integer order, widget target returns boolean
+native IssueImmediateOrderById takes unit whichUnit, integer order returns boolean
+native KillUnit takes unit whichUnit returns nothing
 globals
     unit mage = null
     unit near = null
@@ -52,6 +54,15 @@ function blizzard takes nothing returns nothing
 endfunction
 function teleport takes nothing returns nothing
     set accepted = IssueTargetOrderById(mage, 852093, dest)
+endfunction
+function walk takes nothing returns nothing
+    set accepted = IssuePointOrderById(mage, 851986, 0.0, 500.0)
+endfunction
+function halt takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(mage, 851972)
+endfunction
+function slay takes nothing returns nothing
+    call KillUnit(mage)
 endfunction
 "#;
 
@@ -98,6 +109,12 @@ fn started() -> ScriptHost {
                 },
             );
         }
+        g.set_type_orders(
+            MAGE,
+            sim::orders::TypeOrderData {
+                abilities: vec![sim::orders::AbilityKind::Move],
+            },
+        );
         for base in [BLIZZARD, MASS_TELEPORT] {
             g.ability_types_mut().insert(base, AbilityType { max_level: Some(1) });
         }
@@ -138,16 +155,17 @@ fn blizzard_hurts_enemies_in_the_area_once_per_wave() {
     h.start("blizzard", &[]).unwrap();
     run(&mut h, 1);
     assert!(accepted(&h));
-    // Cast time 1 s, then the first damage wave 0.9 s after the effect starts.
-    run(&mut h, 10);
+    // Blizzard's level init sets the stage-1 delay to 0 (`Cast` is only the wave interval): the effect starts at once
+    // and the first damage wave comes 0.9 s later (t = 0.1 s now).
+    run(&mut h, 7);
     assert_eq!(life(&h, a), 500.0, "no damage before the first wave");
-    run(&mut h, 10);
+    run(&mut h, 3);
     // Two enemies in range: 30 each (30 * 2 = 60 is below the cap of 150).
     assert_eq!(life(&h, a), 470.0);
     assert_eq!(life(&h, b), 470.0);
     assert_eq!(life(&h, far), 500.0, "out of the area");
-    // The wave interval is Cast (1 s): after 6 waves the effect is over.
-    run(&mut h, 80);
+    // The wave interval is Cast (1 s): after 6 waves (the last at 5.9 s) the effect is over.
+    run(&mut h, 51);
     assert_eq!(life(&h, a), 500.0 - 30.0 * 6.0);
     run(&mut h, 40);
     assert_eq!(life(&h, a), 500.0 - 30.0 * 6.0, "exactly DataA waves");
@@ -200,4 +218,101 @@ fn mass_teleport_count_limit_keeps_the_nearest() {
     let moved = |k: ObjKey| h.game().unit(k).x.to_f32() > 1000.0;
     // distances: ally 100, near 200, nearB 300 -> ally and near go.
     assert!(moved(ally) && moved(near) && !moved(near_b));
+}
+
+// ---- the channel lifecycle (cast.rs, spec section 14) ----
+
+/// The spell events of `base` fired by `caster`, as event indexes in order (0 CHANNEL .. 4 ENDCAST).
+fn events(h: &ScriptHost, caster: ObjKey, base: u32) -> Vec<u32> {
+    h.game()
+        .spell_log()
+        .iter()
+        .filter(|(c, b, _)| *c == caster && *b == base)
+        .map(|(_, _, e)| *e)
+        .collect()
+}
+
+#[test]
+fn blizzard_finishes_after_waves_times_interval() {
+    let mut h = started();
+    let mage = unit(&h, "mage");
+    h.start("blizzard", &[]).unwrap();
+    run(&mut h, 1);
+    assert_eq!(events(&h, mage, BLIZZARD), vec![0, 1, 2], "CHANNEL, CAST, EFFECT; the cast is still open");
+    run(&mut h, 50);
+    assert_eq!(events(&h, mage, BLIZZARD), vec![0, 1, 2], "channel time 6 x 1 s: not finished at 5.2 s");
+    run(&mut h, 10);
+    assert_eq!(events(&h, mage, BLIZZARD), vec![0, 1, 2, 3, 4], "FINISH then ENDCAST at 6.0 s");
+}
+
+#[test]
+fn a_replacing_order_ends_blizzard_without_finish_and_stops_the_waves() {
+    let mut h = started();
+    let (mage, a) = (unit(&h, "mage"), unit(&h, "foeA"));
+    h.start("blizzard", &[]).unwrap();
+    run(&mut h, 26); // t = 2.7 s: waves at 0.9 and 1.9 s
+    assert_eq!(life(&h, a), 440.0);
+    h.start("walk", &[]).unwrap();
+    run(&mut h, 60);
+    assert_eq!(life(&h, a), 440.0, "no further wave after the caster's order");
+    assert_eq!(events(&h, mage, BLIZZARD), vec![0, 1, 2, 4], "ENDCAST without FINISH");
+}
+
+#[test]
+fn the_stop_order_ends_a_channel_and_death_ends_it_too() {
+    let mut h = started();
+    let (mage, a) = (unit(&h, "mage"), unit(&h, "foeA"));
+    h.start("blizzard", &[]).unwrap();
+    run(&mut h, 12);
+    h.start("halt", &[]).unwrap();
+    run(&mut h, 30);
+    assert_eq!(events(&h, mage, BLIZZARD), vec![0, 1, 2, 4]);
+    assert_eq!(life(&h, a), 470.0, "one wave (0.9 s) before the stop at 1.3 s");
+    // Death: a new channel, the caster dies after 2 s.
+    h.game_mut().write_mana(mage, f(500.0));
+    h.game_mut().reset_cooldowns(mage);
+    run(&mut h, 2);
+    h.start("blizzard", &[]).unwrap();
+    run(&mut h, 20);
+    h.start("slay", &[]).unwrap();
+    run(&mut h, 40);
+    let ev = events(&h, mage, BLIZZARD);
+    assert_eq!(&ev[4..], &[0, 1, 2, 4], "the second cast ended by death");
+    assert!(life(&h, a) > 400.0, "waves stop with the caster");
+}
+
+#[test]
+fn a_stun_ends_a_channel() {
+    let mut h = started();
+    let (mage, a) = (unit(&h, "mage"), unit(&h, "foeA"));
+    h.start("blizzard", &[]).unwrap();
+    run(&mut h, 12);
+    h.game_mut().add_spell_buff(mage, sim::cast::BUFF_STUN, sim::cast::BuffEffect::Stun, f(5.0));
+    run(&mut h, 40);
+    assert_eq!(events(&h, mage, BLIZZARD), vec![0, 1, 2, 4]);
+    assert_eq!(life(&h, a), 470.0);
+}
+
+#[test]
+fn mass_teleport_teleports_at_the_channel_end_and_a_stop_cancels_it() {
+    let mut h = started();
+    let mage = unit(&h, "mage");
+    h.start("teleport", &[]).unwrap();
+    run(&mut h, 20);
+    assert_eq!(events(&h, mage, MASS_TELEPORT), vec![0, 1, 2], "channelling: no FINISH yet");
+    run(&mut h, 15);
+    assert_eq!(events(&h, mage, MASS_TELEPORT), vec![0, 1, 2, 3, 4]);
+    assert!(h.game().unit(mage).x.to_f32() > 1000.0, "arrived");
+    // A second cast, stopped half way: the caster stays where it is.
+    h.game_mut().write_mana(mage, f(500.0));
+    h.game_mut().reset_cooldowns(mage);
+    run(&mut h, 2);
+    let (x0, y0) = (h.game().unit(mage).x.to_f32(), h.game().unit(mage).y.to_f32());
+    h.start("teleport", &[]).unwrap();
+    run(&mut h, 10);
+    h.start("halt", &[]).unwrap();
+    run(&mut h, 40);
+    let ev = events(&h, mage, MASS_TELEPORT);
+    assert_eq!(&ev[5..], &[0, 1, 2, 4], "ENDCAST without FINISH");
+    assert_eq!((h.game().unit(mage).x.to_f32(), h.game().unit(mage).y.to_f32()), (x0, y0));
 }

@@ -684,6 +684,8 @@ pub fn blizzard_unit_damage(p: &BlizzardParams, count: i32, structure: bool, tab
 
 #[derive(Debug, Clone)]
 struct BlizzardFx {
+    /// The cast that created the effect (the channel end destroys it).
+    cast: u32,
     caster: ObjKey,
     x: F32,
     y: F32,
@@ -713,7 +715,6 @@ pub struct State {
 /// Timer kinds of [`crate::cast::SpellMsg::Human`].
 pub const TICK_BLIZZARD_WAVE: u8 = 1;
 pub const TICK_BLIZZARD_DAMAGE: u8 = 2;
-pub const TICK_TELEPORT: u8 = 3;
 
 fn human_timer(gm: &mut Game, seconds: f32, kind: u8, id: u32) {
     gm.timers.start(
@@ -735,6 +736,7 @@ fn blizzard_start(game: &RefCell<Game>, rec: &CastRec) {
         gm.spells.human.blizzards.insert(
             id,
             BlizzardFx {
+                cast: rec.id,
                 caster: rec.caster,
                 x,
                 y,
@@ -885,20 +887,47 @@ fn teleport_start(game: &RefCell<Game>, rec: &CastRec) {
     let CastTarget::Unit(dest) = rec.target else {
         return;
     };
-    let mut gm = game.borrow_mut();
-    gm.spells.human.next += 1;
-    let id = gm.spells.human.next;
-    gm.spells.human.teleports.insert(
-        id,
+    // The delay is the channel time of the cast core (`DataB`, section 14); the teleport runs at its completion
+    // (`on_channel_complete`), keyed by the cast id.
+    game.borrow_mut().spells.human.teleports.insert(
+        rec.id,
         TeleportFx {
             caster: rec.caster,
             dest,
             level: rec.level,
         },
     );
-    // The delay is DataB (the property at `+0x90` is set from it by the level init `0x6F060AE0`; LIKELY).
-    let delay = rec.level.data[1].to_f32();
-    human_timer(&mut gm, delay, TICK_TELEPORT, id);
+}
+
+/// Blizzard sets the stage-1 delay of the cast to 0 in its level init (`0x6F197E90`), so its `Cast` field is only
+/// the wave interval (CONFIRMED by disassembly).
+pub(crate) fn cast_field_is_wave_interval(base: u32) -> bool {
+    base == BLIZZARD
+}
+
+/// The class value of the channel time property (ability `+0x90`), if the class sets one: Blizzard `waves * Cast`
+/// (Unicorn 400 cases), Mass Teleport `DataB` (level init `0x6F060AE0`, reads the `DataB` getter `0x6F02EA50`).
+pub(crate) fn channel_time_override(base: u32, level: &SpellLevel) -> Option<F32> {
+    match base {
+        BLIZZARD => Some(blizzard_channel_time(level)),
+        MASS_TELEPORT => Some(level.data[1]),
+        _ => None,
+    }
+}
+
+/// Slot `0x39C(1)`, class part: Mass Teleport teleports when its channel time has run out.
+pub(crate) fn on_channel_complete(game: &RefCell<Game>, rec: &CastRec) {
+    if rec.base == MASS_TELEPORT {
+        teleport_finish(game, rec.id);
+    }
+}
+
+/// Slot `0x388`, class part: the channel-end hook of the cast `rec.id` (after FINISH, before ENDCAST). Blizzard
+/// destroys its effect (the waves stop); Mass Teleport drops a teleport that did not complete.
+pub(crate) fn on_cast_end(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    gm.spells.human.blizzards.retain(|_, fx| fx.cast != rec.id);
+    gm.spells.human.teleports.remove(&rec.id);
 }
 
 fn teleport_finish(game: &RefCell<Game>, id: u32) {
@@ -976,7 +1005,6 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     match kind {
         TICK_BLIZZARD_WAVE => blizzard_wave(game, id),
         TICK_BLIZZARD_DAMAGE => blizzard_damage(game, rt, id),
-        TICK_TELEPORT => teleport_finish(game, id),
         _ => {}
     }
 }

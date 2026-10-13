@@ -341,3 +341,58 @@ Thunder Clap (target set filter `targs`, the per-owner array), Divine Shield (th
 the cancel test), Avatar (the first-activation dispel) and Water Elemental (placement `0x6F1D26B0` / `0x6F4AFCD0`) keep the
 labels of sections 1 to 6; the time went into Blizzard, Mass Teleport and the Resurrection sort. Nothing in them changed
 except the order ids of section 8.
+
+## 14. The shared channel lifecycle (S35)
+
+Read from the machine code (CONFIRMED = read in disassembly; Unicorn numbers where a count is given). Implemented once
+in `cast.rs` (`channel_time`, `complete_cast`, `end_cast`, `process_interrupts`) and used by Blizzard and Mass Teleport.
+
+**Flags of the ability word `+0x20`** (names are mine): `0x1` cast active, `0x4` the unit's order queue is held,
+`0x800` the cast animation runs, `0x1000` channel hook active, `0x2000` casting by order (selects the order id getter
+`0x368` instead of `0x348`: slot `0x314` is just this bit), `0x4000` ENDCAST pending, `0x40000` finish succeeded,
+`0x40000000` backswing/channel phase.
+
+**Stage 1** (`0x6F071570`): sets `0x1000`, clears `0x4000`, posts CHANNEL (`0x6F29A0F0`), then calls slot `0x384` (class
+channel-start hook; the default is a `ret`, only `ANcl` implements it), then the readiness check. The stage-1 delay is
+the property at `+0x80`: its value is the level's `Cast` (base init `0x6F05C6C0` through `0x6F01F850`) -- **Blizzard
+overwrites it with 0.0** at the end of its level init `0x6F197E90`, so a Blizzard cast starts at once and its `Cast` is
+only the wave interval (the model had waited `Cast` seconds before; fixed, CONFIRMED by disassembly).
+
+**Stage 3 tail** (`0x6F063760`, CONFIRMED): after EFFECT and the effect body (mana, class effect, cooldown) the property
+at `+0x90` (value cell `+0x94`) is the **channel time**:
+
+| Source | Value |
+|---|---|
+| default (base init `0x6F05C6C0`, when slot `0x35C` is 0) | the unit type's `castbsw` (`0x6F29BD70`, unit type record `+0x70`) |
+| Blizzard (`0x6F1B9E90`, end) | `mul(I2R(f2i(DataA)), Cast)` = waves times the interval (**Unicorn 400/400**, `human_heroes::blizzard_channel_time`) |
+| Mass Teleport (level init `0x6F060AE0`, slot `0x35C` returns 1) | `DataB` |
+
+`0x6F022270` (value above 0.0: ordered `c < p` as an x87 compare, then not `0.001 > |p - c|`) and `0x6F022340`
+(differs from `FLT_MAX` = `0x6FAAE624`: not `0.001 > |c - p|`) decide: not above zero -> slot `0x39C(1)` at once
+(**Unicorn 400/400** each, `cast::prop_above`, `cast::prop_differs`); otherwise slot `0x398` (default `0x6F050A60`: sets
+bit 8 of the flag word of the object the unit's `+0x19C` handle names; no simulation effect found), then, unless the
+value is `FLT_MAX`, a `0xD01BD` timer of that many seconds on the cast's stage timer (`+0xBC`). The FINISH event of a
+spell therefore comes `castbsw` after the effect for an ordinary spell (the earlier model fired it with the effect; the
+`spell_cast.rs` test is updated), and `waves * Cast` after the effect for Blizzard.
+
+**Message `0xD01BD`** (dispatch table at `0x6F074E00`, handler list `0x6F074C60`): slot `0x39C(1)`. Mass Teleport's
+class override `0x6F069D60` teleports and then falls into the default `0x6F05BCD0` (success path: tells the unit the
+order finished with `0xD015F`/`0xD0160`, then `0x6F050AF0`): **FINISH event (`0x6F29A5A0`), the channel-end hook (slot
+`0x388` when flag `0x1` is set), the unit's order drain**. The hooks: default `ret`; Blizzard `0x6F1AFBE0` (resets the
+unit animation, destroys the effect through the handle at `+0x134`, cancels the autocast timer, then posts ENDCAST
+`0x6F050950`); Mass Teleport `0x6F056AC0` (ENDCAST first, then clears flags `0x80000`/`0x100000` on the caster and the
+destination and ends the teleport art). ENDCAST for the other classes is not posted by a visible hook (`0x6F050950` has
+34 callers, mostly class overrides): the model keeps firing it after FINISH (LIKELY).
+
+**Interruption** (message `0xD0144` -> slot `0x3A0` = `0x6F05C020` -> `0x6F050BE0`, CONFIRMED structure): the message
+carries an order object; its id (`+0x34`) is compared with the ability's own order id (`0x368` when flag `0x2000`, else
+`0x348`). When it **differs**: flag `0x1000` is cleared and slot `0x388` runs, the stage timer `+0xBC` is cancelled, the
+casting flags are cleared and the animation is reset. The same id leaves the cast alone. No FINISH is posted on this
+path; the hook posts ENDCAST. Where the unit posts `0xD0144` is the order dispatcher (`orders.md` section 5: every
+replacing order and stop). The model (`note_order_replaced`, `process_interrupts`): a replacing order (including stop)
+of another id ends the cast; **death or removal of the caster and a stun of a channelling caster** end it (LIKELY from
+game behaviour; the buff-side calls were not read); **silence does not** end a started channel (LIKELY). The processing
+runs after every timer event and tick (the original reacts inside the order call; the difference is at most one tick).
+
+Open: the unit-side meaning of slot `0x398`; who posts ENDCAST for classes without a hook; whether a re-issue of the same
+order id restarts a channel in the original (the model restarts the cast, ending the old one).
