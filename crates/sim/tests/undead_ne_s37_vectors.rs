@@ -1,7 +1,7 @@
 //! Unicorn vectors of the S37 numeric cores (`tools/emu/undead_ne4_emu.py`, original Game.dll code run for real).
 //! The swath engine of Carrion Swarm / Shockwave needs the soft-float tables (`GAME_DLL=...`).
 
-use sim::undead_ne::{gt_eps, safe_div, swath_cap_after, swath_countdown, swath_damage_each, swath_launch, swath_radius, swath_rearm, SwathData};
+use sim::undead_ne::{aoe_marker_duration, gt_eps, safe_div, swath_cap_after, swath_countdown, swath_damage_each, swath_launch, swath_radius, swath_rearm, SwathData};
 use softfloat::{Tables, F32};
 
 fn hex(s: &str) -> u32 {
@@ -128,4 +128,19 @@ fn robust_compare_and_safe_division_rules() {
     assert!(!gt_eps(z, one));
     assert!(!gt_eps(F32::from_bits(0x3A80_0000), z)); // 0.00097 < 0.001
     assert!(gt_eps(F32::from_bits(0x3A83_126F), z)); // exactly 0.001
+}
+
+#[test]
+fn immolation_marker_duration_matches_the_original() {
+    let text = include_str!("data/undead_ne/immo_marker.txt");
+    let mut n = 0;
+    for line in text.lines() {
+        let h: Vec<&str> = line.split_whitespace().collect();
+        let got = aoe_marker_duration(f(h[0]));
+        // the original returns the pointer's value for a non-positive input: 0.0; NaN compares false like the model
+        assert_eq!(got.to_bits(), hex(h[1]), "apply {line}");
+        assert_eq!(got.to_bits(), hex(h[2]), "refresh {line}");
+        n += 1;
+    }
+    assert!(n >= 300);
 }

@@ -339,6 +339,41 @@ def run_swarm_tick(cases, r):
     return rows
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Immolation victim marker `CBuffImmolationAoe` ('BEia'): duration plumbing of `CBuffAoe` slots 0x358 / 0x350
+
+def run_aoe_duration(cases, r):
+    A.setup_stubs()
+    nb = DATA + 0x7C00
+    mu.mem_write(nb, bytes(0x400))
+    wr(nb, 0x6F8CF6B4)
+    plog = []
+    U3.make_props(nb, (0xA0, 0xA8, 0xBC, 0xC4, 0xCC), plog)
+    rec = []
+
+    def base_apply(uc, esp, ecx):
+        a2 = rd(esp + 8)
+        rec.append(rd(a2) if (DATA <= a2 < DATA + 0x20000) else rd(a2))
+        return 0
+
+    hook_fn(0x6F0D4CB0, base_apply, 12)
+    hook_fn(0x6F0D4EF0, lambda uc, esp, ecx: rec.append(rd(rd(esp + 8))) or 0, 8)
+    p = DATA + 0x6900
+    rows = []
+    vals = [10.0, 1.0, 0.0, -0.0, -1.0, 0.005, 0.01, 0.0100001, 2.5, float("nan"), float("inf"), 1.0e-30]
+    for i in range(cases):
+        v = vals[i] if i < len(vals) else r.choice((rand_f(r, 0.0, 3.0), rand_f(r, -2.0, 0.02), rand_f(r, 0.0, 120.0), 1.0, 0.99))
+        wr(p, f2u(v))
+        rec.clear()
+        emu.call(0x6F0D6040, ecx=nb, stack_args=(0x1234, p, 0))
+        applied = rec[0]
+        rec.clear()
+        emu.call(0x6F0D60A0, ecx=nb, stack_args=(0x1234, p))
+        refreshed = rec[0]
+        rows.append((f2u(v), applied, refreshed))
+    return rows
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -360,6 +395,13 @@ def main():
             with open(os.path.join(dump, "swarm_launch.txt"), "w") as fh:
                 for row in rows:
                     fh.write(" ".join(hexf(x) for x in row[:7]) + " | " + " ".join(hexf(x) for x in row[7:]) + "\n")
+    if which == "aoe":
+        rows = run_aoe_duration(cases, r)
+        print("aoe: %d cases run" % len(rows), [(hexf(a), hexf(b), hexf(c)) for a, b, c in rows[:3]])
+        if dump:
+            with open(os.path.join(dump, "immo_marker.txt"), "w") as fh:
+                for v, a, c in rows:
+                    fh.write("%s %s %s\n" % (hexf(v), hexf(a), hexf(c)))
     if which == "tick":
         rows = run_swarm_tick(cases, r)
         for head, lives, out in rows[:4]:

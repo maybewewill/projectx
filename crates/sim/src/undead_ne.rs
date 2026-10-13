@@ -69,6 +69,8 @@ pub const BUFF_SLEEP_STATIONARY: u32 = code(b"BUst");
 pub const BUFF_SLEEP_PAUSE: u32 = code(b"BUsp");
 pub const BUFF_SHADOW_STRIKE: u32 = code(b"BEsh");
 pub const BUFF_IMMOLATION: u32 = code(b"BEim");
+/// The victim marker of Immolation (`CBuffImmolationAoe`, a `CBuffAoe`: a duration-only buff, S37).
+pub const BUFF_IMMOLATION_AOE: u32 = code(b"BEia");
 pub const BUFF_VAMPIRIC: u32 = code(b"BUav");
 /// The treants' timed life buff (`BEfn` is one of the 7 special timed life ids, abilities.md).
 pub const BUFF_TREANT_LIFE: u32 = code(b"BEfn");
@@ -142,6 +144,8 @@ struct Immolation {
     damage: F32,
     drain: F32,
     area: F32,
+    /// The level's Dur: the pulse interval and the base of the victim marker's duration.
+    dur: F32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1038,7 +1042,7 @@ fn immolation(game: &RefCell<Game>, caster: ObjKey, base: u32, level: &SpellLeve
     let serial = gm.add_buff(caster, BUFF_IMMOLATION, crate::abilities::buff_predicates(BUFF_IMMOLATION));
     gm.spells_hero_state_mut().immolations.insert(
         (caster, base),
-        Immolation { serial, damage: level.data[0], drain: level.data[1], area: level.area },
+        Immolation { serial, damage: level.data[0], drain: level.data[1], area: level.area, dur: level.dur },
     );
     gm.timers_start_hero(IMMOLATION_PULSE_SECONDS, TICK_IMMOLATION, caster, serial);
 }
@@ -1077,6 +1081,9 @@ fn immolation_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKe
             if gm.unit_is_invulnerable(k) {
                 continue;
             }
+            // The per-victim callback (`0x6F13B2A0`) gives the victim the marker `'BEia'` (refreshing a live one) with
+            // the duration `Dur - 0.01` (CBuffAoe slot `0x358`, [`aoe_marker_duration`]).
+            gm.add_spell_buff(k, BUFF_IMMOLATION_AOE, BuffEffect::Marker, aoe_marker_duration(run.dur));
             if let Some(d) = gm.unit_damage_target(u, k, run.damage, false, false, 0, FROST_NOVA_DAMAGE_TYPE) {
                 deaths.push(d);
             }
@@ -1085,6 +1092,16 @@ fn immolation_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKe
     }
     for t in deaths {
         dispatch_unit_death_by(game, rt, t, Some(unit));
+    }
+}
+
+/// The duration `CBuffAoe` gives its buff (slots `0x358` apply / `0x350` refresh, CONFIRMED by Unicorn, 320 cases):
+/// `value - 0.01` (soft subtract, `0x6FAAE480`) when `0.0 < value` by the x87 compare (NaN and non-positive give `0.0`).
+pub fn aoe_marker_duration(value: F32) -> F32 {
+    if 0.0 < value.to_f32() {
+        arith::sub(value, F32::from_bits(0x3C23_D70A))
+    } else {
+        F32::ZERO
     }
 }
 
