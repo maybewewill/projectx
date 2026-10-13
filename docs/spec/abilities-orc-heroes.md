@@ -353,3 +353,30 @@ on a fake ability with real level getters and a fake victim; 400 cases, 0 mismat
   (model).
 * Not found: the "building factor" of the task text. Nothing in the stomp body scales damage for structures; the only
   structure-dependent branch is the stun skip above.
+
+## 14. S39: Feral Spirit (`AOsf`, `CAbilitySpiritWolf`, vtable `0x6F927B2C`) - count, duration, flag, placement (Unicorn)
+
+Unicorn run `tools/emu/feral_emu.py` (two separate processes, `E` and `P`, 400 cases each, 0 mismatches against the Rust
+functions; vectors `tests/data/orc/feral.txt`, tests `tests/orc_feral.rs`). Order id 852126 (section 10 correction).
+
+* **Effect `0x6F1DF330` (the real code on a fake ability; stubbed: event registration `0x6F1D7990`/`0x6F46D1B0`, info
+  builder `0x6F042B20`, creator wrapper, the class slot `0x3E4`).** `n = F2I(DataB)` (`0x6F02EA50`, `0x6F6EEC20`);
+  duration `T = Dur + ability+0x9C` (soft add `0x6F6EF000`). **There is no `HeroDur` branch** (corrects section 7.2, whose
+  model used `HeroDur` for a hero caster). The loop runs `n` times; each iteration calls the summon wrapper `0x6F1D27A0`
+  (ECX = the unit type from `UnitID` `0x6F02EDD0`, EDX = the caster; stack: the caster's owner index from slot `0xEC`,
+  a pointer to `Area`, the constant 1, the flag word) and then `0x6F053040` (ability bookkeeping), the class slot `0x3E4`
+  (`0x6F1FCD80`: builds the buff `BOsf` = `CBuffSpiritWolf`, vtable `0x6F9277BC`, through `0x6F1FA830`, init slot `0x364`
+  `0x6F1E9900` = `CBuffTimedLife` init `0x6F0D67C0` + register `0x6F26EF10`; the duration argument is a pointer to `T`)
+  and the release `0x6F299390`. The flag word is `0x502` when `T == 0` (x87 equality, NaN = non-zero) and `2` otherwise.
+  The timed-life init sets class flag 4 (`unit+0x248 |= 4`, the model's summoned bit). No RNG draw anywhere (CONFIRMED by
+  the run: the stream state is untouched). Rust: `orc::feral_plan`.
+* **Placement (`0x6F1D27A0` -> `0x6F1D26B0`, real code).** The point given to the unit creator `0x6F29F990` (ECX = owner,
+  EDX = type, stack = pointers to x, y, facing, then `flags | 2`, 1, a cell id from `0x6F2ABF20`) is
+  `(cx, cy) + M * (Area, 0, 0)` with `M` the rotation about (0,0,1) by the caster's facing (the matrix and transform of
+  Mirror Image, `mirror_rotation` / `mirror_transform`); the wrapper adds the CASTER's coordinate first (operand order
+  matters for the sign of a zero), and the facing handed on is the caster's own (third argument 1 selects the caster's
+  facing; 0 would use a Misc-derived random angle via `0x6F020D30`, not used by Feral Spirit). So the wolves appear
+  `Area` (200) in FRONT of the caster, all at the same requested point; separation is the creator's business (its
+  placement search is not decoded: UNSURE). Rust: `orc::feral_place` (needs the soft-float tables; without them the model
+  places the wolves at the caster).
+* Wired: `feral_spirit` uses both. The wolf abilities, the `BOsf` buff polarity and the placement search stay UNSURE.

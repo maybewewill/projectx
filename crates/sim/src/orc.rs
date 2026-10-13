@@ -1141,8 +1141,45 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     }
 }
 
-/// Feral Spirit (class `0x6F927B2C`, effect `0x6F1DF330`): `DataB` units of the level's `UnitID`, summoned, living
-/// `Dur`/`HeroDur`. No RNG draw is reachable through direct calls. UNSURE: the placement (at the caster here).
+/// What the Feral Spirit effect `0x6F1DF330` does before it creates the wolves (CONFIRMED by Unicorn,
+/// `tools/emu/feral_emu.py`, 400 `E` cases): `count = F2I(DataB)`, the duration handed to every wolf's buff is
+/// `Dur + ability+0x9C` (soft add; **there is no HeroDur branch**, a hero caster uses the same `Dur`), and the creator
+/// flag word is `0x502` when that duration is exactly zero (x87 equality, so NaN counts as non-zero) and `2` otherwise
+/// (the creator ORs 2 on top). A negative count loops 2^32 - |n| times in the original (never reached with real data).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FeralPlan {
+    pub count: i32,
+    pub flags: u32,
+    pub duration: F32,
+}
+
+pub fn feral_plan(dur: F32, plus_9c: F32, data_b: F32) -> FeralPlan {
+    let total = arith::add(dur, plus_9c);
+    FeralPlan {
+        count: conv::f2i(data_b),
+        flags: if total.to_f32() == 0.0 { 0x502 } else { 2 },
+        duration: total,
+    }
+}
+
+/// The point the creator wrapper `0x6F1D27A0` -> `0x6F1D26B0` hands to the unit creator: the caster's position plus
+/// `M * (Area, 0, 0)` where `M` is the rotation about the vertical axis by the caster's facing (the same matrix and
+/// transform as Mirror Image). Every wolf of one cast is requested at this point; the unit creator `0x6F29F990` spreads
+/// them by its own placement search (not decoded). The facing passed on is the caster's facing. CONFIRMED (Unicorn, 400
+/// `P` cases, soft-float tables from the DLL).
+pub fn feral_place(cx: F32, cy: F32, facing: F32, area: F32, t: &softfloat::Tables) -> (F32, F32) {
+    let m = mirror_rotation(facing, t);
+    let o = mirror_transform(&m, [area, F32::ZERO, F32::ZERO]);
+    // The wrapper adds the caster's coordinate FIRST (`edx` = the caster's point, the stack argument = the rotated
+    // offset): the operand order decides the sign of a zero sum.
+    (arith::add(cx, o[0]), arith::add(cy, o[1]))
+}
+
+/// Feral Spirit (class `0x6F927B2C`, effect `0x6F1DF330`): `F2I(DataB)` units of the level's `UnitID`, created for the
+/// caster's owner at [`feral_place`] facing like the caster, each given the timed buff `BOsf` (`CBuffSpiritWolf`, a
+/// `CBuffTimedLife`: class flag 4 = summoned, duration `Dur + ability+0x9C`, zero = no expiry). No RNG draw. UNSURE:
+/// the creator's placement search that separates the wolves (the model builds them at the same point), the abilities
+/// of the wolves.
 fn feral_spirit(game: &RefCell<Game>, rec: &CastRec) {
     let mut gm = game.borrow_mut();
     if !gm.alive(rec.caster) {
@@ -1153,15 +1190,18 @@ fn feral_spirit(game: &RefCell<Game>, rec: &CastRec) {
     let Some(&unit_type) = gm.orc.summon_units.get(&FERAL_SPIRIT).and_then(|v| v.get(level_index)) else {
         return;
     };
-    let count = conv::f2i(rec.level.data[1]).max(0);
+    let plan = feral_plan(rec.level.dur, F32::ZERO, rec.level.data[1]);
     let (owner, x, y, facing) = {
         let u = gm.unit(rec.caster);
         (u.owner, u.x, u.y, u.facing)
     };
-    let hero = gm.target_hero(rec.caster);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
-    for _ in 0..count {
-        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, unit_type, x, y, rad_to_deg(facing), true) else {
+    let (px, py) = match gm.softfloat_tables().cloned() {
+        Some(t) => feral_place(x, y, facing, rec.level.area, &t),
+        None => (x, y),
+    };
+    for _ in 0..plan.count.max(0) {
+        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, unit_type, px, py, rad_to_deg(facing), true)
+        else {
             continue;
         };
         {
@@ -1169,7 +1209,7 @@ fn feral_spirit(game: &RefCell<Game>, rec: &CastRec) {
             u.summoned = true;
             u.class_flags |= 0x4;
         }
-        gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, dur);
+        gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, plan.duration);
     }
 }
 
