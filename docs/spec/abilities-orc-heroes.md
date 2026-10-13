@@ -218,3 +218,39 @@ Model: a visible-state fog modifier over the circle for the owner, stopped with 
 | Mirror Image | cast effect, delayed handler, RNG stream 12, polygon | yes: pick, offset, rotation, transform (4 x 400, 0 mismatches) | yes (hero swap LIKELY) |
 | Feral Spirit | effect entry point, no RNG found | no | MODEL |
 | Far Sight | slots only | no | MODEL |
+
+## 10. S34: Healing Wave (`AOhw`, `CAbilityHealingWave`, vtable `0x6F8B12BC`) and the shared chain collector
+
+Order id `0xD0215` = 852501 (slot `0x308`, agrees with the `ability_orders.py` cast getter). Atlas: a child of
+`CAbilityChainLightning`; the cast entry `0x6F1CB550`, hop body `0x6F1C2F50`, next-hop gate `0x6F1C3200`, next-target search
+`0x6F1B6F30` and collector `0x6F1B0780` are the chain code. The class overrides only: `0x42C` = 1 ("heals", also returned
+by slot `0x430`), `0x434` = 1 (score mode), `0x438` = 0 (distance mode off), `0x1FC` = 1, `0x308`.
+
+* **Unicorn (CONFIRMED, `tools/emu/heal_emu.py`, `tests/data/orc/heal.txt`, `tests/orc_heal.rs`; real code on fake
+  objects; 400 hop + 400 gate + 800 collector cases, 0 mismatches, 246 collector picks):**
+  * Hop (`HH`): the record amount is `DataA * factor` with the sign bit flipped when `0x42C` is non-zero (a negative
+    damage record = heal); flags `0x400`; the next-hop timer 0.25 s, the bolt destroy delay is `[0x6FAAE504]` = **2.0**
+    for Healing Wave (1.0 for Chain Lightning); factor and hit count as Chain Lightning (`factor * (1 - DataC)`).
+  * Gate (`HG`): the flag word for the next-target search is `(targs & 0xFFFE0FFF) | base | (0x8000 if ability flag
+    0x80000)`, with base `0x7000` for Healing Wave (slot `0x42C` non-zero) and `0x10000` for Chain Lightning.
+  * Collector (`CB`): validity = visible to the owner's player (`0x6F284EE0` is a fog test, `0x6F3A38F0`, not a relation
+    test), then slot `0x3F0` (`0x6F1B0650`): for a healer a unit with `|life - max| < 2e-7` (`0x6F01FE40`) is refused, and
+    an illusion (`unit+0x5C & 0x40000000`) is refused unless Misc `IllusionsCanRestoreLife`; then the immunity test
+    `0x6F28D750(unit, slot 0x348)`, the hit-list test `0x6F1A2110`, and for a non-healer without ability flag `0x100000` a
+    unit with `+0xEC > 0` is refused. Distance mode (Chain Lightning): the candidate wins if its squared distance is
+    strictly smaller (soft `lt`) than `S+0x14`. Score mode (Healing Wave): score = `max - life` (soft sub, slot `0x130`
+    minus slot `0x12C`), strictly greater (soft `gt`) than `S+0x18` (start 0.0) wins; ties keep the first. So Healing Wave
+    always jumps to the **most wounded** valid unit in the area, not the nearest. Rust: `orc::chain_candidate_update`.
+* Distance for Chain Lightning: `0x6F476860` is a method of the candidate's position object; its stack arguments are
+  (out, x, y, flag) pushed BEFORE the position getter call (slot `0xB8`, no arguments). It subtracts the grid origin
+  (`[0x6FAB7368] + 0x6C/0x70`), scales by 2^-5 (exponent subtract with underflow flush) and takes the fused squared
+  distance `0x6F6EF3B0` against the unit's cell position (`+0x78`), or against the footprint point via `0x6F497460` /
+  `0x6F38B0B0` with flag 1. Not run (needs the world); the model keeps the centre distance (UNSURE, unchanged).
+* Hop ethereal bonus (NOT modelled): when `0x42C != 0` and the target's `+0x158 > 0`, Misc `EtherealHealBonus` modifies the
+  amount (`0x6F1C3045..0x6F1C307D`).
+* Model: `orc::chain_lightning(.., heals = true)`: the heal adds life clamped to the maximum (as Holy Light; the
+  negative-record path of the target side is UNSURE); next target per the collector (allies, alive, not hit, wounded,
+  not structure / mechanical, visible assumed).
+* Corrections made while here: the order ids of Mirror Image (852123) and Feral Spirit (852126) were wrong (fixed upstream
+  by the coordinator); other ids from slot `0x308`: Earthquake 852121, Whirlwind (Bladestorm) 852128, Reincarnation
+  852124, Hex 852502, Voodoo 852503, Serpent Ward (`AOwd`, not `AOsw`) 852504.
