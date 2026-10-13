@@ -762,11 +762,12 @@ impl Game {
         if !live || self.is_stunned(unit) {
             // A dead or removed unit stops where it is (its velocity would otherwise carry it on); so does a stunned one
             // (`CBuffStun` counts a disable on the unit, `crate::auras`), and its route stays for when the stun ends.
-            self.mover_halt(unit);
+            self.mover_halt_with(unit, t);
             return;
         }
-        if self.is_stunned(unit) {
-            self.mover_halt(unit);
+        if self.is_stunned(unit) || self.is_rooted(unit) {
+            // A rooted unit (Ensnare, Web: the buff calls the mover's movement-disable `0x6F2031D0`) does not move either.
+            self.mover_halt_with(unit, t);
             return;
         }
         let Some(route) = self.orders.units.get(&unit).and_then(|s| s.route.clone()) else {

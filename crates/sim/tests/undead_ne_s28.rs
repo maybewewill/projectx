@@ -155,8 +155,10 @@ fn host() -> ScriptHost {
         g.set_spell_levels(DEATH_PACT, vec![level(75, 0.0, 0.0, 0.0, 0.0, &[0.5, 1.0, 0.0, 0.0, 0.0])]);
         // Blink: DataA = maximum range 1000.
         g.set_spell_levels(BLINK, vec![level(50, 0.0, 0.0, 0.0, 0.0, &[1000.0])]);
-        // Carrion Swarm: Area (start width) 100, DataA damage 75, DataB distance 800, DataC end width 200, DataD max 150.
-        g.set_spell_levels(CARRION_SWARM, vec![level(110, 6.0, 0.0, 0.0, 100.0, &[75.0, 800.0, 200.0, 150.0])]);
+        // Carrion Swarm (S37 mapping): Area start width 100, DataA damage 75, DataB total cap 150, DataC distance 800,
+        // DataD final width 200; the missile flies at 1100.
+        g.set_spell_levels(CARRION_SWARM, vec![level(110, 6.0, 0.0, 0.0, 100.0, &[75.0, 150.0, 800.0, 200.0])]);
+        g.set_spell_missile_speed(CARRION_SWARM, f(1100.0));
         // Sleep: Dur 20, HeroDur 10.
         g.set_spell_levels(SLEEP, vec![level(125, 10.0, 20.0, 10.0, 0.0, &[2.0])]);
         // Shadow Strike: DataA 10 per second (UNSURE role), DataB slow 0.5, DataE initial damage 50, Dur 5.
@@ -293,7 +295,7 @@ fn carrion_swarm_hits_the_line_in_order_and_stops_at_the_damage_cap() {
     let (e1, e2, e3) = (unit(&h, "enemy"), unit(&h, "enemy2"), unit(&h, "enemy3"));
     let (l1, l2, l3) = (life(&h, e1), life(&h, e2), life(&h, e3));
     call(&mut h, "swarm");
-    run(&mut h, 1);
+    run(&mut h, 40);
     assert!(accepted(&h));
     // Both units on the x axis are hit (width 100..200 around the line), the one 900 off is not.
     assert_eq!(life(&h, e1), l1 - 75.0, "nearest first, full DataA");

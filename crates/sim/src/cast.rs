@@ -184,6 +184,8 @@ pub enum SpellMsg {
     Human { kind: u8, id: u32 },
     /// A timer of the unit spells in `unit_spells.rs` (autocast scans).
     UnitSpell { kind: u8, unit: ObjKey, base: u32, aux: u32 },
+    /// A timer of the item abilities in `item_abilities.rs` (regeneration ticks).
+    Item { kind: u8, unit: ObjKey, aux: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -254,6 +256,8 @@ pub struct SpellSystem {
     pub human: crate::human_heroes::State,
     /// State of the unit spells (`unit_spells.rs`).
     pub unit: crate::unit_spells::State,
+    /// State of the item abilities (`item_abilities.rs`).
+    pub item: crate::item_abilities::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -360,6 +364,9 @@ impl SpellSystem {
         ] {
             s.order_ids.insert(id, base);
         }
+        for &(id, base) in crate::undead_ne::S37_ORDERS {
+            s.order_ids.insert(id, base);
+        }
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).
         s.missile_speed.insert(STORM_BOLT, F32::from_bits(1000.0f32.to_bits()));
         s
@@ -370,6 +377,11 @@ impl Game {
     /// Installs the level records of ability `base` (index 0 = level 1).
     pub fn set_spell_levels(&mut self, base: u32, levels: Vec<SpellLevel>) {
         self.spells.levels.insert(base, levels);
+    }
+
+    /// The level records installed for ability `base` (empty when none).
+    pub(crate) fn spell_levels_of(&self, base: u32) -> &[SpellLevel] {
+        self.spells.levels.get(&base).map_or(&[], |v| v.as_slice())
     }
 
     /// Installs the cast point and backswing of a unit type.
@@ -490,7 +502,7 @@ impl Game {
         if !mana_check(u.mana, cost_value(level.cost)) {
             return Err(CastError::NoMana);
         }
-        if self.is_cooling(caster, base) {
+        if self.is_cooling(caster, base) || crate::item_abilities::group_cooling(self, caster, base) {
             return Err(CastError::Cooling);
         }
         Ok(())
@@ -552,6 +564,16 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// Replaces the slow amounts of a live spell buff (the Shadow Strike decay, S37) and recomputes the speed.
+    pub(crate) fn set_spell_buff_slow(&mut self, serial: u32, move_delta: F32, attack_delta: F32) {
+        let Some(b) = self.spells.buffs.get_mut(&serial) else {
+            return;
+        };
+        b.effect = BuffEffect::Slow { move_delta, attack_delta };
+        let unit = b.unit;
+        self.refresh_slow(unit);
     }
 
     /// Adds a spell buff: replaces a buff of the same code from an earlier cast (UNSURE: stacking), arms the
@@ -739,6 +761,7 @@ pub fn begin_cast(
                     && !crate::unit_spells::takes_no_target(base)
                     && !crate::human_heroes::is_immediate_spell(base)
                     && !crate::undead_ne::is_immediate(base)
+                    && !crate::item_abilities::takes_no_target(&gm, base)
                 {
                     return Err(CastError::BadTarget);
                 }
@@ -922,6 +945,7 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
     }
     crate::human_heroes::on_cast_end(game, &rec);
     fire_spell_event(game, rt, SPELL_ENDCAST, &rec);
+    crate::item_abilities::on_cast_end(game, rt, &rec, completed);
 }
 
 impl Game {
@@ -999,6 +1023,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
         return;
     }
     if crate::unit_spells::run_effect(game, rt, rec) {
+        return;
+    }
+    if crate::item_abilities::run_effect(game, rec) {
         return;
     }
     let CastTarget::Unit(target) = rec.target else {
@@ -1177,5 +1204,6 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
         SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
         SpellMsg::UnitSpell { kind, unit, base, aux } => crate::unit_spells::on_timer(game, rt, kind, unit, base, aux),
+        SpellMsg::Item { kind, unit, aux } => crate::item_abilities::on_timer(game, rt, kind, unit, aux),
     }
 }

@@ -169,6 +169,7 @@ pub(crate) fn dispatch_unit_death_by(
         let killer_owner = killer.map_or(u32::MAX, |k| gm.unit(k).owner);
         let ty = gm.unit(unit).type_id;
         gm.kill_log.push((killer_owner, owner, ty));
+        gm.orc_on_unit_died(unit);
     }
     // The death handler `0x6F2A4880` gives the kill experience first (UNSURE order against the JASS events).
     if let Some(k) = killer {

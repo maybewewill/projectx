@@ -417,6 +417,13 @@ fn with_attribute_change(g: &Rc<RefCell<Game>>, a: &[Value], permanent: bool, f:
     let Some(k) = hero_key(&gm, a) else {
         return;
     };
+    change_hero_attributes(&mut gm, k, permanent, f);
+}
+
+/// The body of [`with_attribute_change`] for a hero already resolved: `f` changes the attribute counters, then the
+/// derived changes are applied (also used by the item abilities, `crate::item_abilities`: the attribute adders
+/// `0x6F20A160` / `0x6F20A1E0` / `0x6F20A260` take the same path with `permanent` false).
+pub(crate) fn change_hero_attributes(gm: &mut Game, k: ObjKey, permanent: bool, f: impl FnOnce(&mut HeroObj)) {
     let rates = *gm.hero_rates();
     let (before, after) = {
         let Some(h) = gm.unit_mut(k).hero.as_mut() else {

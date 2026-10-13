@@ -317,3 +317,310 @@ initialiser `0x3E8` = `0x6F163570` (also called from the init slot `0x80`), cast
 * Model: `orc::bladestorm` / `blade_tick` with the three pure functions above; the target filter is UNSURE (living enemy
   ground non-structure units), the re-armed one-shot timer replaces the repeating timer, a marker buff `BOww` lasts
   `total`.
+
+## 13. S39: War Stomp (`AOws`, `CAbilityStomp`) - the area filter and the per-unit body (Unicorn)
+
+All numbers CONFIRMED by reading and by the Unicorn run `tools/emu/stomp_emu.py` (the real per-unit callback `0x6F1607B0`
+on a fake ability with real level getters and a fake victim; 400 cases, 0 mismatches; `tests/data/orc/stomp.txt`,
+`tests/orc_stomp.rs`).
+
+* **Area filter (corrects section 3 / 3.1, which left it UNSURE).** The instant slot `0x428` (`0x6F1608B0`) calls the
+  shared area slot `0x434` = `0x6F176CD0` with the third argument 1. That slot forms the flag word
+  `W = (targs & 0xFFFF0FFF) | 0x10000`, plus `0x8000` because the argument is non-zero, and calls the builder `0x6F2A3270`
+  with the tags `0xB` (circle: area, x, y of the CASTER), `0x1D` (`W`, caster, -1), `0xF` and `0x1F`. Tag `0x1D` sets
+  builder bit `0x20000000`, which appends the per-candidate predicate `0x6F26E510` (it is
+  `0x6F25D6F0(unit, W, caster, -1) == 0`) and ORs the coarse category mask of `0x6F25D830` into the iterator's mask. So
+  the filter is exactly the splash candidate filter of `weapon-splash.md` (relation, alive, vulnerable, kind, organic /
+  mechanical, hero, sapper, ancient) with the word `W`: the relation bits are **enemy and neutral only** (self, player,
+  ally cleared). A unit that is passively allied but does not share spells counts as "neutral" and is hit; the caster
+  itself, own units and shared-control allies are not. With the shipped `targs` `ground,organic` (word `0x4000002`) the
+  word is `0x4018002`, so air units, structures that are not "ground" and mechanical units are refused; a dead unit and
+  an invulnerable (vulnerable-only default) unit are refused by the expanded word. Rust: `orc::stomp_word`,
+  `orc::area_predicate`, `Game::set_orc_targs` (host-supplied words, default `STOMP_TARGS_DEFAULT`).
+* **Per-unit body `0x6F1607B0`.** The unit's slot `0x11C` (`CUnit` returns 0) and the spell-immunity test `0x6F28D750`
+  (walks the unit's ability lists and asks each immunity ability, slot `0x26C`) select the ZERO path. Normal path: damage
+  record amount `DataA`, class from slot `0x42C` (**`0x8000`**, CONFIRMED in the run), flags **`0x40`**; zero path: amount
+  `0.0`, flags **`0x50`** (the `0x10` bit is set on exactly this path; this corrects section 3.1, which said it was never
+  set). The record goes to the victim's damage slot `0x120` in both cases (a zero amount does nothing in the model).
+  Afterwards `0x6F282F60` resolves the victim (valid handle, not removed, dead bit `0x100` of `unit+0x5C` clear); a resolved
+  victim is stored in the ability's hit array at `[owner index + 1]` (`vf 0xEC` = `unit+0x58`; last one per owner wins),
+  and the stun slot `0x430` (`0x6F18ABF0`, `HeroDur` for a hero by `0x6F1D2660`, else `Dur + ability+0x9C`; nothing for a
+  zero duration; an existing `BPSE` buff is refreshed through its slot `0x360`) runs only when the unit slot `0x114`
+  (`unit+0x24C`, the `targType` word) has **bit 8 (structure) clear**, the unit is resolved and the zero path was not
+  taken. Rust: `orc::stomp_unit`, `orc::stomp_record_flags`.
+* Enumeration order: the area query's cell walk around the caster (x-major cells), as before; the damage of each unit is
+  applied before the next unit is visited (the callback runs per candidate), deaths are dispatched after the loop
+  (model).
+* Not found: the "building factor" of the task text. Nothing in the stomp body scales damage for structures; the only
+  structure-dependent branch is the stun skip above.
+
+## 14. S39: Feral Spirit (`AOsf`, `CAbilitySpiritWolf`, vtable `0x6F927B2C`) - count, duration, flag, placement (Unicorn)
+
+Unicorn run `tools/emu/feral_emu.py` (two separate processes, `E` and `P`, 400 cases each, 0 mismatches against the Rust
+functions; vectors `tests/data/orc/feral.txt`, tests `tests/orc_feral.rs`). Order id 852126 (section 10 correction).
+
+* **Effect `0x6F1DF330` (the real code on a fake ability; stubbed: event registration `0x6F1D7990`/`0x6F46D1B0`, info
+  builder `0x6F042B20`, creator wrapper, the class slot `0x3E4`).** `n = F2I(DataB)` (`0x6F02EA50`, `0x6F6EEC20`);
+  duration `T = Dur + ability+0x9C` (soft add `0x6F6EF000`). **There is no `HeroDur` branch** (corrects section 7.2, whose
+  model used `HeroDur` for a hero caster). The loop runs `n` times; each iteration calls the summon wrapper `0x6F1D27A0`
+  (ECX = the unit type from `UnitID` `0x6F02EDD0`, EDX = the caster; stack: the caster's owner index from slot `0xEC`,
+  a pointer to `Area`, the constant 1, the flag word) and then `0x6F053040` (ability bookkeeping), the class slot `0x3E4`
+  (`0x6F1FCD80`: builds the buff `BOsf` = `CBuffSpiritWolf`, vtable `0x6F9277BC`, through `0x6F1FA830`, init slot `0x364`
+  `0x6F1E9900` = `CBuffTimedLife` init `0x6F0D67C0` + register `0x6F26EF10`; the duration argument is a pointer to `T`)
+  and the release `0x6F299390`. The flag word is `0x502` when `T == 0` (x87 equality, NaN = non-zero) and `2` otherwise.
+  The timed-life init sets class flag 4 (`unit+0x248 |= 4`, the model's summoned bit). No RNG draw anywhere (CONFIRMED by
+  the run: the stream state is untouched). Rust: `orc::feral_plan`.
+* **Placement (`0x6F1D27A0` -> `0x6F1D26B0`, real code).** The point given to the unit creator `0x6F29F990` (ECX = owner,
+  EDX = type, stack = pointers to x, y, facing, then `flags | 2`, 1, a cell id from `0x6F2ABF20`) is
+  `(cx, cy) + M * (Area, 0, 0)` with `M` the rotation about (0,0,1) by the caster's facing (the matrix and transform of
+  Mirror Image, `mirror_rotation` / `mirror_transform`); the wrapper adds the CASTER's coordinate first (operand order
+  matters for the sign of a zero), and the facing handed on is the caster's own (third argument 1 selects the caster's
+  facing; 0 would use a Misc-derived random angle via `0x6F020D30`, not used by Feral Spirit). So the wolves appear
+  `Area` (200) in FRONT of the caster, all at the same requested point; separation is the creator's business (its
+  placement search is not decoded: UNSURE). Rust: `orc::feral_place` (needs the soft-float tables; without them the model
+  places the wolves at the caster).
+* Wired: `feral_spirit` uses both. The wolf abilities, the `BOsf` buff polarity and the placement search stay UNSURE.
+
+## 15. S39: Serpent Ward (`AOsw`, base `AOwd`, `CAbilityWard`, vtable `0x6F8F91E4`) - point cast (Unicorn)
+
+The ability row is `AOsw` (code `AOwd`); order id 852504 (section 10). Unicorn run `tools/emu/ward_emu.py` (the real slot
+`0x418` = `0x6F162DC0` on a fake ability; 400 cases, 0 mismatches; `tests/data/orc/ward.txt`, `tests/orc_ward.rs`).
+
+* The ward cast has the same shape as the Feral Spirit loop: `n = F2I(DataA)` (`0x6F02E9E0`; 1 in the data) wards of the
+  level's `UnitID` (slot `0x434` = `0x6F190980`) for the caster's owner (slot `0x42C` = `0x6F190960` -> caster `vf 0xEC`),
+  duration `Dur + ability+0x9C` (**no `HeroDur`**), creator flag `0x502` when that duration is zero else `2`.
+* Every ward is created AT THE TARGET POINT: the creator `0x6F29F990` receives the cast's own x and y pointers (the values
+  equal the ordered point bit for bit, no offset, no range pull) and a pointer to the facing, which is the Misc
+  `BuildingAngle` (read through `0x6F009EE0`, key `BuildingAngle` of section `Misc`) rounded down to a multiple of 90
+  degrees: `v = F2I(a) % 360; if v != 0 && v % 90 != 0 { v -= v % 90 }; if v < 0 { v += 360 }; facing = I2R(v) * (pi/180)`.
+  With the shipped Misc value 270 the facing is `4.712389`. `ai_site::building_angle` (AI code) has no rounding; the ward
+  uses `orc::building_angle_radians`. The sixth creator argument is -1 (no cell id; Feral Spirit passes a cell id).
+* Afterwards slot `0x430` (`0x6F18C650`) builds the ward buff `BOwd` (factory `0x6F189900`, init slot `0x324`, apply slot
+  `0x31C` with the ward and a pointer to the duration; `0x6F079CA0` adds it) and `0x6F299390` releases the unit.
+* Model: `orc::serpent_ward` (wired in `run_effect`, order 852504, `takes_point`): builds the wards, marks them summoned
+  (class bit 4), timed life = the duration. The ward's own attack (a `Aatk` ability of `osp1..3`) and the ward target
+  class come from the unit data. UNSURE: the buff's polarity and the unit creator's placement search (the target point
+  may be occupied).
+
+## 16. S39: Hex (`AOhx`, `CAbilityHex`, vtable `0x6F8B1704`, a `CAbilityPolymorph`) - the creature pick (Unicorn)
+
+Order id 852502 (section 10). Unit-target slot `0x424` = `0x6F12F560` (shared with Polymorph). Unicorn run
+`tools/emu/hex_emu.py` (the real selector `0x6F12DAA0`, real class vtable, real token routine, vector helpers and roll
+wrapper; the profile lookup, Storm's tokenizer / allocator and the type database are Python hooks; 400 cases, 0
+mismatches including the stream state; `tests/data/orc/hex.txt`, `tests/orc_hex.rs`).
+
+* **Cast `0x6F12F560`.** A target whose `unit+0x5C` has bit `0x40000000` (an ILLUSION) is killed outright: the unit's slot
+  `0x124` (set life) is called with 0.0 and nothing else happens. Any other target: duration = `HeroDur` for a hero (the
+  hero test `0x6F1D2660`: hero-letter type id, a type flag, or the ability test `0x6F0766A0`) and `Dur + ability+0x9C`
+  (`0x6F02F880`) otherwise; the creature comes from `0x6F12DAA0(level, class)` with `class = unit+0x1FC` (the target's
+  `movetp` word); slot `0x43C` = `0x6F0BAD50` then builds the morph buff `BOhx` (helper `0x6F0BACD0`; the flag word of the
+  buff has bit 1 / bit 2 cleared by a switch on the class).
+* **The pick.** The list text is the level's `DataB` (default), `DataC` (class 2 = fly), `DataD` (class 32 = amphibious) or
+  `DataE` (class 16 = float), looked up by `0x6F113DE0` with the key text `Data?` + level; a missing or empty text falls back
+  to the class default of the class vtable: `nshe` (slot `0x42C`, default class), `nshf` (`0x430`, class 2), `nsha`
+  (`0x434`, class 32), `nshw` (`0x438`, class 16). The text is split by Storm's `SStrTokenize` with the delimiters blank,
+  comma, hyphen, underscore, tab; each token becomes its first four bytes as a big-endian word (`0x6F4C3F50`); a type
+  the unit database does not know (`0x6F29D2F0` -> `0x6F29A8C0`) is dropped. With NO candidate nothing is drawn and the
+  result is type 0; otherwise ONE draw of combat **stream 24** (`edx = 0x18` at `0x6F12DC14`): the roll wrapper `0x6F285350`
+  with count 1, `n` sides, bonus -1, multiplier 1.0 -> `R2I` -> index `0..n-1` into the candidate list in list order. Rust:
+  `orc::{hex_pick, polymorph_tokens, polymorph_code, polymorph_default_list, polymorph_data_column}`. The shipped data:
+  `DataB` = `npig,nsea,ncrb,nhmc,nrat,nfro,nech,necr,nrac`, `DataC` = `nalb,nvul,nsno`, `DataD` = `nsha,npng`, `DataE` =
+  `nshw,npnw`, `DataA` = 99 (not read by this path), `Dur` 15/30/45, `HeroDur` 4/5/6.
+* Model: `orc::hex_cast` (illusion dies; otherwise buff `BOhx` with the duration and the recorded form,
+  `Game::hex_form`; `Game::set_orc_lists` takes the level texts, the shipped lists are the default). NOT modelled: the
+  stat / ability swap of the morph (the hexed unit cannot attack or cast) and what the buff does when no candidate exists.
+
+## 17. S39: Big Bad Voodoo (`AOvd`, `CAbilityVoodoo`, vtable `0x6F8F8124`) - structure (reading only, no Unicorn run)
+
+Order id 852503 (section 10). Data: `Dur` = `HeroDur` 30, `Area` 800, `Cool` 180, `Cost` 200, `targs` `air,ground,friend,vuln,invu`,
+buffs `BOvd,BOvc`.
+
+* **Effect `0x6F18C340` (slot `0x3C0`), CONFIRMED by reading.** It first removes the caster's earlier buffs of three types
+  (`0x6F10F990`, `0x6F07D0B0`, `0x6F159120`) through `0x6F079CC0`, starts the ability's timer (message `0xD01C1`, period
+  the float at `0x6FAAE4D0` = 0.5 s) and creates an area watcher (`0x6F474720`) of radius `Area` (`0x6F02E900`) around the
+  caster with the message `0xD01C7`, stored at ability `+0x138`. The message handler `0x6F191220` routes `0xD01C1` ->
+  `0x6F1592E0` (restart the watcher), `0xD01C2` -> `0x6F1592F0`, `0xD01C3` -> `0x6F14BE50`, `0xD01C7` -> `0x6F18C630`:
+  resolve the unit of the message (`0x6F282F60`) and run `0x6F18C580` on it.
+* **Per unit `0x6F18C580`.** The class gate slot `0x3EC` returns non-zero -> nothing. Otherwise the buff duration is
+  `add(0.5, 0.5)` = **1.0 s** (soft add, `0x6FAAE4D0` twice); a unit that already has the buff (lookup `0x6F0787D0` by the id of
+  `0x6F159120`) gets it refreshed through the buff's slot `0x350`, else a new buff (`0x6F189830`) is initialised (slot
+  `0x324`), applied (slot `0x31C` with the unit and the duration) and added (`0x6F079CA0`). So the effect is a pulsing aura
+  of 1-second buffs, not one 30-second buff per unit.
+* **`targs`.** The area predicate of section 13 with the unmodified ability word (`friend` = `0x6000`: player and ally;
+  there is NO `self` bit, so the area never selects the caster; `vuln` and `invu` both named: any vulnerability state).
+* Model: `orc::voodoo` (pulse every 0.5 s over the circle for `Dur`, buff `BOvd` 1.0 s on every friend that passes
+  `area_predicate`, each live buff holds one invulnerability count). UNSURE: the slot `0x3EC` gate, the watcher's own enter
+  events (the model pulses), the channel interruption (shared channel lifecycle, other agent), `BOvc`, the healing
+  (the 1.26a buff `BOvd` only grants invulnerability, LIKELY from the tooltip).
+
+## 18. S39: Command Aura (`AOac`) base damage - resolved (Unicorn); Endurance Aura (`AOae`) status
+
+`buffs.md` left the base damage of the Command Aura as "the weapon's minimum roll (UNSURE)". The apply routine `0x6F1ACC40`
+computes per weapon slot `w` (`unit+0x1E8` is the attack ability): `X = 0x6F26D5F0(unit, &out, w)`, then
+`F2I(add(mul(DataA, X), 0.5))` (or `F2I(DataA)` when flag D, `buff+0x20` bit 8, is set), clamped below by the negative of
+`0x6F0C6C70(w)`. `0x6F26D5F0` gives 0.0 without an attack ability, else `0x6F0C6D00(attack, &out, w)`:
+
+`X = I2R(bonus) + I2R(count) * (I2R(sides) * 0.5 + 0.5)` (soft float) with the attack ability's `+0x88 + 4w` (dice count),
+`+0x94 + 4w` (sides) and `+0xA0 + 4w` (base bonus; `GetDamageAmount` `0x6F0C6940` adds the extra `+0xAC + 4w` for the roll, this
+getter does not). So the aura scales the AVERAGE damage `bonus + count (sides + 1) / 2`, not the minimum roll. CONFIRMED by
+Unicorn (`tools/emu/cmdaura_emu.py`: 200 `0x6F0C6D00` + 200 `0x6F26D5F0` cases incl. negative and huge counts, 0
+mismatches; `tests/data/orc/cmdaura.txt`, `tests/orc_cmdaura.rs`). Rust: `orc::command_base_damage`; `auras.rs`
+(`aura_damage_amount`) now calls it. Worked example (made-up weapon, 1 die of 6 sides, bonus 20): average 23.5; `DataA` 0.1 -> `F2I(2.35 + 0.5)` = 2. Also read: `0x6F1ACC00` (illusion caster: bonus only when the Misc flag at `0x6F8B4ABC` is
+set), the weapon-type filters (`+0xDC + 4w` == 1 for ranged or `2..8` for the other kinds, `+0x218 + 4w` targs masks `0x80`, 1,
+`0x40`, `0x100` allowed) which stay as in `buffs.md`.
+
+Endurance Aura (`AOae`): the movement bonus `DataA` and the attack speed bonus `DataB` are applied as in `buffs.md` (additive
+agile multiplier cell snapped to 1.0 within 0.001; attack ability re-arm in proportion); no new number was decoded in S39.
+
+## 19. S39: Bladestorm tick and targets (`AOww`) - Unicorn for the tick, reading for the filter
+
+* **Tick `0x6F1912A0`, Unicorn (`tools/emu/bladetick_emu.py`, 400 cases, 0 mismatches; `tests/data/orc/bladetick.txt`,
+  `tests/orc_bladetick.rs`; the real tick on a fake ability, the end routine and the area body recorded).** The counter at
+  `+0xFC` is decremented first (wrapping); when it is then exactly 0 the end routine `0x6F171450` runs; afterwards, when the
+  pause counter `+0x3C` is NOT positive (signed `jg` skip), the area body `0x6F2C31D0` is called once with the 12 stack words
+  (ring pointer, ring count 1, damage class `0x20`, 0, 0, the ability word `+0x4C` UNCHANGED, the caster, owner -1, the
+  eye-candy callback `0x6F18C930`, the ability, 1, 0); the ring is `(radius = cell +0x10C, amount = cell +0x104)`. Rust:
+  `orc::blade_tick_step`.
+* **Target filter (corrects section 12 and the old model, which excluded structures).** The area body dispatches on the
+  word: with any of the bits `0x7E0` (item, tree, wall, debris, decoration, bridge) set it uses the destructable-aware group
+  builder `0x6F2AE9E0` (tags `0x25`, `0x2A`, `0x2B`), otherwise `0x6F2A3270` (tag `0x1D`). The shipped word of Bladestorm
+  (`ground,structure,debris,enemy,neutral` = `0x1810A`) contains debris, so the destructable-aware builder runs. Both builders
+  install the SAME per-unit predicate for the word: `0x6F2AB890` (builder `0x6F2AE9E0`, flag `0x400`) and `0x6F26E510`
+  (builder `0x6F2A3270`) are both `0x6F25D6F0(unit, word, source, -1) == 0` (section 13). Therefore the units hit are the
+  ground units AND structures (kind bits ground/structure; air is refused), enemy or neutral relation, alive and
+  vulnerable (the default for an unnamed group), any hero / organic / mechanical state. The per-candidate immunity gate and the
+  ring membership test (`0x6F476C40`, collision-adjusted) are inside the collector `0x6F2C2E80` (not reproduced; the model keeps the
+  plain circle). Damage class `0x20` = damage type ENHANCED (type 5). Rust: `blade_tick` uses `area_predicate` with
+  `BLADESTORM_TARGS_DEFAULT` / `Game::set_orc_targs`.
+* **Debris.** The word names `debris`, so destructable debris (trees are not named) in the ring is damaged by the same body
+  (the destructable-aware builder collects them). The model has no destructable damage; NOT modelled.
+
+## 20. S39: Earthquake (`AOeq`, `CAbilityEarthquake`, vtable `0x6F8A8154`; effect `CEffectEarthquake` vtable `0x6F88F86C`)
+
+Order id 852121 (section 10). Data (shipped): `Dur` 25 (level 1) / 20, `HeroDur` 20, `Cool` 90, `Cost` 150, `Area` 250 / 400, `Rng` 1000,
+`DataA` 0.5, `DataB` 50 / 40, `DataC` 0.75, `DataD` 250 / 400, buffs `BOeq,BOea`, effect `XOeq`, `targs`
+`ground,structure,debris,tree`.
+
+* **Cast (point slot `0x418` = `0x6F08AE40`, CONFIRMED by reading).** Stores the target x and y into agile cells of the
+  ability (`+0x150`, `+0x158`), reads `DataA` (`0x6F02E9E0`) and starts the ability timer (message `0xD01C1`, cell `+0x13C`) for
+  `DataA` seconds, and clears the caster's earlier buffs of three channel-bookkeeping types (as Big Bad Voodoo does). The duration
+  cell `+0x90` of the ability is `Dur + ability+0x9C` (slot `0x42C` = `0x6F08ADE0`; no hero branch).
+* **Effect start (`0x6F0C4420`, the handler of `0xD01C1`; Unicorn, `tools/emu/quake_emu.py`, 400 cases, 0 mismatches; real
+  handler + initialiser `0x6F0C4230` on a fake ability with real level getters and recording cell setters;
+  `tests/data/orc/quake.txt`, `tests/orc_quake.rs`).** The effect object takes: centre = the stored point (cells `+0x24`,
+  `+0x2C`), **cell `+0x38` = `DataB`** (damage per tick), **cell `+0x40` = `Area`** (radius), **cell `+0x64` = `DataC`**,
+  **tick counter `+0x34` = `F2I(Dur + ability+0x9C)`**; `DataD` is not read; cell `+0x48` is a presentation value derived from the
+  centre. The initialiser ends by running the first tick at once. Rust: `orc::quake_plan`.
+* **Tick `0x6F0C3780` (CONFIRMED by reading).** Counter -= 1; the units and destructables in the circle (destructable-aware
+  builder `0x6F2AE9E0`, predicate `0x6F25D6F0` with the ability's `targs` word UNMODIFIED: it names no relation, so ALL
+  relations are accepted and the caster's own buildings and allies are affected) run the callback `0x6F0B72C0`; then, while the
+  counter is positive, the next tick is armed with 1.0 s (`0x6FAAE4F4`), else the effect destroys itself. So `ticks` ticks at
+  `t0, t0 + 1, ...`.
+* **Per candidate `0x6F0B72C0`.** The zero path as in War Stomp (unit slot `0x11C` or spell immunity `0x6F28D750`). A target whose
+  `targType` (slot `0x114`) has bit 8 (structure): make sure it carries the marker buff `BOea` (`0x424F6561`, factory `0x6F0B4AC0`)
+  and send a damage record of `DataB` (cell value `+0x3C` of the effect), class **`0x4000000`**, flags `0x40` (`0x50` on the zero
+  path) to its damage slot. Any other unit (not on the zero path): the slow buff `BOeq` (`0x424F6571`) with the NEGATED `DataC`
+  (`xor 0x80000000` of the cell value `+0x68`), duration 2.0 s (`[0x6FAAE504]`), created through `0x6F0B4B90` or refreshed through
+  the buff's slot `0x358` when the unit already carries one.
+* Model: `orc::earthquake` / `quake_tick` (timer kind `0x86`): structures take `DataB` per tick (damage type 26), other units get
+  `Slow { move_delta: -DataC }` for 2.0 s each tick. UNSURE: how the slow's `-DataC` enters the unit's speed in the original (the
+  buff's stat apply was not decoded; the model's slow machinery treats it as a delta, `0.75` then means 75 % slower), the debris and
+  tree damage (destructables are not modelled), the channel end (interruption ends the effect in the original: shared channel
+  code, other agent), the marker `BOea`.
+
+## 21. S39: Far Sight (`AOfs`, `CAbilityFarSight`, vtable `0x6F88B25C`, a `CAbilityDetectAoe`) - cast arguments (Unicorn)
+
+Order id 852122. Unicorn run `tools/emu/farsight_emu.py` (the real point slot `0x418` = `0x6F06FA50` on a fake ability; the
+effect creator `0x6F06F8D0` recorded; 400 cases, 0 mismatches; `tests/data/orc/farsight.txt`, `tests/orc_farsight.rs`). The
+unit-target slot `0x424` is an empty `ret 4`: Far Sight is a point ability only.
+
+* The creator receives, as eight stack words: the effect id (the level's `EfctID` list entry through `0x6F02EE80`, `Xbdt`),
+  pointers to the point's x and y, a pointer to the terrain height at the point (`0x6F24F3E0`, flag 1), the caster's owner
+  index (`vf 0xEC`), a pointer to the **duration `Dur + ability+0x9C`** (class slot `0x430` = `0x6F072550`; **no `HeroDur`**: the
+  old model used `HeroDur` for a hero caster, equal in the data), a pointer to `Area` (slot `0x42C`) and the integer
+  `F2I(DataA)` (slot `0x434` = `0x6F031C60`; 3 in the data; its meaning inside the effect was not decoded).
+* The effect object (`0x6F069210`, read) stores the owner, a timed-life style expiry message `0xD01C4` of `duration + 0.1` seconds
+  (`0x6FAAE4A0` = 0.1), and creates an area watcher (`0x6F474720`, message `0xD01B4`) at the point; the visibility itself is applied
+  by that watcher / effect through the vision system. Not decoded: the watcher's radius use and the per-cell visibility writes.
+* Model: `orc::far_sight_plan`, and `far_sight` keeps a visible-state fog modifier for the plan's lifetime (marker buff on the
+  caster; the original has no such buff). UNSURE: the cadence at which the original refreshes the revealed cells.
+
+## 22. S39: Reincarnation (`AOre`, `CAbilityReincarnation`, vtable `0x6F9199C4`; effect `CEffectReincarnation` vtable `0x6F916934`) - reading only
+
+Data: `Cast` 3, `Dur`/`HeroDur` 0, `Cool` 240, `Cost` empty, `DataA` 7, effect `XOre`. A passive: no order id (the cast getters at
+`0x308`/`0x30C` exist for the order tables). Class slots: `0xCC` = `0x6F1F43E0` (0), `0x280` = `0x6F1F43F0` (2), `0x284` = `0x6F1E5E30`
+(the death handler), `0x3E4` = `0x6F1D2F20` forwarder, `0x3E8` = `0x6F1F1C10` (the revival start).
+
+* **Death handler `0x6F1E5E30` (CONFIRMED by reading).** Runs for the dying unit when ALL hold: the ability pause counter
+  `+0x3C` is not positive; slot `0x268` (enabled) answers non-zero; the unit is not an illusion (`unit+0x5C & 0x40000000`) and has
+  `unit+0x20` bit 0 clear; `0x6F1DB6E0(unit)` is zero; slot `0x370(0)` (ready: mana, cooldown) is non-zero and the ability's flag `0x200`
+  is clear; and the death point passes the pathing probe `0x6F468F90(point, 2)` (non-zero blocks it). Then a positive `Cool` (slot
+  `0x2EC`) starts the cooldown (slot `0x3A4`) and slot `0x3E8` starts the revival.
+* **Revival start `0x6F1F1C10`.** Creates the effect object (factory `0x6F1D89B0`, class `CEffectReincarnation`), reads `DataA`
+  (`0x6F02E9E0`) and stores it into the effect's agile cell `+0xB8` (`0x6F4773E0`), registers the effect with the unit (virtual
+  `+0x78` of the effect with the unit, the ability owner id and `unit slot 0x130`), and sets the unit flag `unit+0x5C |= 0x1000`
+  (`0x6F2964E0(unit)`).
+* **Revival `0x6F1EBE30`** (run by the effect's handler `0x6F1EBF80` on message `0xD01C4`, the expiry of the effect): the unit
+  must still resolve and have the dead bit `0x100`; it is moved to its own point (virtual `0x180`), revived by `0x6F2A64A0` with the
+  flag word `0x500`, and its food use is corrected (`0x6F29BAF0` / `0x6F2834E0`). The life and mana the revive leaves were not decoded
+  (the shared revive path `0x6F2A64A0`).
+* **Model (UNSURE).** `Game::orc_on_unit_died` (called from `dispatch_unit_death_by`) starts the cooldown and a timer of `DataA`
+  seconds (LIKELY the effect delay: DataA 7 matches the known 7-second delay of the hero ability), then `resurrect_unit` (full life at the
+  death point). The pathing probe, the pause counter and the readiness slot are not modelled; the death events fire as for any death.
+
+## 23. S39: leftovers - Mirror Image pass two, Wind Walk cancel, Chain Lightning damage timing, corrections
+
+### 23.1 Mirror Image, pass two of the handler `0x6F13D990` (CONFIRMED by reading; corrects 7.1)
+
+Pass one (per slot, ascending): `0x6F127E00` creates the unit (placement search + creator); a created unit's handle pair is copied
+into the 12-byte array entry at `+0x14/+0x18` of the unit's agent record and the **buff** (`0x6F13A5A0` factory, init slot `0x324`, apply
+slot `0x364` with the unit and the ability, add `0x6F079CA0`, `0x6F052BC0(buff, 1, 1)`) is put on EVERY created unit, the hero's
+placeholder included. A failed creation leaves a 0 in the array.
+
+Pass two (ascending, `h` = the hero slot):
+* **Creation failed** (entry 0): if `i == h` the caster's state is restored by `0x6F1280D0(flag 1)` with no unit (so the hero stays where
+  it stood) and the ability's bookkeeping cells `+0xE4/+0xE8` are set to -1; any other failed slot is simply skipped (fewer images).
+* **Created and standing EXACTLY on the requested point** (soft compare of x, y, z against the slot's point): `0x6F1280D0(flag = i == h)`:
+  for an image (`flag 0`) the unit's slot `0x80` runs (activate); for the hero slot (`flag 1`) the placeholder is removed (`0x6F2A63B0(unit, 1,
+  0)`), the CASTER is moved to its point (virtual `0x180`) and the caster's state is undone: `0x6F2A3DA0`, unit flag `+0x20 &= ~0x800000`,
+  `0x6F26FE20`, `0x6F0767F0(unit, 1, 0, 0, 0)` (releases the ability pause counters), `0x6F079730(unit, 1)` (decrements the invulnerability
+  counter `+0xE8`; at 0 the unit flag 8 is cleared) and `0x6F2A4B80(unit, 1)` (a stop order, order id `0xD0004`).
+* **Created but NOT on the requested point** (the placement search moved it): a separate path builds a record and calls the virtual `0xC8` of
+  a factory object (`[0x6F48AB80 result + 0x54]`) with the unit, the flag `i == h` and the ability's value at `+0x180`; not decoded.
+* **The caster during the delay** (the cast effect `0x6F135740`, read): invulnerable (counter `+0xE8`, unit flag 8), its abilities paused
+  (pause counters by `0x6F0767F0`) and `+0x20 |= 0x800000`; all undone in the hero-slot branch above. Model: `mirror_image` / `mirror_fire` now
+  give the caster one invulnerability count for the delay (`tests/orc_spells.rs`); the pause counters, the flag and the stop order are not modelled.
+
+### 23.2 Wind Walk: the "cancel on cast" (S34 LIKELY) is NOT supported
+
+The buff vtable slot `0x178` (`0x6F15A270`, six arguments, removal) is never called through a virtual call anywhere in the image (the
+scans found only field loads at `+0x178` of other classes). The `0xD000F` broadcast `0x6F281580` (callers `0x6F0CD722`, `0x6F0D0CE5` only: the
+attack) calls the arming slot `0x124` of every ability and buff of the attacker with the target; it does not run for spell casts. The
+mechanism that ends Wind Walk when a spell is cast was not found; the first strike (section 11) is the only confirmed end. The Wind Walk
+arming slot `0x6F171870` clears flag `0x200`, does nothing without a target or with buff flag `0x100`, and otherwise asks the filter
+`0x6F26D590(owner, target, buff+0xB8)`: ZERO arms the strike (flag `0x200`, event 0xE), NON-ZERO removes the buff. The buff word `+0xB8` is
+LIKELY the ability's `targs` (`air,ground,enemy,neutral`; the buff base constructor was not read), in which case an attack on an ally or other non-enemy removes the invisibility instead of arming it.
+
+### 23.3 Chain Lightning: when the damage lands
+
+The hop (section 4) copies the record into the bolt effect (`0x6F2BF7F0`: source and target smart pointers, amount cell `+0x44`, class and
+flags words) and the effect start `0x6F1B09C0` creates the lightning object (`0x6F040160`), then registers the callback `0x6F2BF8B0` with the
+lightning table (`0x6F00E0E0` stores the callback and the effect at `+0x84/+0x88` of the lightning entry). The callback `0x6F2BF8B0` is the
+only place that reads the effect's source, target and record and calls the effect's virtual `+0x7C` with them (the damage delivery); WHEN the
+lightning table invokes it was not decoded (LIKELY at the creation of the bolt, i.e. in the same tick as the hop; the 0.1 s repeating timer
+`0xD01A3` only fades the art). The model keeps the instant damage.
+
+### 23.4 Corrections to sections 17 and 20
+
+The three buffs that the Voodoo effect `0x6F18C340` and the Earthquake cast `0x6F08AE40` remove from the caster (ids from `0x6F10F990`,
+`0x6F07D0B0`, `0x6F159120`) are `Bvul` (invulnerable), `BHds` (divine shield) and `BOvd` (the voodoo buff itself); the call `0x6F077630(unit)`
+then sets `unit+0x20 |= 0x40000000`.
+
+### 23.5 Wind Walk: the invisibility transition (read)
+
+`CBuffWindWalk` (`0x6F171630`) hands the effect's pointers to the invisibility base initialiser `0x6F123FC0(unit, duration, fade)`: it sets the
+agile cell `+0xCC` of the buff to the FADE value (`DataA`, 0.6 s / 1.0 s: the time the unit needs to become invisible, a property that runs
+over that time), applies the buff (slot `0x320`), registers it with the unit (`0x6F26F930(unit, buff, 1)`), sets the buff flag `0x100` and calls
+`0x6F28D7D0(unit, fade)` (the unit's invisibility fade update). So the unit is not invisible during the first `DataA` seconds; the movement bonus
+(section 11) applies from the start. The sim has no invisibility or detection state, so the transition is NOT modelled; the cell value is the
+only decoded number.

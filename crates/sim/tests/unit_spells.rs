@@ -759,7 +759,7 @@ fn rejuvenation_heals_in_twelve_ticks_of_one_second_and_stops() {
 }
 
 #[test]
-fn dispel_magic_strips_positive_buffs_from_enemies_and_negative_from_allies_in_the_area() {
+fn dispel_magic_strips_magic_buffs_of_both_polarities_from_everyone_in_the_area() {
     let mut h = started_manual();
     let (shaman, grunt, grunt2, foe2) = (unit(&h, "shaman"), unit(&h, "grunt"), unit(&h, "grunt2"), unit(&h, "foe2"));
     let positive = sim::abilities::BuffPredicates { positive: true, magic: true, dispellable: true, ..Default::default() };
@@ -777,11 +777,11 @@ fn dispel_magic_strips_positive_buffs_from_enemies_and_negative_from_allies_in_t
     assert!(accepted(&h));
     assert_eq!(h.game().unit(shaman).mana.to_f32(), 225.0);
     assert!(!has_buff(&h, foe2, BUFF_INNER_FIRE), "the enemy's positive buff is gone");
-    assert!(has_buff(&h, foe2, BUFF_CRIPPLE), "its negative buff stays");
-    assert_eq!(h.game().unit(foe2).bonuses.armor.to_f32(), -2.0, "the effect of the removed buff is undone");
+    assert!(!has_buff(&h, foe2, BUFF_CRIPPLE), "S38: the caller pushes positive = negative = 1, so its negative buff goes too");
+    assert_eq!(h.game().unit(foe2).bonuses.armor.to_f32(), 0.0, "the effects of the removed buffs are undone");
     assert!(!has_buff(&h, grunt, BUFF_CRIPPLE), "the ally's negative buff is gone");
     assert_eq!(h.game().effective_move_speed(grunt).to_f32(), 270.0);
-    assert!(has_buff(&h, grunt2, BUFF_BLOODLUST), "an ally's positive buff stays");
+    assert!(!has_buff(&h, grunt2, BUFF_BLOODLUST), "S38: an ally loses positive magic buffs too (Dispel Magic hits friend and foe)");
 }
 
 #[test]
@@ -816,7 +816,7 @@ fn raise_dead_makes_skeletons_from_corpses_in_reach_and_they_expire() {
     assert!(accepted(&h));
     assert_eq!(h.game().unit(shaman).mana.to_f32(), 225.0);
     assert_eq!(count_units(&h, SKELETON, true), 2);
-    assert_eq!(count_units(&h, FOOT, false), 6, "of 8 footmen two corpses were consumed (removed)");
+    assert_eq!(count_units(&h, FOOT, false), 7, "S38: ONE of the 8 footmen was raised (consumed): both skeletons come from the same corpse");
     run(&mut h, 55);
     assert_eq!(count_units(&h, SKELETON, true), 0, "timed life ended");
 }
