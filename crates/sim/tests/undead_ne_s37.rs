@@ -8,7 +8,7 @@ use sim::cast::SpellLevel;
 use sim::combat::AttackType;
 use sim::natives::game::{ObjKey, UnitType};
 use sim::orders::{AbilityKind, TypeOrderData};
-use sim::undead_ne::{CARRION_SWARM, DEATH_AND_DECAY, INFERNO};
+use sim::undead_ne::{CARRION_SWARM, DEATH_AND_DECAY, IMPALE, INFERNO};
 use sim::ScriptHost;
 use softfloat::F32;
 
@@ -40,10 +40,14 @@ function setup takes nothing returns nothing
     call UnitAddAbility(caster, 'AUcs')
     call UnitAddAbility(caster, 'AUin')
     call UnitAddAbility(caster, 'AUdd')
+    call UnitAddAbility(caster, 'AUim')
     call SetUnitState(caster, 2, 2000.0)
 endfunction
 function swarm takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852218, 1000.0, 0.0)
+endfunction
+function impale takes nothing returns nothing
+    set accepted = IssuePointOrderById(caster, 852555, 700.0, 0.0)
 endfunction
 function decay takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852221, 300.0, 0.0)
@@ -114,7 +118,7 @@ fn host() -> ScriptHost {
                 ..Default::default()
             },
         );
-        for code in [CARRION_SWARM, INFERNO, DEATH_AND_DECAY] {
+        for code in [CARRION_SWARM, INFERNO, DEATH_AND_DECAY, IMPALE] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         // Carrion Swarm: Area 100 (start width), DataA 75, DataB cap 150, DataC distance 800, DataD final width 200.
@@ -124,6 +128,8 @@ fn host() -> ScriptHost {
         let mut inf = level(175, 180.0, 4.0, 2.0, 250.0, &[50.0, 180.0, 1.0]);
         inf.unit_id = NINF;
         g.set_spell_levels(INFERNO, vec![inf]);
+        // Impale (stock): Dur 2 / HeroDur 1, Area 250, DataA 600 (line length), DataB 0.3 (time), DataC 50 damage.
+        g.set_spell_levels(IMPALE, vec![level(100, 9.0, 2.0, 1.0, 250.0, &[600.0, 0.3, 50.0, 1.0])]);
         // Death and Decay (stock): Dur 35, Area 300, DataA 0.04 of the maximum life per second, DataB 1.
         g.set_spell_levels(DEATH_AND_DECAY, vec![level(250, 150.0, 35.0, 35.0, 300.0, &[0.04, 1.0])]);
     }
@@ -217,4 +223,26 @@ fn death_and_decay_burns_a_fraction_of_the_maximum_life_each_second_inside_the_a
     let after = life(&h, near);
     run(&mut h, 50);
     assert_eq!(life(&h, near), after);
+}
+
+#[test]
+fn impale_spikes_run_along_the_line_and_hit_each_unit_once() {
+    let mut h = host();
+    let (near, far, hero) = (unit(&h, "near"), unit(&h, "far"), unit(&h, "hero"));
+    let (ln, lf, lh) = (life(&h, near), life(&h, far), life(&h, hero));
+    call(&mut h, "impale");
+    run(&mut h, 3);
+    assert_eq!(life(&h, near), ln, "the first spike comes after DataB + 0.1 = 0.4 s");
+    run(&mut h, 10);
+    assert_eq!(life(&h, near), ln - 50.0, "one spike of the line passes the unit at 300 (spikes every 120 from 125)");
+    assert_eq!(life(&h, hero), lh - 50.0);
+    assert_eq!(life(&h, far), lf);
+    assert!(h.game().is_stunned(near));
+    // Dur 2 s for the footman, HeroDur 1 s for the hero.
+    run(&mut h, 8);
+    assert!(h.game().is_stunned(near));
+    assert!(!h.game().is_stunned(hero));
+    run(&mut h, 15);
+    assert!(!h.game().is_stunned(near));
+    assert_eq!(life(&h, near), ln - 50.0, "never hit twice");
 }

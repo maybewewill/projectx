@@ -544,6 +544,77 @@ def run_dnd_pulse(cases, r):
     return rows
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Impale: `CAbilityImpale` slot 0x418 = 0x6F144810 (plan of the spike line)
+
+def run_impale_plan(cases, r):
+    A.setup_stubs()
+    A.make_ability(0x6F8DB8BC, 0x41556D69, 0)
+    obj, lvl, unit = A.OBJ, A.LVL, A.UNIT
+    uvt = DATA + 0x9000
+    mu.mem_write(uvt, bytes(0x800))
+    pvt = DATA + 0x9900
+    mu.mem_write(pvt, bytes(0x100))
+    wr(unit, uvt)
+    s_b8 = stub_slot()
+    mu.mem_write(s_b8, bytes([0xB8]) + struct.pack("<I", unit + 0x164) + bytes([0xC3]))
+    wr(uvt + 0xB8, s_b8)
+    wr(unit + 0x164, pvt)
+    st = {}
+    s_face = stub_slot()
+    hook_fn(s_face, lambda uc, esp, ecx: (wr(rd(esp + 4), f2u(st["facing"])), 0)[1], 4)
+    wr(pvt + 0x1C, s_face)
+
+    def norm(uc, esp, ecx):
+        out = rd(esp + 4)
+        wr(out, f2u(st["cx"]))
+        wr(out + 4, f2u(st["cy"]))
+        wr(out + 8, 0)
+        return out
+
+    hook_fn(0x6F4743A0, norm, 4)
+    log = {}
+    pv = DATA + 0x5E00
+    mu.mem_write(pv, bytes(0x80))
+    pset = stub_slot()
+
+    def propset(uc, esp, ecx):
+        log[ecx - obj] = rd(rd(esp + 4))
+        return ecx + 4
+
+    hook_fn(pset, propset, 8)
+    wr(pv, pset)
+    hook_fn(0x6F144280, lambda uc, esp, ecx: 0, 0)
+    rows = []
+    for i in range(cases):
+        area = r.choice((250.0, 125.0, 300.0, rand_f(r, 20, 400), 0.0))
+        dataa = r.choice((600.0, rand_f(r, 0, 1500), 0.0))
+        datab = r.choice((0.3, rand_f(r, 0, 2), 0.0))
+        cx, cy = rand_f(r, -5000, 5000), rand_f(r, -5000, 5000)
+        mode = r.choice(("far", "far", "far", "near", "same"))
+        if mode == "far":
+            tx, ty = cx + rand_f(r, -900, 900), cy + rand_f(r, -900, 900)
+        elif mode == "near":
+            tx, ty = cx + rand_f(r, -15, 15), cy + rand_f(r, -15, 15)
+        else:
+            tx, ty = cx, cy
+        facing = rand_f(r, -3.2, 6.4)
+        st.update(cx=cx, cy=cy, facing=facing)
+        for off in (0x90, 0x124, 0x12C, 0x134, 0x13C, 0x148):
+            wr(obj + off, pv)
+        wr(obj + 0x144, 0xDEADBEEF)
+        wr(lvl + 0x18, f2u(area))
+        wr(lvl + 0x20, f2u(dataa))
+        wr(lvl + 0x24, f2u(datab))
+        wr(obj + 0x300, f2u(tx))
+        wr(obj + 0x304, f2u(ty))
+        log.clear()
+        emu.call(0x6F144810, ecx=obj, stack_args=(obj + 0x300, obj + 0x304))
+        rows.append((f2u(area), f2u(dataa), f2u(datab), f2u(cx), f2u(cy), f2u(tx), f2u(ty), f2u(facing),
+                     [log[o] for o in (0x124, 0x12C, 0x134, 0x13C, 0x148, 0x90)], rd(obj + 0x144)))
+    return rows
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -600,6 +671,13 @@ def main():
                     for c in calls:
                         ev.append(":".join([c[0]] + [hexf(x) for x in c[1:]]))
                     fh.write("%s %s %s | %s\n" % (hexf(dataa), hexf(maxlife), hexf(dead), " ".join(ev) or "none"))
+    if which == "impale":
+        rows = run_impale_plan(cases, r)
+        print("impale: %d cases run" % len(rows), rows[0])
+        if dump:
+            with open(os.path.join(dump, "impale_plan.txt"), "w") as fh:
+                for row in rows:
+                    fh.write(" ".join(hexf(x) for x in row[:8]) + " | " + " ".join(hexf(x) for x in row[8]) + " " + str(row[9]) + "\n")
     if which == "inferno":
         rows = run_inferno_ctx(cases, r)
         print("inferno: %d cases run" % len(rows), rows[0])

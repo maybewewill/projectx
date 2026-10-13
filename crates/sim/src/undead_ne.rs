@@ -53,7 +53,8 @@ pub const SLEEP: u32 = code(b"AUsl");
 pub const SHADOW_STRIKE: u32 = code(b"AEsh");
 pub const BLINK: u32 = code(b"AEbl");
 pub const IMMOLATION: u32 = code(b"AEim");
-/// The Demon / Doomguard variant of Immolation (`AUim`) is the same class `CAbilityImmolation`.
+/// Formerly misnamed `IMMOLATION_UNDEAD`: `AUim` is the Crypt Lord's Impale ([`IMPALE`], S37; stock rows and the atlas).
+#[deprecated(note = "AUim is Impale")]
 pub const IMMOLATION_UNDEAD: u32 = code(b"AUim");
 pub const VAMPIRIC_AURA: u32 = code(b"AUav");
 
@@ -144,6 +145,9 @@ pub struct State {
     /// Running Death and Decay effects (S37).
     dnds: BTreeMap<u32, DeathAndDecay>,
     next_dnd: u32,
+    /// Running Impales (S37).
+    impales: BTreeMap<u32, Impale>,
+    next_impale: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,6 +205,8 @@ pub const TICK_INFERNO: u8 = 8;
 pub const TICK_DND: u8 = 9;
 /// A Death and Decay victim pulse (`unit` = the victim, `aux` = `(effect id << 16) | victim index`), S37.
 pub const TICK_DND_PULSE: u8 = 10;
+/// An Impale spike (`aux` = the impale id), S37.
+pub const TICK_IMPALE: u8 = 11;
 /// A swath missile arrives (`aux` = the swarm id), S37.
 pub const TICK_SWARM_ARRIVE: u8 = 6;
 
@@ -213,7 +219,7 @@ pub fn cast_field_is_period(base: u32) -> bool {
 
 /// Whether `base` is cast without a target (an immediate order). Only Immolation (the toggle).
 pub fn is_immediate(base: u32) -> bool {
-    base == IMMOLATION || base == IMMOLATION_UNDEAD
+    base == IMMOLATION
 }
 
 /// Runs the class effect of `base` if this module owns it. Returns whether it did.
@@ -237,10 +243,11 @@ pub(crate) fn run_effect(
         (CARRION_SWARM, CastTarget::Point(x, y)) => carrion_swarm(game, rt, caster, level, x, y),
         (INFERNO, CastTarget::Point(x, y)) => inferno(game, rt, caster, level, x, y),
         (DEATH_AND_DECAY, CastTarget::Point(x, y)) => death_and_decay(game, caster, level, x, y),
-        (IMMOLATION | IMMOLATION_UNDEAD, CastTarget::None) => immolation(game, caster, base, level),
+        (IMPALE, CastTarget::Point(x, y)) => impale(game, caster, level, x, y),
+        (IMMOLATION, CastTarget::None) => immolation(game, caster, base, level),
         (
             DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | DARK_RITUAL | SLEEP | SHADOW_STRIKE | BLINK
-            | CARRION_SWARM | IMMOLATION | IMMOLATION_UNDEAD | INFERNO | DEATH_AND_DECAY,
+            | CARRION_SWARM | IMMOLATION | INFERNO | DEATH_AND_DECAY | IMPALE,
             _,
         ) => {}
         _ => return false,
@@ -940,7 +947,7 @@ pub const INFERNO: u32 = code(b"AUin");
 
 /// Cast-order ids of the S37 abilities (the original getters, `tools/analysis/ability_orders.py --verify`: AUin
 /// 852224, AUdd 852221, AEsf 852183, AEtq 852184, AEme 852180).
-pub const S37_ORDERS: &[(u32, u32)] = &[(852_224, INFERNO), (852_221, DEATH_AND_DECAY)];
+pub const S37_ORDERS: &[(u32, u32)] = &[(852_224, INFERNO), (852_221, DEATH_AND_DECAY), (852_555, IMPALE)];
 /// The Infernal's timed-life buff id (`'BNin'`, the level's BuffID).
 pub const BUFF_INFERNAL: u32 = code(b"BNin");
 /// `targs` of `AUin`: ground, structure (+ debris, enemy, neutral): the relation is the enemy test.
@@ -1185,6 +1192,192 @@ fn dnd_pulse(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, victim: ObjKey, a
     }
     if let Some(t) = death {
         dispatch_unit_death_by(game, rt, t, Some(caster));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Impale (S37)
+
+pub const IMPALE: u32 = code(b"AUim");
+
+/// The spike line of `CAbilityImpale` (slot `0x418` = `0x6F144810`, CONFIRMED by Unicorn, 400 cases): with
+/// `half = Area / 2` (an exponent decrement), `N = max(2, f2i((DataA + Area) / half))` spikes, a step of
+/// `(DataA + Area - Area) / I2R(N - 1)` along the direction `(point - caster)` (the caster's facing when the squared distance is
+/// below 400.0, `0x6FAAE598`), the first spike `caster + rescale(step, half)`, the interval `DataB / I2R(N - 1)` and the first timer
+/// `DataB + 0.1`. Each spike (`0x6F144280`) queries the circle of radius `Area / 2` at the current spike point and then advances it by
+/// the step; the timer re-arms with the interval.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImpalePlan {
+    pub count: i32,
+    pub step: (F32, F32),
+    pub first: (F32, F32),
+    pub interval: F32,
+    pub first_delay: F32,
+}
+
+/// Halves `x` by the exponent decrement of the original (`ecx - 0x1000000`, with the denormal / zero guard of the sign trick).
+pub fn halve(x: F32) -> F32 {
+    let b = x.to_bits();
+    // `lea eax,[ecx-0x1000000]; xor eax,ecx; sar eax,31; not eax; add ecx,0xff800000; and eax,ecx`: the result is
+    // `x - 0x0080_0000` unless the exponent field underflows (then 0).
+    let t = b.wrapping_sub(0x0100_0000);
+    let mask = !(((t ^ b) as i32) >> 31) as u32;
+    F32::from_bits(mask & b.wrapping_add(0xFF80_0000))
+}
+
+pub fn impale_plan(
+    caster: (F32, F32),
+    target: (F32, F32),
+    facing: F32,
+    area: F32,
+    data_a: F32,
+    data_b: F32,
+    t: &Tables,
+) -> ImpalePlan {
+    let half = halve(area);
+    let total = arith::add(data_a, area);
+    let n = softfloat::conv::f2i(arith::div(total, half, t)).max(2);
+    let steps = softfloat::conv::i2r(n - 1);
+    let step_len = arith::div(arith::sub(total, area), steps, t);
+    let dy = arith::sub(target.1, caster.1);
+    let dx = arith::sub(target.0, caster.0);
+    let yy = arith::mul(dy, dy);
+    let xx = arith::mul(dx, dx);
+    let d2 = arith::add(xx, yy);
+    let step = if d2.to_f32() >= 400.0 {
+        rescale(dx, dy, step_len, t)
+    } else {
+        // The facing branch: the polar vector of length `step_len` is the step itself (no second rescale).
+        let sn = softfloat::math::sin(facing, t);
+        let cs = softfloat::math::cos(facing, t);
+        let y = arith::mul(step_len, sn);
+        let x = arith::mul(step_len, cs);
+        (x, y)
+    };
+    let off = rescale(step.0, step.1, half, t);
+    let first = (arith::add(caster.0, off.0), arith::add(caster.1, off.1));
+    let interval = arith::div(data_b, softfloat::conv::i2r(n - 1), t);
+    let first_delay = arith::add(data_b, F32::from_bits(0x3DCC_CCCD));
+    ImpalePlan { count: n, step, first, interval, first_delay }
+}
+
+/// The plain `f32` version of [`impale_plan`] for hosts without the soft-float tables (UNSURE bits).
+fn impale_plan_plain(caster: (F32, F32), target: (F32, F32), facing: F32, area: F32, data_a: F32, data_b: F32) -> ImpalePlan {
+    let (a, b, ar) = (data_a.to_f32(), data_b.to_f32(), area.to_f32());
+    let half = ar / 2.0;
+    let n = (((a + ar) / half) as i32).max(2);
+    let step_len = a / (n - 1) as f32;
+    let (cx, cy) = (caster.0.to_f32(), caster.1.to_f32());
+    let (dx, dy) = (target.0.to_f32() - cx, target.1.to_f32() - cy);
+    let d2 = dx * dx + dy * dy;
+    let (ux, uy) = if d2 >= 400.0 { (dx / d2.sqrt(), dy / d2.sqrt()) } else { (facing.to_f32().cos(), facing.to_f32().sin()) };
+    let to = |v: f32| F32::from_bits(v.to_bits());
+    ImpalePlan {
+        count: n,
+        step: (to(ux * step_len), to(uy * step_len)),
+        first: (to(cx + ux * half), to(cy + uy * half)),
+        interval: to(b / (n - 1) as f32),
+        first_delay: to(b + 0.1),
+    }
+}
+
+/// `targs` of `AUim`: ground, organic (`ground,enemy,neutral,organic`).
+pub const IMPALE_TARGS: u32 = 0x2 | 0x0400_0000;
+/// UNSURE: the damage type of the Impale damage (the sim's generic spell class).
+const IMPALE_DAMAGE_TYPE: u32 = 9;
+
+/// A running Impale.
+#[derive(Debug, Clone)]
+struct Impale {
+    caster: ObjKey,
+    next: (F32, F32),
+    step: (F32, F32),
+    left: i32,
+    interval: F32,
+    radius: F32,
+    damage: F32,
+    dur: F32,
+    hero_dur: F32,
+    hit: Vec<ObjKey>,
+}
+
+/// `CAbilityImpale` effect (slot `0x418`): plans the spike line ([`impale_plan`]) and runs the spikes from a timer: the first
+/// after `DataB + 0.1` s, then every `DataB / (N - 1)` s. Each spike queries the circle of radius `Area / 2` around the spike
+/// point (`0x6F144280`) and the callback `0x6F142E20` hands every accepted enemy to `0x6F13BA30`, which gives the unit the
+/// Impale buff `'BUim'` with `HeroDur` (hero) or `Dur` as its duration (stun and lift). UNSURE: that the damage `DataC`
+/// is dealt at the spike (the buff's own handlers carry it in the original), the damage class, that a unit is hit by one spike
+/// only, and the stun being the sim's generic stun.
+fn impale(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, x: F32, y: F32) {
+    let mut gm = game.borrow_mut();
+    if !gm.object_is_live_unit(caster) {
+        return;
+    }
+    let (cx, cy, facing) = (gm.unit(caster).x, gm.unit(caster).y, gm.unit(caster).facing);
+    let plan = match gm.order_tables() {
+        Some(t) => impale_plan((cx, cy), (x, y), facing, level.area, level.data[0], level.data[1], t),
+        None => impale_plan_plain((cx, cy), (x, y), facing, level.area, level.data[0], level.data[1]),
+    };
+    let st = gm.spells_hero_state_mut();
+    st.next_impale += 1;
+    let id = st.next_impale;
+    st.impales.insert(
+        id,
+        Impale {
+            caster,
+            next: plan.first,
+            step: plan.step,
+            left: plan.count,
+            interval: plan.interval,
+            radius: halve(level.area),
+            damage: level.data[2],
+            dur: level.dur,
+            hero_dur: level.hero_dur,
+            hit: Vec::new(),
+        },
+    );
+    gm.timers_start_hero(plan.first_delay.to_f32(), TICK_IMPALE, caster, id);
+}
+
+fn impale_spike(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
+    let mut deaths = Vec::new();
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(mut im) = gm.spells_hero_state_mut().impales.get(&id).cloned() else {
+            return;
+        };
+        caster = im.caster;
+        if !gm.object_is_live_unit(caster) {
+            gm.spells_hero_state_mut().impales.remove(&id);
+            return;
+        }
+        let owner = gm.unit(caster).owner;
+        let victims: Vec<ObjKey> = circle_candidates(&gm, im.next.0, im.next.1, im.radius)
+            .into_iter()
+            .filter(|&k| gm.object_is_live_unit(k) && gm.is_enemy(owner, gm.unit(k).owner) && !im.hit.contains(&k))
+            .filter(|&k| crate::target_accept::predicate(gm.target_flag_word(k), IMPALE_TARGS) == 0)
+            .collect();
+        for k in victims {
+            im.hit.push(k);
+            if let Some(d) = gm.unit_damage_target(caster, k, im.damage, false, false, 0, IMPALE_DAMAGE_TYPE) {
+                deaths.push(d);
+                continue;
+            }
+            let hero = gm.unit(k).hero.is_some() || is_hero_id(gm.unit(k).type_id);
+            let dur = crate::cast::effect_duration(&SpellLevel { dur: im.dur, hero_dur: im.hero_dur, ..SpellLevel::default() }, hero, F32::ZERO);
+            gm.add_spell_buff(k, crate::cast::BUFF_STUN, BuffEffect::Stun, dur);
+        }
+        im.left -= 1;
+        im.next = (arith::add(im.next.0, im.step.0), arith::add(im.next.1, im.step.1));
+        if im.left > 0 {
+            gm.timers_start_hero(im.interval.to_f32().max(MIN_PERIOD_SECONDS), TICK_IMPALE, caster, id);
+            gm.spells_hero_state_mut().impales.insert(id, im);
+        } else {
+            gm.spells_hero_state_mut().impales.remove(&id);
+        }
+    }
+    for d in deaths {
+        dispatch_unit_death_by(game, rt, d, Some(caster));
     }
 }
 
@@ -1507,6 +1700,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_INFERNO => inferno_land(game, rt, aux),
         TICK_DND => dnd_poll(game, aux),
         TICK_DND_PULSE => dnd_pulse(game, rt, unit, aux),
+        TICK_IMPALE => impale_spike(game, rt, aux),
         TICK_SWARM_ARRIVE => swarm_arrive(game, rt, aux),
         _ => {}
     }
