@@ -776,6 +776,17 @@ fn default_tech() -> TechLevel {
     }
 }
 
+impl Game {
+    /// The `SetPlayerTechMaxAllowed` value of player `p` for `tech` (`INT_MAX` when never written; the player counter's
+    /// per-type limit `0x6F4039C0` reads `0x7FFFFFFF` without a record). Read by Raise Dead's unit cap.
+    pub fn player_tech_max_allowed(&self, p: u32, tech: u32) -> i32 {
+        if (p as usize) >= self.misc.players.len() {
+            return i32::MAX;
+        }
+        tech_of(self, p, tech).max_allowed
+    }
+}
+
 /// The tech level of player `p` for `tech` (the default when it was never written).
 fn tech_of(gm: &Game, p: u32, tech: u32) -> TechLevel {
     gm.misc.players[p as usize]

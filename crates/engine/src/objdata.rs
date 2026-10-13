@@ -148,6 +148,9 @@ pub struct ObjectText {
     pub tech: BTreeMap<u32, sim::production::TypeTech>,
     /// The upgrade rows (`UpgradeData.slk`) by raw code.
     pub upgrades: BTreeMap<u32, sim::production::UpgradeType>,
+    /// The item abilities: item specs, the base code of each ability alias an item names and their level records
+    /// (`sim::item_abilities`, `docs/spec/abilities-items.md`).
+    pub item_abilities: sim::item_abilities::ItemAbilityData,
     /// Missing or malformed files, one line each.
     pub notes: Vec<String>,
 }
@@ -179,6 +182,7 @@ pub fn load(archives: &[&[u8]]) -> Result<ObjectText, Error> {
     load_items(archives, &mut out)?;
     load_gold_mine(archives, &mut out)?;
     load_upgrades(archives, &mut out)?;
+    load_item_abilities(archives, &mut out)?;
     Ok(out)
 }
 
@@ -314,6 +318,90 @@ fn load_items(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
     Ok(())
 }
 
+/// Reads the item abilities: for every item row its `abilList` (up to four ability ids), `uses`, `perishable`,
+/// `usable`, `cooldownID` and the type flags, and for every ability id named there the base `code` column and the
+/// level records of the `AbilityData.slk` row (ids of classes the model does not know are kept too and ignored).
+fn load_item_abilities(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
+    let (Some(items), Some(abilities)) = (read_last(archives, ITEM_DATA_FILE)?, read_last(archives, ABILITY_DATA_FILE)?) else {
+        return Ok(());
+    };
+    let (Ok(items), Ok(abilities)) = (Slk::parse_bytes(&items), Slk::parse_bytes(&abilities)) else {
+        out.notes.push("item abilities: ItemData or AbilityData unreadable".to_string());
+        return Ok(());
+    };
+    let int = |slk: &Slk, key: &str, col: &str| -> i32 {
+        slk.raw(key, col)
+            .and_then(|t| t.trim().trim_matches('"').parse::<i32>().ok())
+            .unwrap_or(0)
+    };
+    let flag = |slk: &Slk, key: &str, col: &str| int(slk, key, col) != 0;
+    for row in items.rows() {
+        let key = row.key();
+        let Some(code) = raw_code(key) else { continue };
+        let list = row.raw("abilList").map(|t| t.trim().trim_matches('"')).unwrap_or("");
+        let aliases: Vec<u32> = gamedata::abilitytype::list_slots(Some(list))
+            .into_iter()
+            .filter(|&a| a != 0)
+            .take(4)
+            .collect();
+        let spec = sim::item_abilities::ItemSpec {
+            abilities: aliases.clone(),
+            perishable: flag(&items, key, "perishable"),
+            usable: flag(&items, key, "usable"),
+            cooldown_id: row
+                .raw("cooldownID")
+                .map(|t| gamedata::abilitytype::raw_code(t.trim().trim_matches('"')))
+                .unwrap_or(0),
+            uses: int(&items, key, "uses"),
+            powerup: flag(&items, key, "powerup"),
+            sellable: flag(&items, key, "sellable"),
+            pawnable: flag(&items, key, "pawnable"),
+            level: int(&items, key, "Level"),
+            ignore_cooldown: flag(&items, key, "ignoreCD"),
+            registers_type: true,
+        };
+        for alias in aliases {
+            let name = String::from_utf8_lossy(&alias.to_be_bytes()).into_owned();
+            if out.item_abilities.levels.contains_key(&alias) {
+                continue;
+            }
+            let Some(def) = gamedata::abilitytype::read_ability(&abilities, &name) else {
+                continue;
+            };
+            if let Some(base) = abilities.raw(&name, "code").map(|t| t.trim().trim_matches('"')).filter(|t| !t.is_empty()) {
+                out.item_abilities.bases.insert(alias, gamedata::abilitytype::raw_code(base));
+            }
+            let f = |v: f32| F32::from_bits(v.to_bits());
+            let levels = def
+                .levels
+                .iter()
+                .map(|l| {
+                    let mut data = [F32::ZERO; 9];
+                    for (d, v) in data.iter_mut().zip(l.data.iter()) {
+                        *d = f(*v);
+                    }
+                    sim::cast::SpellLevel {
+                        cast: f(l.cast),
+                        dur: f(l.dur),
+                        hero_dur: f(l.hero_dur),
+                        cost: l.cost,
+                        cool: f(l.cool),
+                        area: f(l.area),
+                        rng: f(l.rng),
+                        data,
+                        unit_id: l.unit_id,
+                    }
+                })
+                .collect();
+            out.item_abilities.levels.insert(alias, levels);
+        }
+        if !spec.abilities.is_empty() || spec.uses != 0 || spec.powerup {
+            out.item_abilities.specs.insert(code, spec);
+        }
+    }
+    Ok(())
+}
+
 fn load_upgrades(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
     let Some(bytes) = read_last(archives, UPGRADE_DATA_FILE)? else {
         out.notes.push(format!("{UPGRADE_DATA_FILE} missing: no research data"));
@@ -400,6 +488,7 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
         ("AOcl", sim::orc::CHAIN_LIGHTNING),
         ("AOfs", sim::orc::FAR_SIGHT),
         ("AOsf", sim::orc::FERAL_SPIRIT),
+        ("AOsw", sim::orc::SERPENT_WARD),
         ("AHtc", sim::human_heroes::THUNDER_CLAP),
         ("AHbh", sim::human_heroes::BASH),
         ("AHav", sim::human_heroes::AVATAR),
@@ -546,6 +635,7 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     for (&code, &ts) in &text.item_stock {
         game.shops.item_stock.insert(code, ts);
     }
+    game.install_item_abilities(&text.item_abilities);
     for &(code, max, regen) in unit_stock {
         game.shops
             .unit_stock
@@ -596,7 +686,7 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
         game.set_spell_levels(code, levels.clone());
     }
     for (&code, units) in &text.summon_units {
-        if code == sim::orc::FERAL_SPIRIT {
+        if code == sim::orc::FERAL_SPIRIT || code == sim::orc::SERPENT_WARD {
             game.set_summon_units(code, units.clone());
         }
     }

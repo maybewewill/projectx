@@ -916,11 +916,13 @@ impl Game {
         let (damage, raw) = self.roll_split(unit, target, &ty);
         let raw = raw.unwrap_or(damage);
         let damage = self.bash_modify_damage(unit, damage);
+        // Passive attack modifiers of `unit_spells.rs` (Feedback's mana burn and its bonus damage).
+        let damage = self.spell_attack_bonus(unit, target, damage);
         // Order CONFIRMED (execute `0x6F0CF660`): the dice first, then the miss gate; an evaded attack stops before
         // the target routine. For missiles the gate runs at launch too (`0x6F2C3F70` calls it before the flight);
         // that an evaded missile deals no direct damage is UNSURE (the original scales the flight's damage by
         // MissDamageReduction, not modelled).
-        if self.evasion_check(target) {
+        if self.evasion_check(target) || self.attacker_miss_check(unit) {
             self.bash_clear(unit);
             return Vec::new();
         }
@@ -1042,6 +1044,24 @@ impl Game {
             .stream_mut(crate::damage::EVASION_STREAM)
             .random_fraction(table);
         crate::damage::evades(chance, draw)
+    }
+
+    /// Walk B of the miss gate `0x6F2BEAC0` (`0x6F077420`, slots `0x15C` / `0x168`, CONFIRMED structure in
+    /// `attack-damage.md` 12.7): the buffs of the ATTACKER that carry a miss chance (Curse) are scored in list order, the
+    /// best one (strict, starting from 0.0) takes one draw of stream 2 and decides ([`crate::unit_spells::curse_evades`],
+    /// CONFIRMED by Unicorn). It runs after the target-side walk A fails; no draw without an entry above zero.
+    fn attacker_miss_check(&mut self, attacker: ObjKey) -> bool {
+        let scores = self.attacker_miss_scores(attacker);
+        let Some(chance) = crate::damage::evasion_select(scores) else {
+            return false;
+        };
+        let Some((table, streams)) = self.rng_parts() else {
+            return false;
+        };
+        let draw = streams
+            .stream_mut(crate::damage::EVASION_STREAM)
+            .random_fraction(table);
+        crate::unit_spells::curse_evades(chance, draw)
     }
 
     /// The `ChanceToMiss` tail of the miss gate `0x6F2BEAC0` for a missile launch (`a3 != 0`), reached when no
@@ -1205,6 +1225,10 @@ impl Game {
         let killed = self.apply_damage(target, damage);
         // Vampiric Aura's life steal of the attacker (`undead_ne.rs`).
         self.apply_lifesteal(attacker, target, damage);
+        if killed.is_none() {
+            // Passive on-hit buffs of `unit_spells.rs` (Frost Attack, Slow Poison).
+            self.spell_on_hit(attacker, target);
+        }
         let bash = if killed.is_none() {
             self.bash_on_hit(attacker, target)
         } else {
@@ -1609,6 +1633,7 @@ impl Game {
     /// Whether unit `unit` may still act: alive and not removed.
     fn attacker_live(&self, unit: ObjKey) -> bool {
         matches!(self.object(unit), Object::Unit(u) if !u.dead && !u.removed && u.bonuses.stun == 0)
+            && !self.is_polymorphed(unit)
     }
 
     /// Whether `unit` may attack `target`: a live unit other than itself that is not invulnerable. The original's

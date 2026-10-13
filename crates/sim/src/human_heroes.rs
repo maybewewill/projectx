@@ -47,6 +47,10 @@ pub const RESURRECTION: u32 = code(b"AHre");
 pub const WATER_ELEMENTAL: u32 = code(b"AHwe");
 pub const BLIZZARD: u32 = code(b"AHbz");
 pub const MASS_TELEPORT: u32 = code(b"AHmt");
+pub const BANISH: u32 = code(b"AHbn");
+pub const SIPHON_MANA: u32 = code(b"AHdr");
+pub const FLAME_STRIKE: u32 = code(b"AHfs");
+pub const PHOENIX: u32 = code(b"AHpx");
 
 /// Buff codes (CONFIRMED by the code getters of the buff classes, slot 7).
 pub const BUFF_THUNDER_CLAP: u32 = code(b"BHtc");
@@ -56,6 +60,8 @@ pub const BUFF_AVATAR: u32 = code(b"BHav");
 pub const BUFF_DIVINE_SHIELD: u32 = code(b"BHds");
 /// The timed life buff of the water elemental (one of the seven special timed life ids).
 pub const BUFF_WATER_ELEMENTAL: u32 = code(b"BHwe");
+/// The Banish buff (`CBuffBanish`, `0x6F903D04`: ethereal and slowed).
+pub const BUFF_BANISH: u32 = code(b"BHbn");
 /// Wind Walk's buff: Bash does not roll while its owner has it (`0x6F15A110` returns `BOwk`).
 pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
 
@@ -63,16 +69,24 @@ pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
 pub const ORDER_THUNDER_CLAP: u32 = 852_096;
 pub const ORDER_AVATAR: u32 = 852_086;
 pub const ORDER_DIVINE_SHIELD: u32 = 852_090;
-/// UNSURE: the state-dependent cancel getter has not been verified.
-pub const ORDER_UNDIVINE_SHIELD: u32 = 852_056;
+/// CONFIRMED (S35): slot 0x318 of `CAbilityDivineShield` (`0x6F0AE2C0`) returns `0xD007B` when `0x6F089A50` allows the
+/// cancel, else the cell `0x6F92ED9C`. (852056 is `undefend`.)
+pub const ORDER_UNDIVINE_SHIELD: u32 = 852_091;
 pub const ORDER_RESURRECTION: u32 = 852_094;
 pub const ORDER_WATER_ELEMENTAL: u32 = 852_097;
 
 pub const ORDER_BLIZZARD: u32 = 852_089;
 pub const ORDER_MASS_TELEPORT: u32 = 852_093;
+/// Cast order ids of the Blood Mage spells (slot `0x308`/`0x348`, `tools/analysis/ability_orders.py`).
+pub const ORDER_BANISH: u32 = 852_486;
+pub const ORDER_SIPHON_MANA: u32 = 852_487;
+pub const ORDER_FLAME_STRIKE: u32 = 852_488;
+pub const ORDER_PHOENIX: u32 = 852_489;
 
 /// The `(order id, ability)` pairs the cast core registers.
-pub const SPELL_ORDERS: [(u32, u32); 7] = [
+pub const SPELL_ORDERS: [(u32, u32); 9] = [
+    (ORDER_BANISH, BANISH),
+    (ORDER_PHOENIX, PHOENIX),
     (ORDER_BLIZZARD, BLIZZARD),
     (ORDER_MASS_TELEPORT, MASS_TELEPORT),
     (ORDER_THUNDER_CLAP, THUNDER_CLAP),
@@ -94,7 +108,7 @@ pub const BASH_STREAM: usize = 3;
 pub fn is_immediate_spell(base: u32) -> bool {
     matches!(
         base,
-        THUNDER_CLAP | AVATAR | DIVINE_SHIELD | RESURRECTION | WATER_ELEMENTAL
+        THUNDER_CLAP | AVATAR | DIVINE_SHIELD | RESURRECTION | WATER_ELEMENTAL | PHOENIX
     )
 }
 
@@ -157,6 +171,12 @@ fn nonzero(x: F32) -> bool {
 }
 
 impl Game {
+    /// Sets Misc `MassTeleportCluster` (default off); with it and a level `DataC != 0` Mass Teleport puts every unit
+    /// on the destination position.
+    pub fn set_mass_teleport_cluster(&mut self, on: bool) {
+        self.spells.human.mass_teleport_cluster = on;
+    }
+
     /// The Bash state of `unit` (defaults when it never rolled).
     pub fn bash_state(&self, unit: ObjKey) -> BashState {
         self.spells.bash.get(&unit).copied().unwrap_or_default()
@@ -288,6 +308,10 @@ impl Game {
         self.avatar_life(unit, life);
         self.add_damage(unit, damage);
         self.unit_mut(unit).magic_immune += 1;
+        // `0x6F07A3A0`: the first immunity count removes the purge debuff and dispels (section 17).
+        if self.unit(unit).magic_immune == 1 {
+            self.magic_immunity_dispel(unit);
+        }
         serial
     }
 
@@ -330,17 +354,56 @@ impl Game {
             expiry: None,
         });
         self.set_buff_duration(unit, serial, duration);
+        // `0x6F07D180`: purge removal and dispel first, then the invulnerability and immunity counts.
+        self.magic_immunity_dispel(unit);
         let u = self.unit_mut(unit);
         u.invuln_count += 1;
         u.magic_immune += 1;
         serial
     }
 
-    /// Whether the Divine Shield of `unit` may be cancelled (`0x6F089A50`: `DataA` is not zero; the Misc test of the
-    /// original is not modelled).
+    /// Whether the Divine Shield of `unit` may be cancelled (`0x6F089A50`, CONFIRMED): `DataA` is not zero **and** Misc
+    /// `CanDeactivateDivineShield` is non-zero (the reader `0x6F009F90` with the default 0; the key is absent from the
+    /// shipped `MiscData.txt`, so in the stock game the shield cannot be cancelled).
     pub fn can_cancel_divine_shield(&self, unit: ObjKey) -> bool {
-        self.ability_level_record(unit, DIVINE_SHIELD)
-            .is_some_and(|l| nonzero(l.data[0]))
+        self.spells.human.can_deactivate_divine_shield
+            && self
+                .ability_level_record(unit, DIVINE_SHIELD)
+                .is_some_and(|l| nonzero(l.data[0]))
+    }
+
+    /// The magic-immunity apply of Divine Shield (`0x6F07D180`) and of Avatar on the first immunity count (`0x6F07A3A0`),
+    /// CONFIRMED by reading and by the walker's Unicorn run: the purge debuff `Bprg` (`0x6F0D9B60`) is removed, then the
+    /// walker `0x6F079FE0` removes the magical, non-aura, dispellable buffs of **both** polarities
+    /// ([`MAGIC_IMMUNITY_DISPEL`]). The sim knows the polarity and magic nature of the spell buffs it creates only by
+    /// code ([`spell_buff_dispel_flags`]); buffs of unknown codes are left alone (UNSURE).
+    pub(crate) fn magic_immunity_dispel(&mut self, unit: ObjKey) {
+        if let Some(i) = self.buff_position(unit, code(b"Bprg")) {
+            let mut b = self.unit_mut(unit).buffs.remove(i);
+            self.finish_buff(unit, &mut b);
+        }
+        for (serial, base) in self.spell_buffs_of(unit) {
+            if let Some(flags) = spell_buff_dispel_flags(base) {
+                if dispel_selects(&MAGIC_IMMUNITY_DISPEL, &flags) {
+                    self.drop_spell_buff(serial);
+                }
+            }
+        }
+        let select = crate::abilities::BuffSelect {
+            remove_positive: true,
+            remove_negative: true,
+            magic: true,
+            physical: false,
+            timed_life: true,
+            aura: false,
+            dispellable: true,
+        };
+        let _ = self.remove_buffs(unit, select);
+    }
+
+    /// Sets Misc `CanDeactivateDivineShield` (default off).
+    pub fn set_can_deactivate_divine_shield(&mut self, on: bool) {
+        self.spells.human.can_deactivate_divine_shield = on;
     }
 
     /// `undivineshield`: removes the `BHds` buff when the ability allows it. Returns whether a buff went.
@@ -502,14 +565,22 @@ fn resurrection(game: &RefCell<Game>, rec: &CastRec) {
         if !arith::le(d2, area2) || gm.is_enemy(owner, u.owner) {
             continue;
         }
-        // The filler of the key fields is NOT FOUND (UNSURE): key, real and flag are all equal here, so the sort
-        // reduces to "the caster's player first, then the larger agent id".
+        // The record fields (`0x6F1C1B90`, CONFIRMED by reading, distance Unicorn 400/400): `key` (`+4`) = the unit
+        // level of `0x6F29DCA0` (the type's level, 0 when not positive, at most Misc `MaxUnitLevel`), `real` (`+8`) =
+        // the squared 2D distance to the caster, `flag` (`+0xC`) = 0 for a plain corpse. Heroes (uppercase type id) take
+        // another path through the `Acar` corpse buff and are not modelled.
+        if (u.type_id >> 24) as u8 >= b'A' && (u.type_id >> 24) as u8 <= b'Z' {
+            continue;
+        }
+        let level = gm.unit_types().get(u.type_id).map_or(0, |t| t.level);
+        let cap = gm.kill_xp_config().max_unit_level;
+        let key = if level <= 0 { 0 } else { level.min(cap) };
         recs.push((
             k,
             ResurrectionRec {
                 owner: u.owner as i32,
-                key: 0,
-                real: F32::ZERO,
+                key,
+                real: d2,
                 flag: 0,
                 player: owner as i32,
                 id: k.0 as i32,
@@ -524,6 +595,18 @@ fn resurrection(game: &RefCell<Game>, rec: &CastRec) {
 }
 
 fn water_elemental(game: &RefCell<Game>, rec: &CastRec) {
+    summon(game, rec, BUFF_WATER_ELEMENTAL);
+}
+
+/// Summon Phoenix (`CAbilitySummonPhoenix` is a `CAbilityWaterElemental`: the effect `0x6F11BA10` registers a callback and
+/// jumps into the same summon loop `0x6F163390`): `f2i(DataA)` units of `UnitID` at the caster. The post-create hook
+/// `0x6F128BE0` (slot `0x3E4`) does not start a timed life; it only stores the summoner in the unit's `0x6F1132A0` buff.
+/// The stock Phoenix has `Dur` 0, so the summon is permanent (`BHwe` with a zero duration starts no timer).
+fn phoenix(game: &RefCell<Game>, rec: &CastRec) {
+    summon(game, rec, BUFF_WATER_ELEMENTAL);
+}
+
+fn summon(game: &RefCell<Game>, rec: &CastRec, timed_life: u32) {
     let mut gm = game.borrow_mut();
     let n = conv::f2i(rec.level.data[0]);
     let dur = arith::add(rec.level.dur, F32::ZERO);
@@ -539,7 +622,7 @@ fn water_elemental(game: &RefCell<Game>, rec: &CastRec) {
         // caster's position.
         if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, rec.level.unit_id, x, y, facing, true) {
             gm.unit_mut(k).summoned = true;
-            gm.apply_timed_life(k, BUFF_WATER_ELEMENTAL, dur);
+            gm.apply_timed_life(k, timed_life, dur);
         }
     }
 }
@@ -585,6 +668,110 @@ pub fn blizzard_params(l: &SpellLevel) -> BlizzardParams {
         hero_dur: l.hero_dur,
         area: l.area,
     }
+}
+
+/// The channel time Blizzard stores in the property at ability `+0x90` at the end of `0x6F1B9E90` (CONFIRMED,
+/// Unicorn 400 cases): `mul(I2R(f2i(DataA)), Cast)`, i.e. waves times the wave interval. The cast core arms the
+/// `0xD01BD` timer with it (`docs/spec/abilities-human-heroes.md` section 14).
+pub fn blizzard_channel_time(l: &SpellLevel) -> F32 {
+    arith::mul(conv::i2r(conv::f2i(l.data[0])), l.cast)
+}
+
+/// The arguments of the dispel walker `0x6F079FE0` in stack order (`ret 0x24`): CONFIRMED by reading the loop and by the
+/// 400 Unicorn runs of `tools/emu/human_heroes3_emu.py` (random argument sets, random buff predicate answers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispelArgs {
+    /// arg0: only buffs answering "physical" (vtable slot `0x1DC`).
+    pub physical: bool,
+    /// arg1: only buffs answering "magic" (slot `0x1D8`).
+    pub magic: bool,
+    /// arg2: also buffs for which slot `0x32C` says "cannot be dispelled".
+    pub undispellable_ok: bool,
+    /// arg3: also aura buffs (slot `0x1E8`).
+    pub aura_ok: bool,
+    /// arg4: only buffs for which slot `0x330(arg7)` is true.
+    pub typed: bool,
+    /// arg5 / arg6: positive buffs (slot `0x1E4`) / negative buffs (slot `0x1E0`) are candidates.
+    pub positive: bool,
+    pub negative: bool,
+    /// arg7: the argument of slot `0x330`.
+    pub type_arg: bool,
+    /// arg8: also buffs with bit `0x20000000` in their flag word (the timed-life buffs).
+    pub timed_ok: bool,
+}
+
+/// The call Divine Shield (`0x6F07D180`) and Avatar (`0x6F07A3A0` on the first immunity count) make: magical buffs of
+/// both polarities, no auras, nothing marked undispellable, timed life included.
+pub const MAGIC_IMMUNITY_DISPEL: DispelArgs = DispelArgs {
+    physical: false,
+    magic: true,
+    undispellable_ok: false,
+    aura_ok: false,
+    typed: false,
+    positive: true,
+    negative: true,
+    type_arg: false,
+    timed_ok: true,
+};
+
+/// The dispel answers of the spell buffs the sim creates (UNSURE: the classes' predicate slots were not read; these are
+/// the usual game behaviour): the stun, the slow and the Thunder Clap slow are negative and magical.
+pub fn spell_buff_dispel_flags(base: u32) -> Option<DispelBuff> {
+    [code(b"BSTN"), code(b"Bslo"), BUFF_THUNDER_CLAP].contains(&base).then_some(DispelBuff {
+        magic: true,
+        negative: true,
+        ..DispelBuff::default()
+    })
+}
+
+/// What a buff answers to the dispel walker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DispelBuff {
+    pub magic: bool,
+    pub physical: bool,
+    pub negative: bool,
+    pub positive: bool,
+    pub aura: bool,
+    pub undispellable: bool,
+    pub typed: bool,
+    pub timed: bool,
+}
+
+/// Whether the walker `0x6F079FE0` removes a buff (CONFIRMED, Unicorn 400 cases): the buff must be positive or negative;
+/// one of the allowed polarities must match; auras, undispellable and timed-life buffs only when the call allows them;
+/// physical / magic / typed only when the call requires them.
+pub fn dispel_selects(a: &DispelArgs, b: &DispelBuff) -> bool {
+    if !(b.negative || b.positive) {
+        return false;
+    }
+    if !((a.positive && b.positive) || (a.negative && b.negative)) {
+        return false;
+    }
+    !((!a.aura_ok && b.aura)
+        || (!a.undispellable_ok && b.undispellable)
+        || (a.physical && !b.physical)
+        || (a.magic && !b.magic)
+        || (a.typed && !b.typed)
+        || (!a.timed_ok && b.timed))
+}
+
+/// The default-filling normaliser of a target flag word (`0x6F2552F0`, CONFIRMED, **Unicorn 400 cases**): every group the
+/// word leaves empty gets its default. Groups (mask -> default): relations `0x1F000` -> all; ancient `0xC0000000` ->
+/// both; mechanical/organic `0xC000000` -> both; sapper `0x30000000` -> both; unit classes `0x7FE` -> `0xE` (ground, air,
+/// structure); alive/dead `0x3000000` -> alive; hero `0xC00000` -> both; vulnerable/invulnerable `0x300000` ->
+/// vulnerable. The result also keeps the word's own bits.
+pub fn targs_normalise(w: u32) -> u32 {
+    const GROUPS: [(u32, u32); 8] = [
+        (0x1F000, 0x1F000),
+        (0xC000_0000, 0xC000_0000),
+        (0xC00_0000, 0xC00_0000),
+        (0x3000_0000, 0x3000_0000),
+        (0x7FE, 0xE),
+        (0x300_0000, 0x100_0000),
+        (0xC0_0000, 0xC0_0000),
+        (0x30_0000, 0x10_0000),
+    ];
+    GROUPS.iter().fold(w, |acc, &(mask, default)| if w & mask == 0 { acc | default } else { acc })
 }
 
 /// The unclamped `f2i(DataA)` and `f2i(DataC)` the ability method passes (the vector check compares these).
@@ -656,12 +843,21 @@ pub fn blizzard_shards(
     ShardWave { perm, offsets }
 }
 
-/// The damage one unit takes in one wave (`0x6F1AF950`, from the disassembly; not Unicorn-run, LIKELY): the wave cap
-/// divides the damage when `damage * count` exceeds it, then the building factor applies to structures.
-pub fn blizzard_unit_damage(p: &BlizzardParams, count: i32, structure: bool, tables: Option<&Tables>) -> F32 {
+/// The damage value one unit gets in one wave (`0x6F1AF950`, CONFIRMED, **Unicorn 400 cases**,
+/// `tools/emu/human_heroes3_emu.py`): with a non-zero cap `DataF` and `cap < mul(I2R(n), d)` (ordered) the value is
+/// `div(cap, I2R(n))` (`n` = the count of units of the same relation kind the area helper counted); the sign is flipped
+/// when the effect's slot `0x8C` says "heal" (always 0 for Blizzard); a structure (`unit+0x5C` bit 16) or a unit with
+/// `unit+0x20` bit `0x200000` (`flagged`) takes `mul(d, building)`.
+pub fn blizzard_unit_damage(
+    p: &BlizzardParams,
+    count: i32,
+    structure_like: bool,
+    negate: bool,
+    tables: Option<&Tables>,
+) -> F32 {
     let mut d = p.damage;
     if nonzero(p.cap) {
-        let total = arith::mul(d, conv::i2r(count));
+        let total = arith::mul(conv::i2r(count), d);
         if arith::lt(p.cap, total) {
             // The division needs the soft-float tables; without them the cap cannot be applied.
             if let Some(t) = tables {
@@ -669,14 +865,25 @@ pub fn blizzard_unit_damage(p: &BlizzardParams, count: i32, structure: bool, tab
             }
         }
     }
-    if structure {
-        d = arith::mul(d, p.building);
+    if negate {
+        d = F32::from_bits(d.to_bits() ^ 0x8000_0000);
+    }
+    if structure_like {
+        d = arith::mul(p.building, d);
     }
     d
 }
 
+/// "The strongest wins": an existing `BHbz` buff keeps its value unless it is smaller than the new one (ordered
+/// compare `existing < new`, CONFIRMED in `0x6F1AF950`, Unicorn 400 cases); the update also refreshes the duration.
+pub fn blizzard_buff_replaces(existing: F32, new: F32) -> bool {
+    arith::lt(existing, new)
+}
+
 #[derive(Debug, Clone)]
 struct BlizzardFx {
+    /// The cast that created the effect (the channel end destroys it).
+    cast: u32,
     caster: ObjKey,
     x: F32,
     y: F32,
@@ -699,6 +906,13 @@ pub struct State {
     next: u32,
     blizzards: std::collections::BTreeMap<u32, BlizzardFx>,
     teleports: std::collections::BTreeMap<u32, TeleportFx>,
+    /// Misc `MassTeleportCluster` (a map's `war3mapMisc.txt` may set it; the shipped MiscData.txt has no such key, so the
+    /// default is 0).
+    pub mass_teleport_cluster: bool,
+    /// Misc `CanDeactivateDivineShield` (default 0; absent from the shipped MiscData.txt).
+    pub can_deactivate_divine_shield: bool,
+    /// The `BHbz` marker of each unit: `(spell buff serial, stored wave value)`.
+    markers: std::collections::BTreeMap<ObjKey, (u32, F32)>,
     /// Every shard wave placed, `(effect id, wave)`, for tests and the renderer.
     pub log: Vec<(u32, ShardWave)>,
 }
@@ -706,7 +920,6 @@ pub struct State {
 /// Timer kinds of [`crate::cast::SpellMsg::Human`].
 pub const TICK_BLIZZARD_WAVE: u8 = 1;
 pub const TICK_BLIZZARD_DAMAGE: u8 = 2;
-pub const TICK_TELEPORT: u8 = 3;
 
 fn human_timer(gm: &mut Game, seconds: f32, kind: u8, id: u32) {
     gm.timers.start(
@@ -728,6 +941,7 @@ fn blizzard_start(game: &RefCell<Game>, rec: &CastRec) {
         gm.spells.human.blizzards.insert(
             id,
             BlizzardFx {
+                cast: rec.id,
                 caster: rec.caster,
                 x,
                 y,
@@ -787,10 +1001,12 @@ fn blizzard_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
     let (targets, tables) = {
         let gm = game.borrow();
         let owner = gm.unit(fx.caster).owner;
-        // UNSURE: the stock `targs` is empty (`_`); the model hits enemy units and structures.
+        // The enumeration filter is the ability's flag word (`'_'` = `0xFDD1F00E`, section 15): alive, vulnerable
+        // (the `invu` bit is clear), ground/air/structure, all relations. UNSURE: where allies are excluded (the
+        // original does not hurt them in play, the word does not say); the model hits enemies only.
         let t: Vec<ObjKey> = circle_candidates(&gm, fx.x, fx.y, fx.p.area)
             .into_iter()
-            .filter(|&k| gm.alive(k) && gm.is_enemy(owner, gm.unit(k).owner))
+            .filter(|&k| gm.alive(k) && !gm.unit_is_invulnerable(k) && gm.is_enemy(owner, gm.unit(k).owner))
             .collect();
         (t, gm.order_tables().cloned())
     };
@@ -802,8 +1018,15 @@ fn blizzard_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
                 continue;
             }
             let structure = gm.unit_types().is_building(gm.unit(t).type_id);
-            blizzard_unit_damage(&fx.p, count, structure, tables.as_ref())
+            blizzard_unit_damage(&fx.p, count, structure, false, tables.as_ref())
         };
+        // The `BHbz` marker decides (`0x6F1AF950`, `0x6F2C31D0`): a unit without the marker gets one (duration
+        // `interval - 0.01`) and takes the damage at once; a unit that has it takes none, and a larger value only
+        // replaces the stored one and refreshes the duration ("strongest wins": Blizzards do not stack).
+        let fresh = blizzard_marker(game, t, amount, fx.p.interval);
+        if !fresh {
+            continue;
+        }
         let died = game
             .borrow_mut()
             .unit_damage_target(fx.caster, t, amount, false, false, 0, BLIZZARD_DAMAGE_TYPE);
@@ -825,6 +1048,43 @@ fn blizzard_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
 
 /// Damage type of Blizzard: the effect's class word is `0x200` (`0x6F1B45F0`), `1 << 9` = `DAMAGE_TYPE_COLD`.
 const BLIZZARD_DAMAGE_TYPE: u32 = 9;
+
+/// The marker buff `BHbz` (`CBuffBlizzardAoe`, parent `CBuffAoe`): it holds the wave value and ends after
+/// `interval - 0.01` (`0x6F0D6040` subtracts the constant `0x6FAAE480`).
+pub const BUFF_BLIZZARD_AOE: u32 = code(b"BHbz");
+
+/// The marker rule of `0x6F1AF950` / `0x6F1CADD0` / `0x6F0D6040`. Returns whether the unit takes this wave's damage
+/// (it had no marker). With a marker: a smaller stored value is replaced and the duration refreshed, no damage.
+fn blizzard_marker(game: &RefCell<Game>, unit: ObjKey, value: F32, interval: F32) -> bool {
+    let mut gm = game.borrow_mut();
+    let dur = if arith::lt(F32::ZERO, interval) {
+        arith::sub(interval, F32::from_bits(0x3C23_D70A))
+    } else {
+        F32::ZERO
+    };
+    let existing = gm
+        .spells
+        .human
+        .markers
+        .get(&unit)
+        .copied()
+        .filter(|(serial, _)| gm.spell_buff_alive(unit, *serial));
+    match existing {
+        None => {
+            let serial = gm.add_spell_buff(unit, BUFF_BLIZZARD_AOE, crate::cast::BuffEffect::Marker, dur);
+            gm.spells.human.markers.insert(unit, (serial, value));
+            true
+        }
+        Some((serial, old)) => {
+            if blizzard_buff_replaces(old, value) {
+                gm.drop_spell_buff(serial);
+                let serial = gm.add_spell_buff(unit, BUFF_BLIZZARD_AOE, crate::cast::BuffEffect::Marker, dur);
+                gm.spells.human.markers.insert(unit, (serial, value));
+            }
+            false
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Mass Teleport (`AHmt`). Spec section 12.
@@ -878,20 +1138,47 @@ fn teleport_start(game: &RefCell<Game>, rec: &CastRec) {
     let CastTarget::Unit(dest) = rec.target else {
         return;
     };
-    let mut gm = game.borrow_mut();
-    gm.spells.human.next += 1;
-    let id = gm.spells.human.next;
-    gm.spells.human.teleports.insert(
-        id,
+    // The delay is the channel time of the cast core (`DataB`, section 14); the teleport runs at its completion
+    // (`on_channel_complete`), keyed by the cast id.
+    game.borrow_mut().spells.human.teleports.insert(
+        rec.id,
         TeleportFx {
             caster: rec.caster,
             dest,
             level: rec.level,
         },
     );
-    // The delay is DataB (the property at `+0x90` is set from it by the level init `0x6F060AE0`; LIKELY).
-    let delay = rec.level.data[1].to_f32();
-    human_timer(&mut gm, delay, TICK_TELEPORT, id);
+}
+
+/// Blizzard sets the stage-1 delay of the cast to 0 in its level init (`0x6F197E90`), so its `Cast` field is only
+/// the wave interval (CONFIRMED by disassembly).
+pub(crate) fn cast_field_is_wave_interval(base: u32) -> bool {
+    base == BLIZZARD
+}
+
+/// The class value of the channel time property (ability `+0x90`), if the class sets one: Blizzard `waves * Cast`
+/// (Unicorn 400 cases), Mass Teleport `DataB` (level init `0x6F060AE0`, reads the `DataB` getter `0x6F02EA50`).
+pub fn channel_time_override(base: u32, level: &SpellLevel) -> Option<F32> {
+    match base {
+        BLIZZARD => Some(blizzard_channel_time(level)),
+        MASS_TELEPORT => Some(level.data[1]),
+        _ => None,
+    }
+}
+
+/// Slot `0x39C(1)`, class part: Mass Teleport teleports when its channel time has run out.
+pub(crate) fn on_channel_complete(game: &RefCell<Game>, rec: &CastRec) {
+    if rec.base == MASS_TELEPORT {
+        teleport_finish(game, rec.id);
+    }
+}
+
+/// Slot `0x388`, class part: the channel-end hook of the cast `rec.id` (after FINISH, before ENDCAST). Blizzard
+/// destroys its effect (the waves stop); Mass Teleport drops a teleport that did not complete.
+pub(crate) fn on_cast_end(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    gm.spells.human.blizzards.retain(|_, fx| fx.cast != rec.id);
+    gm.spells.human.teleports.remove(&rec.id);
 }
 
 fn teleport_finish(game: &RefCell<Game>, id: u32) {
@@ -916,8 +1203,9 @@ fn teleport_finish(game: &RefCell<Game>, id: u32) {
             continue;
         }
         let u = gm.unit(k);
-        // UNSURE: the filter word `0x40303006` of the group builder; the model takes allied and own non-structures.
-        if gm.is_enemy(owner, u.owner) || gm.unit_types().is_building(u.type_id) {
+        // The group filter word `0x40303006` (section 15): nonancient, **player** (the caster's own units only, no
+        // allies), vulnerable and invulnerable, air and ground (so no structures), alive by default.
+        if u.owner != owner || gm.unit_types().is_building(u.type_id) {
             continue;
         }
         let (ex, ey) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
@@ -935,8 +1223,12 @@ fn teleport_finish(game: &RefCell<Game>, id: u32) {
         ));
     }
     let chosen = teleport_select(recs, conv::f2i(fx.level.data[0]));
-    let cluster = nonzero(fx.level.data[2]);
-    // The caster goes to the destination unit's position, the others keep their offset when clustering (UNSURE).
+    // Clustering = Misc `MassTeleportCluster` (default 0; absent from the shipped MiscData.txt) and `DataC != 0`
+    // (`0x6F069F23..0x6F069F45`, CONFIRMED: the reader `0x6F009F90` is given the default 0). With it every unit is
+    // placed at the destination position itself (Unicorn: `0x6F056980` hands the destination pair to the move call
+    // `0x6F048AE0`); without it (the stock game) the unit gets an offset-based position (LIKELY: it keeps its offset
+    // from the caster, UNSURE: the formula was not decoded).
+    let cluster = gm.spells.human.mass_teleport_cluster && nonzero(fx.level.data[2]);
     let (px, py) = gm.clamp_unit_move(dx, dy);
     gm.store_unit_position(fx.caster, px, py);
     for (k, _) in chosen {
@@ -945,18 +1237,56 @@ fn teleport_finish(game: &RefCell<Game>, id: u32) {
             (u.x, u.y)
         };
         let (tx, ty) = if cluster {
-            (arith::add(dx, arith::sub(ux, cx)), arith::add(dy, arith::sub(uy, cy)))
-        } else {
             (dx, dy)
+        } else {
+            (arith::add(dx, arith::sub(ux, cx)), arith::add(dy, arith::sub(uy, cy)))
         };
         let (px, py) = gm.clamp_unit_move(tx, ty);
         gm.store_unit_position(k, px, py);
     }
 }
 
+/// The three values Banish hands to its new buff (`0x6F1CA2B0`, CONFIRMED, **Unicorn 400/400**): the duration (`HeroDur`
+/// for a hero, else `add(Dur, extra)` with `extra` = ability `+0x9C`), the movement factor `-DataA` and the attack-speed
+/// factor `-DataB`.
+pub fn banish_values(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    (
+        effect_duration(l, hero, extra),
+        F32::from_bits(l.data[0].to_bits() ^ 0x8000_0000),
+        F32::from_bits(l.data[1].to_bits() ^ 0x8000_0000),
+    )
+}
+
+/// Banish (`AHbn`, `CAbilityBanish`, unit effect `0x6F1CA2B0`, CONFIRMED by reading): the duration is `HeroDur` for a hero
+/// and `Dur` plus the `+0x9C` term otherwise (the usual rule); the buff `BHbn` (`CBuffBanish`, a `CBuffEthereal`, a
+/// `CBuffSpeed`) gets the movement factor **`-DataA`** and the attack-speed factor **`-DataB`**, with the caster as source.
+/// An existing `BHbn` is refreshed through its slot `0x35C`, else a new buff is created and applied (slot `0x354` =
+/// `0x6F09BEB0`): the speed values go in, the caster is remembered, **a running attack is stopped** (`0x6F2A4B80`) and the
+/// ethereal counter of the unit goes up by one (`0x6F07A340`). The removal (`0x6F07F630`) lowers the counter again and
+/// sends a zero-damage hit of class `0x210` from the remembered caster (not modelled). Ethereal units cannot be hit by
+/// physical attacks and take the Misc ethereal damage factor (`combat.rs`/`damage.rs`).
+fn banish(game: &RefCell<Game>, rec: &CastRec) {
+    let CastTarget::Unit(target) = rec.target else {
+        return;
+    };
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let (dur, move_delta, attack_delta) = banish_values(&rec.level, hero, F32::ZERO);
+    let effect = crate::cast::BuffEffect::Slow { move_delta, attack_delta };
+    let serial = gm.add_spell_buff(target, BUFF_BANISH, effect, dur);
+    if serial != 0 {
+        gm.unit_mut(target).ethereal += 1;
+        gm.combat_end(target);
+    }
+}
+
 /// The class effects of the point and unit target spells of this module; `false` when `rec.base` is not one.
 pub(crate) fn run_target_effect(game: &RefCell<Game>, rec: &CastRec) -> bool {
     match rec.base {
+        BANISH => banish(game, rec),
         BLIZZARD => blizzard_start(game, rec),
         MASS_TELEPORT => teleport_start(game, rec),
         _ => return false,
@@ -969,7 +1299,6 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     match kind {
         TICK_BLIZZARD_WAVE => blizzard_wave(game, id),
         TICK_BLIZZARD_DAMAGE => blizzard_damage(game, rt, id),
-        TICK_TELEPORT => teleport_finish(game, id),
         _ => {}
     }
 }
@@ -982,6 +1311,7 @@ pub(crate) fn run_immediate_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRunt
         DIVINE_SHIELD => divine_shield(game, rec),
         RESURRECTION => resurrection(game, rec),
         WATER_ELEMENTAL => water_elemental(game, rec),
+        PHOENIX => phoenix(game, rec),
         _ => {}
     }
 }

@@ -212,6 +212,8 @@ pub const WAR_STOMP: u32 = code(b"AOws");
 pub const CHAIN_LIGHTNING: u32 = code(b"AOcl");
 pub const FAR_SIGHT: u32 = code(b"AOfs");
 pub const FERAL_SPIRIT: u32 = code(b"AOsf");
+/// Serpent Ward: the ability id is `AOsw` (its base code in the factory is `AOwd`, class `CAbilityWard`).
+pub const SERPENT_WARD: u32 = code(b"AOsw");
 pub const HEALING_WAVE: u32 = code(b"AOhw");
 pub const BLADESTORM: u32 = code(b"AOww");
 pub const BUFF_BLADESTORM: u32 = code(b"BOww");
@@ -239,18 +241,22 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_123, MIRROR_IMAGE);
     ids.insert(852_122, FAR_SIGHT);
     ids.insert(852_126, FERAL_SPIRIT);
+    ids.insert(852_504, SERPENT_WARD);
+    ids.insert(852_502, HEX);
+    ids.insert(852_503, VOODOO);
+    ids.insert(852_121, EARTHQUAKE);
     ids.insert(852_501, HEALING_WAVE);
     ids.insert(852_128, BLADESTORM);
 }
 
 /// Abilities cast without a target (`targs` empty or area around the caster).
 pub fn takes_no_target(base: u32) -> bool {
-    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT | BLADESTORM)
+    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT | BLADESTORM | VOODOO)
 }
 
 /// Abilities cast on a point.
 pub fn takes_point(base: u32) -> bool {
-    matches!(base, SHOCKWAVE | FAR_SIGHT)
+    matches!(base, SHOCKWAVE | FAR_SIGHT | SERPENT_WARD | EARTHQUAKE)
 }
 
 /// Per-game state of the orc abilities.
@@ -279,6 +285,22 @@ pub struct OrcState {
     /// Bladestorms in progress, by serial.
     blades: BTreeMap<u32, BladeState>,
     blade_serial: u32,
+    /// The `targs` word of each level of an ability (host data); absent = the shipped default.
+    targs: BTreeMap<u32, Vec<u32>>,
+    /// The creature lists (`DataB`..`DataE` texts) of each level of an ability (host data).
+    lists: BTreeMap<u32, Vec<[String; 4]>>,
+    /// Hexed units: unit -> (buff serial, the creature it became).
+    hexed: BTreeMap<ObjKey, (u32, u32)>,
+    /// Big Bad Voodoos in progress, by serial, and the buffs they gave (buff serial -> unit, for the invulnerability count).
+    voodoos: BTreeMap<u32, VoodooState>,
+    voodoo_serial: u32,
+    voodoo_buffs: BTreeMap<u32, ObjKey>,
+    /// Earthquakes in progress, by serial.
+    quakes: BTreeMap<u32, QuakeState>,
+    quake_serial: u32,
+    /// Pending Reincarnations: unit -> serial of the revival timer.
+    reincarnating: BTreeMap<ObjKey, u32>,
+    reincarnate_serial: u32,
 }
 
 impl OrcState {
@@ -288,6 +310,25 @@ impl OrcState {
 }
 
 impl Game {
+    /// Installs the `targs` words of an ability's levels (the parsed `targs` column).
+    pub fn set_orc_targs(&mut self, base: u32, words: Vec<u32>) {
+        self.orc.targs.insert(base, words);
+    }
+
+    /// The `targs` word of a level (`level_index` 0-based, clamped to the last level), or the shipped default.
+    pub(crate) fn orc_targs(&self, base: u32, level_index: usize) -> u32 {
+        match self.orc.targs.get(&base) {
+            Some(v) if !v.is_empty() => v[level_index.min(v.len() - 1)],
+            _ => match base {
+                WAR_STOMP => STOMP_TARGS_DEFAULT,
+                VOODOO => VOODOO_TARGS_DEFAULT,
+                BLADESTORM => BLADESTORM_TARGS_DEFAULT,
+                EARTHQUAKE => QUAKE_TARGS_DEFAULT,
+                _ => 0,
+            },
+        }
+    }
+
     /// Installs the summoned unit types of an ability (`UnitID` per level).
     pub fn set_summon_units(&mut self, base: u32, units: Vec<u32>) {
         self.orc.summon_units.insert(base, units);
@@ -401,42 +442,120 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         WIND_WALK => wind_walk(game, rec),
         MIRROR_IMAGE => mirror_image(game, rt, rec),
         FERAL_SPIRIT => feral_spirit(game, rec),
+        SERPENT_WARD => serpent_ward(game, rec),
+        HEX => hex_cast(game, rt, rec),
+        VOODOO => voodoo(game, rec),
+        EARTHQUAKE => earthquake(game, rec),
         FAR_SIGHT => far_sight(game, rec),
         _ => return false,
     }
     true
 }
 
-/// War Stomp (`0x6F1608B0` instant slot, per-unit effect `0x6F1607B0`, CONFIRMED structure): every unit of the area
-/// around the caster that the group builder lets through takes `DataA` damage (class `0x8000`), and a unit that is
-/// still alive is stunned for `HeroDur` (hero) or `Dur` (slot `0x430` = `0x6F18ABF0`, same duration rule as Storm
-/// Bolt). A unit the immunity test `0x6F28D750` rejects gets a zero-damage record and no stun (modelled as untouched).
-/// The units come in the area query's order (x-major cells). UNSURE: the builder's relation filter (enemies of the
-/// caster's owner here), the ground/organic target flags (`ground,organic`: no air, structures, mechanical).
+/// The target flag word the stomp area builder uses (`0x6F176CD0`, slot `0x434` shared with Thunder Clap and Storm Bolt;
+/// CONFIRMED by reading): `(targs & 0xFFFF0FFF) | 0x10000`, and `| 0x8000` when the third argument is non-zero, which
+/// the stomp's instant slot `0x6F1608B0` passes as 1. So the relation bits are enemy and neutral only (self, player
+/// and ally are cleared), and the rest of the ability's `targs` goes to the predicate unchanged.
+pub fn stomp_word(targs: u32) -> u32 {
+    (targs & 0xFFFF_0FFF) | 0x1_0000 | 0x8000
+}
+
+/// The `targs` text of War Stomp in the 1.26a AbilityData (`ground,organic`) as a word (`ground` 0x2, `organic`
+/// `0x4000000`), used when the host gives none (`Game::set_orc_targs`).
+pub const STOMP_TARGS_DEFAULT: u32 = 0x0400_0002;
+
+/// What the per-unit body of War Stomp (`0x6F1607B0`) does with one unit that the area builder let through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StompUnit {
+    /// The damage record is sent with the zero amount (the unit is invulnerable by slot `0x11C` or the spell
+    /// immunity test `0x6F28D750` refused it); its flags are `0x50` instead of `0x40`.
+    pub zero_record: bool,
+    /// The unit is put into the ability's hit array (`array[owner index + 1]`), when the handle resolves.
+    pub hit_slot: Option<u32>,
+    /// The stun slot `0x430` runs.
+    pub stun: bool,
+}
+
+/// The damage record flags of the stomp: `0x40`, plus `0x10` on the zero-damage path. CONFIRMED (Unicorn).
+pub fn stomp_record_flags(zero_record: bool) -> u32 {
+    0x40 | if zero_record { 0x10 } else { 0 }
+}
+
+/// `0x6F1607B0` after the damage: `resolved` = the handle resolver `0x6F282F60` still returns the unit (valid, not
+/// removed, not dead), `target_type` = the unit's slot `0x114` result (`unit+0x24C`: bit 8 = structure). The stun runs
+/// only for a resolved, non-structure unit on the normal path. CONFIRMED by Unicorn (`tests/data/orc/stomp.txt`).
+pub fn stomp_unit(zero_record: bool, resolved: bool, target_type: u32, owner_index: u32) -> StompUnit {
+    StompUnit {
+        zero_record,
+        hit_slot: resolved.then_some(owner_index),
+        stun: resolved && target_type & 8 == 0 && !zero_record,
+    }
+}
+
+/// The candidate facts of a unit for the splash / area predicate (same construction as the bounce picker).
+pub(crate) fn splash_candidate(gm: &Game, k: ObjKey) -> crate::splash::Candidate {
+    let u = gm.unit(k);
+    crate::splash::Candidate {
+        dead: u.dead,
+        invulnerable_flag: gm.unit_is_invulnerable(k),
+        targ_type: gm.target_flag_word(k) & 0x1E,
+        type_char: (u.type_id >> 24) as u8,
+        class_word: u.class_flags,
+        ethereal: u.ethereal,
+        magic_immune: u.magic_immune,
+        invulnerable: gm.unit_is_invulnerable(k),
+        owner: u.owner,
+    }
+}
+
+/// The area builder's candidate test for the `0x1D` tag (predicate `0x6F26E510` -> `0x6F25D6F0(unit, word, source,
+/// -1)`, CONFIRMED by reading): the splash candidate filter without the attack-type gates.
+pub(crate) fn area_predicate(gm: &Game, caster: ObjKey, k: ObjKey, word: u32) -> bool {
+    let cand = splash_candidate(gm, k);
+    let owner = gm.unit(caster).owner;
+    let src = if k == caster { crate::splash::Source::Itself } else { crate::splash::Source::Other(owner) };
+    let passive = |a: u32, b: u32| a < 16 && b < 16 && gm.player(a).alliances[0] & (1 << b) != 0;
+    let shared = |a: u32, b: u32| a < 16 && b < 16 && gm.player(a).alliances[4] & (1 << b) != 0;
+    crate::splash::candidate_filter(&cand, word, src, owner, false, false, passive, shared)
+}
+
+/// War Stomp (`0x6F1608B0` instant slot, per-unit body `0x6F1607B0`, CONFIRMED by reading and Unicorn): the area
+/// builder (`0x6F2A3270` with the tags area, `0x1D` word [`stomp_word`], mode 0xF) walks the circle around the CASTER in
+/// the area query's order and keeps the units the predicate `0x6F25D6F0` accepts (alive, vulnerable, kind and
+/// organic/mechanical from the `targs`, relation enemy or neutral). The body sends `DataA` (class `0x8000`, flags
+/// `0x40`) to every unit; a unit that is invulnerable by slot `0x11C` or fails the spell immunity test gets the zero
+/// record (flags `0x50`) and no stun. A unit still alive and not a structure (`targType` bit 8) is stunned `HeroDur`
+/// (hero) or `Dur` (+ `+0x9C`, slot `0x430` = `0x6F18ABF0`, the Storm Bolt rule).
 fn war_stomp(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     let mut killed = Vec::new();
     {
         let mut gm = game.borrow_mut();
-        let (cx, cy, owner) = {
+        let (cx, cy) = {
             let u = gm.unit(rec.caster);
-            (u.x, u.y, u.owner)
+            (u.x, u.y)
         };
+        let level_index =
+            usize::try_from(gm.unit(rec.caster).abilities.get(WAR_STOMP).map_or(0, |a| a.level_index)).unwrap_or(0);
+        let word = stomp_word(gm.orc_targs(WAR_STOMP, level_index));
         for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
-            if k == rec.caster || !spell_target_ok(&gm, owner, k) {
-                continue;
-            }
-            let u = gm.unit(k);
-            if !is_unit_type(&gm, u, ty::GROUND)
-                || is_unit_type(&gm, u, ty::STRUCTURE)
-                || is_unit_type(&gm, u, ty::MECHANICAL)
             {
+                let u = gm.unit(k);
+                if u.removed || u.hidden {
+                    continue;
+                }
+            }
+            if !area_predicate(&gm, rec.caster, k, word) {
                 continue;
             }
-            if let Some(t) = gm.unit_damage_target(rec.caster, k, rec.level.data[0], false, false, 0, SPELL_DAMAGE_TYPE) {
+            let zero_record = gm.unit_is_invulnerable(k) || is_unit_type(&gm, gm.unit(k), ty::MAGIC_IMMUNE);
+            let amount = if zero_record { F32::ZERO } else { rec.level.data[0] };
+            if let Some(t) = gm.unit_damage_target(rec.caster, k, amount, false, false, 0, SPELL_DAMAGE_TYPE) {
                 killed.push(t);
-                continue;
             }
-            if gm.alive(k) {
+            let target_type = gm.target_flag_word(k) & 0x1E;
+            let resolved = gm.alive(k);
+            let out = stomp_unit(zero_record, resolved, target_type, gm.unit(k).owner);
+            if out.stun {
                 let hero = gm.target_hero(k);
                 let dur = effect_duration(&rec.level, hero, F32::ZERO);
                 gm.add_spell_buff(k, BUFF_STUN, BuffEffect::Stun, dur);
@@ -864,7 +983,13 @@ fn mirror_image(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
     let mut gm = game.borrow_mut();
     gm.orc.mirror_serial = gm.orc.mirror_serial.wrapping_add(1);
     let serial = gm.orc.mirror_serial;
-    gm.orc.mirror_pending.insert(rec.caster, (serial, rec.level));
+    // The cast effect `0x6F135740` makes the caster invulnerable for the delay (`0x6F0796F0`: counter `+0xE8`, unit flag 8),
+    // disables its abilities (`0x6F0767F0`, pause counters) and sets `+0x20 |= 0x800000`; the hero-slot branch of the handler
+    // undoes all three (`0x6F1280D0` -> `0x6F079730`, `0x6F0767F0`, flag clear) and issues a stop order (`0x6F2A4B80`).
+    let had = gm.orc.mirror_pending.insert(rec.caster, (serial, rec.level)).is_some();
+    if !had {
+        gm.unit_mut(rec.caster).invuln_count += 1;
+    }
     gm.timers_start_hero(rec.level.data[3].to_f32(), TICK_MIRROR, rec.caster, serial);
 }
 
@@ -892,6 +1017,10 @@ fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey,
         return;
     }
     gm.orc.mirror_pending.remove(&caster);
+    {
+        let u = gm.unit_mut(caster);
+        u.invuln_count = (u.invuln_count - 1).max(0);
+    }
     if gm.unit(caster).removed {
         return;
     }
@@ -993,6 +1122,20 @@ fn blade_period_bits(gm: &Game) -> u32 {
     }
 }
 
+/// The shipped `targs` of Bladestorm: `ground,structure,debris,enemy,neutral` = ground 2, structure 8, debris `0x100`,
+/// enemy `0x10000`, neutral `0x8000`.
+pub const BLADESTORM_TARGS_DEFAULT: u32 = 0x0001_810A;
+
+/// One tick of the spin (`0x6F1912A0`, CONFIRMED by reading and Unicorn, `tools/emu/bladetick_emu.py`, 400 cases): the
+/// counter `+0xFC` is decremented first (wrapping); when it is then exactly 0 the end routine `0x6F171450` runs; then, when
+/// the pause counter `+0x3C` is NOT positive (signed compare), the area body `0x6F2C31D0` is called with ONE ring
+/// `(radius = +0x10C cell, amount = +0x104 cell)`, class `0x20`, the ability's `+0x4C` word unchanged, the caster as source
+/// and owner -1. Returns `(counter after, end routine runs, damage is dealt)`.
+pub fn blade_tick_step(left: i32, pause: i32) -> (i32, bool, bool) {
+    let after = left.wrapping_sub(1);
+    (after, after == 0, pause <= 0)
+}
+
 fn blade_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
     let mut killed = Vec::new();
     let caster;
@@ -1002,29 +1145,36 @@ fn blade_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
             return;
         };
         caster = st.caster;
-        st.left -= 1;
-        let (left, damage, radius, buff) = (st.left, st.damage, st.radius, st.buff);
+        let (left, ends, deals) = blade_tick_step(st.left, 0);
+        st.left = left;
+        let (damage, radius, buff) = (st.damage, st.radius, st.buff);
+        let _ = deals;
         if !gm.alive(caster) {
             gm.orc.blades.remove(&serial);
             return;
         }
-        if left <= 0 {
+        if ends || left < 0 {
             gm.orc.blades.remove(&serial);
             gm.drop_spell_buff(buff);
         } else {
             let period = f32::from_bits(blade_period_bits(&gm));
             gm.timers_start_hero(period, TICK_BLADE, caster, serial);
         }
-        let (cx, cy, owner) = {
+        let (cx, cy) = {
             let u = gm.unit(caster);
-            (u.x, u.y, u.owner)
+            (u.x, u.y)
         };
+        let level_index =
+            usize::try_from(gm.unit(caster).abilities.get(BLADESTORM).map_or(0, |a| a.level_index)).unwrap_or(0);
+        let word = gm.orc_targs(BLADESTORM, level_index);
         for k in crate::natives::group::circle_candidates(&gm, cx, cy, radius) {
-            if k == caster || !spell_target_ok(&gm, owner, k) {
-                continue;
+            {
+                let u = gm.unit(k);
+                if u.removed || u.hidden {
+                    continue;
+                }
             }
-            let u = gm.unit(k);
-            if !is_unit_type(&gm, u, ty::GROUND) || is_unit_type(&gm, u, ty::STRUCTURE) {
+            if !area_predicate(&gm, caster, k, word) {
                 continue;
             }
             // Damage class 0x20 = 1 << 5 (damage type ENHANCED).
@@ -1045,12 +1195,52 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_CHAIN => chain_next(game, rt, aux),
         TICK_WW_END => game.borrow_mut().drop_spell_buff(aux),
         TICK_BLADE => blade_tick(game, rt, aux),
+        TICK_VOODOO => voodoo_tick(game, aux),
+        TICK_QUAKE => quake_tick(game, rt, aux),
+        TICK_REINCARNATE => reincarnate(game, unit, aux),
         _ => {}
     }
 }
 
-/// Feral Spirit (class `0x6F927B2C`, effect `0x6F1DF330`): `DataB` units of the level's `UnitID`, summoned, living
-/// `Dur`/`HeroDur`. No RNG draw is reachable through direct calls. UNSURE: the placement (at the caster here).
+/// What the Feral Spirit effect `0x6F1DF330` does before it creates the wolves (CONFIRMED by Unicorn,
+/// `tools/emu/feral_emu.py`, 400 `E` cases): `count = F2I(DataB)`, the duration handed to every wolf's buff is
+/// `Dur + ability+0x9C` (soft add; **there is no HeroDur branch**, a hero caster uses the same `Dur`), and the creator
+/// flag word is `0x502` when that duration is exactly zero (x87 equality, so NaN counts as non-zero) and `2` otherwise
+/// (the creator ORs 2 on top). A negative count loops 2^32 - |n| times in the original (never reached with real data).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FeralPlan {
+    pub count: i32,
+    pub flags: u32,
+    pub duration: F32,
+}
+
+pub fn feral_plan(dur: F32, plus_9c: F32, data_b: F32) -> FeralPlan {
+    let total = arith::add(dur, plus_9c);
+    FeralPlan {
+        count: conv::f2i(data_b),
+        flags: if total.to_f32() == 0.0 { 0x502 } else { 2 },
+        duration: total,
+    }
+}
+
+/// The point the creator wrapper `0x6F1D27A0` -> `0x6F1D26B0` hands to the unit creator: the caster's position plus
+/// `M * (Area, 0, 0)` where `M` is the rotation about the vertical axis by the caster's facing (the same matrix and
+/// transform as Mirror Image). Every wolf of one cast is requested at this point; the unit creator `0x6F29F990` spreads
+/// them by its own placement search (not decoded). The facing passed on is the caster's facing. CONFIRMED (Unicorn, 400
+/// `P` cases, soft-float tables from the DLL).
+pub fn feral_place(cx: F32, cy: F32, facing: F32, area: F32, t: &softfloat::Tables) -> (F32, F32) {
+    let m = mirror_rotation(facing, t);
+    let o = mirror_transform(&m, [area, F32::ZERO, F32::ZERO]);
+    // The wrapper adds the caster's coordinate FIRST (`edx` = the caster's point, the stack argument = the rotated
+    // offset): the operand order decides the sign of a zero sum.
+    (arith::add(cx, o[0]), arith::add(cy, o[1]))
+}
+
+/// Feral Spirit (class `0x6F927B2C`, effect `0x6F1DF330`): `F2I(DataB)` units of the level's `UnitID`, created for the
+/// caster's owner at [`feral_place`] facing like the caster, each given the timed buff `BOsf` (`CBuffSpiritWolf`, a
+/// `CBuffTimedLife`: class flag 4 = summoned, duration `Dur + ability+0x9C`, zero = no expiry). No RNG draw. UNSURE:
+/// the creator's placement search that separates the wolves (the model builds them at the same point), the abilities
+/// of the wolves.
 fn feral_spirit(game: &RefCell<Game>, rec: &CastRec) {
     let mut gm = game.borrow_mut();
     if !gm.alive(rec.caster) {
@@ -1061,15 +1251,18 @@ fn feral_spirit(game: &RefCell<Game>, rec: &CastRec) {
     let Some(&unit_type) = gm.orc.summon_units.get(&FERAL_SPIRIT).and_then(|v| v.get(level_index)) else {
         return;
     };
-    let count = conv::f2i(rec.level.data[1]).max(0);
+    let plan = feral_plan(rec.level.dur, F32::ZERO, rec.level.data[1]);
     let (owner, x, y, facing) = {
         let u = gm.unit(rec.caster);
         (u.owner, u.x, u.y, u.facing)
     };
-    let hero = gm.target_hero(rec.caster);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
-    for _ in 0..count {
-        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, unit_type, x, y, rad_to_deg(facing), true) else {
+    let (px, py) = match gm.softfloat_tables().cloned() {
+        Some(t) => feral_place(x, y, facing, rec.level.area, &t),
+        None => (x, y),
+    };
+    for _ in 0..plan.count.max(0) {
+        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, unit_type, px, py, rad_to_deg(facing), true)
+        else {
             continue;
         };
         {
@@ -1077,12 +1270,548 @@ fn feral_spirit(game: &RefCell<Game>, rec: &CastRec) {
             u.summoned = true;
             u.class_flags |= 0x4;
         }
-        gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, dur);
+        gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, plan.duration);
     }
 }
 
-/// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for `Dur`.
-/// MODEL (UNSURE): a visible-state fog modifier started now and stopped when the marker buff on the caster ends.
+/// The facing the wards are created with: the Misc `BuildingAngle` through `0x6F020D30` / the ward cast's copy of it:
+/// `v = F2I(misc) % 360` (C remainder), rounded toward zero to a multiple of 90 (`v - v % 90`), a negative result gets
+/// +360, then `I2R(v) * (pi / 180)` (`0x6FAAE5E8`, soft multiply). CONFIRMED by Unicorn (`tools/emu/ward_emu.py`; the
+/// DLL's value of 90 / 180 / 270 gives 1.5708 / 3.1416 / 4.7124 exactly as the creator receives them). The AI helper
+/// `ai_site::building_angle` has no rounding (it only ever sees 0/90/180/270).
+pub fn building_angle_radians(misc: F32) -> F32 {
+    let mut v = conv::f2i(misc).wrapping_rem(360);
+    let r = v % 90;
+    if v != 0 && r != 0 {
+        v -= r;
+    }
+    if v < 0 {
+        v += 360;
+    }
+    arith::mul(conv::i2r(v), F32::from_bits(0x3C8E_FA35))
+}
+
+/// Serpent Ward point cast (class `CAbilityWard`, slot `0x418` = `0x6F162DC0`): `n = F2I(DataA)` wards of the level's
+/// `UnitID` for the caster's owner, each created AT THE TARGET POINT (the creator `0x6F29F990` receives the cast's own
+/// x and y pointers) facing [`building_angle_radians`] with the same count / duration / flag arithmetic as Feral Spirit
+/// (`Dur + ability+0x9C`, no `HeroDur`; flag `0x502` for a zero duration else `2`; `ward_plan` = `feral_plan`), then the
+/// ward buff `BOwd` through slot `0x430` (`0x6F18C650`: buff factory `0x6F189900`, init `0x324`, apply `0x31C` with the
+/// unit and a pointer to the duration). CONFIRMED by Unicorn (`ward_emu.py`, 400 cases).
+pub fn ward_plan(dur: F32, plus_9c: F32, data_a: F32) -> FeralPlan {
+    feral_plan(dur, plus_9c, data_a)
+}
+
+fn serpent_ward(game: &RefCell<Game>, rec: &CastRec) {
+    let CastTarget::Point(px, py) = rec.target else {
+        return;
+    };
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let level_index =
+        usize::try_from(gm.unit(rec.caster).abilities.get(SERPENT_WARD).map_or(0, |a| a.level_index)).unwrap_or(0);
+    let Some(&unit_type) = gm.orc.summon_units.get(&SERPENT_WARD).and_then(|v| v.get(level_index)) else {
+        return;
+    };
+    let plan = ward_plan(rec.level.dur, F32::ZERO, rec.level.data[0]);
+    let owner = gm.unit(rec.caster).owner;
+    let facing = building_angle_radians(gm.production().building_angle);
+    for _ in 0..plan.count.max(0) {
+        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, unit_type, px, py, rad_to_deg(facing), true)
+        else {
+            continue;
+        };
+        {
+            let u = gm.unit_mut(k);
+            u.summoned = true;
+            u.class_flags |= 0x4;
+        }
+        gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, plan.duration);
+    }
+}
+
+// ---- Hex (`AOhx`, `CAbilityHex`, vtable `0x6F8B1704`, a `CAbilityPolymorph`): the creature pick ----
+
+/// Hex's base code.
+pub const HEX: u32 = code(b"AOhx");
+/// The combat RNG stream of the creature pick: the roll wrapper `0x6F285350` is called with `EDX = 0x18` at `0x6F12DC14`.
+pub const HEX_STREAM: usize = 24;
+
+/// The default list of a movement class when the ability row has none: slots `0x42C` / `0x430` / `0x434` / `0x438` of the
+/// class (`nshe`, `nshf`, `nsha`, `nshw` = the sheep family). The selector `0x6F12DAA0` maps the class value `unit+0x1FC`
+/// of the target: 2 -> slot `0x430`, 16 -> `0x438`, 32 -> `0x434`, anything else -> `0x42C`.
+pub fn polymorph_default_list(class: u32) -> &'static str {
+    match class {
+        2 => "nshf",
+        0x10 => "nshw",
+        0x20 => "nsha",
+        _ => "nshe",
+    }
+}
+
+/// The column of the level record's data list that the profile lookup `0x6F113DE0` reads for a class: 2 -> `DataC`
+/// (index 2), 16 -> `DataE` (index 4), 32 -> `DataD` (index 3), anything else -> `DataB` (index 1) (indices into
+/// `SpellLevel::data` where `DataA` is 0). Read from the key table at `0x6FA6F298..0x6FA6F2A4`.
+pub fn polymorph_data_column(class: u32) -> usize {
+    match class {
+        2 => 2,
+        0x10 => 4,
+        0x20 => 3,
+        _ => 1,
+    }
+}
+
+/// The type code of one list token: the first four bytes as a big-endian word (`0x6F4C3F50`; shorter tokens give a
+/// shorter number).
+pub fn polymorph_code(token: &str) -> u32 {
+    token.bytes().take(4).fold(0u32, |a, b| (a << 8) | u32::from(b))
+}
+
+/// The tokens of a list: Storm's `SStrTokenize` with the delimiters blank, comma, hyphen, underscore and tab (`0x6F88F9FC`).
+pub fn polymorph_tokens(text: &str) -> Vec<u32> {
+    text.split([' ', ',', '-', '_', '\t']).filter(|t| !t.is_empty()).map(polymorph_code).collect()
+}
+
+/// `0x6F12DAA0` (CONFIRMED by Unicorn, `tools/emu/hex_emu.py`): the creature a target becomes. `list` is the ability
+/// row's text for the class (`None` or empty = the class default); only the types the unit database knows (`exists`)
+/// count; with none left the result is `None` and NO draw is made, otherwise ONE draw of combat stream 24, `roll(1 die of
+/// n sides, bonus -1)` = an index `0..n-1`.
+pub fn hex_pick(
+    stream: &mut crate::rng::Rng,
+    table: &crate::rng::RngTable,
+    class: u32,
+    list: Option<&str>,
+    exists: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    let text = match list {
+        Some(t) if !t.is_empty() => t,
+        _ => polymorph_default_list(class),
+    };
+    let candidates: Vec<u32> = polymorph_tokens(text).into_iter().filter(|&c| exists(c)).collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let n = u32::try_from(candidates.len()).ok()?;
+    let index = crate::damage::roll_total(stream, table, 1, n, -1)?;
+    candidates.get(usize::try_from(index).ok()?).copied()
+}
+
+/// The shipped lists of Hex (`DataB`..`DataE` of AbilityData, the same on every level), used when the host gives none.
+const HEX_DEFAULT_LISTS: [&str; 4] = [
+    "npig,nsea,ncrb,nhmc,nrat,nfro,nech,necr,nrac",
+    "nalb,nvul,nsno",
+    "nsha,npng",
+    "nshw,npnw",
+];
+
+/// Buff code of Hex.
+pub const BUFF_HEX: u32 = code(b"BOhx");
+
+impl Game {
+    /// Installs the creature lists of an ability's levels (`DataB`, `DataC`, `DataD`, `DataE` texts per level).
+    pub fn set_orc_lists(&mut self, base: u32, lists: Vec<[String; 4]>) {
+        self.orc.lists.insert(base, lists);
+    }
+
+    fn orc_list(&self, base: u32, level_index: usize, column: usize) -> Option<String> {
+        let c = column.checked_sub(1)?;
+        match self.orc.lists.get(&base) {
+            Some(v) if !v.is_empty() => v.get(level_index.min(v.len() - 1)).map(|l| l[c].clone()),
+            _ if base == HEX => Some(HEX_DEFAULT_LISTS[c].to_owned()),
+            _ => None,
+        }
+    }
+
+    /// The creature a hexed unit became (for tests and hosts); `None` when the unit is not hexed.
+    pub fn hex_form(&self, unit: ObjKey) -> Option<u32> {
+        self.orc.hexed.get(&unit).map(|&(_, form)| form)
+    }
+}
+
+/// Hex (`CAbilityHex`, unit target slot `0x424` = `0x6F12F560`, shared with Polymorph; CONFIRMED by reading, the creature
+/// pick by Unicorn): an ILLUSION target dies at once (slot `0x124` with life 0.0). Otherwise the duration is `HeroDur`
+/// for a hero (the hero test `0x6F1D2660`) and `Dur + ability+0x9C` (`0x6F02F880`) for everyone else (`0x6F12F5C3`..
+/// `0x6F12F5DD`), the creature is [`hex_pick`] over the list of the target's movement class (2 fly -> `DataC`, 16 float ->
+/// `DataE`, 32 amphibious -> `DataD`, else `DataB`; the class is the target's `movetp` word), and slot `0x43C` =
+/// `0x6F0BAD50` applies the morph buff `BOhx` with the form and the duration. Not modelled: the stat and ability swap of the
+/// morph (the hexed unit cannot attack or cast), only the buff and the recorded form. A pick with no existing type
+/// leaves the target untouched (the original passes type 0 on; UNSURE what the buff does then).
+fn hex_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let CastTarget::Unit(target) = rec.target else {
+        return;
+    };
+    let mut killed = None;
+    {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(target) || !gm.alive(rec.caster) {
+            return;
+        }
+        if gm.unit(target).illusion {
+            if crate::natives::unit::set_life(&mut gm, target, F32::ZERO) {
+                killed = Some(target);
+            }
+        } else {
+            let hero = gm.target_hero(target);
+            let dur = effect_duration(&rec.level, hero, F32::ZERO);
+            let class = gm.unit_types().get(gm.unit(target).type_id).map_or(1, |t| t.movement);
+            let level_index =
+                usize::try_from(gm.unit(rec.caster).abilities.get(HEX).map_or(0, |a| a.level_index)).unwrap_or(0);
+            let list = gm.orc_list(HEX, level_index, polymorph_data_column(class));
+            let known: std::collections::BTreeSet<u32> = polymorph_tokens(list.as_deref().unwrap_or(""))
+                .into_iter()
+                .chain(polymorph_tokens(polymorph_default_list(class)))
+                .filter(|&c| gm.unit_types().get(c).is_some())
+                .collect();
+            let form = match gm.rng_parts() {
+                Some((table, streams)) => hex_pick(
+                    streams.stream_mut(HEX_STREAM),
+                    table,
+                    class,
+                    list.as_deref(),
+                    |c| known.contains(&c),
+                ),
+                None => None,
+            };
+            if let Some(form) = form {
+                let serial = gm.add_spell_buff(target, BUFF_HEX, BuffEffect::Marker, dur);
+                if serial != 0 {
+                    gm.orc.hexed.insert(target, (serial, form));
+                }
+            }
+        }
+    }
+    if let Some(t) = killed {
+        dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+// ---- Big Bad Voodoo (`AOvd`, `CAbilityVoodoo`, vtable `0x6F8F8124`) ----
+
+/// Big Bad Voodoo's ability id (its factory base code is the same).
+pub const VOODOO: u32 = code(b"AOvd");
+/// The buff the units in the area carry (`BOvd`; `BOvc` is the caster's channel buff, not modelled).
+pub const BUFF_VOODOO: u32 = code(b"BOvd");
+/// The pulse timer kind of the voodoo (`SpellMsg::HeroSpell`).
+pub const TICK_VOODOO: u8 = 0x85;
+/// The pulse period: the float at `0x6FAAE4D0`, 0.5 s (the timer message `0xD01C1` of the effect `0x6F18C340`).
+pub const VOODOO_PULSE_BITS: u32 = 0x3F00_0000;
+/// The shipped `targs` of Big Bad Voodoo (`air,ground,friend,vuln,invu`): air 4, ground 2, friend `0x6000`, vulnerable
+/// `0x100000`, invulnerable `0x200000`. `friend` carries no `self` bit, so the area predicate never accepts the caster.
+pub const VOODOO_TARGS_DEFAULT: u32 = 0x0030_6006;
+
+/// The duration of the buff each pulse gives (`0x6F18C580`: `add(0.5, 0.5)` through the soft add, i.e. 1.0 s; an
+/// existing buff is refreshed through its slot `0x350` instead of getting a second one). CONFIRMED by reading.
+pub fn voodoo_buff_duration() -> F32 {
+    arith::add(F32::from_bits(VOODOO_PULSE_BITS), F32::from_bits(VOODOO_PULSE_BITS))
+}
+
+/// A Big Bad Voodoo in progress.
+#[derive(Debug, Clone)]
+pub(crate) struct VoodooState {
+    caster: ObjKey,
+    left: F32,
+    area: F32,
+    word: u32,
+}
+
+/// Big Bad Voodoo cast (effect `0x6F18C340`, CONFIRMED structure): clears the caster's earlier voodoo buffs, starts the
+/// pulse timer (message `0xD01C1`, 0.5 s) and creates an area watcher of radius `Area` around the caster (message
+/// `0xD01C7` per unit that enters; the handler `0x6F18C630` -> `0x6F18C580` gives each accepted unit the buff `BOvd` for
+/// [`voodoo_buff_duration`], refreshing a buff it already has). While the buff lasts the unit is invulnerable. MODEL (UNSURE):
+/// the watcher is a pulse every 0.5 s over the circle (no per-entry events), the run lasts `Dur` (the channel; the real
+/// one also ends when the channel is interrupted, see the shared channel code), the per-unit gate of slot `0x3EC` is not
+/// decoded, the caster is not affected (no `self` in `targs`).
+fn voodoo(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let level_index =
+        usize::try_from(gm.unit(rec.caster).abilities.get(VOODOO).map_or(0, |a| a.level_index)).unwrap_or(0);
+    let word = gm.orc_targs(VOODOO, level_index);
+    gm.orc.voodoo_serial = gm.orc.voodoo_serial.wrapping_add(1);
+    let serial = gm.orc.voodoo_serial;
+    gm.orc.voodoos.insert(serial, VoodooState { caster: rec.caster, left: rec.level.dur, area: rec.level.area, word });
+    voodoo_pulse(&mut gm, serial);
+}
+
+fn voodoo_pulse(gm: &mut Game, serial: u32) {
+    let Some(st) = gm.orc.voodoos.get(&serial).cloned() else {
+        return;
+    };
+    let (cx, cy) = {
+        let u = gm.unit(st.caster);
+        (u.x, u.y)
+    };
+    let dur = voodoo_buff_duration();
+    for k in crate::natives::group::circle_candidates(gm, cx, cy, st.area) {
+        {
+            let u = gm.unit(k);
+            if u.removed || u.hidden {
+                continue;
+            }
+        }
+        if !area_predicate(gm, st.caster, k, st.word) {
+            continue;
+        }
+        let buff = gm.add_spell_buff(k, BUFF_VOODOO, BuffEffect::Marker, dur);
+        if buff != 0 {
+            gm.unit_mut(k).invuln_count += 1;
+            gm.orc.voodoo_buffs.insert(buff, k);
+        }
+    }
+    let period = F32::from_bits(VOODOO_PULSE_BITS);
+    let left = arith::sub(st.left, period);
+    if left.to_f32() > 0.0 {
+        if let Some(s) = gm.orc.voodoos.get_mut(&serial) {
+            s.left = left;
+        }
+        gm.timers_start_hero(f32::from_bits(VOODOO_PULSE_BITS), TICK_VOODOO, st.caster, serial);
+    } else {
+        gm.orc.voodoos.remove(&serial);
+    }
+}
+
+fn voodoo_tick(game: &RefCell<Game>, serial: u32) {
+    let mut gm = game.borrow_mut();
+    let Some(st) = gm.orc.voodoos.get(&serial).cloned() else {
+        return;
+    };
+    if !gm.alive(st.caster) {
+        gm.orc.voodoos.remove(&serial);
+        return;
+    }
+    voodoo_pulse(&mut gm, serial);
+}
+
+// ---- Command Aura (`AOac`): the base damage it multiplies ----
+
+/// The average damage of one weapon slot that the Command Aura scales (`0x6F0C6D00`, reached through `0x6F26D5F0`):
+/// `I2R(bonus) + I2R(count) * (I2R(sides) * 0.5 + 0.5)` in the soft float, i.e. `bonus + count * (sides + 1) / 2`. The fields
+/// are the attack ability's `+0x88 + 4w` (dice count), `+0x94 + 4w` (sides) and `+0xA0 + 4w` (base bonus); the extra bonus
+/// `+0xAC` is NOT included. A unit without an attack ability gives 0.0. CONFIRMED by Unicorn (`tools/emu/cmdaura_emu.py`,
+/// 400 + 200 cases). The aura's bonus is then `F2I(add(mul(DataA, this), 0.5))` (`0x6F1ACC40`), or `F2I(DataA)` when flag D is set.
+pub fn command_base_damage(count: i32, sides: i32, bonus: i32) -> F32 {
+    let half = F32::from_bits(0x3F00_0000);
+    let per_die = arith::add(arith::mul(conv::i2r(sides), half), half);
+    arith::add(conv::i2r(bonus), arith::mul(conv::i2r(count), per_die))
+}
+
+// ---- Earthquake (`AOeq`, `CAbilityEarthquake`, vtable `0x6F8A8154`; effect `CEffectEarthquake`, vtable `0x6F88F86C`) ----
+
+/// Earthquake's ability id.
+pub const EARTHQUAKE: u32 = code(b"AOeq");
+/// The slow buff on the units in the quake (`BOeq`, id `0x424F6571` at `0x6F0B736E`; the structure marker buff is `BOea`).
+pub const BUFF_QUAKE: u32 = code(b"BOeq");
+/// The timer kind of the quake (`SpellMsg::HeroSpell`): the start after `DataA`, then the 1.0 s ticks.
+pub const TICK_QUAKE: u8 = 0x86;
+/// The shipped `targs` of Earthquake (`ground,structure,debris,tree`): ground 2, structure 8, debris `0x100`, tree `0x40`.
+/// No relation word: the predicate accepts any relation, so the quake also hurts the caster's own buildings.
+pub const QUAKE_TARGS_DEFAULT: u32 = 0x0000_014A;
+/// The damage class of the per-structure damage record: `0x4000000` (damage type index 26).
+pub const QUAKE_DAMAGE_TYPE: u32 = 26;
+
+/// What the effect initialiser `0x6F0C4230` keeps (CONFIRMED by Unicorn, `tools/emu/quake_emu.py`, 400 runs of the real
+/// timer handler `0x6F0C4420` + initialiser on a fake ability): the centre cells `+0x24` / `+0x2C` are the ability's stored
+/// point, cell `+0x38` is `DataB` (the damage per tick on structures), cell `+0x40` is `Area` (the radius), cell `+0x64` is
+/// `DataC` (the factor of the slow), and the tick counter `+0x34` is `F2I(Dur + ability+0x9C)` (soft add; no `HeroDur`).
+/// Cell `+0x48` (a soft-float value that depends on the centre) is presentation. `DataD` is not read by the effect; `DataA`
+/// is the delay of the timer message `0xD01C1` that starts the effect (0x6F08AE40 starts it with `DataA` seconds).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuakePlan {
+    pub ticks: i32,
+    pub damage: F32,
+    pub radius: F32,
+    pub slow: F32,
+}
+
+pub fn quake_plan(dur: F32, plus_9c: F32, data_b: F32, data_c: F32, area: F32) -> QuakePlan {
+    QuakePlan { ticks: conv::f2i(arith::add(dur, plus_9c)), damage: data_b, radius: area, slow: data_c }
+}
+
+/// A running earthquake.
+#[derive(Debug, Clone)]
+pub(crate) struct QuakeState {
+    caster: ObjKey,
+    x: F32,
+    y: F32,
+    plan: QuakePlan,
+    word: u32,
+    started: bool,
+    left: i32,
+}
+
+/// Earthquake cast (point order 852121): the cast point is stored (cells `+0x150`/`+0x158` of the ability), the effect timer
+/// runs `DataA` seconds (`0x6F08AE40`: `DataA` read by `0x6F02E9E0`, timer message `0xD01C1` at `+0x13C`), then
+/// [`quake_start`] creates the effect. CONFIRMED by reading (cast) and Unicorn (effect numbers).
+fn earthquake(game: &RefCell<Game>, rec: &CastRec) {
+    let CastTarget::Point(px, py) = rec.target else {
+        return;
+    };
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let level_index =
+        usize::try_from(gm.unit(rec.caster).abilities.get(EARTHQUAKE).map_or(0, |a| a.level_index)).unwrap_or(0);
+    let word = gm.orc_targs(EARTHQUAKE, level_index);
+    let plan = quake_plan(rec.level.dur, F32::ZERO, rec.level.data[1], rec.level.data[2], rec.level.area);
+    gm.orc.quake_serial = gm.orc.quake_serial.wrapping_add(1);
+    let serial = gm.orc.quake_serial;
+    gm.orc.quakes.insert(
+        serial,
+        QuakeState { caster: rec.caster, x: px, y: py, plan, word, started: false, left: plan.ticks },
+    );
+    gm.timers_start_hero(rec.level.data[0].to_f32(), TICK_QUAKE, rec.caster, serial);
+}
+
+fn quake_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
+    let mut killed = Vec::new();
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(st) = gm.orc.quakes.get_mut(&serial) else {
+            return;
+        };
+        st.started = true;
+        caster = st.caster;
+        let (x, y, plan, word) = (st.x, st.y, st.plan, st.word);
+        // The tick (`0x6F0C3780`): the counter drops first, the group is collected and visited, then the next tick is armed
+        // (1.0 s, `0x6FAAE4F4`) while the counter is positive, else the effect is destroyed.
+        st.left -= 1;
+        let left = st.left;
+        if left > 0 {
+            gm.timers_start_hero(1.0, TICK_QUAKE, caster, serial);
+        } else {
+            gm.orc.quakes.remove(&serial);
+        }
+        for k in crate::natives::group::circle_candidates(&gm, x, y, plan.radius) {
+            {
+                let u = gm.unit(k);
+                if u.removed || u.hidden {
+                    continue;
+                }
+            }
+            if !area_predicate(&gm, caster, k, word) {
+                continue;
+            }
+            // `0x6F0B72C0`: the zero path (invulnerable slot or spell immunity) skips both effects.
+            let zero = gm.unit_is_invulnerable(k) || is_unit_type(&gm, gm.unit(k), ty::MAGIC_IMMUNE);
+            if gm.target_flag_word(k) & 8 != 0 {
+                // A structure: the damage record (class `0x4000000`, flags `0x40`, `0x50` on the zero path).
+                let amount = if zero { F32::ZERO } else { plan.damage };
+                if let Some(t) = gm.unit_damage_target(caster, k, amount, false, false, 0, QUAKE_DAMAGE_TYPE) {
+                    killed.push(t);
+                }
+            } else if !zero {
+                // Any other unit: the slow buff `BOeq` with `-DataC` movement for 2.0 s (`[0x6FAAE504]`), refreshed per tick.
+                let neg = F32::from_bits(plan.slow.to_bits() ^ 0x8000_0000);
+                gm.add_spell_buff(
+                    k,
+                    BUFF_QUAKE,
+                    BuffEffect::Slow { move_delta: neg, attack_delta: F32::ZERO },
+                    F32::from_bits(0x4000_0000),
+                );
+            }
+        }
+    }
+    for t in killed {
+        dispatch_unit_death_by(game, rt, t, Some(caster));
+    }
+}
+
+/// What the Far Sight cast (`0x6F06FA50`) hands to the reveal effect creator `0x6F06F8D0` (CONFIRMED by Unicorn,
+/// `tools/emu/farsight_emu.py`, 400 cases): the effect id (the level's `EfctID`, `Xbdt`), pointers to the cast point x and y and
+/// to the terrain height at it, the caster's owner index, the DURATION `Dur + ability+0x9C` (class slot `0x430`; no `HeroDur`),
+/// the radius `Area` (slot `0x42C`) and `F2I(DataA)` (slot `0x434`, 3 in the data). The effect itself lives for `duration +
+/// 0.1` seconds (`0x6F069210` starts its expiry message `0xD01C4` with `add(duration, [0x6FAAE4A0])`, CONFIRMED by reading).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FarSightPlan {
+    pub duration: F32,
+    pub lifetime: F32,
+    pub radius: F32,
+    pub count: i32,
+}
+
+pub fn far_sight_plan(dur: F32, plus_9c: F32, data_a: F32, area: F32) -> FarSightPlan {
+    let duration = arith::add(dur, plus_9c);
+    FarSightPlan {
+        duration,
+        lifetime: arith::add(duration, F32::from_bits(0x3DCC_CCCD)),
+        radius: area,
+        count: conv::f2i(data_a),
+    }
+}
+
+// ---- Reincarnation (`AOre`, `CAbilityReincarnation`, vtable `0x6F9199C4`; effect `CEffectReincarnation`, vtable `0x6F916934`) ----
+
+/// Reincarnation's ability id.
+pub const REINCARNATION: u32 = code(b"AOre");
+/// The timer kind of the revival (`SpellMsg::HeroSpell`).
+pub const TICK_REINCARNATE: u8 = 0x87;
+
+/// The conditions of the death handler (slot `0x284` = `0x6F1E5E30`, CONFIRMED by reading): the ability's pause counter
+/// (`+0x3C`) is not positive, the ability is enabled (slot `0x268`), the dying unit is not an illusion (`unit+0x5C` bit
+/// `0x40000000`) and has bit 0 of `unit+0x20` clear, the unit passes `0x6F1DB6E0`, the ability is ready (slot `0x370`) and not on
+/// its cooldown flag (`+0x20` bit `0x200`), and the death point passes the pathing probe `0x6F468F90(point, 2)` (a non-zero
+/// answer blocks the revival). A positive `Cool` (`0x6F02E9F0`-style getter through slot `0x2EC`) then starts the cooldown
+/// (slot `0x3A4`), and the revival effect starts (slot `0x3E8` = `0x6F1F1C10`).
+pub fn reincarnation_allowed(illusion: bool, cooling: bool, blocked_by_pathing: bool) -> bool {
+    !illusion && !cooling && !blocked_by_pathing
+}
+
+impl Game {
+    /// Called by the unit death dispatch for every dying unit: starts the Reincarnation of a unit that carries a ready
+    /// ability. UNSURE (see the spec): the delay is `DataA` seconds (the effect `0x6F1F1C10` stores `DataA` into the effect's
+    /// agile cell `+0xB8`; the effect's expiry message `0xD01C4` runs the revival `0x6F1EBE30`), the pathing probe is not
+    /// modelled, the revival gives full life (`resurrect_unit`) at the death point and leaves the mana alone.
+    pub(crate) fn orc_on_unit_died(&mut self, unit: ObjKey) {
+        if self.unit(unit).abilities.get(REINCARNATION).is_none_or(|a| a.is_removed()) {
+            return;
+        }
+        let illusion = self.unit(unit).illusion;
+        let cooling = self.is_cooling(unit, REINCARNATION);
+        if !reincarnation_allowed(illusion, cooling, false) {
+            return;
+        }
+        let Some(level) = self.ability_level_record(unit, REINCARNATION) else {
+            return;
+        };
+        if level.cool.to_f32() > 0.0 {
+            self.start_cooldown(unit, REINCARNATION, level.cool);
+        }
+        self.orc.reincarnate_serial = self.orc.reincarnate_serial.wrapping_add(1);
+        let serial = self.orc.reincarnate_serial;
+        self.orc.reincarnating.insert(unit, serial);
+        self.timers_start_hero(level.data[0].to_f32(), TICK_REINCARNATE, unit, serial);
+    }
+
+    /// Whether a Reincarnation of `unit` is pending (for tests and hosts).
+    pub fn reincarnation_pending(&self, unit: ObjKey) -> bool {
+        self.orc.reincarnating.contains_key(&unit)
+    }
+}
+
+/// The expiry of the revival effect (`0x6F1EBF80` on message `0xD01C4` -> slot `0x80` = `0x6F1EBE30`): the unit must still
+/// resolve and be dead (`unit+0x5C` bit `0x100`); it is moved to its own point (slot `0x180`), revived (`0x6F2A64A0` with the
+/// flags `0x500`) and its food is corrected (the dead unit's food use was released).
+fn reincarnate(game: &RefCell<Game>, unit: ObjKey, serial: u32) {
+    let mut gm = game.borrow_mut();
+    if gm.orc.reincarnating.get(&unit) != Some(&serial) {
+        return;
+    }
+    gm.orc.reincarnating.remove(&unit);
+    let u = gm.unit(unit);
+    if u.removed || !u.dead {
+        return;
+    }
+    gm.resurrect_unit(unit);
+}
+
+/// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for [`far_sight_plan`]'s
+/// lifetime. MODEL (UNSURE): a visible-state fog modifier started now and stopped when the marker buff on the caster ends (the
+/// original's reveal is a vision effect object with an area watcher, message `0xD01B4`, not decoded).
 fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
     let CastTarget::Point(px, py) = rec.target else {
         return;
@@ -1098,8 +1827,7 @@ fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
         return;
     };
     gm.fog_start(key);
-    let hero = gm.target_hero(rec.caster);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    let dur = far_sight_plan(rec.level.dur, F32::ZERO, rec.level.data[0], rec.level.area).lifetime;
     let serial = gm.add_spell_buff(rec.caster, BUFF_FAR_SIGHT, BuffEffect::Marker, dur);
     if serial == 0 {
         gm.fog_stop(key);
@@ -1110,6 +1838,11 @@ fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
 
 /// Called by `Game::drop_spell_buff` when a spell buff ends: stops the Far Sight reveal tied to it.
 pub(crate) fn on_buff_dropped(game: &mut Game, serial: u32) {
+    game.orc.hexed.retain(|_, &mut (s, _)| s != serial);
+    if let Some(k) = game.orc.voodoo_buffs.remove(&serial) {
+        let u = game.unit_mut(k);
+        u.invuln_count = (u.invuln_count - 1).max(0);
+    }
     if let Some(key) = game.orc.reveals.remove(&serial) {
         game.fog_stop(key);
     }

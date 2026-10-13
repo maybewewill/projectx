@@ -400,8 +400,12 @@ fn cast_point_delays_the_effect_and_the_payment() {
     assert_eq!(mana(&h, c), 200.0);
     assert!(!h.game().is_cooling(c, STORM_BOLT));
     run(&mut h, 4);
-    assert_eq!(int(&h, "order"), 12345);
+    // The effect ran (mana paid); FINISH and ENDCAST wait for the 0.5 s backswing (the channel time property,
+    // cast.rs "The channel lifecycle", `0x6F063760`).
+    assert_eq!(int(&h, "order"), 123);
     assert_eq!(mana(&h, c), 125.0);
+    run(&mut h, 6);
+    assert_eq!(int(&h, "order"), 12345);
     run(&mut h, 5);
     assert_eq!(life(&h, t), 400.0);
 }

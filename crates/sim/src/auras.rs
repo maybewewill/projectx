@@ -566,13 +566,17 @@ impl Game {
 
     /// The damage bonus a Command or Trueshot buff gives `unit` (`0x6F1ACC40`): flat `trunc(value)` when flag D is set,
     /// otherwise `round(value times the base damage)` (`f2i(add(mul(v, base), 0.5))`). The base damage is the weapon's
-    /// minimum roll, dice plus bonus (UNSURE; the original reads a weapon base field).
+    /// AVERAGE `bonus + count * (sides + 1) / 2` (`0x6F0C6D00`, CONFIRMED by Unicorn, `orc::command_base_damage`).
     fn aura_damage_amount(&self, unit: ObjKey, a: &AuraBuff) -> i32 {
         if a.flags[2] {
             return conv::f2i(a.values[0]);
         }
         let ty = self.attack_type(self.unit(unit).type_id);
-        let base = conv::i2r(ty.dice_bonus.saturating_add(i32::try_from(ty.dice).unwrap_or(0)));
+        let base = crate::orc::command_base_damage(
+            i32::try_from(ty.dice).unwrap_or(0),
+            i32::try_from(ty.sides).unwrap_or(0),
+            ty.dice_bonus,
+        );
         let half = F32::from_bits(0x3F00_0000);
         conv::f2i(arith::add(arith::mul(a.values[0], base), half))
     }
