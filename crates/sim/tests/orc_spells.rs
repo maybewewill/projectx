@@ -214,6 +214,9 @@ fn chain_lightning_hops_to_the_nearest_unit_with_falling_damage() {
     let mut h = host();
     let (e1, e2, e3, e4, decoy) = (unit(&h, "e1"), unit(&h, "e2"), unit(&h, "e3"), unit(&h, "e4"), unit(&h, "decoy"));
     cast(&mut h, "chain");
+    assert_eq!(life(&h, e1), 400.0, "the first hop is at once");
+    assert_eq!(life(&h, e2), 500.0, "the next hop comes 0.25 s later");
+    run(&mut h, 8);
     // First hop: the target, full damage. Second: the nearest unit to it (e2 at 100, the decoy at 150), 85 % of it.
     assert_eq!(life(&h, e1), 400.0);
     let second = 500.0 - life(&h, e2);
@@ -261,6 +264,8 @@ fn mirror_image_makes_illusions_that_expire() {
     let mut h = host();
     let before = unit_count(&h);
     cast(&mut h, "mirror");
+    assert_eq!(unit_count(&h), before, "the images appear after DataD (0.5 s)");
+    run(&mut h, 6);
     assert_eq!(unit_count(&h), before + 2);
     let images: Vec<ObjKey> = h.game().unit_objects().filter(|(_, u)| u.illusion).map(|(k, _)| k).collect();
     assert_eq!(images.len(), 2);
