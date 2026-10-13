@@ -206,8 +206,9 @@ Blizzard 852089 (`0xD0079`), Mass Teleport 852093, Thunder Clap **852096**, Avat
 Resurrection **852094**, Water Elemental 852097, Holy Bolt **852092**, Thunder Bolt 852095. The earlier values for Thunder
 Clap (852594), Resurrection (852044) and Holy Light (852089, which is Blizzard's) were wrong and are fixed (cast.rs,
 human_heroes.rs, tests); Mirror Image in `orc.rs` is 852123 (it had 852093). `undivineshield` 852056 is still from the
-public list (UNSURE). Slow's slot `0x308` reads 852076, not 852075 (probably the off order of the autocast pair;
-unchanged).
+public list (UNSURE). Slot roles (re-checked after the coordinator's note): for these non-autocast classes slot `0x308` returns the cast id and
+slot `0x348` is the generic stub; for autocast classes (Slow) slot `0x348` is the cast id (852075) and `0x308` the
+autocast/toggle id (852076). The nine ids above equal the coordinator's table (`ability_orders.py`).
 `natives/order.rs` routes `IssueImmediateOrderById` with an immediate spell id to `human_heroes::immediate_order`; point
 and unit target orders go through `spell_for_order` into the cast core (`CastTarget::Point` / `Unit`).
 
