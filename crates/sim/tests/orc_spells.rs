@@ -68,7 +68,7 @@ function walk takes nothing returns nothing
     set accepted = IssueImmediateOrderById(caster, 852129)
 endfunction
 function mirror takes nothing returns nothing
-    set accepted = IssueImmediateOrderById(caster, 852093)
+    set accepted = IssueImmediateOrderById(caster, 852123)
 endfunction
 function wolves takes nothing returns nothing
     set accepted = IssueImmediateOrderById(caster, 852120)

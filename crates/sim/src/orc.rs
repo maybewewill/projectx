@@ -103,7 +103,7 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_125, SHOCKWAVE);
     ids.insert(852_119, CHAIN_LIGHTNING);
     ids.insert(852_129, WIND_WALK);
-    ids.insert(852_093, MIRROR_IMAGE);
+    ids.insert(852_123, MIRROR_IMAGE); // DLL slot 0x308 of CAbilityMirrorImage (852093 is Mass Teleport)
     ids.insert(852_122, FAR_SIGHT);
     ids.insert(852_120, FERAL_SPIRIT);
 }

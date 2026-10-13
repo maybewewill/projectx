@@ -159,6 +159,8 @@ pub enum SpellMsg {
     BuffEnd { unit: ObjKey, serial: u32 },
     /// A timer of the hero spells in `undead_ne.rs` (`kind` is its `TICK_*`).
     HeroSpell { kind: u8, unit: ObjKey, aux: u32 },
+    /// A timer of the Human hero spells in `human_heroes.rs` (`kind` is its `TICK_*`, `id` the effect).
+    Human { kind: u8, id: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -214,6 +216,8 @@ pub struct SpellSystem {
     pub log: Vec<(ObjKey, u32, u32)>,
     /// State of the Undead / Night Elf hero spells (`undead_ne.rs`).
     pub hero: crate::undead_ne::State,
+    /// State of the Blizzard and Mass Teleport effects (`human_heroes.rs`).
+    pub human: crate::human_heroes::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -273,7 +277,7 @@ impl SpellSystem {
         let mut s = Self::default();
         // Order ids of the three spells: UNSURE (taken from the public order-id lists, not read from the DLL).
         s.order_ids.insert(852_095, STORM_BOLT);
-        s.order_ids.insert(852_089, HOLY_LIGHT);
+        s.order_ids.insert(852_092, HOLY_LIGHT);
         s.order_ids.insert(852_075, SLOW);
         crate::orc::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
@@ -783,6 +787,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
         crate::human_heroes::run_immediate_effect(game, rt, rec);
         return;
     }
+    if crate::human_heroes::run_target_effect(game, rec) {
+        return;
+    }
     if crate::orc::run_effect(game, rt, rec) {
         return;
     }
@@ -958,5 +965,6 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
             game.borrow_mut().drop_spell_buff(serial);
         }
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
+        SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
     }
 }

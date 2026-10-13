@@ -20,8 +20,8 @@ inference; **UNSURE** = a stand-in in the model; **NOT FOUND** = searched, not l
 | `AHds` | `CAbilityDivineShield` | `0x6F894AEC` | no target, self buff, cancellable |
 | `AHre` | `CAbilityResurrection` | `0x6F91C1CC` | no target, area effect |
 | `AHwe` | `CAbilityWaterElemental` | `0x6F89BF84` | no target, summon |
-| `AHbz` | `CAbilityBlizzard` | `0x6F910CAC` | channel (NOT DONE) |
-| `AHmt` | `CAbilityMassTeleport` | `0x6F88BEFC` | target + group (NOT DONE) |
+| `AHbz` | `CAbilityBlizzard` | `0x6F910CAC` | point target, spawns the effect `XHbz` (section 11) |
+| `AHmt` | `CAbilityMassTeleport` | `0x6F88BEFC` | unit target, group teleport (section 12) |
 
 Buff classes (slot 7): `BHtc` `CBuffThunderClap` `0x6F8E79B4`; `BPSE` `CBuffPause` `0x6F8B3BEC` (Bash's stun is a
 **pause** buff, not `BSTN`); `BHav` `CBuffAvatar` `0x6F9039A4`; `BHds` `CBuffDivineShield` `0x6F894794`; `BHwe`
@@ -188,20 +188,21 @@ class stops orders and attacks the way a stun does; its class was not read beyon
   (UNSURE), `summoned = true`, `apply_timed_life(unit, 'BHwe', Dur)`; the timed life expiry kills them (`buffs.md`
   section 3). Not modelled: the summon event, the placement offsets, food flags.
 
-## 7. Blizzard (`AHbz`) and Mass Teleport (`AHmt`): NOT DONE
+## 7. Blizzard (`AHbz`) and Mass Teleport (`AHmt`)
 
-Located only: classes (section 0), the Blizzard channel end handler `0x6F1AFBE0` (clears the channel state and stops
-the wave timer at `+0x144`) and its wave-state setter (`0x6F1AFCE0`, stores a time computed from the missile speed
-and the delay: `max(a, b)` through the agile setter), the init `0x6F197E90`, the buff `BHbz` (`CBuffBlizzardAoe`).
-The wave scheduling, the damage per wave (building factor, random target cells) and the Mass Teleport group walk are
-not decoded; no sim code exists for them.
+Decoded in S30, see sections 11 (Blizzard) and 12 (Mass Teleport).
 
-## 8. Order ids and routing (UNSURE)
+## 8. Order ids and routing
 
-Thunder Clap 852594, Avatar 852086, Divine Shield 852090, undivineshield 852056, Resurrection 852044, Water Elemental
-852097 are from the public order-id lists, like the three spells of `abilities-5.md` section 7. `natives/order.rs`
-routes `IssueImmediateOrderById` with such an id (the unit must own the ability) to `human_heroes::immediate_order`;
-the native returns whether the cast started. The cast core was extended with the no-target form (`CastTarget::None`).
+**CONFIRMED (S30, Unicorn: `tools/emu/human_heroes2_emu.py`)**: vtable slot `0x308` of each class is `mov eax, id`:
+Blizzard 852089 (`0xD0079`), Mass Teleport 852093, Thunder Clap **852096**, Avatar 852086, Divine Shield 852090,
+Resurrection **852094**, Water Elemental 852097, Holy Bolt **852092**, Thunder Bolt 852095. The earlier values for Thunder
+Clap (852594), Resurrection (852044) and Holy Light (852089, which is Blizzard's) were wrong and are fixed (cast.rs,
+human_heroes.rs, tests); Mirror Image in `orc.rs` is 852123 (it had 852093). `undivineshield` 852056 is still from the
+public list (UNSURE). Slow's slot `0x308` reads 852076, not 852075 (probably the off order of the autocast pair;
+unchanged).
+`natives/order.rs` routes `IssueImmediateOrderById` with an immediate spell id to `human_heroes::immediate_order`; point
+and unit target orders go through `spell_for_order` into the cast core (`CastTarget::Point` / `Unit`).
 
 ## 9. Verification
 
@@ -225,3 +226,64 @@ Unicorn-checked pieces (`attack-damage.md`, `heroes.md` section 10, `buffs.md`).
 * The placement of summoned units; the summon and revive events.
 * The dispel and the state change of Avatar's first activation; the Misc half of the Divine Shield cancel test.
 * Blizzard and Mass Teleport.
+
+## 11. Blizzard in detail (S30)
+
+Three objects, found by RTTI and the message dispatch (CONFIRMED = read in the machine code and, where a number is
+given, Unicorn-run):
+
+* `CAbilityBlizzard` (`0x6F910CAC`): the point form (slot `0x418`, `0x6F1C2650`) builds an `XHbz` effect (type lookup by
+  the code from `0x6F197A00`), calls `0x6F1B9E90` (parameter hand-over) and arms a `0xD01C1` timer on the ability
+  (`+0x144`, an autocast scan, not the waves). The ability's own handlers `0x6F14CEF0/0x6F14CFC0` are the autocast scan.
+  The channel end (slot `0x388`, `0x6F1AFBE0`) destroys the effect (link at `+0x134`).
+* `CEffectBlizzard` (`XHbz`, `0x6F8FB97C`): the message handler `0x6F1C2610`: `0xD01B0` -> `0x6F1B6C00` (visual wave),
+  `0xD01B1` -> `0x6F1B9DB0` (damage wave), `0xD01C1` -> `0x6F1A1000` (launch the next shard missile; art only).
+* `CBuffBlizzardAoe` (`BHbz`, `0x6F905484`, parent `CBuffAoe`): a buff whose duration is `interval - 0.01` and whose
+  float `+0xCC` holds the wave damage; see "Not found" below. `BHbd` (`CBuffBlizzard`) is the sister buff.
+
+**Parameters** (`0x6F1B9E90` -> setup `0x6F1B9BB0`, CONFIRMED, Unicorn 400 random level records, 0 mismatches):
+
+| Level field | Use |
+|---|---|
+| `Cast` (`+0x04`) | wave interval (`+0x80`) |
+| `DataA` | number of waves, `f2i`, at least 1 (`+0x78` visual counter, `+0x84` damage counter) |
+| `DataB` | damage per wave and unit (`+0x8C`) |
+| `DataC` | shards per wave, `f2i`, clamped to `1..=32` (`+0x98`) |
+| `DataD` | building factor (`+0xAC`) |
+| `DataF` | cap on the total damage of one wave (`+0x94`), 0 = none |
+| `DataE`, `Dur` (+ ability `+0x9C`), `HeroDur` | optional debuff properties (`+0x354`, `+0x35C`, `+0x364`); Blizzard has Dur 0 |
+| `Area` | damage radius (`+0x74`) and the placement radius |
+| `BuffID[1]`, `BuffID[0]` | `+0x370` (`BHbz`), `+0x374` (`BHbd`) |
+
+The Cast field is both the cast time of the cast core and the wave interval.
+
+**Timeline** (CONFIRMED structure): the setup runs the visual wave at once (`0x6F1B6C00`: presentation, then
+`+0x78 -= 1`, re-arm `0xD01B0` with the interval while `> 0`, then the placement `0x6F1AF6E0`) and arms the damage timer
+`0xD01B1` with **0.9 s** (the cell `0x6FAAE4F0`, start-up value 0.9). Each damage wave decrements `+0x84` and re-arms with
+the interval while `> 0`. So the damage waves are at `0.9 + k * interval`, `k = 0..DataA-1`; the visual waves at
+`k * interval`. The damage wave first tests the effect's flag word `+0xC0` (the ability's targs word) and skips the
+damage when it is zero; the stock `targs` of Blizzard is `_` (empty), so this test cannot be the targs word as read, and
+the model damages regardless (UNSURE).
+
+**Shard placement** (`0x6F1AF6E0`, CONFIRMED, Unicorn 400 cases, bit-exact permutation, offsets and final generator
+states): `n = +0x98` shards. The shuffle is a Fisher-Yates over `0..n` using the **global generator**, one step per
+`i = 1..n-1`, `j = high32(step * (i + 1))`. All other draws are **stream 4** (`add(0.0, mul(1.0, U))`): with `n > 5` the
+last shard is at a random point of a square (`x = 0.4*Area*(U-0.5)`, then `y`), the other `m` shards sit on a circle of
+radius `Area/2` at angles `base + i * (2*pi/m)` (`base = 2*pi*U`), each plus a jitter `0.4*Area*(U-0.5)` in x then y.
+Draw count per wave: `(n>5 ? 2 : 0) + 1 + 2m` on stream 4 and `n-1` global steps. The shard launcher `0x6F1A1000` takes
+`perm[remaining-1]` and spawns a missile art object at the offset; it carries no damage.
+
+**Damage wave** (`0x6F1B9DB0` -> area helper `0x6F2C31D0` -> callback `0x6F1B6CB0` -> `0x6F1AF950`; numerics read, not
+Unicorn-run, LIKELY): per unit in the area `d = DataB`; when `DataF != 0` and `DataF < d * n` then `d = DataF / n` (soft
+`mul`/`div`, `n` = a candidate count chosen by the record's relation kind in `0x6F2C31D0`; the model uses the number of
+enemies in the area); a structure (`unit+0x5C` bit 16) or a unit with `unit+0x20` bit `0x200000` takes `d * DataD`; the
+result goes to the `BHbz` buff creator (`0x6F1CADD0`) with the interval and the damage: an existing buff keeps the larger
+value ("strongest wins", so overlapping Blizzards do not stack). The damage class word is `0x200` (`0x6F1B45F0`), i.e.
+type 9 `DAMAGE_TYPE_COLD`.
+
+**Not found**: where `BHbz`'s stored value becomes life loss (the buff has no timer of its own; the inherited `CBuffAoe`
+hooks `0x6F0D4CB0` / `0x6F0D1B00` were read only partly), the filter word `0x40303006` of the area helper, the category
+counts, whether a stun or order change of the caster ends the channel (the model ends the effect when the caster dies).
+
+Model: `human_heroes::blizzard_*` (params, placement, damage numerics) and the effect timers (`SpellMsg::Human`). The
+model deals the damage directly at each damage wave (no buff, no strongest-wins), enemy units and structures.

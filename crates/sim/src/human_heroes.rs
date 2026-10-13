@@ -36,6 +36,7 @@ use crate::heroes::life_sink;
 use crate::missiles::MOVE_FLY;
 use crate::natives::game::{Game, ObjKey, Object, ScriptRuntime};
 use crate::natives::{circle_candidates, dispatch_unit_death_by};
+use crate::rng::{Rng, RngTable};
 
 /// Base codes.
 pub const THUNDER_CLAP: u32 = code(b"AHtc");
@@ -44,6 +45,8 @@ pub const AVATAR: u32 = code(b"AHav");
 pub const DIVINE_SHIELD: u32 = code(b"AHds");
 pub const RESURRECTION: u32 = code(b"AHre");
 pub const WATER_ELEMENTAL: u32 = code(b"AHwe");
+pub const BLIZZARD: u32 = code(b"AHbz");
+pub const MASS_TELEPORT: u32 = code(b"AHmt");
 
 /// Buff codes (CONFIRMED by the code getters of the buff classes, slot 7).
 pub const BUFF_THUNDER_CLAP: u32 = code(b"BHtc");
@@ -56,16 +59,22 @@ pub const BUFF_WATER_ELEMENTAL: u32 = code(b"BHwe");
 /// Wind Walk's buff: Bash does not roll while its owner has it (`0x6F15A110` returns `BOwk`).
 pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
 
-/// Order ids of the immediate spells (UNSURE: from the public order-id lists, not read from the DLL).
-pub const ORDER_THUNDER_CLAP: u32 = 852_594;
+/// Order ids of the spells: CONFIRMED by the order-id getter (vtable slot `0x308`) of each class, Unicorn-run in
+/// `tools/emu/human_heroes2_emu.py` (the earlier values for Thunder Clap and Resurrection were wrong).
+pub const ORDER_THUNDER_CLAP: u32 = 852_096;
 pub const ORDER_AVATAR: u32 = 852_086;
 pub const ORDER_DIVINE_SHIELD: u32 = 852_090;
 pub const ORDER_UNDIVINE_SHIELD: u32 = 852_056;
-pub const ORDER_RESURRECTION: u32 = 852_044;
+pub const ORDER_RESURRECTION: u32 = 852_094;
 pub const ORDER_WATER_ELEMENTAL: u32 = 852_097;
 
+pub const ORDER_BLIZZARD: u32 = 852_089;
+pub const ORDER_MASS_TELEPORT: u32 = 852_093;
+
 /// The `(order id, ability)` pairs the cast core registers.
-pub const SPELL_ORDERS: [(u32, u32); 5] = [
+pub const SPELL_ORDERS: [(u32, u32); 7] = [
+    (ORDER_BLIZZARD, BLIZZARD),
+    (ORDER_MASS_TELEPORT, MASS_TELEPORT),
     (ORDER_THUNDER_CLAP, THUNDER_CLAP),
     (ORDER_AVATAR, AVATAR),
     (ORDER_DIVINE_SHIELD, DIVINE_SHIELD),
@@ -480,6 +489,436 @@ fn water_elemental(game: &RefCell<Game>, rec: &CastRec) {
             gm.unit_mut(k).summoned = true;
             gm.apply_timed_life(k, BUFF_WATER_ELEMENTAL, dur);
         }
+    }
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// Blizzard (`AHbz`): the effect object `XHbz` (`CEffectBlizzard`, `0x6F8FB97C`). Spec section 11.
+
+/// Level fields as `0x6F1B9E90` hands them to the effect setup `0x6F1B9BB0` (CONFIRMED, Unicorn: 400 level records).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlizzardParams {
+    /// Number of waves: `f2i(DataA)` (stored at `+0x78`/`+0x84`; the setup clamps it to at least 1).
+    pub waves: i32,
+    /// Wave interval: the level's `Cast` field (`+0x80`).
+    pub interval: F32,
+    /// Damage per wave and unit: `DataB` (`+0x8C`).
+    pub damage: F32,
+    /// Cap on the total damage of one wave: `DataF` (`+0x94`), 0 = none.
+    pub cap: F32,
+    /// Shards per wave: `f2i(DataC)` (the setup clamps it to `1..=32`, `+0x98`).
+    pub shards: i32,
+    /// Building factor: `DataD` (`+0xAC`).
+    pub building: F32,
+    /// `DataE` (`+0x354` property), `Dur + 0` and `HeroDur` (`+0x35C`/`+0x364`): the optional debuff duration.
+    pub data_e: F32,
+    pub dur: F32,
+    pub hero_dur: F32,
+    /// Damage radius: `Area` (`+0x74`).
+    pub area: F32,
+}
+
+/// The mapping of a level record to the effect parameters.
+pub fn blizzard_params(l: &SpellLevel) -> BlizzardParams {
+    BlizzardParams {
+        waves: conv::f2i(l.data[0]).max(1),
+        interval: l.cast,
+        damage: l.data[1],
+        cap: l.data[5],
+        shards: conv::f2i(l.data[2]).clamp(1, 32),
+        building: l.data[3],
+        data_e: l.data[4],
+        dur: arith::add(l.dur, F32::ZERO),
+        hero_dur: l.hero_dur,
+        area: l.area,
+    }
+}
+
+/// The unclamped `f2i(DataA)` and `f2i(DataC)` the ability method passes (the vector check compares these).
+pub fn blizzard_raw_counts(l: &SpellLevel) -> (i32, i32) {
+    (conv::f2i(l.data[0]), conv::f2i(l.data[2]))
+}
+
+const TWO_PI: F32 = F32::from_bits(0x40C9_0FDB);
+const POINT_FOUR: F32 = F32::from_bits(0x3ECC_CCCD);
+const HALF: F32 = F32::from_bits(0x3F00_0000);
+/// The delay of the first damage wave: the constant `0x6FAAE4F0` (0.9), passed as the start delay of the `0xD01B1`
+/// timer by the setup `0x6F1B9BB0` (CONFIRMED by the argument capture; the value is the start-up value of that cell).
+const FIRST_DAMAGE_DELAY: f32 = 0.9;
+
+/// The result of one wave's shard placement (`0x6F1AF6E0`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShardWave {
+    /// The shuffled launch order (`+0xCC`): the first shard launched is `perm[count - 1]`.
+    pub perm: Vec<u32>,
+    /// The offset of every shard from the wave centre (properties `+0x150 + 8i` and `+0x254 + 8i`).
+    pub offsets: Vec<(F32, F32)>,
+}
+
+fn stream_real(rng: &mut Rng, table: &RngTable) -> F32 {
+    // `0x6F2853D0`: `add(0.0, mul(1.0, U))` (Unicorn-checked for stream 3 in `human_heroes_vectors.rs`).
+    arith::add(F32::ZERO, arith::mul(F32::ONE, rng.random_fraction(table)))
+}
+
+/// `0x6F1AF6E0` (CONFIRMED, Unicorn: 400 cases). `n` shards (1..=32) in a circle of radius `area / 2` with a random
+/// start angle and a jitter of `area * 0.4 * (U - 0.5)` per axis. With more than five shards the last one is not on
+/// the circle but at a random point of the jitter square. Draws: the global generator once per `i = 1..n` for the
+/// shuffle, stream 4 for everything else (extra shard x, y; start angle; x, y jitter per circle shard).
+pub fn blizzard_shards(
+    n: usize,
+    area: F32,
+    global: &mut Rng,
+    stream4: &mut Rng,
+    table: &RngTable,
+    tables: &Tables,
+) -> ShardWave {
+    let mut perm: Vec<u32> = (0..n as u32).collect();
+    for i in 1..n {
+        let r = global.next_u32(table);
+        let j = ((u64::from(r) * (i as u64 + 1)) >> 32) as usize;
+        perm.swap(i, j);
+    }
+    let half = arith::mul(area, HALF);
+    let jitter = arith::mul(area, POINT_FOUR);
+    let mut offsets = vec![(F32::ZERO, F32::ZERO); n];
+    let mut circle = n;
+    if n > 5 {
+        circle = n - 1;
+        let jx = arith::mul(jitter, arith::sub(stream_real(stream4, table), HALF));
+        let jy = arith::mul(jitter, arith::sub(stream_real(stream4, table), HALF));
+        offsets[circle] = (jx, jy);
+    }
+    let step = arith::div(TWO_PI, conv::i2r(circle as i32), tables);
+    let base = arith::mul(TWO_PI, stream_real(stream4, table));
+    for (i, slot) in offsets.iter_mut().enumerate().take(circle) {
+        let angle = arith::add(base, arith::mul(step, conv::i2r(i as i32)));
+        let c = softfloat::math::cos(angle, tables);
+        let s = softfloat::math::sin(angle, tables);
+        let rx = arith::mul(half, c);
+        let ry = arith::mul(half, s);
+        let jx = arith::mul(jitter, arith::sub(stream_real(stream4, table), HALF));
+        let jy = arith::mul(jitter, arith::sub(stream_real(stream4, table), HALF));
+        *slot = (arith::add(rx, jx), arith::add(ry, jy));
+    }
+    ShardWave { perm, offsets }
+}
+
+/// The damage one unit takes in one wave (`0x6F1AF950`, from the disassembly; not Unicorn-run, LIKELY): the wave cap
+/// divides the damage when `damage * count` exceeds it, then the building factor applies to structures.
+pub fn blizzard_unit_damage(p: &BlizzardParams, count: i32, structure: bool, tables: Option<&Tables>) -> F32 {
+    let mut d = p.damage;
+    if nonzero(p.cap) {
+        let total = arith::mul(d, conv::i2r(count));
+        if arith::lt(p.cap, total) {
+            // The division needs the soft-float tables; without them the cap cannot be applied.
+            if let Some(t) = tables {
+                d = arith::div(p.cap, conv::i2r(count), t);
+            }
+        }
+    }
+    if structure {
+        d = arith::mul(d, p.building);
+    }
+    d
+}
+
+#[derive(Debug, Clone)]
+struct BlizzardFx {
+    caster: ObjKey,
+    x: F32,
+    y: F32,
+    p: BlizzardParams,
+    visual_left: i32,
+    damage_left: i32,
+}
+
+/// Mass Teleport channel in progress.
+#[derive(Debug, Clone, Copy)]
+struct TeleportFx {
+    caster: ObjKey,
+    dest: ObjKey,
+    level: SpellLevel,
+}
+
+/// State of the effects this module creates (owned by the spell system).
+#[derive(Debug, Clone, Default)]
+pub struct State {
+    next: u32,
+    blizzards: std::collections::BTreeMap<u32, BlizzardFx>,
+    teleports: std::collections::BTreeMap<u32, TeleportFx>,
+    /// Every shard wave placed, `(effect id, wave)`, for tests and the renderer.
+    pub log: Vec<(u32, ShardWave)>,
+}
+
+/// Timer kinds of [`crate::cast::SpellMsg::Human`].
+pub const TICK_BLIZZARD_WAVE: u8 = 1;
+pub const TICK_BLIZZARD_DAMAGE: u8 = 2;
+pub const TICK_TELEPORT: u8 = 3;
+
+fn human_timer(gm: &mut Game, seconds: f32, kind: u8, id: u32) {
+    gm.timers.start(
+        seconds,
+        false,
+        crate::natives::game::Payload::Spell(crate::cast::SpellMsg::Human { kind, id }),
+    );
+}
+
+fn blizzard_start(game: &RefCell<Game>, rec: &CastRec) {
+    let CastTarget::Point(x, y) = rec.target else {
+        return;
+    };
+    let p = blizzard_params(&rec.level);
+    let id = {
+        let mut gm = game.borrow_mut();
+        gm.spells.human.next += 1;
+        let id = gm.spells.human.next;
+        gm.spells.human.blizzards.insert(
+            id,
+            BlizzardFx {
+                caster: rec.caster,
+                x,
+                y,
+                p,
+                visual_left: p.waves,
+                damage_left: p.waves,
+            },
+        );
+        id
+    };
+    // `0x6F1B9D2D`: the first visual wave starts at once, the damage timer after 0.9 s.
+    blizzard_wave(game, id);
+    human_timer(&mut game.borrow_mut(), FIRST_DAMAGE_DELAY, TICK_BLIZZARD_DAMAGE, id);
+}
+
+/// Message `0xD01B0` (`0x6F1B6C00`): a visual wave: one placement, the counter, the next wave.
+fn blizzard_wave(game: &RefCell<Game>, id: u32) {
+    let mut gm = game.borrow_mut();
+    let Some(mut fx) = gm.spells.human.blizzards.get(&id).cloned() else {
+        return;
+    };
+    let tables = gm.order_tables().cloned();
+    let mut placed = None;
+    if let Some(tables) = tables {
+        if let Some((table, streams)) = gm.rng_parts() {
+            let table = table.clone();
+            let mut global = streams.global;
+            let mut s4 = streams.stream(4);
+            let wave = blizzard_shards(fx.p.shards as usize, fx.p.area, &mut global, &mut s4, &table, &tables);
+            streams.global = global;
+            *streams.stream_mut(4) = s4;
+            placed = Some(wave);
+        }
+    }
+    if let Some(w) = placed {
+        gm.spells.human.log.push((id, w));
+    }
+    fx.visual_left -= 1;
+    let again = fx.visual_left > 0;
+    let interval = fx.p.interval.to_f32();
+    gm.spells.human.blizzards.insert(id, fx);
+    if again {
+        human_timer(&mut gm, interval, TICK_BLIZZARD_WAVE, id);
+    }
+}
+
+/// Message `0xD01B1` (`0x6F1B9DB0`): the damage wave over the area.
+fn blizzard_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
+    let Some(fx) = game.borrow().spells.human.blizzards.get(&id).cloned() else {
+        return;
+    };
+    // UNSURE: the effect ends with its caster (the channel end `0x6F1AFBE0` destroys it).
+    if !game.borrow().alive(fx.caster) {
+        game.borrow_mut().spells.human.blizzards.remove(&id);
+        return;
+    }
+    let (targets, tables) = {
+        let gm = game.borrow();
+        let owner = gm.unit(fx.caster).owner;
+        // UNSURE: the stock `targs` is empty (`_`); the model hits enemy units and structures.
+        let t: Vec<ObjKey> = circle_candidates(&gm, fx.x, fx.y, fx.p.area)
+            .into_iter()
+            .filter(|&k| gm.alive(k) && gm.is_enemy(owner, gm.unit(k).owner))
+            .collect();
+        (t, gm.order_tables().cloned())
+    };
+    let count = targets.len() as i32;
+    for t in targets {
+        let amount = {
+            let gm = game.borrow();
+            if !gm.alive(t) {
+                continue;
+            }
+            let structure = gm.unit_types().is_building(gm.unit(t).type_id);
+            blizzard_unit_damage(&fx.p, count, structure, tables.as_ref())
+        };
+        let died = game
+            .borrow_mut()
+            .unit_damage_target(fx.caster, t, amount, false, false, 0, BLIZZARD_DAMAGE_TYPE);
+        if let Some(k) = died {
+            dispatch_unit_death_by(game, rt, k, Some(fx.caster));
+        }
+    }
+    let mut gm = game.borrow_mut();
+    if let Some(e) = gm.spells.human.blizzards.get_mut(&id) {
+        e.damage_left -= 1;
+        let (again, iv, done) = (e.damage_left > 0, e.p.interval.to_f32(), e.visual_left <= 0);
+        if again {
+            human_timer(&mut gm, iv, TICK_BLIZZARD_DAMAGE, id);
+        } else if done {
+            gm.spells.human.blizzards.remove(&id);
+        }
+    }
+}
+
+/// Damage type of Blizzard: the effect's class word is `0x200` (`0x6F1B45F0`), `1 << 9` = `DAMAGE_TYPE_COLD`.
+const BLIZZARD_DAMAGE_TYPE: u32 = 9;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Mass Teleport (`AHmt`). Spec section 12.
+
+/// A candidate record of the selection (`0x6F056890`, 20 bytes): the unit, `f2i` of the squared distance to the
+/// caster, the level key, the hero flag, the "same owner as the caster" flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeleportRec {
+    pub dist: i32,
+    pub key: i32,
+    pub hero: i32,
+    pub own: i32,
+    /// The unit's agent id (`unit + 0xC`), the final tie break.
+    pub id: i32,
+}
+
+/// The sort comparator `0x6F026120` (CONFIRMED, Unicorn: 400 cases): negative when `a` goes first. Own units first,
+/// heroes first, higher key first, nearer first, then the larger agent id first.
+pub fn teleport_compare(a: &TeleportRec, b: &TeleportRec) -> i32 {
+    let c = b.own.wrapping_sub(a.own);
+    if c != 0 {
+        return c;
+    }
+    let c = b.hero.wrapping_sub(a.hero);
+    if c != 0 {
+        return c;
+    }
+    let c = b.key.wrapping_sub(a.key);
+    if c != 0 {
+        return c;
+    }
+    let c = a.dist.wrapping_sub(b.dist);
+    if c != 0 {
+        return c;
+    }
+    b.id.wrapping_sub(a.id)
+}
+
+/// The count rule of `0x6F069D60` (CONFIRMED structure): with `limit = f2i(DataA) - 1` (compared as unsigned, so
+/// `DataA < 1` never trims), more candidates than the limit are sorted and cut to the limit.
+pub fn teleport_select(mut recs: Vec<(ObjKey, TeleportRec)>, data_a: i32) -> Vec<(ObjKey, TeleportRec)> {
+    let limit = data_a.wrapping_sub(1) as u32;
+    if recs.len() as u32 > limit {
+        recs.sort_by(|a, b| teleport_compare(&a.1, &b.1).cmp(&0));
+        recs.truncate(limit as usize);
+    }
+    recs
+}
+
+fn teleport_start(game: &RefCell<Game>, rec: &CastRec) {
+    let CastTarget::Unit(dest) = rec.target else {
+        return;
+    };
+    let mut gm = game.borrow_mut();
+    gm.spells.human.next += 1;
+    let id = gm.spells.human.next;
+    gm.spells.human.teleports.insert(
+        id,
+        TeleportFx {
+            caster: rec.caster,
+            dest,
+            level: rec.level,
+        },
+    );
+    // The delay is DataB (the property at `+0x90` is set from it by the level init `0x6F060AE0`; LIKELY).
+    let delay = rec.level.data[1].to_f32();
+    human_timer(&mut gm, delay, TICK_TELEPORT, id);
+}
+
+fn teleport_finish(game: &RefCell<Game>, id: u32) {
+    let Some(fx) = game.borrow_mut().spells.human.teleports.remove(&id) else {
+        return;
+    };
+    let mut gm = game.borrow_mut();
+    if !gm.alive(fx.caster) || !gm.alive(fx.dest) {
+        return;
+    }
+    let (cx, cy, owner) = {
+        let c = gm.unit(fx.caster);
+        (c.x, c.y, c.owner)
+    };
+    let (dx, dy) = {
+        let d = gm.unit(fx.dest);
+        (d.x, d.y)
+    };
+    let mut recs = Vec::new();
+    for k in circle_candidates(&gm, cx, cy, fx.level.area) {
+        if k == fx.caster || !gm.alive(k) {
+            continue;
+        }
+        let u = gm.unit(k);
+        // UNSURE: the filter word `0x40303006` of the group builder; the model takes allied and own non-structures.
+        if gm.is_enemy(owner, u.owner) || gm.unit_types().is_building(u.type_id) {
+            continue;
+        }
+        let (ex, ey) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
+        let d2 = arith::add(arith::add(arith::mul(ex, ex), arith::mul(ey, ey)), F32::ZERO);
+        let hero = u.hero.as_ref().map(|h| h.level);
+        recs.push((
+            k,
+            TeleportRec {
+                dist: conv::f2i(d2),
+                key: hero.unwrap_or(0),
+                hero: i32::from(hero.is_some() && !u.illusion),
+                own: i32::from(u.owner == owner),
+                id: k.0 as i32,
+            },
+        ));
+    }
+    let chosen = teleport_select(recs, conv::f2i(fx.level.data[0]));
+    let cluster = nonzero(fx.level.data[2]);
+    // The caster goes to the destination unit's position, the others keep their offset when clustering (UNSURE).
+    let (px, py) = gm.clamp_unit_move(dx, dy);
+    gm.store_unit_position(fx.caster, px, py);
+    for (k, _) in chosen {
+        let (ux, uy) = {
+            let u = gm.unit(k);
+            (u.x, u.y)
+        };
+        let (tx, ty) = if cluster {
+            (arith::add(dx, arith::sub(ux, cx)), arith::add(dy, arith::sub(uy, cy)))
+        } else {
+            (dx, dy)
+        };
+        let (px, py) = gm.clamp_unit_move(tx, ty);
+        gm.store_unit_position(k, px, py);
+    }
+}
+
+/// The class effects of the point and unit target spells of this module; `false` when `rec.base` is not one.
+pub(crate) fn run_target_effect(game: &RefCell<Game>, rec: &CastRec) -> bool {
+    match rec.base {
+        BLIZZARD => blizzard_start(game, rec),
+        MASS_TELEPORT => teleport_start(game, rec),
+        _ => return false,
+    }
+    true
+}
+
+/// A timer of [`crate::cast::SpellMsg::Human`].
+pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, id: u32) {
+    match kind {
+        TICK_BLIZZARD_WAVE => blizzard_wave(game, id),
+        TICK_BLIZZARD_DAMAGE => blizzard_damage(game, rt, id),
+        TICK_TELEPORT => teleport_finish(game, id),
+        _ => {}
     }
 }
 

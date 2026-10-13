@@ -107,10 +107,10 @@ function bolt_ally takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852095, ally)
 endfunction
 function holy_ally takes nothing returns nothing
-    set accepted = IssueTargetOrderById(caster, 852089, ally)
+    set accepted = IssueTargetOrderById(caster, 852092, ally)
 endfunction
 function holy_tgt takes nothing returns nothing
-    set accepted = IssueTargetOrderById(caster, 852089, tgt)
+    set accepted = IssueTargetOrderById(caster, 852092, tgt)
 endfunction
 function slow_tgt takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852075, tgt)
