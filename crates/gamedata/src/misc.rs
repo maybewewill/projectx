@@ -288,6 +288,40 @@ pub struct HeroMisc {
     /// `HeroAbilityLevelSkip` (integer, element 0): the level skip of a hero skill whose definition has none
     /// (`0x6F207B60`, default 0).
     pub hero_ability_level_skip: i32,
+    /// The revive keys (`docs/spec/revive.md`).
+    pub revive: ReviveMisc,
+}
+
+/// The `[Misc]` keys of the hero revive formulas (`docs/spec/revive.md`, readers `0x6F0340A0`, `0x6F030CF0`,
+/// `0x6F059E20`). Reals use the real reader `0x6F009EE0` (absent gives 0.0), integers `0x6F009F90` (absent gives 0).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReviveMisc {
+    /// `ReviveBaseFactor`.
+    pub base_factor: F32,
+    /// `ReviveLevelFactor`.
+    pub level_factor: F32,
+    /// `ReviveMaxFactor`.
+    pub max_factor: F32,
+    /// `ReviveBaseLumberFactor`.
+    pub base_lumber_factor: F32,
+    /// `ReviveLumberLevelFactor`.
+    pub lumber_level_factor: F32,
+    /// `ReviveTimeFactor`.
+    pub time_factor: F32,
+    /// `ReviveMaxTimeFactor`.
+    pub max_time_factor: F32,
+    /// `HeroMaxReviveTime` (seconds).
+    pub max_time: F32,
+    /// `HeroMaxReviveCostGold` (unsigned limit).
+    pub max_cost_gold: i32,
+    /// `HeroMaxReviveCostLumber`.
+    pub max_cost_lumber: i32,
+    /// `HeroReviveManaStart`: non-zero gives the type's starting mana on revive.
+    pub mana_start: i32,
+    /// `HeroReviveManaFactor`: revived mana as a fraction of the maximum when `mana_start` is 0.
+    pub mana_factor: F32,
+    /// `HeroReviveLifeFactor`: revived life as a fraction of the maximum.
+    pub life_factor: F32,
 }
 
 /// The eight reals that turn a hero attribute into a derived bonus (`docs/spec/heroes.md`, section 9). Each is read
@@ -360,6 +394,21 @@ impl HeroMisc {
         let hero_exp_range = reader.real_or_zero("HeroExpRange");
         let summoned_kill_factor = reader.real_or_zero("SummonedKillFactor");
         let hero_ability_level_skip = reader.int_element("HeroAbilityLevelSkip");
+        let revive = ReviveMisc {
+            base_factor: reader.real_or_zero("ReviveBaseFactor"),
+            level_factor: reader.real_or_zero("ReviveLevelFactor"),
+            max_factor: reader.real_or_zero("ReviveMaxFactor"),
+            base_lumber_factor: reader.real_or_zero("ReviveBaseLumberFactor"),
+            lumber_level_factor: reader.real_or_zero("ReviveLumberLevelFactor"),
+            time_factor: reader.real_or_zero("ReviveTimeFactor"),
+            max_time_factor: reader.real_or_zero("ReviveMaxTimeFactor"),
+            max_time: reader.real_or_zero("HeroMaxReviveTime"),
+            max_cost_gold: reader.int_element("HeroMaxReviveCostGold"),
+            max_cost_lumber: reader.int_element("HeroMaxReviveCostLumber"),
+            mana_start: reader.int_element("HeroReviveManaStart"),
+            mana_factor: reader.real_or_zero("HeroReviveManaFactor"),
+            life_factor: reader.real_or_zero("HeroReviveLifeFactor"),
+        };
         HeroMisc {
             max_hero_level,
             need_hero_xp,
@@ -377,6 +426,7 @@ impl HeroMisc {
             hero_exp_range,
             summoned_kill_factor,
             hero_ability_level_skip,
+            revive,
         }
     }
 }
