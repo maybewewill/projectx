@@ -65,6 +65,8 @@ pub const INNER_FIRE: u32 = code(b"Ainf");
 pub const BUFF_INNER_FIRE: u32 = code(b"Binf");
 pub const BLOODLUST: u32 = code(b"Ablo");
 pub const BUFF_BLOODLUST: u32 = code(b"Bblo");
+pub const CRIPPLE: u32 = code(b"Acri");
+pub const BUFF_CRIPPLE: u32 = code(b"Bcri");
 
 pub const ORDER_HEAL: u32 = 852_063;
 pub const ORDER_HEAL_ON: u32 = 852_064;
@@ -83,7 +85,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 3] = [(ORDER_HEAL, HEAL), (852_066, INNER_FIRE), (852_101, BLOODLUST)];
+pub const SPELL_ORDERS: [(u32, u32); 4] =
+    [(ORDER_HEAL, HEAL), (852_066, INNER_FIRE), (852_101, BLOODLUST), (852_189, CRIPPLE)];
 
 /// `(autocast on order, autocast off order, ability)`.
 const TOGGLES: [(u32, u32, u32); 3] = [
@@ -414,6 +417,20 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        CRIPPLE => {
+            let t = gm.unit(target);
+            // targs: air,ground,enemy,organic,neutral
+            let hostile = gm.is_enemy(gm.unit(caster).owner, t.owner) || t.owner >= 12;
+            if !hostile
+                || t.removed
+                || is_unit_type(gm, t, ty::STRUCTURE)
+                || is_unit_type(gm, t, ty::MECHANICAL)
+                || gm.unit_is_invulnerable(target)
+            {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -427,7 +444,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             }
             true
         }
-        INNER_FIRE | BLOODLUST => {
+        INNER_FIRE | BLOODLUST | CRIPPLE => {
             if let CastTarget::Unit(t) = rec.target {
                 buff_spell(game, rec, t);
             }
@@ -452,7 +469,19 @@ fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let hero = gm.target_hero(target);
     let dur = effect_duration(&rec.level, hero, F32::ZERO);
     let d = &rec.level.data;
-    let (code, mods) = if rec.base == INNER_FIRE {
+    let (code, mods) = if rec.base == CRIPPLE {
+        // Cripple (`0x6F1CC450`): `DataA` movement, `DataB` attack speed, `DataC` damage reduction, all subtracted
+        // (the buff negates them, `0x6F1B7FD0`; the editor labels name them in this order).
+        (
+            BUFF_CRIPPLE,
+            UnitMods {
+                move_delta: arith::neg(d[0]),
+                attack_delta: arith::neg(d[1]),
+                damage_pct: arith::neg(d[2]),
+                ..UnitMods::default()
+            },
+        )
+    } else if rec.base == INNER_FIRE {
         (
             BUFF_INNER_FIRE,
             UnitMods {
@@ -473,8 +502,10 @@ fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
             },
         )
     };
+    let bad = rec.base == CRIPPLE;
     let preds = crate::abilities::BuffPredicates {
-        positive: true,
+        positive: !bad,
+        negative: bad,
         magic: true,
         dispellable: true,
         ..buff_predicates(code)

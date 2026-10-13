@@ -56,6 +56,7 @@ function setup takes nothing returns nothing
     set shaman = CreateUnit(Player(0), 'hprt', 5000.0, 0.0, 0.0)
     call UnitAddAbility(shaman, 'Ablo')
     call UnitAddAbility(shaman, 'Ainf')
+    call UnitAddAbility(shaman, 'Acri')
     call SetUnitState(shaman, 2, 300.0)
     set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
     set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
@@ -64,6 +65,12 @@ endfunction
 function setup_manual takes nothing returns nothing
     call setup()
     call IssueImmediateOrderById(priest, 852065)
+endfunction
+function cripple_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852189, foe2)
+endfunction
+function cripple_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852189, grunt)
 endfunction
 function lust_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852101, grunt)
@@ -131,6 +138,25 @@ fn host() -> ScriptHost {
         }
         g.ability_types_mut().insert(HEAL, AbilityType { max_level: Some(1) });
         g.ability_types_mut().insert(BLOODLUST, AbilityType { max_level: Some(1) });
+        g.ability_types_mut().insert(CRIPPLE, AbilityType { max_level: Some(1) });
+        g.set_spell_levels(
+            CRIPPLE,
+            vec![SpellLevel {
+                cost: 100,
+                cool: f(1.0),
+                dur: f(5.0),
+                hero_dur: f(2.0),
+                rng: f(600.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(0.75);
+                    d[1] = f(0.5);
+                    d[2] = f(0.5);
+                    d
+                },
+                ..Default::default()
+            }],
+        );
         g.ability_types_mut().insert(INNER_FIRE, AbilityType { max_level: Some(1) });
         g.set_type_orders(
             FOOT,
@@ -473,4 +499,31 @@ fn inner_fire_autocast_needs_a_unit_in_reach_of_its_enemy() {
     run(&mut h, 5);
     assert!(has_buff(&h, grunt, BUFF_INNER_FIRE));
     assert!(!has_buff(&h, grunt2, BUFF_INNER_FIRE), "no attack target: refused");
+}
+
+#[test]
+fn cripple_slows_movement_and_attacks_and_cuts_damage_then_wears_off() {
+    let mut h = started_manual();
+    let (shaman, foe2, grunt) = (unit(&h, "shaman"), unit(&h, "foe2"), unit(&h, "grunt"));
+    call(&mut h, "cripple_grunt");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "an ally is not a legal target");
+    call(&mut h, "cripple_foe");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 200.0);
+    assert!(has_buff(&h, foe2, BUFF_CRIPPLE));
+    {
+        let g = h.game();
+        let u = g.unit(foe2);
+        assert_eq!(g.effective_move_speed(foe2).to_f32(), 270.0 * 0.25);
+        assert!((u.bonuses.attack_mult.to_f32() - 0.5).abs() < 1e-6);
+        assert!((u.bonuses.damage_pct.to_f32() + 0.5).abs() < 1e-6);
+    }
+    run(&mut h, 52);
+    let g = h.game();
+    assert!(!g.buffs(foe2).iter().any(|b| b.base == BUFF_CRIPPLE));
+    assert_eq!(g.effective_move_speed(foe2).to_f32(), 270.0);
+    assert_eq!(g.unit(foe2).bonuses.attack_mult.to_f32(), 1.0);
+    assert_eq!(g.unit(foe2).bonuses.damage_pct.to_f32(), 0.0);
 }

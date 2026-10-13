@@ -11,7 +11,11 @@ inference; **UNSURE** = a stand-in; **NOT DONE** = not modelled.
 
 ## 0. Order ids (CONFIRMED)
 
-The registration code of the DLL pushes the order string and its id as immediates; the ids are read from there
+All ids below were re-checked against the original getters (`tools/analysis/ability_orders.py --verify`, cast = slot
+`0x348`, autocast on = `0x308`, off = `0x318`; Unicorn-checked): Heal 852063/64/65, Inner Fire 852066/67/68, Bloodlust
+852101/02/03, Cripple 852189 (no autocast pair), Curse 852190/91/92, Faerie Fire 852149/50/51, Web 852211/12/13, Raise
+Dead 852197/98/99, Abolish Magic 852132/33/34, Dispel 852057, Purge 852111. First found from the registration code of
+the DLL (immediates pushed beside the order strings): the registration code of the DLL pushes the order string and its id as immediates; the ids are read from there
 (`heal` = 0xD005F = 852063 and so on, ids are `0xD0000 + index`). Heal 852063 / healon 852064 / healoff 852065;
 innerfire 852066/67/68; dispel 852057; purge 852111; polymorph 852074; bloodlust 852101/02/03; lightningshield
 852110; ensnare 852106; healingward 852109; raisedead 852197/98/99; unholyfrenzy 852209; cripple 852189; curse
@@ -98,3 +102,15 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   out-of-range best; two in-range units: the best stays if `Vb > Vc`, so the original keeps the FARTHER of two
   in-range units and replaces it only by one that is not strictly nearer; two out-of-range units: the strictly nearer
   wins. (Slot `0x464` is 0 for these spells.)
+
+## 4. Cripple (`Acri`, `CAbilityCripple` vtable `0x6F914394`, a `CAbilitySimpleSpell`, no autocast)
+
+* Data (first level): cost 175, range 600, Dur 60 / HeroDur 10, `DataA` 0.75, `DataB` 0.5, `DataC` 0.5, buff `Bcri`,
+  targets air, ground, enemy, organic, neutral. Editor labels: `DataA` movement speed reduction, `DataB` attack speed
+  reduction, `DataC` damage reduction.
+* Effect slot `0x424` = `0x6F1CC450` (CONFIRMED structure): hero test, `HeroDur` / `Dur`, the buff apply
+  `0x6F1CC320`. The buff (`CBuffCripple`, apply `0x6F1B7FD0`) negates its values (sign flips) and hands two to the
+  speed buff base `CBuffSpeed` (movement `0x6F202FF0` and attack speed `0x6F0C9090` sinks, CONFIRMED by scanning the
+  apply slots) and one to the attack-record damage modifiers (slot `0x2D4`, negated list at `+0xF8`).
+* Model: `UnitMods { move_delta = -A, attack_delta = -B, damage_pct = -C }` as a negative, magic, dispellable buff
+  `Bcri`; refresh replaces the values. UNSURE: the order of the percentage damage modifier against other modifiers.
