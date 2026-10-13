@@ -77,6 +77,24 @@ function setup_aoe takes nothing returns nothing
     set potion = CreateItem('ps01', 0.0, 0.0)
     call UnitAddItem(u, potion)
 endfunction
+function setup_speed takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set friend = CreateUnit(Player(0), 'hfoo', 100.0, 0.0, 0.0)
+    set foe = CreateUnit(Player(1), 'hfoo', 0.0, -100.0, 0.0)
+    set potion = CreateItem('psp1', 0.0, 0.0)
+    call UnitAddItem(u, potion)
+endfunction
+function setup_portal takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set friend = CreateUnit(Player(0), 'hfoo', 100.0, 0.0, 0.0)
+    set foe = CreateUnit(Player(1), 'hfoo', 0.0, -100.0, 0.0)
+    set far = CreateUnit(Player(0), 'htow', 4000.0, 0.0, 0.0)
+    set potion = CreateItem('stwp', 0.0, 0.0)
+    call UnitAddItem(u, potion)
+endfunction
+function use_potion_on_far takes nothing returns nothing
+    set accepted = UnitUseItemTarget(u, potion, far)
+endfunction
 function setup_bonus takes nothing returns nothing
     set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
     set claw = CreateItem('cl01', 0.0, 0.0)
@@ -128,6 +146,9 @@ const POTION2: u32 = 0x7068_3032; // 'ph02' shares the cooldown group of ph01
 const MANA: u32 = 0x706D_3031; // 'pm01'
 const RESTORE: u32 = 0x7072_3031; // 'pr01'
 const SCROLL: u32 = 0x7073_3031; // 'ps01' healing area scroll
+const SPEED_POTION: u32 = 0x7073_7031; // 'psp1'
+const PORTAL: u32 = 0x7374_7770; // 'stwp'
+const TOWN: u32 = 0x6874_6F77; // 'htow'
 const CLAW: u32 = 0x636C_3031; // 'cl01' +15 damage
 const BOOTS: u32 = 0x6274_3031; // 'bt01' +10 armor
 const TOME: u32 = 0x746D_3031; // 'tm01' attribute tome powerup
@@ -136,6 +157,8 @@ const A_HEAL2: u32 = 0x4149_6832; // 'AIh2'
 const A_MANA: u32 = 0x4149_6D31; // 'AIm1'
 const A_REST: u32 = 0x4149_7231; // 'AIr1'
 const A_SCROLL: u32 = 0x4149_6832 + 0x100; // 'AIh3'
+const A_SPEED: u32 = 0x4149_7370; // 'AIsp'
+const A_PORTAL: u32 = 0x4149_7470; // 'AItp'
 const A_CLAW: u32 = 0x4149_6133; // 'AIa3'
 const A_BOOTS: u32 = 0x4149_6434; // 'AId4'
 const A_TOME: u32 = 0x4149_7331; // 'AIs1'
@@ -192,7 +215,7 @@ fn host(with_tables: bool) -> ScriptHost {
     let h = ScriptHost::new(module, NativeRegistry::with_builtins(), None).expect("vm");
     {
         let mut g = h.game_mut();
-        for (id, name, life, inv) in [(PACK2, "Courier", 500.0, 2u32), (FOOT, "Footman", 500.0, 0), (HERO, "Paladin", 600.0, 2)] {
+        for (id, name, life, inv) in [(PACK2, "Courier", 500.0, 2u32), (FOOT, "Footman", 500.0, 0), (HERO, "Paladin", 600.0, 2), (TOWN, "Town Hall", 1500.0, 0)] {
             g.unit_types_mut().insert(
                 id,
                 UnitType {
@@ -244,6 +267,11 @@ fn host(with_tables: bool) -> ScriptHost {
         add(MANA, &[A_MANA], ITEM_MANA, level(0, 5.0, 0.0, 100.0, 0.0, 0.0), &|s| s.perishable = true);
         add(RESTORE, &[A_REST], ITEM_RESTORE, level(0, 5.0, 0.0, 70.0, 40.0, 0.0), &|s| s.perishable = true);
         add(SCROLL, &[A_SCROLL], ITEM_HEAL_AOE, level(0, 5.0, 500.0, 200.0, 0.0, 0.0), &|s| s.perishable = true);
+        let mut speed_level = level(0, 0.0, 0.0, 0.6, 0.3, 0.0);
+        speed_level.dur = f(45.0);
+        speed_level.hero_dur = f(45.0);
+        add(SPEED_POTION, &[A_SPEED], ITEM_SPEED, speed_level, &|s| s.perishable = true);
+        add(PORTAL, &[A_PORTAL], TOWN_PORTAL, level(0, 0.0, 1100.0, 90.0, 1.0, 0.0), &|s| s.perishable = true);
         add(CLAW, &[A_CLAW], BONUS_ATTACK, level(0, 0.0, 0.0, 15.0, 0.0, 0.0), &|_| {});
         add(BOOTS, &[A_BOOTS], BONUS_DEFENSE, level(0, 0.0, 0.0, 10.0, 0.0, 0.0), &|_| {});
         add(TOME, &[A_TOME], TOME_ATTRS, level(0, 0.0, 0.0, 1.0, 2.0, 3.0), &|_| {});
@@ -253,6 +281,8 @@ fn host(with_tables: bool) -> ScriptHost {
         g.item_types_mut().insert(MANA, item_type(2, true, false));
         g.item_types_mut().insert(RESTORE, item_type(1, true, false));
         g.item_types_mut().insert(SCROLL, item_type(1, true, false));
+        g.item_types_mut().insert(SPEED_POTION, item_type(1, true, false));
+        g.item_types_mut().insert(PORTAL, item_type(1, true, false));
         g.item_types_mut().insert(CLAW, item_type(0, false, false));
         g.item_types_mut().insert(BOOTS, item_type(0, false, false));
         g.item_types_mut().insert(TOME, item_type(0, false, true));
@@ -467,4 +497,43 @@ fn tome_of_experience_levels_a_hero() {
     let hero = h.game().unit(u).hero.clone().expect("hero");
     assert_eq!(hero.xp, 200);
     assert_eq!(hero.level, 2);
+}
+
+#[test]
+fn speed_potion_gives_the_speed_buff_for_its_duration() {
+    let mut h = started("setup_speed", false);
+    let u = global_unit(&h, "u");
+    assert_eq!(h.game().unit(u).bonuses.move_mult.to_f32(), 1.0);
+    call(&mut h, "use_potion");
+    assert!(accepted(&h));
+    // Movement +DataA (0.6), attack speed +DataB (0.3): the buff `Bspe` for Dur 45 s (the user is not a hero).
+    assert!((h.game().unit(u).bonuses.move_mult.to_f32() - 1.6).abs() < 1e-5);
+    assert!((h.game().unit(u).bonuses.attack_mult.to_f32() - 1.3).abs() < 1e-5);
+    assert!(h.game().buffs(u).iter().any(|b| b.base == BUFF_SPEED));
+    run(&mut h, 440);
+    assert!(h.game().buffs(u).iter().any(|b| b.base == BUFF_SPEED), "still running at 44 s");
+    run(&mut h, 20);
+    assert!(!h.game().buffs(u).iter().any(|b| b.base == BUFF_SPEED), "ended at 45 s");
+    assert_eq!(h.game().unit(u).bonuses.move_mult.to_f32(), 1.0);
+}
+
+#[test]
+fn town_portal_moves_the_caster_and_nearby_allies_to_the_structure() {
+    let mut h = started("setup_portal", false);
+    let (u, friend, foe, town) = (
+        global_unit(&h, "u"),
+        global_unit(&h, "friend"),
+        global_unit(&h, "foe"),
+        global_unit(&h, "far"),
+    );
+    h.game_mut().unit_mut(town).x = f(4000.0);
+    call(&mut h, "use_potion_on_far");
+    assert!(accepted(&h));
+    // Cast time 0 in this setup: the effect is immediate. The caster stands at the structure, the ally keeps its
+    // offset (clustering), the enemy stays.
+    let ux = h.game().unit(u).x.to_f32();
+    let fx = h.game().unit(friend).x.to_f32();
+    assert!((ux - 4000.0).abs() < 1.0, "caster at {ux}");
+    assert!((fx - 4100.0).abs() < 1.0, "ally at {fx}");
+    assert_eq!(h.game().unit(foe).x.to_f32(), 0.0);
 }

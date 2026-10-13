@@ -24,7 +24,7 @@ use crate::abilities::{code, Ability};
 use crate::cast::{begin_cast, CastRec, CastTarget, SpellLevel};
 use crate::heroes::{self, BonusEnv, EngineEnv, Gain};
 use crate::natives::event::{Datum, Field, Firing};
-use crate::natives::game::{item_flags, Game, ObjKey};
+use crate::natives::game::{item_flags, Game, ItemType, ObjKey};
 use crate::natives::{fire_observers_in, set_life, ScriptRuntime, KEY_BASE};
 
 // ---- the base codes of the families ----
@@ -54,6 +54,11 @@ pub const BONUS_LIFE: u32 = code(b"AIml");
 pub const BONUS_MANA: u32 = code(b"AImm");
 pub const BONUS_SIGHT: u32 = code(b"AIsi");
 pub const BONUS_ATTRS: u32 = code(b"AIab");
+pub const ITEM_SPEED: u32 = code(b"AIsp");
+pub const ITEM_SPEED_AOE: u32 = code(b"AIsa");
+pub const TOWN_PORTAL: u32 = code(b"AItp");
+/// The buff of the item speed abilities (`BuffID` of `AIsp` and `AIsa`).
+pub const BUFF_SPEED: u32 = code(b"Bspe");
 
 /// The behaviour class of an item ability base code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +94,11 @@ pub enum Family {
     BonusMana,
     BonusSight,
     BonusAttrs,
+    /// `CAbilityItemSpeed` / `CAbilityItemSpeedAoe`: the buff `Bspe` with movement `DataA` and attack speed `DataB`.
+    Speed,
+    SpeedAoe,
+    /// `CAbilityItemTownPortal` (UNSURE model, see [`town_portal`]).
+    TownPortal,
 }
 
 impl Family {
@@ -132,6 +142,9 @@ impl Family {
             BONUS_MANA => Family::BonusMana,
             BONUS_SIGHT => Family::BonusSight,
             BONUS_ATTRS => Family::BonusAttrs,
+            ITEM_SPEED => Family::Speed,
+            ITEM_SPEED_AOE => Family::SpeedAoe,
+            TOWN_PORTAL => Family::TownPortal,
             _ => return None,
         })
     }
@@ -146,8 +159,22 @@ pub struct ItemSpec {
     pub perishable: bool,
     /// `usable`: the item can be used from the pack.
     pub usable: bool,
-    /// `cooldownID`: the ability id whose cooldown the item shares (0 = its own first ability).
+    /// `cooldownID`: the ability code whose cooldown the item shares (the real table names the base code, e.g. `AIhe`
+    /// for every healing potion; 0 = none).
     pub cooldown_id: u32,
+    /// `ignoreCD`: the item does not take part in the cooldown group.
+    pub ignore_cooldown: bool,
+    /// `uses`: the charges of a new item (0 = no charges).
+    pub uses: i32,
+    /// `powerup`: consumed when taken.
+    pub powerup: bool,
+    /// `sellable` and `pawnable`.
+    pub sellable: bool,
+    pub pawnable: bool,
+    /// `level`: the item level (`GetItemLevel`).
+    pub level: i32,
+    /// Whether `install_item_abilities` also registers the item type (charges and flags) when it is missing.
+    pub registers_type: bool,
 }
 
 /// Everything the engine loads for the item abilities: the item specs, the base code of every alias and the level
@@ -206,6 +233,31 @@ impl Game {
     pub fn install_item_abilities(&mut self, data: &ItemAbilityData) {
         for (&ty, spec) in &data.specs {
             self.set_item_spec(ty, spec.clone());
+            if self.item_types().get(ty).is_none() && spec.registers_type {
+                let mut flags = 0;
+                if spec.perishable {
+                    flags |= item_flags::PERISHABLE;
+                }
+                if spec.powerup {
+                    flags |= item_flags::POWERUP;
+                }
+                // Class and the random-selection flag stay 0 until the item rows are decoded fully: the type is
+                // registered for creation (charges, flags), not for `ChooseRandomItem`.
+                self.item_types_mut().insert(
+                    ty,
+                    ItemType {
+                        class: 0,
+                        level_ex: spec.level,
+                        level_plain: spec.level,
+                        flag_48: 0,
+                        charges: spec.uses,
+                        powerup: spec.powerup,
+                        sellable: spec.sellable,
+                        pawnable: spec.pawnable,
+                        flags,
+                    },
+                );
+            }
         }
         for (&alias, &base) in &data.bases {
             self.set_item_ability_base(alias, base);
@@ -217,7 +269,7 @@ impl Game {
 
     /// Registers the abilities of item type `type_id`.
     pub fn set_item_spec(&mut self, type_id: u32, spec: ItemSpec) {
-        if spec.cooldown_id != 0 {
+        if spec.cooldown_id != 0 && !spec.ignore_cooldown {
             for &a in &spec.abilities {
                 if a != spec.cooldown_id {
                     self.spells.item.groups.entry(a).or_insert(spec.cooldown_id);
@@ -323,7 +375,7 @@ fn apply_passive(gm: &mut Game, unit: ObjKey, item: ObjKey, alias: u32, fam: Fam
     let a = level.data[0];
     let applied = match fam {
         Family::BonusAttack => {
-            let v = conv::f2i(a);
+            let v = damage_bonus_value(a);
             gm.add_damage(unit, v);
             Applied::Damage(v)
         }
@@ -352,7 +404,7 @@ fn apply_passive(gm: &mut Game, unit: ObjKey, item: ObjKey, alias: u32, fam: Fam
             Applied::Sight(a)
         }
         Family::BonusAttrs => {
-            let (agi, int, str) = (conv::f2i(level.data[0]), conv::f2i(level.data[1]), conv::f2i(level.data[2]));
+            let (agi, int, str) = attribute_values(&level.data);
             add_attributes(gm, unit, agi, int, str);
             Applied::Attrs { agi, int, str }
         }
@@ -422,6 +474,55 @@ fn add_attributes(gm: &mut Game, unit: ObjKey, agi: i32, int: i32, str: i32) {
     });
 }
 
+// ---- the pure cores (Unicorn-checked against the original, `tools/emu/item_cores_emu.py`) ----
+
+/// Where a restoration amount goes: the life adder `0x6F277C20` or the mana adder `0x6F279140`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sink {
+    Life,
+    Mana,
+}
+
+/// The sink calls of a restoration effect body (`0x6F0E3990`, `0x6F119F10`, `0x6F1DBB10`): the amounts are the level
+/// data as they are, in this order (Unicorn: no ethereal factor, the class slot `0x42C` answers 0 for all three).
+pub fn restore_plan(fam: Family, d: &[F32; 9]) -> Vec<(Sink, F32)> {
+    match fam {
+        Family::Heal | Family::HealAoe => vec![(Sink::Life, d[0])],
+        Family::Mana | Family::ManaAoe => vec![(Sink::Mana, d[0])],
+        Family::Restore | Family::RestoreAoe => vec![(Sink::Life, d[0]), (Sink::Mana, d[1])],
+        _ => Vec::new(),
+    }
+}
+
+/// The area callback `0x6F0F0470`: the candidate is skipped when it is immune, or when it is an illusion and the Misc
+/// switch is off; otherwise the life adder gets `DataA` (the callback always returns 1).
+pub fn area_callback_amount(illusion: bool, misc: bool, immune: bool, a: F32) -> Option<F32> {
+    if immune || (!misc && illusion) {
+        None
+    } else {
+        Some(a)
+    }
+}
+
+/// The three attribute values the attribute tome and the attribute bonus read (`0x6F0E5D50`, `0x6F0E57E0`): the
+/// integer parts (`F2I`) of `DataA`, `DataB` and `DataC`, handed to the agility, intelligence and strength adders.
+pub fn attribute_values(d: &[F32; 9]) -> (i32, i32, i32) {
+    (conv::f2i(d[0]), conv::f2i(d[1]), conv::f2i(d[2]))
+}
+
+/// The flat damage bonus of `AIat` (`F2I(DataA)`; the removal is the negative).
+pub fn damage_bonus_value(a: F32) -> i32 {
+    conv::f2i(a)
+}
+
+/// The outcome of the charge routine `0x6F2B8390` for an item: `None` when it returns at once, else `(new charges, the
+/// holder is told, the item is destroyed)`. `holder_live` is the answer of the key resolver for the holder key.
+pub fn charge_outcome(flags: u32, charges: i32, holder_live: bool) -> Option<(i32, bool, bool)> {
+    let (_, new) = charge_step(flags, charges);
+    let new = new?;
+    Some((new, holder_live, destroys(flags, new)))
+}
+
 // ---- the effects ----
 
 /// The level-1 record of an alias: the tomes and attribute bonuses read `DataA..C` at level 1 whatever the level
@@ -452,6 +553,15 @@ fn add_mana(gm: &mut Game, target: ObjKey, amount: F32) {
     gm.write_mana(target, next);
 }
 
+fn run_plan(gm: &mut Game, t: ObjKey, plan: &[(Sink, F32)]) {
+    for &(sink, amount) in plan {
+        match sink {
+            Sink::Life => add_life(gm, t, amount),
+            Sink::Mana => add_mana(gm, t, amount),
+        }
+    }
+}
+
 /// The target of an effect: the ability's unit target, else its owner (`[ability+0x30]`, `0x6F472890`).
 fn effect_target(caster: ObjKey, target: CastTarget) -> ObjKey {
     match target {
@@ -480,7 +590,7 @@ fn area_units(gm: &Game, caster: ObjKey, target: CastTarget, level: &SpellLevel)
             let u = gm.unit(k);
             // UNSURE: the group builder's relation flags (`0x1D` / `0x1F`) are not decoded; friends and the caster.
             let friend = k == caster || u.owner == owner || !gm.is_enemy(owner, u.owner);
-            friend && (!u.illusion || gm.spells.item.illusions_heal)
+            friend && area_callback_amount(u.illusion, gm.spells.item.illusions_heal, false, F32::ZERO).is_some()
         })
         .collect()
 }
@@ -489,35 +599,16 @@ fn area_units(gm: &Game, caster: ObjKey, target: CastTarget, level: &SpellLevel)
 fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, target: CastTarget) {
     let d = &level.data;
     match fam {
-        Family::Heal => {
+        Family::Heal | Family::Mana | Family::Restore => {
             let t = effect_target(caster, target);
             if gm.alive(t) {
-                add_life(gm, t, d[0]);
-            }
-        }
-        Family::Mana => {
-            let t = effect_target(caster, target);
-            if gm.alive(t) {
-                add_mana(gm, t, d[0]);
-            }
-        }
-        Family::Restore => {
-            let t = effect_target(caster, target);
-            if gm.alive(t) {
-                add_life(gm, t, d[0]);
-                add_mana(gm, t, d[1]);
+                run_plan(gm, t, &restore_plan(fam, d));
             }
         }
         Family::HealAoe | Family::ManaAoe | Family::RestoreAoe => {
+            let plan = restore_plan(fam, d);
             for k in area_units(gm, caster, target, level) {
-                match fam {
-                    Family::HealAoe => add_life(gm, k, d[0]),
-                    Family::ManaAoe => add_mana(gm, k, d[0]),
-                    _ => {
-                        add_life(gm, k, d[0]);
-                        add_mana(gm, k, d[1]);
-                    }
-                }
+                run_plan(gm, k, &plan);
             }
         }
         Family::TomeLife => {
@@ -541,13 +632,24 @@ fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, 
         }
         Family::TomeAttrs => {
             let t = effect_target(caster, target);
-            add_attributes(gm, t, conv::f2i(d[0]), conv::f2i(d[1]), conv::f2i(d[2]));
+            let (agi, int, str) = attribute_values(d);
+            add_attributes(gm, t, agi, int, str);
         }
         Family::TomeAttack => {
             let t = effect_target(caster, target);
             // `0x6F0DE190`: only a unit with an attack ability; the value goes into both weapons' base bonuses.
             gm.add_damage(t, conv::f2i(d[0]));
         }
+        Family::Speed => {
+            let t = effect_target(caster, target);
+            apply_speed(gm, t, level);
+        }
+        Family::SpeedAoe => {
+            for k in area_units(gm, caster, target, level) {
+                apply_speed(gm, k, level);
+            }
+        }
+        Family::TownPortal => town_portal(gm, caster, target, level),
         Family::Gold | Family::Lumber => {
             let t = effect_target(caster, target);
             let owner = gm.unit(t).owner;
@@ -559,6 +661,99 @@ fn apply_effect(gm: &mut Game, fam: Family, level: &SpellLevel, caster: ObjKey, 
             gm.credit_resource(owner, res, conv::f2i(d[0]), crate::economy::Flags::NONE);
         }
         _ => {}
+    }
+}
+
+/// The speed buff arguments of `CAbilityItemSpeed::vf424` (`0x6F1FC4C0`): the duration by the hero rule (`HeroDur` for a
+/// hero target, else `Dur` plus the ability's extra term, a soft add), then `DataA` and `DataB`. The buff's apply slot
+/// (`CBuffSpeed`, `0x6F0D6500`) gives `DataA` to the movement sink (`0x6F202FF0`, holder `+0xCC`) and `DataB` to the attack
+/// speed sink (`0x6F0C9090`, holder `+0xD4`). Unicorn: `item_cores_emu.py` rows `SP`.
+pub fn speed_buff_args(level: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    (crate::cast::effect_duration(level, hero, extra), level.data[0], level.data[1])
+}
+
+fn apply_speed(gm: &mut Game, target: ObjKey, level: &SpellLevel) {
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let (dur, mv, atk) = speed_buff_args(level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..crate::abilities::buff_predicates(BUFF_SPEED)
+    };
+    let mods = crate::unit_spells::UnitMods {
+        move_delta: mv,
+        attack_delta: atk,
+        ..Default::default()
+    };
+    gm.apply_mods_buff(target, BUFF_SPEED, preds, mods, dur);
+}
+
+/// Town portal (`AItp`, `CAbilityItemTownPortal`): UNSURE model. Decoded: a target structure (`targs`), the cast time
+/// `Cast` (5 s) is the cast core's delay, `Area` 1100 around the caster, the class slot `0x418` runs the area group
+/// builder with the callback `0x6F0264B0` (not decoded). The model reads `DataA` as the count of teleported units and
+/// `DataB` as the clustering flag (the Mass Teleport fields: `human_heroes::teleport_select`): the caster and the chosen
+/// own or allied non-structure units in the area go to the target's position, keeping their offsets when clustering.
+fn town_portal(gm: &mut Game, caster: ObjKey, target: CastTarget, level: &SpellLevel) {
+    let CastTarget::Unit(dest) = target else {
+        return;
+    };
+    if !gm.alive(caster) || !gm.alive(dest) {
+        return;
+    }
+    let (cx, cy, owner) = {
+        let c = gm.unit(caster);
+        (c.x, c.y, c.owner)
+    };
+    let (dx, dy) = {
+        let d = gm.unit(dest);
+        (d.x, d.y)
+    };
+    let mut recs = Vec::new();
+    for k in crate::natives::circle_candidates(gm, cx, cy, level.area) {
+        if k == caster || !gm.alive(k) {
+            continue;
+        }
+        let u = gm.unit(k);
+        if gm.is_enemy(owner, u.owner) || gm.unit_types().is_building(u.type_id) {
+            continue;
+        }
+        let (ex, ey) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
+        let d2 = arith::add(arith::add(arith::mul(ex, ex), arith::mul(ey, ey)), F32::ZERO);
+        let hero = u.hero.as_ref().map(|h| h.level);
+        recs.push((
+            k,
+            crate::human_heroes::TeleportRec {
+                dist: conv::f2i(d2),
+                key: hero.unwrap_or(0),
+                hero: i32::from(hero.is_some() && !u.illusion),
+                own: i32::from(u.owner == owner),
+                id: k.0 as i32,
+            },
+        ));
+    }
+    let chosen = crate::human_heroes::teleport_select(recs, conv::f2i(level.data[0]));
+    let cluster = level.data[1].to_bits() & 0x7FFF_FFFF != 0;
+    let (px, py) = gm.clamp_unit_move(dx, dy);
+    gm.store_unit_position(caster, px, py);
+    for (k, _) in chosen {
+        let (ux, uy) = {
+            let u = gm.unit(k);
+            (u.x, u.y)
+        };
+        let (tx, ty) = if cluster {
+            (arith::add(dx, arith::sub(ux, cx)), arith::add(dy, arith::sub(uy, cy)))
+        } else {
+            (dx, dy)
+        };
+        let (px, py) = gm.clamp_unit_move(tx, ty);
+        gm.store_unit_position(k, px, py);
     }
 }
 
@@ -711,17 +906,16 @@ pub fn use_charge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item: ObjKey
         if it.removed {
             return;
         }
-        let (flags, charges) = charge_step(it.flags, it.charges);
-        let Some(charges) = charges else {
+        let Some((charges, _, _)) = charge_outcome(it.flags, it.charges, true) else {
             return;
         };
         it.charges = charges;
-        let _ = flags;
         holder = it.holder;
     }
     if let Some(unit) = holder {
         fire_use_events(game, rt, unit, item);
     }
+    // The destroy test reads the flags and the count again, after the event handlers ran.
     let mut gm = game.borrow_mut();
     let it = gm.item(item);
     if destroys(it.flags, it.charges) && !it.removed {

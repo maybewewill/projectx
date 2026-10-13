@@ -99,11 +99,22 @@ def setup(vtable, level_fields=None, flags=0):
             mu.mem_write(ABIL + off, struct.pack('<I', v))
 
 
-def ret_cleanup(target):
+def ret_cleanup(target, depth=0):
+    """Bytes the callee pops (`ret N`): the first `ret` of the function, or (a function that ends in a tail jump and
+    has no `ret` before its padding) the cleanup of the jump target."""
     off = target - BASE
+    last_jmp = None
     for ins in md.disasm(emu.img[off:off + 800], target):
         if ins.mnemonic == 'ret':
             return int(ins.op_str, 16) if ins.op_str else 0
+        if ins.mnemonic == 'int3':
+            break
+        if ins.mnemonic == 'jmp' and ins.operands[0].type == CS_OP_IMM:
+            t = ins.operands[0].imm
+            if not (target <= t < ins.address + 0x400 and t > ins.address):
+                last_jmp = t
+    if last_jmp is not None and depth < 4:
+        return ret_cleanup(last_jmp, depth + 1)
     return 0
 
 
@@ -114,23 +125,22 @@ def factory_row(code):
     return [dict(zip(h, r)) for r in rows[1:] if r[0] == code][0]
 
 
-def run(code, slot, args=(), stub_ret=None, vt_override=None, flags=0, level_fields=None, quiet=False, fn_override=None, into=()):
-    row = factory_row(code)
-    vt = int(row['vtable'], 16) if vt_override is None else vt_override
-    setup(vt, level_fields, flags)
-    fn = fn_override or struct.unpack('<I', bytes(mu.mem_read(vt + slot, 4)))[0]
-    off = fn - BASE
+def trace_call(fn, ecx, args=(), stub_ret=None, stub_fn=None, into=(), span=0x600, edx=None, cleanup=None):
+    """Runs `fn` with ECX = `ecx` and the stack `args`; every call made directly by `fn` (and by the functions listed
+    in `into`) is stubbed and recorded unless its target is in ALLOW or in `into`. `stub_ret[target]` is the value
+    returned in EAX; `stub_fn[target](uc, ecx, edx, stack)` computes it instead. Returns
+    (EAX, trace lines, structured calls) where a call is (target, ecx, edx, stack dwords, tail_jump)."""
     sites = {}
     for f0 in (fn,) + tuple(into):
-        for ins in md.disasm(emu.img[f0 - BASE:f0 - BASE + 0x600], f0):
+        for ins in md.disasm(emu.img[f0 - BASE:f0 - BASE + span], f0):
             if ins.mnemonic == 'call':
                 sites[ins.address] = ins
             elif ins.mnemonic == 'jmp' and ins.operands[0].type == CS_OP_IMM and not (f0 <= ins.operands[0].imm < f0 + 0x300):
                 sites[ins.address] = ins
-            elif ins.mnemonic == 'ret':
-                pass
     trace = []
+    calls = []
     stub_ret = stub_ret or {}
+    stub_fn = stub_fn or {}
 
     def target_of(ins, uc):
         op = ins.operands[0]
@@ -160,22 +170,29 @@ def run(code, slot, args=(), stub_ret=None, vt_override=None, flags=0, level_fie
             return
         esp = uc.reg_read(UC_X86_REG_ESP)
         stack = struct.unpack('<6I', bytes(uc.mem_read(esp, 24)))
-        ecx = uc.reg_read(UC_X86_REG_ECX)
-        edx = uc.reg_read(UC_X86_REG_EDX)
+        c = uc.reg_read(UC_X86_REG_ECX)
+        d = uc.reg_read(UC_X86_REG_EDX)
         try:
             n = ret_cleanup(tgt)
         except Exception:
             n = 0
+        if cleanup and tgt in cleanup:
+            n = cleanup[tgt]
         shown = []
         for v in stack[:max(n // 4, 0) if n else 3]:
-            s = fmt(v)
+            sv = fmt(v)
             if (D <= v < D + 0x10000 or 0x100000 <= v < 0x110000) and v not in (ABIL, UNIT, OWNER):
-                s += '->' + fmt(struct.unpack('<I', bytes(uc.mem_read(v, 4)))[0])
-            shown.append(s)
-        trace.append('call %08x ecx=%s edx=%s cleanup=%d args=[%s]' % (tgt, fmt(ecx), fmt(edx), n, ', '.join(shown)))
-        uc.reg_write(UC_X86_REG_EAX, stub_ret.get(tgt, 0))
-        if ins.mnemonic == 'jmp':
-            trace[-1] = 'TAILJMP' + trace[-1][4:]
+                sv += '->' + fmt(struct.unpack('<I', bytes(uc.mem_read(v, 4)))[0])
+            shown.append(sv)
+        tail = ins.mnemonic == 'jmp'
+        trace.append('%s %08x ecx=%s edx=%s cleanup=%d args=[%s]' % ('TAILJMP' if tail else 'call', tgt, fmt(c), fmt(d), n, ', '.join(shown)))
+        calls.append((tgt, c, d, stack, tail))
+        if tgt in stub_fn:
+            rv = stub_fn[tgt](uc, c, d, stack) & 0xffffffff
+        else:
+            rv = stub_ret.get(tgt, 0)
+        uc.reg_write(UC_X86_REG_EAX, rv)
+        if tail:
             ret = struct.unpack('<I', bytes(uc.mem_read(esp, 4)))[0]
             uc.reg_write(UC_X86_REG_ESP, esp + 4 + n)
             uc.reg_write(UC_X86_REG_EIP, ret)
@@ -191,17 +208,29 @@ def run(code, slot, args=(), stub_ret=None, vt_override=None, flags=0, level_fie
             return False
         return True
 
-    h1 = mu.hook_add(UC_HOOK_CODE, hook, begin=fn, end=fn + 0x600)
+    h1 = mu.hook_add(UC_HOOK_CODE, hook, begin=min((fn,) + tuple(into)), end=max((fn,) + tuple(into)) + span)
     h2 = mu.hook_add(UC_HOOK_MEM_READ_UNMAPPED, unm)
     h3 = mu.hook_add(UC_HOOK_MEM_WRITE_UNMAPPED, unm)
     try:
-        r = emu.call(fn, ecx=ABIL, stack_args=args)
+        r = emu.call(fn, ecx=ecx, edx=edx, stack_args=args)
+    finally:
+        mu.hook_del(h1)
+        mu.hook_del(h2)
+        mu.hook_del(h3)
+    return r, trace, calls
+
+
+def run(code, slot, args=(), stub_ret=None, vt_override=None, flags=0, level_fields=None, quiet=False, fn_override=None, into=()):
+    row = factory_row(code)
+    vt = int(row['vtable'], 16) if vt_override is None else vt_override
+    setup(vt, level_fields, flags)
+    fn = fn_override or struct.unpack('<I', bytes(mu.mem_read(vt + slot, 4)))[0]
+    try:
+        r, trace, _ = trace_call(fn, ABIL, args, stub_ret=stub_ret, into=into)
         res = 'ret=%08x' % r
     except Exception as e:
         res = 'ERR %s' % e
-    mu.hook_del(h1)
-    mu.hook_del(h2)
-    mu.hook_del(h3)
+        trace = []
     if not quiet:
         print('%s slot %#x fn=%08x %s' % (code, slot, fn, res))
         for t in trace:
