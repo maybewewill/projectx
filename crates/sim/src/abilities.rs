@@ -507,7 +507,7 @@ pub struct Buff {
 impl Game {
     /// Whether unit `k` is invulnerable: it has the ability `Avul` (CONFIRMED structure, see the module notes).
     pub fn unit_is_invulnerable(&self, k: ObjKey) -> bool {
-        self.unit(k).abilities.contains(INVULNERABLE)
+        self.unit(k).abilities.contains(INVULNERABLE) || self.unit(k).invuln_count > 0
     }
 
     /// `SetUnitInvulnerable` on unit `k` (the body of the original's unit slot 42, CONFIRMED structure): adds the

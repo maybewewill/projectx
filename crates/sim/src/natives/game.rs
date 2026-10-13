@@ -707,6 +707,9 @@ pub struct UnitObj {
     pub ethereal: i32,
     /// Magic immunity counter (object `+0x15C`): `IsUnitType(MAGIC_IMMUNE)` is `> 0`. No writer in the model yet.
     pub magic_immune: i32,
+    /// Invulnerability counter of buffs (Divine Shield, object `+0xE8` of the buff target: LIKELY): the unit is
+    /// invulnerable while it is above zero, next to the `Avul` ability of `SetUnitInvulnerable`.
+    pub invuln_count: i32,
     /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
     pub abilities: UnitAbilities,
     /// The unit's buffs in the order they were added (see [`crate::abilities`]).

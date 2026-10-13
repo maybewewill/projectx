@@ -117,6 +117,7 @@ fn host() -> ScriptHost {
                 area: F32::ZERO,
                 rng: f(600.0),
                 data: [f(100.0), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
+                unit_id: 0,
             }],
         );
         // Set Slow levels: (dur=10.0, hero_dur=4.0, move_delta=0.6, attack_delta=0.6)
@@ -131,6 +132,7 @@ fn host() -> ScriptHost {
                 area: F32::ZERO,
                 rng: f(600.0),
                 data: [f(0.6), f(0.6), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
+                unit_id: 0,
             }],
         );
     }

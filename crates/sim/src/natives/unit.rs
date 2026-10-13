@@ -535,6 +535,7 @@ pub(crate) fn build(
         food_reg: 0,
         ethereal: 0,
         magic_immune: 0,
+        invuln_count: 0,
         sight: ty.sight,
         night_sight: ty.night_sight,
         revealed: 0,

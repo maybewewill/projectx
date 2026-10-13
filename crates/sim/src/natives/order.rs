@@ -640,6 +640,11 @@ fn issue(g: &Rc<RefCell<Game>>, rt: &mut dyn ScriptRuntime, unit: ObjKey, order:
             return crate::cast::begin_cast(g, rt, unit, base, target).is_ok();
         }
     }
+    if order.class == OrderClass::Immediate {
+        if let Some(ok) = crate::human_heroes::immediate_order(g, rt, unit, order.id) {
+            return ok;
+        }
+    }
     let class = order.class;
     let (validated, index) = g.borrow_mut().issue_order(unit, order, true);
     if let Some(index) = index {

@@ -187,6 +187,11 @@ pub trait DamageModel: std::fmt::Debug {
     /// The amount of life `target` loses from a script damage event (`UnitDamageTarget`): the target side of the
     /// record the native builds. The default passes the raw amount through (the placeholder model has no armor).
     fn native_hit(&mut self, _game: &Game, hit: &NativeHit) -> F32 {
+        // The one gate of the target side the placeholder keeps: an invulnerable target takes nothing, except from the
+        // classes `0x10`, `0x20`, `0x4000000` and `0x400000` (CONFIRMED, attack-damage.md section 11).
+        if hit.invulnerable && hit.class & (0x10 | 0x20 | 0x400_0000 | 0x40_0000) == 0 {
+            return F32::ZERO;
+        }
         hit.raw
     }
 }
@@ -669,21 +674,25 @@ impl Game {
             return None;
         }
         let ty = self.attack_type_of(unit);
+        self.bash_on_attack_start(unit, target);
         let damage = self.roll_damage(unit, target, &ty);
+        let damage = self.bash_modify_damage(unit, damage);
         // Order CONFIRMED (execute `0x6F0CF660`): the dice first, then the miss gate; an evaded attack stops before
         // the target routine. For missiles the gate runs at launch too (`0x6F2C3F70` calls it before the flight);
         // that an evaded missile deals no direct damage is UNSURE (the original scales the flight's damage by
         // MissDamageReduction, not modelled).
         if self.evasion_check(target) {
+            self.bash_clear(unit);
             return None;
         }
         match ty.missile_speed {
-            None => self.apply_damage(target, damage),
+            None => self.hit_with_bash(unit, target, damage),
             Some(speed) => {
                 // A launch also runs the `ChanceToMiss` tail of the gate: ONE stream-2 draw per launch, always
                 // (CONFIRMED, `docs/spec/missiles.md` section 9). A missed missile is not bound to its target and
                 // deals no direct damage (LIKELY).
                 if self.chance_to_miss_check(unit, target) {
+                    self.bash_clear(unit);
                     return None;
                 }
                 let delay = self.impact_delay(unit, target, speed);
@@ -933,6 +942,19 @@ impl Game {
         self.combat.point_damages.remove(&id)
     }
 
+    /// The main damage of an attack, then Bash's on-hit effects of the attacker (stun and flat damage, docs/spec/
+    /// abilities-human-heroes.md section 3; the order of the two is UNSURE). Returns the unit that died.
+    fn hit_with_bash(&mut self, attacker: ObjKey, target: ObjKey, damage: F32) -> Option<ObjKey> {
+        let killed = self.apply_damage(target, damage);
+        let bash = if killed.is_none() {
+            self.bash_on_hit(attacker, target)
+        } else {
+            None
+        };
+        self.bash_clear(attacker);
+        killed.or(bash)
+    }
+
     /// Applies `amount` to the life of `target` through the life setter (the death event fires from the caller when
     /// it returns the unit). Invulnerable and dead targets take nothing.
     fn apply_damage(&mut self, target: ObjKey, amount: F32) -> Option<ObjKey> {
@@ -1056,7 +1078,7 @@ impl Game {
             missiles::FLAG_TARGET_BOUND,
             present,
         )) {
-            missiles::Arrival::Damage { .. } => self.apply_damage(target, damage),
+            missiles::Arrival::Damage { .. } => self.hit_with_bash(unit, target, damage),
             missiles::Arrival::Blocked | missiles::Arrival::NoTarget => None,
         }
     }
