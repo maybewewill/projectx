@@ -159,6 +159,30 @@ fn banish_values_match_the_original() {
 }
 
 #[test]
+fn thunder_clap_slow_values_match_the_original() {
+    let data = hex_rows(include_str!("data/human_heroes/thunder_slow.txt"));
+    assert!(data.len() >= 300);
+    let (mut applied, mut refused) = (0, 0);
+    for r in &data {
+        let level = SpellLevel {
+            dur: F32::from_bits(r[0]),
+            hero_dur: F32::from_bits(r[1]),
+            data: [F32::ZERO, F32::ZERO, F32::from_bits(r[2]), F32::from_bits(r[3]), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
+            ..SpellLevel::default()
+        };
+        let got = sim::human_heroes::thunder_clap_slow(&level, r[5] != 0, F32::from_bits(r[4]));
+        assert_eq!(u32::from(got.is_some()), r[6], "applied, row {:08x?}", r);
+        if let Some((d, m, a)) = got {
+            assert_eq!([d.to_bits(), m.to_bits(), a.to_bits()], [r[7], r[8], r[9]], "row {:08x?}", r);
+            applied += 1;
+        } else {
+            refused += 1;
+        }
+    }
+    assert!(applied > 200 && refused > 20);
+}
+
+#[test]
 fn corpse_distance_matches_the_original() {
     use softfloat::arith;
     let data = hex_rows(include_str!("data/human_heroes/corpse_distance.txt"));
