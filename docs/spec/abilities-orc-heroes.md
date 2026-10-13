@@ -615,3 +615,12 @@ lightning table invokes it was not decoded (LIKELY at the creation of the bolt, 
 The three buffs that the Voodoo effect `0x6F18C340` and the Earthquake cast `0x6F08AE40` remove from the caster (ids from `0x6F10F990`,
 `0x6F07D0B0`, `0x6F159120`) are `Bvul` (invulnerable), `BHds` (divine shield) and `BOvd` (the voodoo buff itself); the call `0x6F077630(unit)`
 then sets `unit+0x20 |= 0x40000000`.
+
+### 23.5 Wind Walk: the invisibility transition (read)
+
+`CBuffWindWalk` (`0x6F171630`) hands the effect's pointers to the invisibility base initialiser `0x6F123FC0(unit, duration, fade)`: it sets the
+agile cell `+0xCC` of the buff to the FADE value (`DataA`, 0.6 s / 1.0 s: the time the unit needs to become invisible, a property that runs
+over that time), applies the buff (slot `0x320`), registers it with the unit (`0x6F26F930(unit, buff, 1)`), sets the buff flag `0x100` and calls
+`0x6F28D7D0(unit, fade)` (the unit's invisibility fade update). So the unit is not invisible during the first `DataA` seconds; the movement bonus
+(section 11) applies from the start. The sim has no invisibility or detection state, so the transition is NOT modelled; the cell value is the
+only decoded number.
