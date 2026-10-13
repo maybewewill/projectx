@@ -69,6 +69,8 @@ pub const CRIPPLE: u32 = code(b"Acri");
 pub const BUFF_CRIPPLE: u32 = code(b"Bcri");
 pub const UNHOLY_FRENZY: u32 = code(b"Auhf");
 pub const BUFF_UNHOLY_FRENZY: u32 = code(b"BUhf");
+pub const REJUVENATION: u32 = code(b"Arej");
+pub const BUFF_REJUVENATION: u32 = code(b"Brej");
 pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 
@@ -100,7 +102,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 6] = [
+pub const SPELL_ORDERS: [(u32, u32); 7] = [
+    (852_160, REJUVENATION),
     (852_209, UNHOLY_FRENZY),
     (ORDER_HEAL, HEAL),
     (852_066, INNER_FIRE),
@@ -450,6 +453,18 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        REJUVENATION => {
+            let t = gm.unit(target);
+            // targs: air,ground,friend,vuln,invu,self,organic,neutral.
+            if !(is_ally(gm, caster, target) || t.owner >= 12)
+                || t.removed
+                || is_unit_type(gm, t, ty::STRUCTURE)
+                || is_unit_type(gm, t, ty::MECHANICAL)
+            {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         UNHOLY_FRENZY => {
             let t = gm.unit(target);
             // targs: air,ground,organic (any player, no structures, no mechanical units).
@@ -495,6 +510,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             }
             true
         }
+        REJUVENATION => {
+            if let CastTarget::Unit(t) = rec.target {
+                rejuvenation(game, rec, t);
+            }
+            true
+        }
         INNER_FIRE | BLOODLUST | CRIPPLE | FAERIE_FIRE => {
             if let CastTarget::Unit(t) = rec.target {
                 buff_spell(game, rec, t);
@@ -534,6 +555,39 @@ fn unholy_frenzy(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     };
     let serial = gm.apply_mods_buff(target, BUFF_UNHOLY_FRENZY, preds, mods, dur);
     gm.register_tick(target, serial, rec.caster, d[1], false, DAMAGE_TYPE_DEATH, true);
+}
+
+/// Rejuvenation (`0x6F108530` -> buff apply `0x6F0F0650`, CONFIRMED): the hero rule duration `T` (`HeroDur` / `Dur`);
+/// the buff is applied for `T + 0.01` (constant `0x6FAAE480`, when `T > 0`) and heals `DataA / T` life per tick
+/// (soft division) on a repeating 1.0 s timer (`0x6F0F05A0`: period constant `0x6FAAE4F4`, first tick after 1.0 s).
+/// The tick (`0x6F0E3A20`) heals through the life adder, with the ethereal bonus, and skips an immune target
+/// (`vf 0x11C`, not modelled). `DataB` (mana) goes through `0x6F279140` the same way and is not modelled (0 in the
+/// data). The buff is found by its code (`0x6F0DAB00`) and re-applied, else created. UNSURE: whether a refreshed
+/// buff restarts the 1.0 s phase (the model keeps the running timer).
+fn rejuvenation(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let total = rec.level.data[0];
+    let amount = match gm.order_tables() {
+        Some(t) => arith::div(total, dur, t),
+        None => F32::from_bits((total.to_f32() / dur.to_f32()).to_bits()),
+    };
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_REJUVENATION)
+    };
+    let buff_dur = arith::add(dur, F32::from_bits(TICK_FIRST_DELAY_BITS));
+    let serial = gm.apply_mods_buff(target, BUFF_REJUVENATION, preds, UnitMods::default(), buff_dur);
+    gm.register_tick(target, serial, rec.caster, amount, true, 0, false);
 }
 
 impl Game {

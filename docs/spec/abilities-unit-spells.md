@@ -145,3 +145,17 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
 * Model: `UnitMods { attack_delta = DataA }` plus `TickRec` (damage `DataB` of type 18 per tick, kills run the death
   dispatch with the caster as killer). Re-casting keeps one tick stream and replaces the values. 5 ticks in a 5 s test
   buff (ticks at 0.01 .. 4.01 s). UNSURE: the stored tick amount is `DataB` unchanged.
+
+## 7. Rejuvenation (`Arej`, `CAbilityRejuvination` vtable `0x6F8CA7D4`, a SimpleSpell)
+
+* Data: cost 125, range 400, Dur 12 / HeroDur 12, `DataA` 400 (hit points gained), `DataB` mana gained (0), `DataC`
+  allow when full, buff `Brej`, targets air, ground, friend, vulnerable, invulnerable, self, organic, neutral.
+* Effect slot `0x424` = `0x6F108530` (CONFIRMED structure): hero rule duration `T`; `DataA`, `DataB`, `DataC` into
+  `0x6F1083D0`, which finds the buff by its code (`0x6F0DAB00`) and re-applies through slot `0x358`, else creates it.
+* Buff apply `0x6F0F0650` (CONFIRMED): when `T > 0` the buff duration is `T + 0.01` (`0x6FAAE480`); the life per tick
+  is the soft division `DataA / T` (and `DataB / T` for mana), stored at `+0xE0` / `+0xE8`. The timer `0xD01C1` is
+  armed in `0x6F0F05A0` as a repeating timer with the period `0x6FAAE4F4` = 1.0 s (the first tick after 1.0 s). The tick
+  `0x6F0E3A20` heals through the life adder `0x6F277C20` (ethereal target: times Misc `EtherealHealBonus`), mana
+  through `0x6F279140`; an immune target (`vf 0x11C`) is skipped. 12 ticks of `DataA / 12` fit the 12.01 s buff.
+* Model: shared `TickRec` heal ticks (`hot`), mana part and the "allow when full" rule NOT DONE (the cast is allowed on
+  full life), UNSURE: whether a refresh restarts the tick phase.

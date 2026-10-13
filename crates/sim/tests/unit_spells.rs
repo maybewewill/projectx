@@ -59,6 +59,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(shaman, 'Acri')
     call UnitAddAbility(shaman, 'Afae')
     call UnitAddAbility(shaman, 'Auhf')
+    call UnitAddAbility(shaman, 'Arej')
     call SetUnitState(shaman, 2, 300.0)
     set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
     set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
@@ -82,6 +83,9 @@ function frenzy_grunt takes nothing returns nothing
 endfunction
 function frenzy_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852209, foe2)
+endfunction
+function rejuv_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852160, grunt)
 endfunction
 function lust_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852101, grunt)
@@ -198,6 +202,23 @@ fn host() -> ScriptHost {
                     let mut d = [F32::ZERO; 9];
                     d[0] = f(0.75);
                     d[1] = f(4.0);
+                    d
+                },
+                ..Default::default()
+            }],
+        );
+        g.ability_types_mut().insert(REJUVENATION, AbilityType { max_level: Some(1) });
+        g.set_spell_levels(
+            REJUVENATION,
+            vec![SpellLevel {
+                cost: 125,
+                cool: f(1.0),
+                dur: f(12.0),
+                hero_dur: f(12.0),
+                rng: f(400.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(240.0);
                     d
                 },
                 ..Default::default()
@@ -633,4 +654,24 @@ fn unholy_frenzy_cast_twice_keeps_one_tick_stream() {
     let before = life(&h, grunt);
     run(&mut h, 20);
     assert_eq!(before - life(&h, grunt), 8.0, "two ticks in two seconds, not four");
+}
+
+#[test]
+fn rejuvenation_heals_in_twelve_ticks_of_one_second_and_stops() {
+    let mut h = started_manual();
+    let (shaman, grunt) = (unit(&h, "shaman"), unit(&h, "grunt"));
+    h.game_mut().write_life(grunt, f(100.0));
+    call(&mut h, "rejuv_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 175.0);
+    assert!(has_buff(&h, grunt, BUFF_REJUVENATION));
+    assert_eq!(life(&h, grunt), 100.0, "the first tick comes after 1.0 s");
+    run(&mut h, 10);
+    assert_eq!(life(&h, grunt), 120.0);
+    run(&mut h, 110);
+    assert_eq!(life(&h, grunt), 340.0, "12 ticks of 240 / 12 = 20");
+    assert!(!has_buff(&h, grunt, BUFF_REJUVENATION));
+    run(&mut h, 30);
+    assert_eq!(life(&h, grunt), 340.0);
 }
