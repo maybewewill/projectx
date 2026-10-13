@@ -133,6 +133,8 @@ pub struct ObjectText {
     pub gold_mine_amount: Option<i32>,
     /// The level records of the spells the cast core knows (`sim::cast`), by raw code.
     pub spell_levels: BTreeMap<u32, Vec<sim::cast::SpellLevel>>,
+    /// The `UnitID` of each level of the spell abilities (0 when empty).
+    pub summon_units: BTreeMap<u32, Vec<u32>>,
     /// The skill data `(levels, reqLevel, levelSkip)` of every ability row, by raw code (hero skill slots).
     pub ability_skill: BTreeMap<u32, (i32, i32, i32)>,
     /// The levels of the aura abilities the model knows (`sim::auras::AuraKind`), by raw code: `Area`, `DataA` to
@@ -387,6 +389,13 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
         ("Aslo", sim::cast::SLOW),
         ("AEev", sim::abilities::EVASION),
         ("AOcr", sim::orc::CRITICAL_STRIKE),
+        ("AOwk", sim::orc::WIND_WALK),
+        ("AOmi", sim::orc::MIRROR_IMAGE),
+        ("AOsh", sim::orc::SHOCKWAVE),
+        ("AOws", sim::orc::WAR_STOMP),
+        ("AOcl", sim::orc::CHAIN_LIGHTNING),
+        ("AOfs", sim::orc::FAR_SIGHT),
+        ("AOsf", sim::orc::FERAL_SPIRIT),
     ] {
         if let Some(def) = gamedata::abilitytype::read_ability(&slk, name) {
             let f = |v: f32| F32::from_bits(v.to_bits());
@@ -411,6 +420,7 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
                 })
                 .collect();
             out.spell_levels.insert(code, levels);
+            out.summon_units.insert(code, def.levels.iter().map(|l| l.unit_id).collect());
         }
     }
     for kind in AURA_KINDS {
@@ -487,6 +497,11 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     }
     for (&code, levels) in &text.spell_levels {
         game.set_spell_levels(code, levels.clone());
+    }
+    for (&code, units) in &text.summon_units {
+        if code == sim::orc::FERAL_SPIRIT {
+            game.set_summon_units(code, units.clone());
+        }
     }
     for (&base, levels) in &text.auras {
         game.aura_types_mut().insert(base, levels.clone());

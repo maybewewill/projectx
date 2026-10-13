@@ -63,3 +63,86 @@ no draw happens. Not wired (as before).
 `Game::orc_swing_start` (from `start_swing`) draws the roll, `Game::orc_crit_raw` (from `SpecDamage::roll`) applies it.
 The placeholder damage model does not apply a crit. UNSURE: the blocking buff, the count gate and the target filters of
 the arm function are modelled as open.
+
+## 2. Shared plumbing (CONFIRMED structure)
+
+* The cast dispatcher `0x6F05C3A0` (slot `0x3C0`) branches on the target kind (slot `0x34C`): unit target -> slot
+  `0x424`; point/destination (`kind & 0x0A`) -> slot `0x418`; no target -> slot `0x428`.
+* The area spells build their unit set with the group builder `0x6F2A3270` (tag list: area `0xB`, filter flags `0x1D`,
+  owner, mode `0xF`, end `0x1F`; flags = the ability's target word `+0x4C & 0xFFFF0FFF | 0x10000`). The per-unit callback
+  is called in the enumeration order of the area query (x-major cells, groups-events-2.md).
+* The duration rule of every effect is the Slow/Storm Bolt rule: `HeroDur` for a hero (`0x6F1D2660`), else `Dur` plus the
+  float at ability `+0x9C` (0.0 in the model).
+* Model plumbing: `CastTarget::{None, Point}` casts (point range check against `Rng`), `Issue{Immediate,Point}Order*`
+  reach `begin_cast`, order ids from the public list (UNSURE): stomp 852127, shockwave 852125, chain lightning 852119,
+  wind walk 852129, mirror image 852093, far sight 852122, spiritwolf 852120.
+
+## 3. War Stomp (`AOws`, `CAbilityStomp`, vtable `0x6F8F6C04`)
+
+Data: `DataA` damage (25/50/75), `Dur`/`HeroDur` stun, `Area` 250/300/350, targs `ground,organic`.
+Instant slot `0x428` = `0x6F1608B0` (eye candy, then the area slot `0x434` = `0x6F176CD0` with the caster position) ->
+per-unit `0x6F1607B0` (CONFIRMED): skipped when the unit's slot `0x11C` is true or the immunity test `0x6F28D750`
+rejects it (then a zero-damage record with flag `0x10` is sent); otherwise a damage record of `DataA`, class
+`0x8000` (slot `0x42C` = `0x6F18F880`), flags `0x40`, goes to the unit's damage slot `0x120`; afterwards, if the unit
+is not flagged `0x8` in slot `0x114` and was not skipped, slot `0x430` = `0x6F18ABF0` applies the stun with the
+Dur/HeroDur rule. Model: `orc::war_stomp`. UNSURE: the relation filter (enemies), the meaning of the `0x114` bit, the
+exact ground/organic tests. Numeric cores: none new (the arithmetic is the verified soft-float add and the Storm Bolt
+duration rule).
+
+## 4. Chain Lightning (`AOcl`, `CAbilityChainLightning`, vtable `0x6F8B0E74`)
+
+Data: `DataA` damage (100/140/180), `DataB` units hit (4/6/8), `DataC` reduction 0.15, `Area` 500 bounce radius, `Rng` 700.
+Slot `0x424` = `0x6F1CB550` sets the relation flags (`0x80000` when the target is an enemy, `0x100000` when
+`target+0xEC > 0`), resets the factor cell (`+0x128`, value at `+0x12C`) to 1.0 and starts the hop body `0x6F1C2F50`
+(CONFIRMED): hop damage = `mul(DataA, factor)`, then `factor := mul(factor, sub(1.0, DataC))`; the unit is appended to the hit
+list (`+0x134`, 12-byte entries, count `+0x124`); damage record flags `0x400` (never miss) to the source's damage slot.
+Next target: `0x6F1B6F30` = group builder around the unit just hit with `Area`, callback `0x6F1B0780`: in the distance mode it
+keeps a candidate only when `lt(distance, best)` (strict, `0x6F00C110`), so the NEAREST valid unit wins and the first of equal
+distances stays; validity `0x6F1B06F0`: attackable by the owner (`0x6F284EE0(owner, unit, 0, 4)`), not rejected by slot
+`0x3F0`, not immune (`0x6F28D750`), not already hit (`0x6F1A2110`), and the `+0xEC` count rule. Model: `orc::chain_lightning`
+(no hop delay: UNSURE; the damage class and the exact relation filter UNSURE). The arithmetic composes already
+Unicorn-checked soft-float helpers (mul `0x6F6EEE20`, sub `0x6F6EEEF0`); the hop function itself was not run (it needs the
+agile cell objects).
+
+## 5. Shockwave (`AOsh`, `CAbilityShockwave`, vtable `0x6F92075C`)
+
+Data: `DataA` damage (75/130/200), `DataB` cap, `DataC` distance 800, `DataD` end width 150, `Area` start width 150,
+`Rng` 700, targs `ground,structure`. Point slots `0x418/0x41C/0x420/0x424` all forward to `0x6F1DD4F0`; the line missile
+is spawned by `0x6F1F2B90` through the engine projectile system (not decoded). Model `orc::shockwave` (UNSURE): one
+instant pass over the segment (width = max(Area, DataD), inclusive), hits ordered by travel distance, `min(DataA, DataB)`.
+
+## 6. Wind Walk (`AOwk`, `CAbilityWindWalk`, vtable `0x6F8F2534`)
+
+Data: `Dur`/`HeroDur` 20/40/60, `DataA` fade 0.6/1/1, `DataB` speed bonus 0.1/0.4/0.7, `DataC` first strike bonus
+50/75/100. Effect `0x6F18CAA0` (CONFIRMED): duration by the hero rule on the caster, buff creation through the buff
+factory `0x6F189F80` (slot `0x358`) with the data, then `0x6F079CA0(caster)`. Model: buff `BOwk` as a movement factor
+`1 + DataB` (strongest-slow machinery of cast.rs), the first strike (`Game::orc_crit_raw`) adds `DataC` flat and ends the
+buff (UNSURE: flat versus percent, order against the crit). Invisibility, the fade, and ending on casting are not modelled.
+
+## 7. Mirror Image (`AOmi`) and Feral Spirit (`AOsf`)
+
+Mirror Image (vtable `0x6F8D9E5C`, effect `0x6F135740`): `DataA` images (1/2/3), `DataB` damage dealt 0, `DataC` damage taken
+2.0, `DataD` 0.5 (animation delay), `Dur` 60, `Area` 1000. Feral Spirit (vtable `0x6F927B2C`, effect `0x6F1DF330`): `UnitID`
+`osw1..3`, `DataB` = 2 wolves, `Dur` 60. A direct-call search to depth 5 from both effects (and from the summon helpers
+`0x6F1D27A0`, `0x6F299390`, `0x6F1DD4F0`) finds NO draw of the RNG helpers `0x6F2853D0/0x6F285320/0x6F285350`: no stream
+draw is known for the placement (virtual calls not followed: UNSURE). Model: units built at the caster (illusion flag with
+the damage factors; summoned flag), timed life `Dur`/`HeroDur` through BTLF. UNSURE: placement offsets, life of the images,
+abilities of the images, where the taken factor applies.
+
+## 8. Far Sight (`AOfs`, `CAbilityFarSight`, vtable `0x6F88B25C`)
+
+Data: `Dur` 8, `Area` 600/1800/4000, `DataA` 3, `Rng` 99999. Point slots `0x418` = `0x6F06FA50`, `0x424` = `0x6F06F840`.
+Model: a visible-state fog modifier over the circle for the owner, stopped with a marker buff `BOfs` on the caster after
+`Dur` (UNSURE; the original's reveal mechanism is not decoded).
+
+## 9. Status
+
+| Ability | Class and effect decoded | Numeric core in Unicorn | Wired |
+|---|---|---|---|
+| Critical Strike | yes (roll, PRD, damage) | yes, 800 cases, 0 mismatches | yes (`start_swing`, `SpecDamage::roll`) |
+| War Stomp | structure CONFIRMED | no new core | yes |
+| Chain Lightning | hop arithmetic and selection rule read | components only | yes (no hop delay) |
+| Shockwave | data + launcher only | no | MODEL |
+| Wind Walk | effect read | no | MODEL |
+| Mirror Image / Feral Spirit | effect entry points, no RNG found | no | MODEL |
+| Far Sight | slots only | no | MODEL |
