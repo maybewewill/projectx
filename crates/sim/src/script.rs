@@ -194,6 +194,19 @@ impl ScriptHost {
         self.vm.start_now(name, args, now)
     }
 
+    /// Test aid (`w3boot --wipe`): sets the life of every live structure of `owner` to zero through the normal death path
+    /// (counters, death events, triggers). Returns how many were killed.
+    pub fn kill_units_zero_life(&mut self, owner: u32) -> usize {
+        let keys = self.game.borrow().structure_keys(owner);
+        for &k in &keys {
+            let died = natives::set_life(&mut self.game.borrow_mut(), k, F32::ZERO);
+            if died {
+                natives::dispatch_unit_death_by(&self.game, &mut self.vm, k, None);
+            }
+        }
+        keys.len()
+    }
+
     /// Game ticks run since the host was created.
     pub fn ticks(&self) -> u64 {
         self.ticks

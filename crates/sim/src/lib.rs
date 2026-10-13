@@ -45,6 +45,7 @@ pub mod pathing;
 pub mod push;
 pub mod production;
 pub mod regen;
+pub mod revive;
 pub mod rng;
 pub mod script;
 pub mod shop;

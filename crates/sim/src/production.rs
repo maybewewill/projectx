@@ -536,6 +536,8 @@ pub struct Production {
     last_entangle_scan: f32,
     /// Dead heroes whose revive is queued at an altar (the queue item revives instead of creating a unit).
     reviving: std::collections::BTreeSet<ObjKey>,
+    /// The `[Misc]` revive keys (`None`: all keys absent, i.e. zeros).
+    pub revive_config: Option<crate::revive::ReviveConfig>,
 }
 
 impl Production {
@@ -762,23 +764,35 @@ impl Game {
     }
 
     /// Queues the revive of the dead hero `hero` at the altar `building` (the AI's `SetProduce` of a hero it owns that is
-    /// dead; `0x6F2D2D80` is the revive path). UNSURE model: the original's cost and time formulas are not decoded; the
-    /// cost is the type cost times `0.4 + 0.1 * level` (level 1..10), the time the build time times the same factor, and no
-    /// food is taken (a dead hero keeps its food).
+    /// dead; `0x6F2D2D80` is the revive path). Cost and time are the original's formulas (`crate::revive`, CONFIRMED by
+    /// Unicorn); no food is taken (a dead hero keeps its food, LIKELY: the non-hero branch of `0x6F061AA0` is the one that
+    /// changes the count).
     pub fn revive_hero_at(&mut self, building: ObjKey, hero: ObjKey) -> Result<(), ProdError> {
         let type_id = self.unit(hero).type_id;
         if self.production.reviving.contains(&hero) {
             return Ok(());
         }
-        let level = self.hero_level_of(hero).clamp(1, 10) as f32;
-        let factor = 0.4 + 0.1 * level;
-        self.train_inner(building, type_id, Some(factor))?;
+        let level = self.hero_level_of(hero);
+        self.train_inner(building, type_id, Some(level))?;
         self.production.reviving.insert(hero);
         Ok(())
     }
 
     fn hero_level_of(&self, hero: ObjKey) -> i32 {
         self.unit(hero).hero.as_ref().map_or(1, |h| h.level)
+    }
+
+    /// The live structures of `owner` (test aid of `w3boot --wipe`).
+    pub fn structure_keys(&self, owner: u32) -> Vec<ObjKey> {
+        self.unit_objects()
+            .filter(|(_, u)| u.owner == owner && !u.dead && !u.removed && self.unit_types().is_building(u.type_id))
+            .map(|(k, _)| k)
+            .collect()
+    }
+
+    /// Installs the `[Misc]` revive keys.
+    pub fn set_revive_config(&mut self, cfg: crate::revive::ReviveConfig) {
+        self.production.revive_config = Some(cfg);
     }
 
     /// A dead, not removed hero of `owner` and `type_id` that is not being revived yet.
@@ -788,7 +802,7 @@ impl Game {
             .map(|(k, _)| k)
     }
 
-    fn train_inner(&mut self, building: ObjKey, type_id: u32, revive: Option<f32>) -> Result<(), ProdError> {
+    fn train_inner(&mut self, building: ObjKey, type_id: u32, revive: Option<i32>) -> Result<(), ProdError> {
         if !self.unit_live(building) {
             return Err(ProdError::BadUnit);
         }
@@ -800,12 +814,23 @@ impl Game {
             return Err(ProdError::NotAvailable);
         };
         let bldtm = self.production.build_seconds.get(&type_id).copied().unwrap_or(0);
-        let scale = |v: i32| revive.map_or(v, |f| (v as f32 * f) as i32);
-        let seconds = countdown_seconds(self.order_tables(), revive.map_or(bldtm, |f| (bldtm as f32 * f) as i32));
+        let (gold, lumber, seconds) = match revive {
+            Some(level) => {
+                let cfg = self.production.revive_config.unwrap_or_default();
+                match self.order_tables() {
+                    Some(t) => {
+                        let (g, l) = crate::revive::cost(&cfg, level, ty.gold_cost, ty.wood_cost, t);
+                        (g as i32, l as i32, crate::revive::time(&cfg, level, bldtm, t).to_f32())
+                    }
+                    None => (0, 0, 1.0),
+                }
+            }
+            None => (ty.gold_cost, ty.wood_cost, countdown_seconds(self.order_tables(), bldtm)),
+        };
         let item = TrainItem {
             type_id,
-            gold: scale(ty.gold_cost),
-            lumber: scale(ty.wood_cost),
+            gold,
+            lumber,
             food: if revive.is_some() { 0 } else { ty.food_used },
             food_exempt: false,
             build_seconds: seconds,
@@ -838,16 +863,40 @@ impl Game {
         (x, y - half - 48.0)
     }
 
-    /// The hero returns at the altar with full life and no mana (UNSURE: the original restores by the Misc revive rules).
+    /// The revived hero (`0x6F059E20`, `0x6F061E70`): placed at the altar's position, life = `HeroReviveLifeFactor` times
+    /// the maximum (at least 0.5), mana = the type's starting mana when `HeroReviveManaStart` is set, else
+    /// `HeroReviveManaFactor` times the maximum. CONFIRMED formulas from the decompile; the call sequence into
+    /// `0x6F2A64A0` is not run in Unicorn (LIKELY). A life factor below 0.001 keeps the maximum (the branch of
+    /// `0x6F2A64A0`, UNSURE which value the getter returns).
     fn revive_unit(&mut self, h: ObjKey, x: f32, y: f32) {
         if self.unit(h).removed {
             return;
         }
         self.unit_mut(h).dead = false;
         self.stats_set_dead(h, false);
+        crate::natives::unit::count_add_completed(self, h);
+        let cfg = self.production.revive_config.unwrap_or_default();
         let max = self.life_cells(h).max;
-        self.write_life(h, max);
-        self.write_mana(h, F32::ZERO);
+        let max_mana = self.mana_cells(h).max;
+        let type_mana = self.unit_types().get(self.unit(h).type_id).map_or(F32::ZERO, |t| t.start_mana);
+        let (life, mana) = match self.order_tables() {
+            Some(_) => {
+                let raw = softfloat::arith::mul(cfg.life_factor, max);
+                let half = F32::from_bits(0x3F00_0000);
+                let life = if f32::from_bits(raw.to_bits() & 0x7FFF_FFFF) < 0.001 {
+                    max
+                } else if f32::from_bits(half.to_bits()) < f32::from_bits(raw.to_bits()) {
+                    raw
+                } else {
+                    half
+                };
+                let mana = if cfg.mana_start { type_mana } else { softfloat::arith::mul(cfg.mana_factor, max_mana) };
+                (life, mana)
+            }
+            None => (max, F32::ZERO),
+        };
+        self.write_life(h, life);
+        self.write_mana(h, mana);
         self.store_unit_position(h, fl(x), fl(y));
         self.production.events.push(ProdEvent::Revived { unit: h });
     }
@@ -870,7 +919,8 @@ impl Game {
             .find(|&h| self.unit(h).owner == owner && self.unit(h).type_id == type_id);
         if let Some(h) = dead {
             self.production.reviving.remove(&h);
-            self.revive_unit(h, x, y);
+            let (ax, ay) = self.unit_xy(building);
+            self.revive_unit(h, ax, ay);
             return;
         }
         let food = self.unit_types().get(type_id).map_or(0, |t| t.food_used);
@@ -1275,6 +1325,18 @@ impl Game {
         self.production.unit_upgrades.insert(unit, UnitUpgrade { to, done_at, cd });
         self.production.events.push(ProdEvent::UnitUpgradeStarted { unit, to });
         Ok(())
+    }
+
+    /// A unit died: an upgrade it was running is cancelled and its in-progress entry leaves the owner's counters (the
+    /// target type would otherwise count as a structure for ever, which the melee defeat check would see). The
+    /// original removes the abilities of a dead unit, which cancels their work (LIKELY; the cancel path was not run).
+    pub(crate) fn production_unit_died(&mut self, unit: ObjKey) {
+        let Some(up) = self.production.unit_upgrades.remove(&unit) else { return };
+        let owner = self.unit(unit).owner;
+        let class = self.type_class(up.to);
+        if let Some(p) = self.player_mut(owner) {
+            p.counts.remove_in_progress(up.to, class, false);
+        }
     }
 
     fn finish_unit_upgrade(&mut self, unit: ObjKey) {
