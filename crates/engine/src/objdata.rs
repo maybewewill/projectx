@@ -138,6 +138,8 @@ pub struct ObjectText {
     pub spell_levels: BTreeMap<u32, Vec<sim::cast::SpellLevel>>,
     /// The `UnitID` of each level of the spell abilities (0 when empty).
     pub summon_units: BTreeMap<u32, Vec<u32>>,
+    /// The parsed `targs` word of each level of the orc spells that filter an area (`sim::orc::Game::set_orc_targs`).
+    pub orc_targs: BTreeMap<u32, Vec<u32>>,
     /// The skill data `(levels, reqLevel, levelSkip)` of every ability row, by raw code (hero skill slots).
     pub ability_skill: BTreeMap<u32, (i32, i32, i32)>,
     /// The levels of the aura abilities the model knows (`sim::auras::AuraKind`), by raw code: `Area`, `DataA` to
@@ -401,6 +403,12 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
         ("AOfs", sim::orc::FAR_SIGHT),
         ("AOsf", sim::orc::FERAL_SPIRIT),
         ("AOsw", sim::orc::SERPENT_WARD),
+        ("AOhx", sim::orc::HEX),
+        ("AOvd", sim::orc::VOODOO),
+        ("AOeq", sim::orc::EARTHQUAKE),
+        ("AOre", sim::orc::REINCARNATION),
+        ("AOww", sim::orc::BLADESTORM),
+        ("AOhw", sim::orc::HEALING_WAVE),
         ("AHtc", sim::human_heroes::THUNDER_CLAP),
         ("AHbh", sim::human_heroes::BASH),
         ("AHav", sim::human_heroes::AVATAR),
@@ -433,6 +441,7 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
                 .collect();
             out.spell_levels.insert(code, levels);
             out.summon_units.insert(code, def.levels.iter().map(|l| l.unit_id).collect());
+            out.orc_targs.insert(code, def.levels.iter().map(|l| gamedata::unitclass::parse_target_flags(&l.targs)).collect());
         }
     }
     for kind in AURA_KINDS {
@@ -595,6 +604,11 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     install_harvest(game, text);
     for (&code, levels) in &text.spell_levels {
         game.set_spell_levels(code, levels.clone());
+    }
+    for (&base, words) in &text.orc_targs {
+        if matches!(base, sim::orc::WAR_STOMP | sim::orc::VOODOO | sim::orc::EARTHQUAKE | sim::orc::BLADESTORM) {
+            game.set_orc_targs(base, words.clone());
+        }
     }
     for (&code, units) in &text.summon_units {
         if code == sim::orc::FERAL_SPIRIT || code == sim::orc::SERPENT_WARD {
