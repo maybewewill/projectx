@@ -587,6 +587,13 @@ pub fn blizzard_params(l: &SpellLevel) -> BlizzardParams {
     }
 }
 
+/// The channel time Blizzard stores in the property at ability `+0x90` at the end of `0x6F1B9E90` (CONFIRMED,
+/// Unicorn 400 cases): `mul(I2R(f2i(DataA)), Cast)`, i.e. waves times the wave interval. The cast core arms the
+/// `0xD01BD` timer with it (`docs/spec/abilities-human-heroes.md` section 14).
+pub fn blizzard_channel_time(l: &SpellLevel) -> F32 {
+    arith::mul(conv::i2r(conv::f2i(l.data[0])), l.cast)
+}
+
 /// The unclamped `f2i(DataA)` and `f2i(DataC)` the ability method passes (the vector check compares these).
 pub fn blizzard_raw_counts(l: &SpellLevel) -> (i32, i32) {
     (conv::f2i(l.data[0]), conv::f2i(l.data[2]))

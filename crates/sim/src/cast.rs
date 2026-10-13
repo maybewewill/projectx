@@ -276,6 +276,30 @@ pub fn cost_value(cost: i32) -> F32 {
     crate::abilities::cast_cost_value(cost)
 }
 
+/// `0x6FAAE47C` after start-up: the compare epsilon `0.001`.
+const PROP_EPS: F32 = F32::from_bits(0x3A83_126F);
+/// `0x6FAAE624` after start-up: `FLT_MAX`, the "no end" value of the channel property.
+pub const FLT_MAX: F32 = F32::from_bits(0x7F7F_FFFF);
+
+fn abs_bits(x: F32) -> F32 {
+    F32::from_bits(x.to_bits() & 0x7FFF_FFFF)
+}
+
+/// The "property is above the constant" test of the cast tail (`0x6F022270`, CONFIRMED, Unicorn 400 cases): an
+/// ordered `c < p` as an x87 compare, then not (`0.001 > |p - c|`). False for a NaN on either side.
+pub fn prop_above(p: F32, c: F32) -> bool {
+    if !(f64::from(c.to_f32()) < f64::from(p.to_f32())) {
+        return false;
+    }
+    !(f64::from(PROP_EPS.to_f32()) > f64::from(abs_bits(arith::sub(p, c)).to_f32()))
+}
+
+/// The "property differs from the constant" test (`0x6F022340`, CONFIRMED, Unicorn 400 cases): not
+/// (`0.001 > |c - p|`); a NaN difference counts as different.
+pub fn prop_differs(p: F32, c: F32) -> bool {
+    !(f64::from(PROP_EPS.to_f32()) > f64::from(abs_bits(arith::sub(c, p)).to_f32()))
+}
+
 // ---- registry API ----
 
 impl SpellSystem {
