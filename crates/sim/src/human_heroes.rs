@@ -157,6 +157,12 @@ fn nonzero(x: F32) -> bool {
 }
 
 impl Game {
+    /// Sets Misc `MassTeleportCluster` (default off); with it and a level `DataC != 0` Mass Teleport puts every unit
+    /// on the destination position.
+    pub fn set_mass_teleport_cluster(&mut self, on: bool) {
+        self.spells.human.mass_teleport_cluster = on;
+    }
+
     /// The Bash state of `unit` (defaults when it never rolled).
     pub fn bash_state(&self, unit: ObjKey) -> BashState {
         self.spells.bash.get(&unit).copied().unwrap_or_default()
@@ -594,6 +600,25 @@ pub fn blizzard_channel_time(l: &SpellLevel) -> F32 {
     arith::mul(conv::i2r(conv::f2i(l.data[0])), l.cast)
 }
 
+/// The default-filling normaliser of a target flag word (`0x6F2552F0`, CONFIRMED, **Unicorn 400 cases**): every group the
+/// word leaves empty gets its default. Groups (mask -> default): relations `0x1F000` -> all; ancient `0xC0000000` ->
+/// both; mechanical/organic `0xC000000` -> both; sapper `0x30000000` -> both; unit classes `0x7FE` -> `0xE` (ground, air,
+/// structure); alive/dead `0x3000000` -> alive; hero `0xC00000` -> both; vulnerable/invulnerable `0x300000` ->
+/// vulnerable. The result also keeps the word's own bits.
+pub fn targs_normalise(w: u32) -> u32 {
+    const GROUPS: [(u32, u32); 8] = [
+        (0x1F000, 0x1F000),
+        (0xC000_0000, 0xC000_0000),
+        (0xC00_0000, 0xC00_0000),
+        (0x3000_0000, 0x3000_0000),
+        (0x7FE, 0xE),
+        (0x300_0000, 0x100_0000),
+        (0xC0_0000, 0xC0_0000),
+        (0x30_0000, 0x10_0000),
+    ];
+    GROUPS.iter().fold(w, |acc, &(mask, default)| if w & mask == 0 { acc | default } else { acc })
+}
+
 /// The unclamped `f2i(DataA)` and `f2i(DataC)` the ability method passes (the vector check compares these).
 pub fn blizzard_raw_counts(l: &SpellLevel) -> (i32, i32) {
     (conv::f2i(l.data[0]), conv::f2i(l.data[2]))
@@ -726,6 +751,9 @@ pub struct State {
     next: u32,
     blizzards: std::collections::BTreeMap<u32, BlizzardFx>,
     teleports: std::collections::BTreeMap<u32, TeleportFx>,
+    /// Misc `MassTeleportCluster` (a map's `war3mapMisc.txt` may set it; the shipped MiscData.txt has no such key, so the
+    /// default is 0).
+    pub mass_teleport_cluster: bool,
     /// The `BHbz` marker of each unit: `(spell buff serial, stored wave value)`.
     markers: std::collections::BTreeMap<ObjKey, (u32, F32)>,
     /// Every shard wave placed, `(effect id, wave)`, for tests and the renderer.
@@ -973,7 +1001,7 @@ pub(crate) fn cast_field_is_wave_interval(base: u32) -> bool {
 
 /// The class value of the channel time property (ability `+0x90`), if the class sets one: Blizzard `waves * Cast`
 /// (Unicorn 400 cases), Mass Teleport `DataB` (level init `0x6F060AE0`, reads the `DataB` getter `0x6F02EA50`).
-pub(crate) fn channel_time_override(base: u32, level: &SpellLevel) -> Option<F32> {
+pub fn channel_time_override(base: u32, level: &SpellLevel) -> Option<F32> {
     match base {
         BLIZZARD => Some(blizzard_channel_time(level)),
         MASS_TELEPORT => Some(level.data[1]),
@@ -1018,8 +1046,9 @@ fn teleport_finish(game: &RefCell<Game>, id: u32) {
             continue;
         }
         let u = gm.unit(k);
-        // UNSURE: the filter word `0x40303006` of the group builder; the model takes allied and own non-structures.
-        if gm.is_enemy(owner, u.owner) || gm.unit_types().is_building(u.type_id) {
+        // The group filter word `0x40303006` (section 15): nonancient, **player** (the caster's own units only, no
+        // allies), vulnerable and invulnerable, air and ground (so no structures), alive by default.
+        if u.owner != owner || gm.unit_types().is_building(u.type_id) {
             continue;
         }
         let (ex, ey) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
@@ -1037,8 +1066,12 @@ fn teleport_finish(game: &RefCell<Game>, id: u32) {
         ));
     }
     let chosen = teleport_select(recs, conv::f2i(fx.level.data[0]));
-    let cluster = nonzero(fx.level.data[2]);
-    // The caster goes to the destination unit's position, the others keep their offset when clustering (UNSURE).
+    // Clustering = Misc `MassTeleportCluster` (default 0; absent from the shipped MiscData.txt) and `DataC != 0`
+    // (`0x6F069F23..0x6F069F45`, CONFIRMED: the reader `0x6F009F90` is given the default 0). With it every unit is
+    // placed at the destination position itself (Unicorn: `0x6F056980` hands the destination pair to the move call
+    // `0x6F048AE0`); without it (the stock game) the unit gets an offset-based position (LIKELY: it keeps its offset
+    // from the caster, UNSURE: the formula was not decoded).
+    let cluster = gm.spells.human.mass_teleport_cluster && nonzero(fx.level.data[2]);
     let (px, py) = gm.clamp_unit_move(dx, dy);
     gm.store_unit_position(fx.caster, px, py);
     for (k, _) in chosen {
@@ -1047,9 +1080,9 @@ fn teleport_finish(game: &RefCell<Game>, id: u32) {
             (u.x, u.y)
         };
         let (tx, ty) = if cluster {
-            (arith::add(dx, arith::sub(ux, cx)), arith::add(dy, arith::sub(uy, cy)))
-        } else {
             (dx, dy)
+        } else {
+            (arith::add(dx, arith::sub(ux, cx)), arith::add(dy, arith::sub(uy, cy)))
         };
         let (px, py) = gm.clamp_unit_move(tx, ty);
         gm.store_unit_position(k, px, py);

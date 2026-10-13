@@ -215,6 +215,21 @@ fn mass_teleport_moves_the_caster_and_nearby_allies_after_the_delay() {
 }
 
 #[test]
+fn mass_teleport_clustering_needs_the_misc_key_and_data_c() {
+    // Without Misc `MassTeleportCluster` (the stock game) units keep their offset; with it they all arrive on the
+    // destination position (Unicorn: `0x6F056980`).
+    let mut h = started();
+    h.game_mut().set_mass_teleport_cluster(true);
+    let (mage, ally, dest) = (unit(&h, "mage"), unit(&h, "ally"), unit(&h, "dest"));
+    h.start("teleport", &[]).unwrap();
+    run(&mut h, 40);
+    let (dx, dy) = (h.game().unit(dest).x.to_f32(), h.game().unit(dest).y.to_f32());
+    for k in [mage, ally] {
+        assert!((h.game().unit(k).x.to_f32() - dx).abs() < 1.0 && (h.game().unit(k).y.to_f32() - dy).abs() < 1.0);
+    }
+}
+
+#[test]
 fn mass_teleport_count_limit_keeps_the_nearest() {
     let mut h = started();
     // DataA = 3: the caster plus 2 others (limit = 3 - 1); the two allies nearest to the caster stay in.

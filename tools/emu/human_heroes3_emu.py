@@ -176,6 +176,34 @@ def check_wave_unit(cases, r, rows):
         rows.append([n, cap, d, building, int(structure), int(ward), negate, int(has_buff), old] + out)
 
 
+F_MT_INIT = 0x6F060AE0
+F_NORM = 0x6F2552F0
+VT_MASS_TELEPORT = 0x6F88BEFC
+
+
+def check_mt_init(cases, r, rows):
+    """Mass Teleport level init `0x6F060AE0`: the channel-time property at `+0x90` gets `DataB` (the base init
+    `0x6F05C6C0` is stubbed: it needs the unit-type tables)."""
+    A.patch_jump(0x6F05C6C0, A.stub_ret(8, 0))
+    for _ in range(cases):
+        db = rbits(r)
+        A.make_ability(VT_MASS_TELEPORT, 0x41486D74, 100)
+        wr(A.LVL + 0x24, db)
+        wr(A.LVL + 0x20, rbits(r))
+        wr(A.OBJ + 0x90, FLOATMINI_VT)
+        wr(A.OBJ + 0x94, 0xDEADBEEF)
+        emu.call(F_MT_INIT, ecx=A.OBJ, stack_args=(H2.OBJ2, f2u(1.0)))
+        rows.append((db, rd(A.OBJ + 0x94)))
+
+
+def check_targs_normalise(cases, r, rows):
+    """The default-filling normaliser of the flag word `0x6F2552F0` (ECX = word, returns EAX)."""
+    words = [0, 0xFFFFFFFF, 0x40303006, 0xFDD1F00E, 0x1, 0x2, 0x4, 0x8, 0x2000, 0x100000, 0x200000]
+    for i in range(cases):
+        w = words[i] if i < len(words) else (r.getrandbits(32) & r.getrandbits(32) if r.random() < 0.7 else r.getrandbits(32))
+        rows.append((w, emu.call(F_NORM, ecx=w)))
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -189,8 +217,12 @@ def main():
     check_channel_time(cases, r, ch)
     check_prop_compare(cases, r, pc)
     check_wave_unit(cases, r, wv)
-    print("channel time rows %d, property compare rows %d, wave unit rows %d" % (len(ch), len(pc), len(wv)))
-    for row in wv[:10]:
+    mt, nm = [], []
+    check_mt_init(cases, r, mt)
+    check_targs_normalise(cases, r, nm)
+    print("channel time rows %d, property compare rows %d, wave unit rows %d, mt init %d, targs %d"
+          % (len(ch), len(pc), len(wv), len(mt), len(nm)))
+    for row in mt[:4] + nm[:12]:
         print(" ".join("%08x" % x for x in row))
     if dump:
         os.makedirs(dump, exist_ok=True)
@@ -202,6 +234,12 @@ def main():
                 fh.write("%08x %08x %d %d\n" % row)
         with open(os.path.join(dump, "wave_unit.txt"), "w") as fh:
             for row in wv:
+                fh.write(" ".join("%08x" % x for x in row) + "\n")
+        with open(os.path.join(dump, "mt_init.txt"), "w") as fh:
+            for row in mt:
+                fh.write(" ".join("%08x" % x for x in row) + "\n")
+        with open(os.path.join(dump, "targs_normalise.txt"), "w") as fh:
+            for row in nm:
                 fh.write(" ".join("%08x" % x for x in row) + "\n")
 
 

@@ -453,3 +453,32 @@ the buff" question is answered: there is none). `n` in step 2 is the number of e
 
 Model: `human_heroes::blizzard_damage` (marker map `State::markers`, spell buff `BHbz`), tests
 `two_blizzards_do_not_stack_and_invulnerable_units_are_skipped`, `human_heroes3_vectors.rs`.
+
+## 16. Mass Teleport: delay, filter, placement (S35)
+
+* **Channel delay** (CONFIRMED, **Unicorn 400/400**: the real level init `0x6F060AE0` with the base init stubbed): the
+  property at ability `+0x90` (the channel time of section 14) is set to the level's **`DataB`** unchanged. The teleport
+  runs when that `0xD01BD` timer ends (completion `0x6F069D60`), so it is cancelled by an order, a stun or the caster's
+  death before that (section 14). The completion also requires flag `0x80000` on the ability (set at the start), a live
+  destination whose `+0x5C` bit `0x100` is clear, and `0x6F0485F0(caster)` to accept the caster; otherwise it only
+  finishes.
+* **Group filter** (CONFIRMED: argument capture of the call at `0x6F069E95`, the `targs` table of section 15): the group
+  builder `0x6F2A3270` gets op `0x1D` with the word `0x40303006` (nonancient, player, self, vulnerable, invulnerable, air,
+  ground), the caster as reference and player -1. The normaliser `0x6F2552F0` (**Unicorn 400/400**,
+  `human_heroes::targs_normalise`) turns it into `0x7DF03006`: **units of the caster's own player** (and the caster itself,
+  which the callback `0x6F056890` skips), alive, **no structures** (the class group is given, so structure is not
+  defaulted in), not ancient, invulnerable ones included. Allied units of other players are NOT taken (the earlier model
+  took allies). The per-unit callback also asks `0x6F0485F0` (the "can be moved" test: not owned by someone else, not a
+  unit with a channelling order id `0xD0278`, not flag `+0x60 & 0x200` = already being teleported, not a ward/structure
+  class; error codes `0xDD`, `0x6C`, `0xBA`, `0x5C`, `0x95`, `0x69`) -- only the owner and structure parts are modelled.
+* **Selection**: the limit `f2i(DataA) - 1`, the record layout and the comparator are section 12 (unchanged, Unicorn 400).
+* **Placement** (CONFIRMED structure by running the real `0x6F056980` with the move call captured): with the cluster
+  flag every unit is handed the **destination position pair itself** (`0x6F048AE0(unit, &dest, &dest, 0, ...)`), so they
+  stack on the destination; without it the unit gets an offset-based pair (`*A2 + *A4` of the helper's arguments; the
+  formula behind them was not decoded: the model keeps the caster-relative offset, UNSURE). **The cluster flag** is Misc
+  `MassTeleportCluster` (read with default 0, `0x6F009F90` with `push 0`) **and** `DataC != 0` (`0x6F0327E0`); the key is
+  not in the shipped `MiscData.txt`, so in the stock game clustering is OFF whatever `DataC` says (the earlier model
+  clustered on `DataC` alone and kept offsets for it, the opposite). `Game::set_mass_teleport_cluster` carries the key.
+  The move itself (`0x6F048AE0`, 14 arguments: pathing-aware placement, the transported unit's order cleanup) is not
+  decoded; the model clamps to the playable area and stores the position.
+* Order: the caster is moved first, then the sorted records (`0x6F06A023..0x6F06A063`, stride 20 bytes).

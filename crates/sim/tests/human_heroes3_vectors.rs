@@ -76,6 +76,33 @@ fn blizzard_wave_value_and_marker_rule_match_the_original() {
 }
 
 #[test]
+fn target_flag_normaliser_matches_the_original() {
+    use sim::human_heroes::targs_normalise;
+    let data = hex_rows(include_str!("data/human_heroes/targs_normalise.txt"));
+    assert!(data.len() >= 300);
+    for r in &data {
+        assert_eq!(targs_normalise(r[0]), r[1], "word {:08x}", r[0]);
+    }
+    // The two words the Human heroes use: Blizzard's `_` and Mass Teleport's group filter.
+    assert_eq!(targs_normalise(0), 0xFDD1_F00E);
+    assert_eq!(targs_normalise(0x4030_3006), 0x7DF0_3006);
+}
+
+#[test]
+fn mass_teleport_channel_time_is_data_b() {
+    let data = hex_rows(include_str!("data/human_heroes/mt_init.txt"));
+    assert!(data.len() >= 300);
+    for r in &data {
+        let level = SpellLevel {
+            data: [F32::ZERO, F32::from_bits(r[0]), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
+            ..SpellLevel::default()
+        };
+        let t = sim::human_heroes::channel_time_override(sim::human_heroes::MASS_TELEPORT, &level);
+        assert_eq!(t.map(F32::to_bits), Some(r[1]), "DataB {:08x}", r[0]);
+    }
+}
+
+#[test]
 fn channel_property_compares_match_the_original() {
     let text = include_str!("data/human_heroes/prop_compare.txt");
     let mut n = 0;
