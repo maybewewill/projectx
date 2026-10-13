@@ -292,6 +292,7 @@ impl SpellSystem {
             (852_171, crate::undead_ne::ENTANGLING_ROOTS),
             (852_176, crate::undead_ne::FORCE_OF_NATURE),
             (852_223, crate::undead_ne::DEATH_PACT),
+            (852_219, crate::undead_ne::DARK_RITUAL),
             (852_218, crate::undead_ne::CARRION_SWARM),
             (852_227, crate::undead_ne::SLEEP),
             (852_527, crate::undead_ne::SHADOW_STRIKE),
