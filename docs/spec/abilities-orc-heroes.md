@@ -452,3 +452,23 @@ buffs `BOvd,BOvc`.
   `area_predicate`, each live buff holds one invulnerability count). UNSURE: the slot `0x3EC` gate, the watcher's own enter
   events (the model pulses), the channel interruption (shared channel lifecycle, other agent), `BOvc`, the healing
   (the 1.26a buff `BOvd` only grants invulnerability, LIKELY from the tooltip).
+
+## 18. S39: Command Aura (`AOac`) base damage - resolved (Unicorn); Endurance Aura (`AOae`) status
+
+`buffs.md` left the base damage of the Command Aura as "the weapon's minimum roll (UNSURE)". The apply routine `0x6F1ACC40`
+computes per weapon slot `w` (`unit+0x1E8` is the attack ability): `X = 0x6F26D5F0(unit, &out, w)`, then
+`F2I(add(mul(DataA, X), 0.5))` (or `F2I(DataA)` when flag D, `buff+0x20` bit 8, is set), clamped below by the negative of
+`0x6F0C6C70(w)`. `0x6F26D5F0` gives 0.0 without an attack ability, else `0x6F0C6D00(attack, &out, w)`:
+
+`X = I2R(bonus) + I2R(count) * (I2R(sides) * 0.5 + 0.5)` (soft float) with the attack ability's `+0x88 + 4w` (dice count),
+`+0x94 + 4w` (sides) and `+0xA0 + 4w` (base bonus; `GetDamageAmount` `0x6F0C6940` adds the extra `+0xAC + 4w` for the roll, this
+getter does not). So the aura scales the AVERAGE damage `bonus + count (sides + 1) / 2`, not the minimum roll. CONFIRMED by
+Unicorn (`tools/emu/cmdaura_emu.py`: 200 `0x6F0C6D00` + 200 `0x6F26D5F0` cases incl. negative and huge counts, 0
+mismatches; `tests/data/orc/cmdaura.txt`, `tests/orc_cmdaura.rs`). Rust: `orc::command_base_damage`; `auras.rs`
+(`aura_damage_amount`) now calls it. Worked example, the Blademaster (`1d..` weapon 2d6 + 21): average 28, level 1 Command
+Aura `DataA` 0.1 -> `F2I(2.8 + 0.5)` = 3. Also read: `0x6F1ACC00` (illusion caster: bonus only when the Misc flag at `0x6F8B4ABC` is
+set), the weapon-type filters (`+0xDC + 4w` == 1 for ranged or `2..8` for the other kinds, `+0x218 + 4w` targs masks `0x80`, 1,
+`0x40`, `0x100` allowed) which stay as in `buffs.md`.
+
+Endurance Aura (`AOae`): the movement bonus `DataA` and the attack speed bonus `DataB` are applied as in `buffs.md` (additive
+agile multiplier cell snapped to 1.0 within 0.001; attack ability re-arm in proportion); no new number was decoded in S39.

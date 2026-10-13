@@ -1542,6 +1542,19 @@ fn voodoo_tick(game: &RefCell<Game>, serial: u32) {
     voodoo_pulse(&mut gm, serial);
 }
 
+// ---- Command Aura (`AOac`): the base damage it multiplies ----
+
+/// The average damage of one weapon slot that the Command Aura scales (`0x6F0C6D00`, reached through `0x6F26D5F0`):
+/// `I2R(bonus) + I2R(count) * (I2R(sides) * 0.5 + 0.5)` in the soft float, i.e. `bonus + count * (sides + 1) / 2`. The fields
+/// are the attack ability's `+0x88 + 4w` (dice count), `+0x94 + 4w` (sides) and `+0xA0 + 4w` (base bonus); the extra bonus
+/// `+0xAC` is NOT included. A unit without an attack ability gives 0.0. CONFIRMED by Unicorn (`tools/emu/cmdaura_emu.py`,
+/// 400 + 200 cases). The aura's bonus is then `F2I(add(mul(DataA, this), 0.5))` (`0x6F1ACC40`), or `F2I(DataA)` when flag D is set.
+pub fn command_base_damage(count: i32, sides: i32, bonus: i32) -> F32 {
+    let half = F32::from_bits(0x3F00_0000);
+    let per_die = arith::add(arith::mul(conv::i2r(sides), half), half);
+    arith::add(conv::i2r(bonus), arith::mul(conv::i2r(count), per_die))
+}
+
 /// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for `Dur`.
 /// MODEL (UNSURE): a visible-state fog modifier started now and stopped when the marker buff on the caster ends.
 fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
