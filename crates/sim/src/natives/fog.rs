@@ -367,7 +367,7 @@ impl Game {
 
     /// Creates a fog modifier (inactive) and returns its handle, or 0 when the player is not live.
     /// `cells` is computed by the caller from the shape it was given.
-    fn fog_create(
+    pub(crate) fn fog_create(
         &mut self,
         owner: u32,
         state: i32,
@@ -557,7 +557,7 @@ fn rect_of(gm: &Game, a: &[Value], i: usize) -> Option<RectObj> {
 
 impl Game {
     /// Starts modifier `k` (no effect when it is already active): it joins the active list and its shape is written.
-    fn fog_start(&mut self, k: ObjKey) {
+    pub(crate) fn fog_start(&mut self, k: ObjKey) {
         if self.fog_modifier(k).active {
             return;
         }
@@ -567,7 +567,7 @@ impl Game {
     }
 
     /// Stops modifier `k` (no effect when it is inactive) and rebuilds the visible layer from the remaining sources.
-    fn fog_stop(&mut self, k: ObjKey) {
+    pub(crate) fn fog_stop(&mut self, k: ObjKey) {
         if !self.fog_modifier(k).active {
             return;
         }

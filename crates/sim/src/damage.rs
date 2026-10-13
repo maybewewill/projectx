@@ -609,6 +609,8 @@ impl DamageModel for SpecDamage {
             // No RNG table, or more dice than the known sampler handles: the placeholder value (documented).
             return weapon.damage;
         };
+        // Critical Strike multiplies the raw record damage right after the dice (`orc.rs`).
+        let raw = game.orc_crit_raw(attacker, raw);
         let defense = game.unit_defense(target);
         let side = TargetSide {
             raw,

@@ -39,6 +39,7 @@ pub mod mover;
 pub mod movement;
 pub mod natives;
 pub mod occupancy;
+pub mod orc;
 pub mod orders;
 pub mod pathing;
 pub mod push;

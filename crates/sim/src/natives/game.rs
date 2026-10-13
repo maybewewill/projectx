@@ -1444,6 +1444,8 @@ pub struct Game {
     pub(crate) combat: crate::combat::CombatSystem,
     /// The spell casting system: level data, active casts, cooldowns, spell buffs (see `cast.rs`).
     pub(crate) spells: crate::cast::SpellSystem,
+    /// Orc hero ability state (see `orc.rs`).
+    pub(crate) orc: crate::orc::OrcState,
     /// The hero experience tables built from the Misc values (see `crate::heroes`). Empty until the engine sets them,
     /// in which case the heroes have no thresholds (`MaxHeroLevel` 0).
     pub(crate) hero_xp: crate::heroes::XpTables,
@@ -1540,6 +1542,7 @@ impl Game {
             economy_constants: crate::economy::EconomyConstants::default(),
             combat: crate::combat::CombatSystem::default(),
             spells: crate::cast::SpellSystem::new(),
+            orc: crate::orc::OrcState::new(),
             hero_xp: crate::heroes::XpTables::default(),
             hero_rates: crate::heroes::BonusRates::default(),
             hero_attributes: BTreeMap::new(),

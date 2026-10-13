@@ -160,11 +160,11 @@ pub enum SpellMsg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct CastRec {
-    caster: ObjKey,
-    base: u32,
-    target: CastTarget,
-    level: SpellLevel,
+pub(crate) struct CastRec {
+    pub(crate) caster: ObjKey,
+    pub(crate) base: u32,
+    pub(crate) target: CastTarget,
+    pub(crate) level: SpellLevel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -178,6 +178,8 @@ struct Missile {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BuffEffect {
     Stun,
+    /// A buff with no stat effect of its own; the module that applied it reads it (`orc.rs`).
+    Marker,
     /// The move speed delta (negative slows) and the attack speed delta (stored only).
     Slow { move_delta: F32, attack_delta: F32 },
 }
@@ -269,6 +271,7 @@ impl SpellSystem {
         s.order_ids.insert(852_095, STORM_BOLT);
         s.order_ids.insert(852_089, HOLY_LIGHT);
         s.order_ids.insert(852_075, SLOW);
+        crate::orc::register_orders(&mut s.order_ids);
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).
         s.missile_speed.insert(STORM_BOLT, F32::from_bits(1000.0f32.to_bits()));
         s
@@ -416,7 +419,7 @@ impl Game {
             && self.unit(unit).buffs.iter().any(|x| x.serial == serial)
     }
 
-    fn alive(&self, k: ObjKey) -> bool {
+    pub(crate) fn alive(&self, k: ObjKey) -> bool {
         matches!(self.object(k), Object::Unit(u) if !u.dead && !u.removed)
     }
 
@@ -504,6 +507,7 @@ impl Game {
             self.unit_mut(b.unit).bonuses.stun = self.unit(b.unit).bonuses.stun.saturating_sub(1);
         }
         self.unit_mut(b.unit).buffs.retain(|x| x.serial != serial);
+        crate::orc::on_buff_dropped(self, serial);
         self.refresh_slow(b.unit);
     }
 
@@ -523,7 +527,7 @@ impl Game {
         self.spells.cooling.insert((unit, base), id);
     }
 
-    fn target_hero(&self, target: ObjKey) -> bool {
+    pub(crate) fn target_hero(&self, target: ObjKey) -> bool {
         let u = self.unit(target);
         is_hero_target(u.type_id, u.hero.is_some())
     }
@@ -614,8 +618,22 @@ pub fn begin_cast(
                     }
                 }
             }
-            CastTarget::Point(..) => {}
-            CastTarget::None => return Err(CastError::BadTarget),
+            CastTarget::Point(px, py) => {
+                if arith::lt(F32::ZERO, level.rng) {
+                    let a = gm.unit(caster);
+                    let dx = arith::sub(px, a.x);
+                    let dy = arith::sub(py, a.y);
+                    let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
+                    if arith::lt(arith::mul(level.rng, level.rng), d2) {
+                        return Err(CastError::OutOfRange);
+                    }
+                }
+            }
+            CastTarget::None => {
+                if !crate::orc::takes_no_target(base) {
+                    return Err(CastError::BadTarget);
+                }
+            }
         }
         CastRec {
             caster,
@@ -754,6 +772,9 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
 // ---- the class effects (slot 0x424) ----
 
 fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    if crate::orc::run_effect(game, rt, rec) {
+        return;
+    }
     if crate::undead_ne::run_effect(game, rt, rec.caster, rec.base, &rec.level, rec.target) {
         return;
     }

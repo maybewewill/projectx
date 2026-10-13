@@ -605,6 +605,8 @@ impl Game {
     /// point over the multiplier, at most `cooldown - 0.01`. The backswing timer is armed when the execute point fires
     /// ([`Game::fire_execute`]), not here.
     fn start_swing(&mut self, unit: ObjKey, ty: &AttackType) {
+        // Critical Strike arms at the swing start (`orc.rs`).
+        self.orc_swing_start(unit);
         let cmds = match self.order_tables() {
             Some(t) => {
                 let speed = self.attack_speed_of(unit);
