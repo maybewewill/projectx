@@ -14,6 +14,7 @@
 //! system clock, uses hash maps with random seeds, or depends on the host floating point unit.
 
 pub mod abilities;
+pub mod attack_timing;
 pub mod ai;
 pub mod ai_manager;
 pub mod ai_site;
