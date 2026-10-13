@@ -159,3 +159,18 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   through `0x6F279140`; an immune target (`vf 0x11C`) is skipped. 12 ticks of `DataA / 12` fit the 12.01 s buff.
 * Model: shared `TickRec` heal ticks (`hot`), mana part and the "allow when full" rule NOT DONE (the cast is allowed on
   full life), UNSURE: whether a refresh restarts the tick phase.
+
+## 8. Dispel Magic (`Adis`, `CAbilityDispelMagic` vtable `0x6F8C3A24`, family of 3 with Abolish Magic and the item forms)
+
+* Data: cost 75, range 500, Area 200, `DataA` mana loss (0), `DataB` 200 (summoned unit damage), no buff; targets air,
+  ground, ward, invulnerable, vulnerable, tree.
+* The class overrides only slot `0x418` (`0x6F0EF320`, the area effect: group around the target point via the builder
+  `0x6F2A3270`, per-unit worker `0x6F0EEF00` as callback `0x6F0EF210`) and the order getter. The worker (static
+  reading, partly decoded): a summoned (`+0x248 & 4`) or illusion (`+0x5C & 0x40000000`) unit, the presence of a timed
+  life buff, a relation test `0x6F285B20` and the ability's target legality `0x6F28D750` pick between two damage
+  records, one with class `0x4000` (magic) and the amount handed in (`DataB`), one of amount 0 with the class flags
+  `0x10`; the buff removal itself runs inside the target's damage handling (not decoded).
+* Model (`dispel_magic`): units in `Area` of the target point in the circle query's order; an enemy loses positive
+  dispellable buffs, anyone else negative ones; an enemy summoned unit or illusion takes `DataB` magic damage (type 14)
+  from the caster. All of that is LIKELY/UNSURE (the worker's flow is not fully decoded); `DataA` mana loss and the
+  timed-life kill path (`buffs.md`) are NOT DONE for the spell.

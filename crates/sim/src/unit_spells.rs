@@ -71,6 +71,7 @@ pub const UNHOLY_FRENZY: u32 = code(b"Auhf");
 pub const BUFF_UNHOLY_FRENZY: u32 = code(b"BUhf");
 pub const REJUVENATION: u32 = code(b"Arej");
 pub const BUFF_REJUVENATION: u32 = code(b"Brej");
+pub const DISPEL_MAGIC: u32 = code(b"Adis");
 pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 
@@ -102,7 +103,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 7] = [
+pub const SPELL_ORDERS: [(u32, u32); 8] = [
+    (852_057, DISPEL_MAGIC),
     (852_160, REJUVENATION),
     (852_209, UNHOLY_FRENZY),
     (ORDER_HEAL, HEAL),
@@ -496,7 +498,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
 }
 
 /// The class effects of this module. Returns false for any other ability.
-pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
+pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
     match rec.base {
         HEAL => {
             if let CastTarget::Unit(t) = rec.target {
@@ -514,6 +516,10 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             if let CastTarget::Unit(t) = rec.target {
                 rejuvenation(game, rec, t);
             }
+            true
+        }
+        DISPEL_MAGIC => {
+            dispel_magic(game, rt, rec);
             true
         }
         INNER_FIRE | BLOODLUST | CRIPPLE | FAERIE_FIRE => {
@@ -555,6 +561,58 @@ fn unholy_frenzy(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     };
     let serial = gm.apply_mods_buff(target, BUFF_UNHOLY_FRENZY, preds, mods, dur);
     gm.register_tick(target, serial, rec.caster, d[1], false, DAMAGE_TYPE_DEATH, true);
+}
+
+/// Damage type of Dispel Magic's summoned-unit damage: the class word `0x4000` of the worker `0x6F0EEF00` is bit 14,
+/// `DAMAGE_TYPE_MAGIC`.
+const DAMAGE_TYPE_MAGIC: u32 = 14;
+
+/// Dispel Magic (`Adis`, `CAbilityDispelMagic` vtable `0x6F8C3A24`; area slot `0x418` = `0x6F0EF320`, the per-unit
+/// worker `0x6F0EEF00` shared with Purge and Abolish Magic). The group is the units within `Area` of the target point;
+/// per unit (LIKELY reading of the worker, whose dispel runs through a damage record with the class flags `0x10` /
+/// `0x4000`): an enemy loses its positive dispellable buffs, an ally (or the caster) its negative ones; an enemy that is
+/// summoned or an illusion also takes `DataB` ("summoned unit damage") of magic damage from the caster. `DataA` (mana
+/// loss, 0 in the data) is NOT DONE. The cast is accepted on a unit or a point.
+fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let mut killed = Vec::new();
+    {
+        let mut gm = game.borrow_mut();
+        let (x, y) = match rec.target {
+            CastTarget::Unit(t) => (gm.unit(t).x, gm.unit(t).y),
+            CastTarget::Point(x, y) => (x, y),
+            CastTarget::None => (gm.unit(rec.caster).x, gm.unit(rec.caster).y),
+        };
+        let owner = gm.unit(rec.caster).owner;
+        for k in crate::natives::group::circle_candidates(&gm, x, y, rec.level.area) {
+            if !gm.alive(k) || gm.unit(k).hidden {
+                continue;
+            }
+            let (enemy, summoned) = {
+                let u = gm.unit(k);
+                (gm.is_enemy(owner, u.owner), u.summoned || u.illusion)
+            };
+            if enemy && summoned {
+                if let Some(t) =
+                    gm.unit_damage_target(rec.caster, k, rec.level.data[1], false, false, 0, DAMAGE_TYPE_MAGIC)
+                {
+                    killed.push(t);
+                    continue;
+                }
+            }
+            gm.remove_buffs(
+                k,
+                crate::abilities::BuffSelect {
+                    remove_positive: enemy,
+                    remove_negative: !enemy,
+                    dispellable: true,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    for t in killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
 }
 
 /// Rejuvenation (`0x6F108530` -> buff apply `0x6F0F0650`, CONFIRMED): the hero rule duration `T` (`HeroDur` / `Dur`);

@@ -60,6 +60,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(shaman, 'Afae')
     call UnitAddAbility(shaman, 'Auhf')
     call UnitAddAbility(shaman, 'Arej')
+    call UnitAddAbility(shaman, 'Adis')
     call SetUnitState(shaman, 2, 300.0)
     set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
     set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
@@ -86,6 +87,9 @@ function frenzy_foe takes nothing returns nothing
 endfunction
 function rejuv_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852160, grunt)
+endfunction
+function dispel_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852057, foe2)
 endfunction
 function lust_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852101, grunt)
@@ -219,6 +223,22 @@ fn host() -> ScriptHost {
                 data: {
                     let mut d = [F32::ZERO; 9];
                     d[0] = f(240.0);
+                    d
+                },
+                ..Default::default()
+            }],
+        );
+        g.ability_types_mut().insert(DISPEL_MAGIC, AbilityType { max_level: Some(1) });
+        g.set_spell_levels(
+            DISPEL_MAGIC,
+            vec![SpellLevel {
+                cost: 75,
+                cool: f(0.0),
+                rng: f(500.0),
+                area: f(200.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[1] = f(200.0);
                     d
                 },
                 ..Default::default()
@@ -674,4 +694,40 @@ fn rejuvenation_heals_in_twelve_ticks_of_one_second_and_stops() {
     assert!(!has_buff(&h, grunt, BUFF_REJUVENATION));
     run(&mut h, 30);
     assert_eq!(life(&h, grunt), 340.0);
+}
+
+#[test]
+fn dispel_magic_strips_positive_buffs_from_enemies_and_negative_from_allies_in_the_area() {
+    let mut h = started_manual();
+    let (shaman, grunt, grunt2, foe2) = (unit(&h, "shaman"), unit(&h, "grunt"), unit(&h, "grunt2"), unit(&h, "foe2"));
+    let positive = sim::abilities::BuffPredicates { positive: true, magic: true, dispellable: true, ..Default::default() };
+    let negative = sim::abilities::BuffPredicates { negative: true, magic: true, dispellable: true, ..Default::default() };
+    let mods = UnitMods { armor: f(5.0), ..Default::default() };
+    {
+        let mut g = h.game_mut();
+        g.apply_mods_buff(foe2, BUFF_INNER_FIRE, positive, mods, f(30.0));
+        g.apply_mods_buff(foe2, BUFF_CRIPPLE, negative, UnitMods { armor: f(-2.0), ..Default::default() }, f(30.0));
+        g.apply_mods_buff(grunt, BUFF_CRIPPLE, negative, UnitMods { move_delta: f(-0.5), ..Default::default() }, f(30.0));
+        g.apply_mods_buff(grunt2, BUFF_BLOODLUST, positive, UnitMods { move_delta: f(0.25), ..Default::default() }, f(30.0));
+    }
+    call(&mut h, "dispel_foe");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 225.0);
+    assert!(!has_buff(&h, foe2, BUFF_INNER_FIRE), "the enemy's positive buff is gone");
+    assert!(has_buff(&h, foe2, BUFF_CRIPPLE), "its negative buff stays");
+    assert_eq!(h.game().unit(foe2).bonuses.armor.to_f32(), -2.0, "the effect of the removed buff is undone");
+    assert!(!has_buff(&h, grunt, BUFF_CRIPPLE), "the ally's negative buff is gone");
+    assert_eq!(h.game().effective_move_speed(grunt).to_f32(), 270.0);
+    assert!(has_buff(&h, grunt2, BUFF_BLOODLUST), "an ally's positive buff stays");
+}
+
+#[test]
+fn dispel_magic_hurts_enemy_summons_for_data_b() {
+    let mut h = started_manual();
+    let foe2 = unit(&h, "foe2");
+    h.game_mut().unit_mut(foe2).summoned = true;
+    call(&mut h, "dispel_foe");
+    run(&mut h, 1);
+    assert_eq!(life(&h, foe2), 300.0, "500 - 200 (placeholder armor-free damage model)");
 }
