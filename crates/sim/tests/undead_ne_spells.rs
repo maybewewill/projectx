@@ -290,7 +290,7 @@ fn entangling_roots_hold_the_target_and_tick_damage() {
     assert_eq!(h.game().unit(enemy).move_speed.to_f32(), 0.0, "rooted: cannot move");
     assert!(!h.game().is_stunned(enemy), "a rooted unit can still attack");
     run(&mut h, 35);
-    assert_eq!(life(&h, enemy), 470.0, "three one-second ticks of DataA");
+    assert_eq!(life(&h, enemy), 460.0, "ticks at 0.01, 1.01, 2.01 and 3.01 s (first pulse 0.01 s after the cast)");
     run(&mut h, 80);
     assert!(!has_buff(&h, enemy, BUFF_ROOTS));
     assert_eq!(h.game().unit(enemy).move_speed.to_f32(), 270.0);

@@ -74,8 +74,12 @@ pub const BUFF_TREANT_LIFE: u32 = code(b"BEfn");
 /// `unit_damage_target` takes the bit index.
 const DEATH_COIL_DAMAGE_TYPE: u32 = 18;
 const FROST_NOVA_DAMAGE_TYPE: u32 = 9;
-/// UNSURE: the class of the roots' damage.
-const ROOTS_DAMAGE_TYPE: u32 = 9;
+/// CONFIRMED (S33): the periodic pulse of `CBuffEntanglingRoots` hands the class word `0x100000` (slot `0x374` =
+/// `0x6F0AEED0`) to the damage record, i.e. damage type 20.
+const ROOTS_DAMAGE_TYPE: u32 = 20;
+/// CONFIRMED (S33): the first pulse comes 0.01 s after the buff is applied (slot `0x358` = `0x6F0ADBD0` returns the
+/// start-up value 0.01 of `0x6FAAE480`), then every 1.0 s (slot `0x35C` = `0x6F0ADBE0` returns `0x6FAAE4F4`).
+const ROOT_FIRST_TICK_SECONDS: f32 = 0.01;
 
 /// The unit class bit of UNDEAD and the race value of undead (`0x6F08EAC0`: `+0x248 & 2` or `0x6F29C1B0 == 5`).
 const CLASS_UNDEAD: u32 = 0x2;
@@ -300,7 +304,7 @@ fn entangling_roots(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, ta
         return;
     }
     gm.spells_hero_state_mut().roots.insert(serial, (caster, level.data[0]));
-    gm.timers_start_hero(ROOT_TICK_SECONDS, TICK_ROOTS, target, serial);
+    gm.timers_start_hero(ROOT_FIRST_TICK_SECONDS, TICK_ROOTS, target, serial);
 }
 
 fn force_of_nature(
@@ -792,7 +796,10 @@ fn roots_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, au
             return;
         }
         caster = Some(c);
-        if gm.object_is_live_unit(unit) {
+        // The pulse does nothing while the target has the Sleep buff `'BUsl'` (`0x6F0D54B0` looks it up first); the
+        // timer is re-armed before the pulse body runs, so the ticks go on.
+        let asleep = gm.object_is_live_unit(unit) && gm.unit(unit).buffs.iter().any(|b| b.base == BUFF_SLEEP);
+        if gm.object_is_live_unit(unit) && !asleep {
             killed = gm.unit_damage_target(c, unit, dmg, false, false, 0, ROOTS_DAMAGE_TYPE);
         }
         if killed.is_none() {
@@ -876,4 +883,47 @@ impl Game {
     pub(crate) fn spell_missile_speed(&self, base: u32) -> F32 {
         self.spell_missile_speed_of(base)
     }
+}
+
+/// What one periodic pulse of a buff of the `0x6F0D54B0` family does (CONFIRMED structure, Unicorn
+/// `tools/emu/undead_ne3_emu.py` CHECK=pulse on `CBuffEntanglingRoots`, 600 cases, 0 mismatches).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Pulse {
+    /// The pulse does nothing (the target sleeps, or the Misc immunity gate rejects it).
+    Skip,
+    /// A damage record with this amount (class `0x100000` for Roots) and record flags `2` (`0` while the buff's
+    /// first-pulse bit `0x8000000` is still set) is delivered to the target.
+    Damage { amount: F32, record_flags: u32 },
+    /// A negative amount: multiplied by Misc `EtherealHealBonus` and added through AddLife (`0x6F277C20`).
+    AddLife(F32),
+}
+
+/// Inputs of [`pulse`]: the target's sleep state, the Misc gate `MagicImmunesResistDamage`, the class tests of the
+/// damage class word (`0x6F2555E0` / `0x6F2555F0`), the target's immunity counters (`+0x15C` / `+0x158`) and the
+/// buff's first-pulse bit.
+#[derive(Debug, Clone, Copy)]
+pub struct PulseInput {
+    pub asleep: bool,
+    pub gate: bool,
+    pub class_a: bool,
+    pub class_b: bool,
+    pub immune_a: bool,
+    pub immune_b: bool,
+    pub first_pulse: bool,
+    pub ethereal_bonus: F32,
+}
+
+/// The pulse body of `0x6F0D54B0` for an amount (`buff + 0xEC`).
+pub fn pulse(input: &PulseInput, amount: F32) -> Pulse {
+    if input.asleep {
+        return Pulse::Skip;
+    }
+    if input.gate && ((input.immune_a && input.class_a) || (input.immune_b && input.class_b)) {
+        return Pulse::Skip;
+    }
+    // x87 `fcompp` of 0.0 against the amount: the damage branch is taken unless `amount < 0.0` (NaN included).
+    if arith::lt(amount, F32::ZERO) {
+        return Pulse::AddLife(arith::mul(amount, input.ethereal_bonus));
+    }
+    Pulse::Damage { amount, record_flags: if input.first_pulse { 0 } else { 2 } }
 }
