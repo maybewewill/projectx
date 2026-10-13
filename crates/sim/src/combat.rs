@@ -599,6 +599,8 @@ impl Game {
 
     /// Starts a swing: the cooldown, the execute point and the swing end.
     fn start_swing(&mut self, unit: ObjKey, ty: &AttackType) {
+        // Critical Strike arms at the swing start (`orc.rs`).
+        self.orc_swing_start(unit);
         let cooldown = self.arm(self.swing_cooldown(unit, ty.cooldown), unit, AttackMsg::Cooldown);
         let execute = self.arm(ty.damage_point, unit, AttackMsg::Execute);
         let swing = arith::add(ty.damage_point, ty.backswing);

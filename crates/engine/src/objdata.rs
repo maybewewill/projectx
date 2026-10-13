@@ -386,6 +386,7 @@ fn load_gold_mine(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error>
         ("AHhb", sim::cast::HOLY_LIGHT),
         ("Aslo", sim::cast::SLOW),
         ("AEev", sim::abilities::EVASION),
+        ("AOcr", sim::orc::CRITICAL_STRIKE),
     ] {
         if let Some(def) = gamedata::abilitytype::read_ability(&slk, name) {
             let f = |v: f32| F32::from_bits(v.to_bits());
