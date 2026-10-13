@@ -81,6 +81,52 @@ pub fn crit_damage(damage: F32, mult: F32) -> F32 {
     arith::add(arith::sub(damage, F32::ZERO), bonus)
 }
 
+// ---- Wind Walk first strike (CONFIRMED in Unicorn: `tools/emu/ww_emu.py`, `tests/data/orc/windwalk.txt`) ----
+
+/// The shared bonus writer `0x6F255720` on a damage record (`+0x10` damage `a`, `+0x18` bonus `b`): refused when the
+/// record already carries a positive bonus (x87 `0.0 < b`; NaN goes on), otherwise `a := (a - b) + v` and `b := v`.
+/// Critical Strike and the Wind Walk first strike both write through it, so whichever handler runs first keeps the record.
+pub fn record_bonus(a: F32, b: F32, v: F32) -> Option<(F32, F32)> {
+    if 0.0f32 < b.to_f32() {
+        return None;
+    }
+    Some((arith::add(arith::sub(a, b), v), v))
+}
+
+/// The buff handler `0x6F1637B0` (slot `0x134`, category `0x0B`): with the buff flag `0x200` set it adds the buff bonus
+/// (`buff+0xE8` = DataC) to the record through [`record_bonus`], ORs the record flag `0x400` when the buff flag `0x400`
+/// (set by the constructor when DataD is non-zero) is set, and asks the buff to end in 0.01 s (slot `0x34C`, the
+/// constant `[0x6FAAE480]`). Returns the new record `(damage, bonus, flags)`; `None` when the buff is not armed.
+/// Unicorn: 400 cases, 0 mismatches (damage, bonus, flags, event and slot call).
+pub fn ww_first_strike(buff_flags: u32, a: F32, b: F32, v: F32, rec_flags: u32) -> Option<(F32, F32, u32)> {
+    if buff_flags & 0x200 == 0 {
+        return None;
+    }
+    let (a, b) = record_bonus(a, b, v).unwrap_or((a, b));
+    let flags = if buff_flags & 0x400 != 0 { rec_flags | 0x400 } else { rec_flags };
+    Some((a, b, flags))
+}
+
+/// The arming slot `0x124` (`0x6F171870`, order broadcast `0xD000F` at the swing start): clears `0x200`; with a target and
+/// buff flag `0x100` clear the target filter `0x6F26D590(owner, target, buff+0xB8)` decides: zero arms the buff (flag
+/// `0x200`, owner event 0xE), non-zero removes the buff (`0x6F079CC0`). Returns `(flags, removed, event)`.
+pub fn ww_arm(has_target: bool, buff_flags: u32, filter_answer: u32) -> (u32, bool, bool) {
+    let flags = buff_flags & !0x200;
+    if !has_target || flags & 0x100 != 0 {
+        return (flags, false, false);
+    }
+    if filter_answer == 0 {
+        (flags | 0x200, false, true)
+    } else {
+        (flags, true, false)
+    }
+}
+
+/// Seconds until the Wind Walk buff ends after the strike: `[0x6FAAE480]` = 0.01 (`0x3C23D70A`).
+pub const WW_END_DELAY_BITS: u32 = 0x3C23_D70A;
+/// Timer kind that ends the buff after the first strike.
+pub const TICK_WW_END: u8 = 0x83;
+
 // ---- Mirror Image numeric cores (CONFIRMED in Unicorn: `tools/emu/mirror_emu.py`, `tests/data/orc/mirror.txt`) ----
 
 /// The combat RNG stream of the slot pick of Mirror Image: the roll wrapper `0x6F285350` is called with `EDX = 0xC`
@@ -197,6 +243,8 @@ pub struct OrcState {
     /// Chain Lightning chains in flight, by serial.
     chains: BTreeMap<u32, ChainState>,
     chain_serial: u32,
+    /// Units whose Wind Walk buff is armed for the coming execute (buff flag `0x200`).
+    ww_armed: BTreeSet<ObjKey>,
 }
 
 impl OrcState {
@@ -212,7 +260,12 @@ impl Game {
     }
 
     /// Swing start: the Critical Strike arming roll (see the module notes). One stream-3 draw per ability.
-    pub(crate) fn orc_swing_start(&mut self, unit: ObjKey) {
+    pub fn orc_swing_start(&mut self, unit: ObjKey) {
+        // The Wind Walk buff arms itself on the same broadcast (target filter assumed to accept, UNSURE).
+        self.orc.ww_armed.remove(&unit);
+        if self.unit(unit).buffs.iter().any(|b| b.base == BUFF_WIND_WALK) {
+            self.orc.ww_armed.insert(unit);
+        }
         self.orc.crit_armed.remove(&unit);
         let alive = {
             let u = self.unit(unit);
@@ -243,19 +296,35 @@ impl Game {
     /// (their order relative to the crit is UNSURE).
     pub fn orc_crit_raw(&mut self, attacker: ObjKey, raw: F32) -> F32 {
         let mut raw = raw;
+        let mut bonus = F32::ZERO;
+        // The walk of `0x6F2763A0` visits the unit's abilities newest first (`0x6F079990` inserts at the list head), so
+        // the Wind Walk buff (added at cast time) comes before Critical Strike: it takes the record's bonus field and a
+        // positive bonus makes the Critical Strike writer refuse (`record_bonus`). CONFIRMED order rule; the exception
+        // (Critical Strike learned while the buff is up) is not modelled.
+        if self.orc.ww_armed.remove(&attacker) {
+            let ww = self.unit(attacker).buffs.iter().find(|b| b.base == BUFF_WIND_WALK).map(|b| b.serial);
+            if let (Some(serial), Some(record)) = (ww, self.ability_level_record(attacker, WIND_WALK)) {
+                if let Some((a, b, _)) = ww_first_strike(0x200, raw, bonus, record.data[2], 0) {
+                    raw = a;
+                    bonus = b;
+                }
+                self.timers_start_hero(f32::from_bits(WW_END_DELAY_BITS), TICK_WW_END, attacker, serial);
+            }
+        }
         if self.orc.crit_armed.contains(&attacker) {
             if let Some(record) = self.ability_level_record(attacker, CRITICAL_STRIKE) {
-                raw = crit_damage(raw, record.data[1]);
+                let mult = record.data[1];
+                // The x87 equality test skips only an exact zero; NaN goes on.
+                if mult.to_f32() != 0.0 {
+                    let extra = arith::sub(arith::mul(raw, mult), raw);
+                    if let Some((a, b)) = record_bonus(raw, bonus, extra) {
+                        raw = a;
+                        bonus = b;
+                    }
+                }
             }
         }
-        // Wind Walk: the first strike ends the buff and adds DataC (flat; UNSURE whether DataC is a flat bonus).
-        let ww = self.unit(attacker).buffs.iter().find(|b| b.base == BUFF_WIND_WALK).map(|b| b.serial);
-        if let Some(serial) = ww {
-            if let Some(record) = self.ability_level_record(attacker, WIND_WALK) {
-                raw = arith::add(raw, record.data[2]);
-            }
-            self.drop_spell_buff(serial);
-        }
+        let _ = bonus;
         if let Some(&(dealt, _)) = self.orc.illusions.get(&attacker) {
             raw = arith::mul(raw, dealt);
         }
@@ -849,6 +918,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     match kind {
         TICK_MIRROR => mirror_fire(game, rt, unit, aux),
         TICK_CHAIN => chain_next(game, rt, aux),
+        TICK_WW_END => game.borrow_mut().drop_spell_buff(aux),
         _ => {}
     }
 }

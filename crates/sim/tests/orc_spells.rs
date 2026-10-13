@@ -252,8 +252,11 @@ fn wind_walk_speeds_up_and_the_first_strike_ends_it() {
     assert!(has_buff(&h, c, BUFF_WIND_WALK));
     let speed = h.game().unit(c).move_speed.to_f32();
     assert!((509.0..=510.1).contains(&speed), "speed {speed}");
+    h.game_mut().orc_swing_start(c);
     let raw = h.game_mut().orc_crit_raw(c, f(50.0));
     assert_eq!(raw.to_f32(), 150.0, "DataC added to the first strike");
+    assert!(has_buff(&h, c, BUFF_WIND_WALK), "the buff ends 0.01 s after the strike (slot 0x34C), not at once");
+    run(&mut h, 1);
     assert!(!has_buff(&h, c, BUFF_WIND_WALK));
     assert_eq!(h.game().unit(c).move_speed.to_f32(), 300.0, "speed restored");
     assert_eq!(h.game_mut().orc_crit_raw(c, f(50.0)).to_f32(), 50.0, "only the first strike");

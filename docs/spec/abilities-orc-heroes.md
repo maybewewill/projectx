@@ -254,3 +254,39 @@ by slot `0x430`), `0x434` = 1 (score mode), `0x438` = 0 (distance mode off), `0x
 * Corrections made while here: the order ids of Mirror Image (852123) and Feral Spirit (852126) were wrong (fixed upstream
   by the coordinator); other ids from slot `0x308`: Earthquake 852121, Whirlwind (Bladestorm) 852128, Reincarnation
   852124, Hex 852502, Voodoo 852503, Serpent Ward (`AOwd`, not `AOsw`) 852504.
+
+## 11. S34: Wind Walk (`AOwk` / buff `BOwk`, `CBuffWindWalk`, vtable `0x6F8ED58C`)
+
+Order id `0xD00A1` = 852129 (slot `0x308`). Atlas: `BOwk` descends from `CBuffInvisibility` (`Binv`).
+
+* **Buff constructor (slot `0x358` = `0x6F171630`), CONFIRMED by two Unicorn runs (`tools/emu/ww_ctor_emu.py`: the real
+  cast effect `0x6F18CAA0` with marker level values, then the real constructor with marker arguments):** the effect hands
+  `(owner, &duration, &DataA, &DataB, &DataC, &Area, ability, owner id, DataD != 0)`; the duration is `HeroDur` for a hero
+  (`0x6F1D2660`) else `Dur + ability+0x9C`. The constructor stores DataB into the agile cell `+0xDC` (value `+0xE0`: the
+  movement bonus), DataC into the cell `+0xE4` (value `+0xE8`: the first strike bonus), Area into `+0xF4`, the ability in
+  `+0xFC`, the owner id in `+0x108`; DataD != 0 sets the buff flag `0x400` (record flag "never miss"). DataA (fade time) is
+  not stored by the constructor (presentation / the invisibility base).
+* **Movement bonus:** the buff adds `DataB` to the unit's movement multiplier (`0x6F1717F0` / `0x6F171840` copy `+0xE0` into
+  the stat block; the removal slot `0x33C` = `0x6F171710` calls `0x6F202FF0(-DataB)` on the mover `unit+0x1EC`; the property
+  is an additive agile float snapped to 1.0 within `[0x6FAAE47C]`). So bonuses ADD (1 + sum), they do not take the maximum.
+  The model keeps its slow machinery (UNSURE for stacking with other speed bonuses).
+* **First strike, Unicorn (CONFIRMED, `tools/emu/ww_emu.py`, `tests/data/orc/windwalk.txt`, `tests/orc_windwalk.rs`, 400
+  handler + 400 arming cases, 0 mismatches):** the buff has category `0x130` = 0x0B (the SAME category as Critical Strike) and
+  handler `0x134` = `0x6F1637B0`, after-hit `0x154` = `0x6F163820` (presentation: a text tag). With the buff flag `0x200`
+  set the handler posts event 0xE, writes `DataC` through the shared record writer `0x6F255720` (`orc::record_bonus`:
+  refused when the record's bonus `+0x18` is positive, else `damage := (damage - bonus) + v`, `bonus := v`), ORs `0x400` into
+  the record flags when the buff flag `0x400` is set, and calls slot `0x34C(0.01 s, 0)`: the buff ENDS 0.01 s later through
+  the timed-life message `0xD01C4` (not in the same call). The bonus is FLAT (CONFIRMED: an add, not a percentage).
+* **Arming:** slot `0x124` = `0x6F171870` is called by the `0xD000F` broadcast at the swing start (same as Critical Strike):
+  clears `0x200`; with a target and buff flag `0x100` clear it calls the target filter `0x6F26D590(owner, target, buff+0xB8)`
+  (= `0x6F25D6F0(.., -1)`); answer 0 sets `0x200` and posts event 0xE, a non-zero answer REMOVES the buff (`0x6F079CC0`).
+  Which targets the filter refuses (buff word `+0xB8`) is not decoded (UNSURE; the model accepts every target).
+* **Order against Critical Strike (CONFIRMED rule):** `0x6F2763A0` walks the unit's ability list head to tail for each
+  category; `0x6F079990` (add ability) links a new ability at the HEAD, so the newest ability is visited first. The buff is
+  added at cast time, after the hero learned Critical Strike, so the Wind Walk handler runs first, fills the bonus field with
+  `DataC` and the Critical Strike writer is then refused: **a Wind Walk strike does not crit** (unless `DataC` is not
+  positive). The exception (Critical Strike learned while the buff is up) is not modelled. Both handlers return 0, so the
+  walk continues through all abilities. Rust: `Game::orc_crit_raw`.
+* **Cancel on cast:** the buff's slot `0x178` (`0x6F15A270`, six arguments) forwards to the removal `0x6F079CC0(owner, buff)`:
+  LIKELY the "ability cast by the owner" notification (not run; the model does not end the buff on casting).
+* Not modelled: the invisibility itself (`Binv` base, fade `DataA`), which belongs to the vision / detection system.
