@@ -243,6 +243,24 @@ pub fn install(game: &mut Game, data: &GameData, tables: Option<&Tables>) -> Com
             hero_ability_level_skip: h.hero_ability_level_skip,
         });
     }
+    {
+        let r = &data.misc.hero.revive;
+        game.set_revive_config(sim::revive::ReviveConfig {
+            base_factor: r.base_factor,
+            level_factor: r.level_factor,
+            max_factor: r.max_factor,
+            base_lumber_factor: r.base_lumber_factor,
+            lumber_level_factor: r.lumber_level_factor,
+            time_factor: r.time_factor,
+            max_time_factor: r.max_time_factor,
+            max_time: r.max_time,
+            max_cost_gold: r.max_cost_gold as u32,
+            max_cost_lumber: r.max_cost_lumber as u32,
+            mana_start: r.mana_start != 0,
+            mana_factor: r.mana_factor,
+            life_factor: r.life_factor,
+        });
+    }
     for (code, row) in data.units.iter() {
         let Some(id) = rawcode(code) else {
             continue;
