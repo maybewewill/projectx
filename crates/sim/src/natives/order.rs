@@ -632,11 +632,16 @@ fn instant_point(
 fn issue(g: &Rc<RefCell<Game>>, rt: &mut dyn ScriptRuntime, unit: ObjKey, order: Order) -> bool {
     // A spell order (id = the ability's order index on top of 0xD0028, abilities-4 section 2.1) starts the cast
     // pipeline of `cast.rs`; the native's result is whether the cast started (the readiness errors refuse it).
-    if order.class == OrderClass::Target {
+    if matches!(order.class, OrderClass::Target | OrderClass::Point) {
         let spell = g.borrow().spell_for_order(unit, order.id);
         if let Some(base) = spell {
-            let target = g.borrow().handle_of_kind(order.target, HandleKind::Unit);
-            let target = target.map_or(crate::cast::CastTarget::None, crate::cast::CastTarget::Unit);
+            let target = match (order.class, order.point) {
+                (_, Some((x, y))) => crate::cast::CastTarget::Point(x, y),
+                _ => {
+                    let t = g.borrow().handle_of_kind(order.target, HandleKind::Unit);
+                    t.map_or(crate::cast::CastTarget::None, crate::cast::CastTarget::Unit)
+                }
+            };
             return crate::cast::begin_cast(g, rt, unit, base, target).is_ok();
         }
     }

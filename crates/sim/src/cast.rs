@@ -155,6 +155,8 @@ pub enum SpellMsg {
     Impact(u32),
     /// A spell buff runs out.
     BuffEnd { unit: ObjKey, serial: u32 },
+    /// A timer of the hero spells in `undead_ne.rs` (`kind` is its `TICK_*`).
+    HeroSpell { kind: u8, unit: ObjKey, aux: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -204,6 +206,8 @@ pub struct SpellSystem {
     base_speed: BTreeMap<ObjKey, F32>,
     /// The stage log: `(caster, base, event index)` of every spell event fired, in order (for tests and the host).
     pub log: Vec<(ObjKey, u32, u32)>,
+    /// State of the Undead / Night Elf hero spells (`undead_ne.rs`).
+    pub hero: crate::undead_ne::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -394,6 +398,22 @@ impl Game {
             return Err(CastError::Cooling);
         }
         Ok(())
+    }
+
+    pub(crate) fn spells_hero_state_mut(&mut self) -> &mut crate::undead_ne::State {
+        &mut self.spells.hero
+    }
+
+    /// Starts a one-shot `HeroSpell` timer.
+    pub(crate) fn timers_start_hero(&mut self, seconds: f32, kind: u8, unit: ObjKey, aux: u32) {
+        self.timers
+            .start(seconds, false, Payload::Spell(SpellMsg::HeroSpell { kind, unit, aux }));
+    }
+
+    /// Whether the spell buff `serial` is still on `unit`.
+    pub(crate) fn spell_buff_alive(&self, unit: ObjKey, serial: u32) -> bool {
+        self.spells.buffs.get(&serial).is_some_and(|b| b.unit == unit)
+            && self.unit(unit).buffs.iter().any(|x| x.serial == serial)
     }
 
     fn alive(&self, k: ObjKey) -> bool {
@@ -594,7 +614,8 @@ pub fn begin_cast(
                     }
                 }
             }
-            _ => return Err(CastError::BadTarget),
+            CastTarget::Point(..) => {}
+            CastTarget::None => return Err(CastError::BadTarget),
         }
         CastRec {
             caster,
@@ -733,6 +754,9 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
 // ---- the class effects (slot 0x424) ----
 
 fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    if crate::undead_ne::run_effect(game, rt, rec.caster, rec.base, &rec.level, rec.target) {
+        return;
+    }
     let CastTarget::Unit(target) = rec.target else {
         return;
     };
@@ -901,5 +925,6 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
             let _ = unit;
             game.borrow_mut().drop_spell_buff(serial);
         }
+        SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
     }
 }
