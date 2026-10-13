@@ -253,7 +253,53 @@ def check_banish(cases, r, rows):
         rows.append([dur, hdur, da, db, extra, int(hero), rd(BN_CAP), rd(BN_CAP + 4), rd(BN_CAP + 8)])
 
 
-F_DISPEL = 0x6F079FE0  # thiscall(unit), 9 stack arguments: walks the unit's buff list and removes the selected ones
+F_SLOW = 0x6F18A930     # thiscall(ability), (target unit): Thunder Clap's slow application
+
+
+def check_thunder_slow(cases, r, rows):
+    """Thunder Clap's slow `0x6F18A930` (new-buff path): hero test, `HeroDur` / `Dur + (+0x9C)`, the duration non-zero test,
+    movement `-DataC` and attack speed `-DataD` as they reach the apply slot `0x354`. Rows: dur, herodur, DataC, DataD,
+    `+0x9C`, hero flag -> applied, the three values."""
+    A.patch_jump(0x6F0787D0, A.stub_ret(0x14, 0))
+    A.patch_jump(0x6F188B30, A.stub_ret(0, BN_NEWBUFF))
+    A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+    asm_stubs()   # also installs the smart-reference stubs (0x6F038450, 0x6F042B20)
+    mu.mem_write(BN_BVT, b"\0" * 0x400)
+    mu.mem_write(BN_CODE, b"\xC2\x04\x00")
+    wr(BN_BVT + 0x324, BN_CODE)
+    code = (b"\x8B\x44\x24\x08\x8B\x00\xA3" + struct.pack("<I", BN_CAP)
+            + b"\x8B\x44\x24\x10\x8B\x00\xA3" + struct.pack("<I", BN_CAP + 4)
+            + b"\x8B\x44\x24\x14\x8B\x00\xA3" + struct.pack("<I", BN_CAP + 8)
+            + b"\xA1" + struct.pack("<I", BN_CAP + 0xC) + b"\x40\xA3" + struct.pack("<I", BN_CAP + 0xC)
+            + b"\xC2\x14\x00")
+    mu.mem_write(BN_CODE + 0x60, code)   # a new address: Unicorn keeps translated blocks of rewritten code
+    wr(BN_BVT + 0x354, BN_CODE + 0x60)
+    for _ in range(cases):
+        dur, hdur, dc, dd = rbits(r), rbits(r), rbits(r), rbits(r)
+        extra = rbits(r) if r.random() < 0.3 else 0
+        if r.random() < 0.15:
+            dur = 0
+        if r.random() < 0.15:
+            hdur = 0
+        hero = r.random() < 0.5
+        A.make_ability(0x6F8F67C4, 0x41487463, 75)
+        L = A.LVL
+        wr(L + 0x08, dur)
+        wr(L + 0x0C, hdur)
+        wr(L + 0x28, dc)
+        wr(L + 0x2C, dd)
+        wr(A.OBJ + 0x9C, extra)
+        mu.mem_write(BN_TARGET, b"\0" * 0x200)
+        mu.mem_write(BN_TARGET + 0x33, b"A" if hero else b"h")
+        wr(BN_TARGET + 4, 100)
+        mu.mem_write(BN_NEWBUFF, b"\0" * 0x200)
+        wr(BN_NEWBUFF, BN_BVT)
+        mu.mem_write(BN_CAP, b"\0" * 0x20)
+        emu.call(F_SLOW, ecx=A.OBJ, stack_args=(BN_TARGET,))
+        rows.append([dur, hdur, dc, dd, extra, int(hero), rd(BN_CAP + 0xC), rd(BN_CAP), rd(BN_CAP + 4), rd(BN_CAP + 8)])
+
+
+F_DISPEL = 0x6F079FE0 # thiscall(unit), 9 stack arguments: walks the unit's buff list and removes the selected ones
 F_RESOLVE = 0x6F4786B0  # reference -> object
 F_REMOVE = 0x6F079CC0   # thiscall(unit), (buff): remove a buff
 DUNIT, DBUFF, DVT, DLOG, DCODE = DATA + 0xC200, DATA + 0xCC00, DATA + 0xC500, DATA + 0xC900, DATA + 0xCA00
@@ -374,9 +420,10 @@ def main():
     check_channel_time(cases, r, ch)
     check_prop_compare(cases, r, pc)
     check_wave_unit(cases, r, wv)
-    mt, nm, cd, dp, bn = [], [], [], [], []
+    mt, nm, cd, dp, bn, ts = [], [], [], [], [], []
     check_dispel(cases, r, dp)
     check_banish(cases, r, bn)
+    check_thunder_slow(cases, r, ts)
     check_mt_init(cases, r, mt)
     check_targs_normalise(cases, r, nm)
     check_corpse_distance(cases, r, cd)
@@ -397,6 +444,9 @@ def main():
                 fh.write(" ".join("%08x" % x for x in row) + "\n")
         with open(os.path.join(dump, "mt_init.txt"), "w") as fh:
             for row in mt:
+                fh.write(" ".join("%08x" % x for x in row) + "\n")
+        with open(os.path.join(dump, "thunder_slow.txt"), "w") as fh:
+            for row in ts:
                 fh.write(" ".join("%08x" % x for x in row) + "\n")
         with open(os.path.join(dump, "banish.txt"), "w") as fh:
             for row in bn:

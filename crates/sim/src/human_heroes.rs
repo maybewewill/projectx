@@ -430,6 +430,20 @@ impl Game {
     }
 }
 
+/// The slow Thunder Clap applies (`0x6F18A930`, CONFIRMED, **Unicorn 400/400**): the duration is `HeroDur` for a hero and
+/// `add(Dur, extra)` otherwise (`extra` = ability `+0x9C`); a duration that is exactly zero (ordered compare, NaN counts
+/// as non-zero) applies nothing; the buff gets `-DataC` as movement factor and `-DataD` as attack-speed factor.
+pub fn thunder_clap_slow(l: &SpellLevel, hero: bool, extra: F32) -> Option<(F32, F32, F32)> {
+    let dur = effect_duration(l, hero, extra);
+    nonzero(dur).then(|| {
+        (
+            dur,
+            F32::from_bits(l.data[2].to_bits() ^ 0x8000_0000),
+            F32::from_bits(l.data[3].to_bits() ^ 0x8000_0000),
+        )
+    })
+}
+
 fn thunder_clap_targets(gm: &Game, caster: ObjKey, level: &SpellLevel) -> Vec<ObjKey> {
     let c = gm.unit(caster);
     let owner = c.owner;
@@ -467,16 +481,8 @@ fn thunder_clap(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
             continue;
         }
         let hero = gm.target_hero(t);
-        let dur = effect_duration(&level, hero, F32::ZERO);
-        if nonzero(dur) {
-            // The buff gets `-DataC` (movement) and `-DataD` (attack speed), `0x6F18A930`.
-            gm.apply_slow_as(
-                BUFF_THUNDER_CLAP,
-                t,
-                dur,
-                arith::neg(level.data[2]),
-                arith::neg(level.data[3]),
-            );
+        if let Some((dur, move_factor, attack_factor)) = thunder_clap_slow(&level, hero, F32::ZERO) {
+            gm.apply_slow_as(BUFF_THUNDER_CLAP, t, dur, move_factor, attack_factor);
         }
     }
 }
