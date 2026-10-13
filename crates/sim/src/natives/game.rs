@@ -921,6 +921,9 @@ pub mod item_flags {
     pub const DROP_ON_DEATH: u32 = 0x080;
     /// Set by `UnitAddItemById` on the item it creates. Its meaning is not known (UNSURE).
     pub const ADDED_BY_ID: u32 = 0x100;
+    /// Perishable: the item is destroyed when its last charge is used (bit `0x40` tested by the charge routine
+    /// `0x6F2B8390`, `docs/spec/abilities-items.md` section 1).
+    pub const PERISHABLE: u32 = 0x040;
     /// Droppable (`SetItemDroppable`).
     pub const DROPPABLE: u32 = 0x400;
     /// Powerup: consumed when a unit takes it, never placed in a slot (`IsItemPowerup`).

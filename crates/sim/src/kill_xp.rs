@@ -67,7 +67,7 @@ fn shares_xp(game: &Game, killer_owner: u32, cand_owner: u32) -> bool {
 
 /// The skill point cap of a hero's slots against the abilities its unit holds (`heroes::skill_point_cap`), in the
 /// `(min, max)` pair form `EngineEnv` takes. A hero without slots has no cap: the pairs make a slack that never binds.
-fn caps_of(unit: &crate::natives::game::UnitObj) -> [(i32, i32); 5] {
+pub(crate) fn caps_of(unit: &crate::natives::game::UnitObj) -> [(i32, i32); 5] {
     let Some(h) = unit.hero.as_ref() else {
         return [(0, 0); 5];
     };

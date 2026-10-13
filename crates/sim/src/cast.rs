@@ -163,6 +163,8 @@ pub enum SpellMsg {
     Human { kind: u8, id: u32 },
     /// A timer of the unit spells in `unit_spells.rs` (autocast scans).
     UnitSpell { kind: u8, unit: ObjKey, base: u32, aux: u32 },
+    /// A timer of the item abilities in `item_abilities.rs` (regeneration ticks).
+    Item { kind: u8, unit: ObjKey, aux: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -224,6 +226,8 @@ pub struct SpellSystem {
     pub human: crate::human_heroes::State,
     /// State of the unit spells (`unit_spells.rs`).
     pub unit: crate::unit_spells::State,
+    /// State of the item abilities (`item_abilities.rs`).
+    pub item: crate::item_abilities::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -316,6 +320,11 @@ impl Game {
     /// Installs the level records of ability `base` (index 0 = level 1).
     pub fn set_spell_levels(&mut self, base: u32, levels: Vec<SpellLevel>) {
         self.spells.levels.insert(base, levels);
+    }
+
+    /// The level records installed for ability `base` (empty when none).
+    pub(crate) fn spell_levels_of(&self, base: u32) -> &[SpellLevel] {
+        self.spells.levels.get(&base).map_or(&[], |v| v.as_slice())
     }
 
     /// Installs the cast point and backswing of a unit type.
@@ -436,7 +445,7 @@ impl Game {
         if !mana_check(u.mana, cost_value(level.cost)) {
             return Err(CastError::NoMana);
         }
-        if self.is_cooling(caster, base) {
+        if self.is_cooling(caster, base) || crate::item_abilities::group_cooling(self, caster, base) {
             return Err(CastError::Cooling);
         }
         Ok(())
@@ -681,6 +690,7 @@ pub fn begin_cast(
                     && !crate::unit_spells::takes_no_target(base)
                     && !crate::human_heroes::is_immediate_spell(base)
                     && !crate::undead_ne::is_immediate(base)
+                    && !crate::item_abilities::takes_no_target(&gm, base)
                 {
                     return Err(CastError::BadTarget);
                 }
@@ -821,6 +831,7 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
         fire_spell_event(game, rt, SPELL_FINISH, &rec);
     }
     fire_spell_event(game, rt, SPELL_ENDCAST, &rec);
+    crate::item_abilities::on_cast_end(game, rt, &rec, completed);
 }
 
 // ---- the class effects (slot 0x424) ----
@@ -840,6 +851,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
         return;
     }
     if crate::unit_spells::run_effect(game, rt, rec) {
+        return;
+    }
+    if crate::item_abilities::run_effect(game, rec) {
         return;
     }
     let CastTarget::Unit(target) = rec.target else {
@@ -1014,5 +1028,6 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
         SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
         SpellMsg::UnitSpell { kind, unit, base, aux } => crate::unit_spells::on_timer(game, rt, kind, unit, base, aux),
+        SpellMsg::Item { kind, unit, aux } => crate::item_abilities::on_timer(game, rt, kind, unit, aux),
     }
 }
