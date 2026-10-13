@@ -500,6 +500,16 @@ impl Game {
         }
     }
 
+    /// Replaces the slow amounts of a live spell buff (the Shadow Strike decay, S37) and recomputes the speed.
+    pub(crate) fn set_spell_buff_slow(&mut self, serial: u32, move_delta: F32, attack_delta: F32) {
+        let Some(b) = self.spells.buffs.get_mut(&serial) else {
+            return;
+        };
+        b.effect = BuffEffect::Slow { move_delta, attack_delta };
+        let unit = b.unit;
+        self.refresh_slow(unit);
+    }
+
     /// Adds a spell buff: replaces a buff of the same code from an earlier cast (UNSURE: stacking), arms the
     /// expiry timer when `dur > 0`. For stun buffs, increments the stun counter.
     pub fn add_spell_buff(&mut self, unit: ObjKey, code: u32, effect: BuffEffect, dur: F32) -> u32 {

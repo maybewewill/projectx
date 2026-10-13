@@ -374,6 +374,82 @@ def run_aoe_duration(cases, r):
     return rows
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Shadow Strike slow decay: `CBuffShadowStrike` slot 0x390 = 0x6F1DD190 (factor f) and the apply slot 0x37C = 0x6F11BBF0
+
+def run_strike_decay(cases, r):
+    A.setup_stubs()
+    b = DATA + 0x7000
+    mu.mem_write(b, bytes(0x400))
+    wr(b, 0x6F91FD04)
+    tv = DATA + 0x7800
+    mu.mem_write(tv, bytes(0x100))
+    wr(b + 0x84, tv)
+    st = {}
+    s1c = stub_slot()
+    hook_fn(s1c, lambda uc, esp, ecx: (wr(rd(esp + 4), f2u(st["t"])), rd(esp + 4))[1], 4)
+    wr(tv + 0x1C, s1c)
+    out = DATA + 0x6A00
+    rows = []
+    for i in range(cases):
+        d = r.choice((1.0, 2.0, 3.0, 3.0, 0.5, 0.0, 4.0, rand_f(r, 0.0, 5.0), 1.5))
+        dur = r.choice((15.1, 15.1, 10.0, rand_f(r, 0.5, 40.0), 0.0, 0.0005))
+        t = r.choice((rand_f(r, 0.0, 1.0) * dur, rand_f(r, 0.0, 2.0) * dur, 0.0, dur, rand_f(r, 0.0, 20.0)))
+        flag = r.choice((0x80, 0x80, 0x80, 0))
+        wr(b + 0x20, flag)
+        wr(b + 0x134, f2u(d))
+        wr(b + 0x13C, f2u(dur))
+        st["t"] = t
+        wr(out, 0xDEADBEEF)
+        emu.call(0x6F1DD190, ecx=b, stack_args=(out,))
+        rows.append((flag, f2u(d), f2u(dur), f2u(t), rd(out)))
+    return rows
+
+
+def run_strike_apply(cases, r):
+    """Slot 0x37C = 0x6F11BBF0: the move / attack amounts handed to the slow setters 0x6F202FF0 / 0x6F0C9090."""
+    A.setup_stubs()
+    b = DATA + 0x7000
+    mu.mem_write(b, bytes(0x400))
+    unit = A.UNIT
+    mu.mem_write(unit, bytes(0x400))
+    wr(b + 0x30, unit)
+    move, atk = DATA + 0x6B00, DATA + 0x6B80
+    wr(unit + 0x1EC, move)
+    wr(unit + 0x1E8, atk)
+    rec = []
+    hook_fn(0x6F202FF0, lambda uc, esp, ecx: rec.append(("m", rd(rd(esp + 4)))) or 0, 4)
+    hook_fn(0x6F0C9090, lambda uc, esp, ecx: rec.append(("a", rd(rd(esp + 4)), rd(esp + 8))) or 0, 8)
+    vt = DATA + 0x5C00
+    mu.mem_write(vt, bytes(0x500))
+    for i in range(0x400 // 4):
+        wr(vt + 4 * i, rd(0x6F91FD04 + 4 * i))
+    s384 = stub_slot()
+    st = {}
+    hook_fn(s384, lambda uc, esp, ecx: (wr(rd(esp + 4), f2u(st["v"])), rd(esp + 4))[1], 4)
+    wr(vt + 0x384, s384)
+    wr(b, vt)
+    p = DATA + 0x6C00
+    rows = []
+    for i in range(cases):
+        v = r.choice((0.0, 1.0, rand_f(r, 0, 1), rand_f(r, -1, 2)))
+        m = r.choice((0.5, 0.0, 0.25, rand_f(r, 0, 1)))
+        a = r.choice((0.0, 0.5, rand_f(r, 0, 1)))
+        f = r.choice((0.0, 1.0, rand_f(r, 0, 1)))
+        flags = r.choice((0, 0x4000000))
+        st["v"] = v
+        wr(b + 0x108, f2u(m))
+        wr(b + 0x110, f2u(a))
+        wr(b + 0x20, flags)
+        wr(p, f2u(f))
+        wr(p + 4, f2u(m))
+        wr(p + 8, f2u(a))
+        rec.clear()
+        emu.call(0x6F11BBF0, ecx=b, stack_args=(p + 4, p + 8, p))
+        rows.append((f2u(v), f2u(m), f2u(a), f2u(f), flags, list(rec)))
+    return rows
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -402,6 +478,22 @@ def main():
             with open(os.path.join(dump, "immo_marker.txt"), "w") as fh:
                 for v, a, c in rows:
                     fh.write("%s %s %s\n" % (hexf(v), hexf(a), hexf(c)))
+    if which == "decay":
+        rows = run_strike_decay(cases, r)
+        print("decay: %d cases run" % len(rows), [(hexf(a), hexf(b), hexf(c), hexf(d), hexf(e)) for a, b, c, d, e in rows[:3]])
+        if dump:
+            with open(os.path.join(dump, "strike_decay.txt"), "w") as fh:
+                for row in rows:
+                    fh.write(" ".join(hexf(x) for x in row) + "\n")
+    if which == "apply":
+        rows = run_strike_apply(cases, r)
+        for row in rows[:3]:
+            print("apply", [hexf(x) for x in row[:5]], row[5])
+        print("apply: %d cases run" % len(rows))
+        if dump:
+            with open(os.path.join(dump, "strike_apply.txt"), "w") as fh:
+                for v, m, a, f, flags, rec in rows:
+                    fh.write("%s %s %s %s %s | %s\n" % (hexf(v), hexf(m), hexf(a), hexf(f), hexf(flags), " ".join("%s:%s" % (x[0], ":".join(hexf(y) for y in x[1:])) for x in rec)))
     if which == "tick":
         rows = run_swarm_tick(cases, r)
         for head, lives, out in rows[:4]:

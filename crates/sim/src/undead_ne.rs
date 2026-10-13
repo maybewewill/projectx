@@ -127,6 +127,8 @@ pub struct State {
     strikes: BTreeMap<u32, Strike>,
     /// Running Shadow Strike damage over time: buff serial -> (caster, damage per tick, period in seconds).
     strike_dots: BTreeMap<u32, (ObjKey, F32, f32)>,
+    /// Running Shadow Strike slow decays: buff serial -> record (S37).
+    strike_slows: BTreeMap<u32, StrikeSlow>,
     next_strike: u32,
     /// Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (S33, CONFIRMED source of the Frost Nova slow);
     /// `0.0` when the key is absent, as the original's reader defaults.
@@ -146,6 +148,20 @@ struct Immolation {
     area: F32,
     /// The level's Dur: the pulse interval and the base of the victim marker's duration.
     dur: F32,
+}
+
+/// The state of one Shadow Strike slow decay: DataB / DataC / DataD, the buff duration, the 1.0 s ticks done, the
+/// factor applied last and the move / attack speed factors (start 1.0, the setters add to them).
+#[derive(Debug, Clone, Copy)]
+struct StrikeSlow {
+    m: F32,
+    a: F32,
+    d: F32,
+    dur: F32,
+    ticks: u32,
+    prev: F32,
+    fm: F32,
+    fa: F32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -171,6 +187,8 @@ pub const TICK_STRIKE_HIT: u8 = 3;
 pub const TICK_STRIKE_DOT: u8 = 4;
 /// A swath missile tick (`aux` = the swarm id), S37.
 pub const TICK_SWARM: u8 = 5;
+/// The 1.0 s slow update of a Shadow Strike buff (`aux` = the buff serial), S37.
+pub const TICK_STRIKE_SLOW: u8 = 7;
 /// A swath missile arrives (`aux` = the swarm id), S37.
 pub const TICK_SWARM_ARRIVE: u8 = 6;
 
@@ -976,19 +994,61 @@ fn strike_hit(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
         if killed.is_none() {
             let hero = gm.unit(st.target).hero.is_some() || is_hero_id(gm.unit(st.target).type_id);
             let dur = crate::cast::effect_duration(&level, hero, F32::ZERO);
-            let slow = arith::neg(F32::from_bits(level.data[1].to_bits() & 0x7FFF_FFFF));
-            let effect = BuffEffect::Slow { move_delta: slow, attack_delta: slow };
+            // S37 (CONFIRMED amounts, UNSURE timer reading): the creation call applies `m * 0 - m * 1.0` = -DataB to the
+            // move factor and `-DataC` to the attack factor; DataC is absent (0) in the stock rows, so only the movement
+            // slows. A 1.0 s timer then follows the decay factor ([`strike_decay_factor`]).
+            let (m, a, d) = (level.data[1], level.data[2], level.data[3]);
+            let first = strike_slow_amounts(F32::ZERO, m, a, F32::ONE, 0);
+            let (fm, fa) = (arith::add(F32::ONE, first.move_amount), arith::add(F32::ONE, arith::add(first.attack_prev, first.attack_new)));
+            let effect = BuffEffect::Slow { move_delta: arith::sub(fm, F32::ONE), attack_delta: arith::sub(fa, F32::ONE) };
             let serial = gm.add_spell_buff(st.target, BUFF_SHADOW_STRIKE, effect, dur);
             if serial != 0 {
                 let period = level.cast.to_f32().max(MIN_PERIOD_SECONDS);
                 gm.spells_hero_state_mut().strike_dots.insert(serial, (caster, level.data[0], period));
                 gm.timers_start_hero(period, TICK_STRIKE_DOT, st.target, serial);
+                gm.spells_hero_state_mut().strike_slows.insert(serial, StrikeSlow { m, a, d, dur, ticks: 0, prev: F32::ONE, fm, fa });
+                gm.timers_start_hero(1.0, TICK_STRIKE_SLOW, st.target, serial);
             }
         }
     }
     if let Some(t) = killed {
         dispatch_unit_death_by(game, rt, t, Some(caster));
     }
+}
+
+/// The 1.0 s update of the Shadow Strike slow (`0xD01C3`, `0x6F1D53B0`): the factor `f` (clamped to >= 0.0), then the
+/// amounts of [`strike_slow_amounts`] added to the move and attack factors; the buff stores `f` as the new `prev`.
+/// UNSURE: the timer value `T` of [`strike_decay_factor`] is taken as the elapsed time, which makes the slow start at
+/// DataB and decay to 0 over the duration (the machine code's sign convention for `T` was not run).
+fn strike_slow_tick(game: &RefCell<Game>, unit: ObjKey, serial: u32) {
+    let mut gm = game.borrow_mut();
+    let Some(mut sl) = gm.spells_hero_state_mut().strike_slows.get(&serial).copied() else {
+        return;
+    };
+    if !gm.spell_buff_alive(unit, serial) {
+        gm.spells_hero_state_mut().strike_slows.remove(&serial);
+        return;
+    }
+    sl.ticks += 1;
+    let elapsed = F32::from_bits((sl.ticks as f32).to_bits());
+    let mut f = match gm.order_tables() {
+        Some(t) => strike_decay_factor(true, sl.dur, elapsed, sl.d, t),
+        None => {
+            let (dur, d) = (sl.dur.to_f32(), sl.d.to_f32());
+            let v = ((elapsed.to_f32() - dur).abs().powf(d)) / dur.powf(d);
+            F32::from_bits(v.to_bits())
+        }
+    };
+    if !(0.0 <= f.to_f32()) {
+        f = F32::ZERO;
+    }
+    let amounts = strike_slow_amounts(sl.prev, sl.m, sl.a, f, 0);
+    sl.fm = arith::add(sl.fm, amounts.move_amount);
+    sl.fa = arith::add(arith::add(sl.fa, amounts.attack_prev), amounts.attack_new);
+    sl.prev = f;
+    gm.set_spell_buff_slow(serial, arith::sub(sl.fm, F32::ONE), arith::sub(sl.fa, F32::ONE));
+    gm.spells_hero_state_mut().strike_slows.insert(serial, sl);
+    gm.timers_start_hero(1.0, TICK_STRIKE_SLOW, unit, serial);
 }
 
 fn strike_dot(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, serial: u32) {
@@ -1015,6 +1075,49 @@ fn strike_dot(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, se
     }
     if let Some(t) = killed {
         dispatch_unit_death_by(game, rt, t, Some(caster));
+    }
+}
+
+/// The Shadow Strike slow factor `f` (`CBuffShadowStrike` slot `0x390` = `0x6F1DD190`, CONFIRMED by Unicorn, 400
+/// cases): `0.0` while the buff flag `0x80` is clear or when `Dur` equals 0.0 within 0.001; else
+/// `pow(|T - Dur|, DataD) / pow(Dur, DataD)` (soft `pow` and divide) where `T` is the buff timer's slot `0x1C`
+/// value, snapped to `0.0` when its magnitude is below 0.001 (`0x6F1D2A10`). The handler of the 1.0 s timer
+/// (`0xD01C3`, `0x6F1D53B0`) clamps a negative or NaN `f` to 0.0.
+pub fn strike_decay_factor(applied: bool, dur: F32, t_value: F32, exponent: F32, tables: &Tables) -> F32 {
+    if !applied || arith::approx_eq(dur, F32::ZERO) {
+        return F32::ZERO;
+    }
+    let num = softfloat::math::pow(F32::from_bits(arith::sub(t_value, dur).to_bits() & 0x7FFF_FFFF), exponent, tables);
+    let den = softfloat::math::pow(dur, exponent, tables);
+    let f = arith::div(num, den, tables);
+    let mag = F32::from_bits(arith::sub(f, F32::ZERO).to_bits() & 0x7FFF_FFFF);
+    if f32::from_bits(0x3A83_126F) <= mag.to_f32() {
+        f
+    } else {
+        F32::ZERO
+    }
+}
+
+/// What `CBuffShadowStrike` slot `0x37C` (`0x6F11BBF0`) hands to the slow setters (CONFIRMED by Unicorn, 400 cases):
+/// the move amount `m * prev - m * f` (soft multiplies and subtract) for `0x6F202FF0`, and for the attack ability
+/// `0x6F0C9090` two calls `a * prev` and `(-a) * f`, both with the flag `(buff_flags >> 26) & 1`. `prev` is the value
+/// of slot `0x384` (`+0x144`: the factor applied last, 0.0 at the creation call and 1.0 afterwards) and `m`, `a` are
+/// DataB / DataC. The setters ADD their amount to a speed factor that starts at 1.0, so the net effect is a slow of
+/// `m * f` that starts at `m` (creation: `prev = 0`, `f = 1`) and follows `f`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrikeSlowAmounts {
+    pub move_amount: F32,
+    pub attack_prev: F32,
+    pub attack_new: F32,
+    pub attack_flag: u32,
+}
+
+pub fn strike_slow_amounts(prev: F32, m: F32, a: F32, f: F32, buff_flags: u32) -> StrikeSlowAmounts {
+    StrikeSlowAmounts {
+        move_amount: arith::sub(arith::mul(m, prev), arith::mul(m, f)),
+        attack_prev: arith::mul(a, prev),
+        attack_new: arith::mul(F32::from_bits(a.to_bits() ^ 0x8000_0000), f),
+        attack_flag: (buff_flags >> 26) & 1,
     }
 }
 
@@ -1126,6 +1229,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_STRIKE_HIT => strike_hit(game, rt, aux),
         TICK_STRIKE_DOT => strike_dot(game, rt, unit, aux),
         TICK_SWARM => swarm_tick(game, rt, aux),
+        TICK_STRIKE_SLOW => strike_slow_tick(game, unit, aux),
         TICK_SWARM_ARRIVE => swarm_arrive(game, rt, aux),
         _ => {}
     }
