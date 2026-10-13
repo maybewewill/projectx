@@ -154,7 +154,7 @@ fn host() -> ScriptHost {
         // Carrion Swarm: Area (start width) 100, DataA damage 75, DataB distance 800, DataC end width 200, DataD max 150.
         g.set_spell_levels(CARRION_SWARM, vec![level(110, 6.0, 0.0, 0.0, 100.0, &[75.0, 800.0, 200.0, 150.0])]);
         // Sleep: Dur 20, HeroDur 10.
-        g.set_spell_levels(SLEEP, vec![level(125, 10.0, 20.0, 10.0, 0.0, &[0.0])]);
+        g.set_spell_levels(SLEEP, vec![level(125, 10.0, 20.0, 10.0, 0.0, &[2.0])]);
         // Shadow Strike: DataA 10 per second (UNSURE role), DataB slow 0.5, DataE initial damage 50, Dur 5.
         let mut strike = level(75, 8.0, 5.0, 5.0, 0.0, &[10.0, 0.5, 0.0, 3.0, 50.0]);
         strike.cast = f(2.0); // Cast = the pulse period (S33, CONFIRMED)
@@ -293,9 +293,14 @@ fn sleep_disables_until_damaged_unless_a_keeper_buff_is_present() {
     assert!(accepted(&h));
     assert!(has_buff(&h, e1, BUFF_SLEEP));
     assert!(h.game().is_stunned(e1), "asleep = disabled");
-    // Time passes: still asleep before the duration (20 s for a non-hero).
+    // The second buff 'BUsp' lasts DataA = 2 s and holds the sleep against damage (S33, CONFIRMED).
+    assert!(has_buff(&h, e1, BUFF_SLEEP_PAUSE));
+    h.game_mut().unit_damage_target(c, e1, f(5.0), false, false, 0, 9);
+    assert!(has_buff(&h, e1, BUFF_SLEEP), "damage inside the first DataA seconds does not wake");
+    // Time passes: still asleep before the duration (20 s for a non-hero), the keeper has expired.
     run(&mut h, 100);
     assert!(has_buff(&h, e1, BUFF_SLEEP));
+    assert!(!has_buff(&h, e1, BUFF_SLEEP_PAUSE));
     // Damage wakes it.
     h.game_mut().unit_damage_target(c, e1, f(5.0), false, false, 0, 9);
     assert!(!has_buff(&h, e1, BUFF_SLEEP));
@@ -306,7 +311,6 @@ fn sleep_disables_until_damaged_unless_a_keeper_buff_is_present() {
     call(&mut h, "sleep_enemy");
     run(&mut h, 1);
     assert!(has_buff(&h, e1, BUFF_SLEEP));
-    h.game_mut().add_buff(e1, BUFF_SLEEP_PAUSE, Default::default());
     h.game_mut().unit_damage_target(c, e1, f(5.0), false, false, 0, 9);
     assert!(has_buff(&h, e1, BUFF_SLEEP), "the keeper buff holds the sleep");
     // Duration: it ends after 20 s from the second cast.
