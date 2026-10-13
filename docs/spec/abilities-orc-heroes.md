@@ -527,3 +527,20 @@ Order id 852121 (section 10). Data (shipped): `Dur` 25 (level 1) / 20, `HeroDur`
   buff's stat apply was not decoded; the model's slow machinery treats it as a delta, `0.75` then means 75 % slower), the debris and
   tree damage (destructables are not modelled), the channel end (interruption ends the effect in the original: shared channel
   code, other agent), the marker `BOea`.
+
+## 21. S39: Far Sight (`AOfs`, `CAbilityFarSight`, vtable `0x6F88B25C`, a `CAbilityDetectAoe`) - cast arguments (Unicorn)
+
+Order id 852122. Unicorn run `tools/emu/farsight_emu.py` (the real point slot `0x418` = `0x6F06FA50` on a fake ability; the
+effect creator `0x6F06F8D0` recorded; 400 cases, 0 mismatches; `tests/data/orc/farsight.txt`, `tests/orc_farsight.rs`). The
+unit-target slot `0x424` is an empty `ret 4`: Far Sight is a point ability only.
+
+* The creator receives, as eight stack words: the effect id (the level's `EfctID` list entry through `0x6F02EE80`, `Xbdt`),
+  pointers to the point's x and y, a pointer to the terrain height at the point (`0x6F24F3E0`, flag 1), the caster's owner
+  index (`vf 0xEC`), a pointer to the **duration `Dur + ability+0x9C`** (class slot `0x430` = `0x6F072550`; **no `HeroDur`**: the
+  old model used `HeroDur` for a hero caster, equal in the data), a pointer to `Area` (slot `0x42C`) and the integer
+  `F2I(DataA)` (slot `0x434` = `0x6F031C60`; 3 in the data; its meaning inside the effect was not decoded).
+* The effect object (`0x6F069210`, read) stores the owner, a timed-life style expiry message `0xD01C4` of `duration + 0.1` seconds
+  (`0x6FAAE4A0` = 0.1), and creates an area watcher (`0x6F474720`, message `0xD01B4`) at the point; the visibility itself is applied
+  by that watcher / effect through the vision system. Not decoded: the watcher's radius use and the per-cell visibility writes.
+* Model: `orc::far_sight_plan`, and `far_sight` keeps a visible-state fog modifier for the plan's lifetime (marker buff on the
+  caster; the original has no such buff). UNSURE: the cadence at which the original refreshes the revealed cells.

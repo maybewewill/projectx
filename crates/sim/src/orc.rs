@@ -1707,8 +1707,32 @@ fn quake_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, serial: u32) {
     }
 }
 
-/// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for `Dur`.
-/// MODEL (UNSURE): a visible-state fog modifier started now and stopped when the marker buff on the caster ends.
+/// What the Far Sight cast (`0x6F06FA50`) hands to the reveal effect creator `0x6F06F8D0` (CONFIRMED by Unicorn,
+/// `tools/emu/farsight_emu.py`, 400 cases): the effect id (the level's `EfctID`, `Xbdt`), pointers to the cast point x and y and
+/// to the terrain height at it, the caster's owner index, the DURATION `Dur + ability+0x9C` (class slot `0x430`; no `HeroDur`),
+/// the radius `Area` (slot `0x42C`) and `F2I(DataA)` (slot `0x434`, 3 in the data). The effect itself lives for `duration +
+/// 0.1` seconds (`0x6F069210` starts its expiry message `0xD01C4` with `add(duration, [0x6FAAE4A0])`, CONFIRMED by reading).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FarSightPlan {
+    pub duration: F32,
+    pub lifetime: F32,
+    pub radius: F32,
+    pub count: i32,
+}
+
+pub fn far_sight_plan(dur: F32, plus_9c: F32, data_a: F32, area: F32) -> FarSightPlan {
+    let duration = arith::add(dur, plus_9c);
+    FarSightPlan {
+        duration,
+        lifetime: arith::add(duration, F32::from_bits(0x3DCC_CCCD)),
+        radius: area,
+        count: conv::f2i(data_a),
+    }
+}
+
+/// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for [`far_sight_plan`]'s
+/// lifetime. MODEL (UNSURE): a visible-state fog modifier started now and stopped when the marker buff on the caster ends (the
+/// original's reveal is a vision effect object with an area watcher, message `0xD01B4`, not decoded).
 fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
     let CastTarget::Point(px, py) = rec.target else {
         return;
@@ -1724,8 +1748,7 @@ fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
         return;
     };
     gm.fog_start(key);
-    let hero = gm.target_hero(rec.caster);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    let dur = far_sight_plan(rec.level.dur, F32::ZERO, rec.level.data[0], rec.level.area).lifetime;
     let serial = gm.add_spell_buff(rec.caster, BUFF_FAR_SIGHT, BuffEffect::Marker, dur);
     if serial == 0 {
         gm.fog_stop(key);
