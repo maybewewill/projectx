@@ -123,3 +123,25 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   `0x6F0B8640`; `CBuffFaerieFire` has the armor sink only (scan of its apply slots). Model: armor `-DataA` for the
   duration (negative, magic, dispellable); refresh replaces the value. Revealing invisible units (detection) is not
   modelled. Autocast (filter slot `0x450` = `0x6F09C240`) is NOT DONE; the order ids 852150/852151 toggle nothing.
+
+## 6. Unholy Frenzy (`Auhf`, `CAbilityUnholyFrenzy` vtable `0x6F8F8984`, a SimpleSpell) and the damage-over-time base
+
+* Data: cost 50, range 500, Dur 45 / HeroDur 45, `DataA` 0.75 (attack speed bonus), `DataB` 4 (damage per second),
+  buff `BUhf`, targets air, ground, organic (no relation listed).
+* Effect slot `0x424` = `0x6F18C070` (CONFIRMED structure): hero rule duration; `DataA`, `DataB` into `0x6F18BF60`,
+  which finds the buff by its code (`0x6F158DB0`) and re-applies it through slot `0x37C`, else creates it.
+* `CBuffUnholyFrenzy` is a `CBuffDoT` (RTTI base; message handler `0x6F177450` forwards to `CBuffDoT::vf3`
+  `0x6F0D52D0`). CONFIRMED in `CBuffDoT`: apply `0x6F0D5250` arms the one-shot timer `0xD01E2` with the delay of slot
+  `0x358` (`0x6F0ADBD0`: constant `0x6FAAE480` = **0.01 s**); its handler starts the repeating timer `0xD01C1` with the
+  period of slot `0x35C` (`0x6F0ADBE0`: constant `0x6FAAE4F4` = **1.0 s**) and runs the tick `0x6F0D54B0` at once. So
+  ticks come at 0.01, 1.01, 2.01 ... s. The tick: skipped while the target carries `BUsl` (`0x6F1D6000`, not
+  modelled) or by the `MagicImmunesResistDamage` / immunity counters; amount `>= 0` is damage from the buff's
+  creator with the class word of slot `0x374` (for Unholy Frenzy `0x40000` = bit 18 = `DAMAGE_TYPE_DEATH`); a negative
+  amount is a heal through the life adder `0x6F277C20` (ethereal bonus). The per-tick amount is slot `0x360`
+  (`0x6F0ADC30`: the stored value at `+0xEC`), taken as `DataB` (period 1.0 s, so DPS = amount, LIKELY).
+* The attack speed part: `CBuffUnholyFrenzy` slot `0x314` (`0x6F177400`) adds `DataA` through the attack speed sink and
+  re-applies it every 0.1 s (`0xD01C3`, `0x6FAAE4A0`) while the target's attack ability exists (only a refresh of the
+  same value; not modelled separately).
+* Model: `UnitMods { attack_delta = DataA }` plus `TickRec` (damage `DataB` of type 18 per tick, kills run the death
+  dispatch with the caster as killer). Re-casting keeps one tick stream and replaces the values. 5 ticks in a 5 s test
+  buff (ticks at 0.01 .. 4.01 s). UNSURE: the stored tick amount is `DataB` unchanged.

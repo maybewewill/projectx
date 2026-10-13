@@ -58,6 +58,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(shaman, 'Ainf')
     call UnitAddAbility(shaman, 'Acri')
     call UnitAddAbility(shaman, 'Afae')
+    call UnitAddAbility(shaman, 'Auhf')
     call SetUnitState(shaman, 2, 300.0)
     set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
     set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
@@ -75,6 +76,12 @@ function cripple_grunt takes nothing returns nothing
 endfunction
 function fae_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852149, foe2)
+endfunction
+function frenzy_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852209, grunt)
+endfunction
+function frenzy_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852209, foe2)
 endfunction
 function lust_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852101, grunt)
@@ -173,6 +180,24 @@ fn host() -> ScriptHost {
                 data: {
                     let mut d = [F32::ZERO; 9];
                     d[0] = f(4.0);
+                    d
+                },
+                ..Default::default()
+            }],
+        );
+        g.ability_types_mut().insert(UNHOLY_FRENZY, AbilityType { max_level: Some(1) });
+        g.set_spell_levels(
+            UNHOLY_FRENZY,
+            vec![SpellLevel {
+                cost: 50,
+                cool: f(1.0),
+                dur: f(5.0),
+                hero_dur: f(5.0),
+                rng: f(500.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(0.75);
+                    d[1] = f(4.0);
                     d
                 },
                 ..Default::default()
@@ -561,4 +586,51 @@ fn faerie_fire_lowers_the_armor_of_an_enemy_for_dur() {
     run(&mut h, 62);
     assert!(!has_buff(&h, foe2, BUFF_FAERIE_FIRE));
     assert_eq!(h.game().unit(foe2).bonuses.armor.to_f32(), 0.0);
+}
+
+#[test]
+fn unholy_frenzy_speeds_attacks_and_drains_four_life_a_second_starting_at_once() {
+    let mut h = started_manual();
+    let (shaman, grunt) = (unit(&h, "shaman"), unit(&h, "grunt"));
+    call(&mut h, "frenzy_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 250.0);
+    assert!((h.game().unit(grunt).bonuses.attack_mult.to_f32() - 1.75).abs() < 1e-6);
+    // The first tick comes 0.01 s after the apply, the rest every 1.0 s.
+    run(&mut h, 1);
+    assert_eq!(life(&h, grunt), 496.0);
+    run(&mut h, 10);
+    assert_eq!(life(&h, grunt), 492.0, "second tick at 1.01 s");
+    run(&mut h, 40);
+    // Dur 5: ticks at 0.01 .. 4.01 = five ticks.
+    assert_eq!(life(&h, grunt), 480.0);
+    assert!(!has_buff(&h, grunt, BUFF_UNHOLY_FRENZY));
+    assert_eq!(h.game().unit(grunt).bonuses.attack_mult.to_f32(), 1.0);
+    run(&mut h, 30);
+    assert_eq!(life(&h, grunt), 480.0, "no ticks after the buff ends");
+}
+
+#[test]
+fn unholy_frenzy_can_kill_a_weak_unit() {
+    let mut h = started_manual();
+    let grunt = unit(&h, "grunt");
+    h.game_mut().write_life(grunt, f(6.0));
+    call(&mut h, "frenzy_grunt");
+    run(&mut h, 15);
+    assert!(h.game().unit(grunt).dead, "6 life: dead on the second tick");
+}
+
+#[test]
+fn unholy_frenzy_cast_twice_keeps_one_tick_stream() {
+    let mut h = started_manual();
+    let grunt = unit(&h, "grunt");
+    call(&mut h, "frenzy_grunt");
+    run(&mut h, 15);
+    call(&mut h, "frenzy_grunt");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    let before = life(&h, grunt);
+    run(&mut h, 20);
+    assert_eq!(before - life(&h, grunt), 8.0, "two ticks in two seconds, not four");
 }

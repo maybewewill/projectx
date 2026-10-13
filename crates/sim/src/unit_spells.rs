@@ -67,6 +67,8 @@ pub const BLOODLUST: u32 = code(b"Ablo");
 pub const BUFF_BLOODLUST: u32 = code(b"Bblo");
 pub const CRIPPLE: u32 = code(b"Acri");
 pub const BUFF_CRIPPLE: u32 = code(b"Bcri");
+pub const UNHOLY_FRENZY: u32 = code(b"Auhf");
+pub const BUFF_UNHOLY_FRENZY: u32 = code(b"BUhf");
 pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 
@@ -76,6 +78,17 @@ pub const ORDER_HEAL_OFF: u32 = 852_065;
 
 /// Timer kind of the autocast scan (message `0xD01C2`).
 pub const KIND_AUTOCAST: u8 = 1;
+/// Timer kind of a damage/heal-over-time tick (message `0xD01C1`), the tick period of `CBuffDoT` is 1.0 s.
+pub const KIND_TICK: u8 = 2;
+/// The first tick of a damage-over-time buff, 0.01 s after the apply (`0xD01E2`, constant `0x6FAAE480`).
+pub const KIND_TICK_FIRST: u8 = 3;
+/// The tick period (`CBuffDoT` slot `0x35C` = `0x6F0ADBE0`: the constant `0x6FAAE4F4` = 1.0).
+const TICK_PERIOD: f32 = 1.0;
+/// The first-tick delay (`0x6F0ADBD0`: the constant `0x6FAAE480`).
+const TICK_FIRST_DELAY_BITS: u32 = 0x3C23_D70A;
+/// Damage type of Unholy Frenzy's drain: the class word `0x40000` of `CBuffUnholyFrenzy` slot `0x374` is bit 18,
+/// `DAMAGE_TYPE_DEATH`.
+const DAMAGE_TYPE_DEATH: u32 = 18;
 /// First scan delay after activation (`0x6FAAE484`, runtime value `0x3CA3D70A`).
 pub const FIRST_SCAN_BITS: u32 = 0x3CA3_D70A;
 /// The scan period (`0x6FAAE50C` = 3.0).
@@ -87,7 +100,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 5] = [
+pub const SPELL_ORDERS: [(u32, u32); 6] = [
+    (852_209, UNHOLY_FRENZY),
     (ORDER_HEAL, HEAL),
     (852_066, INNER_FIRE),
     (852_101, BLOODLUST),
@@ -231,6 +245,16 @@ impl Game {
     }
 }
 
+/// One over-time effect of a buff: damage (`hot` false) or healing per tick.
+#[derive(Debug, Clone, Copy)]
+struct TickRec {
+    source: ObjKey,
+    amount: F32,
+    hot: bool,
+    damage_type: u32,
+    timer: Option<TimerId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AutoSlot {
     on: bool,
@@ -244,6 +268,8 @@ pub struct State {
     auto: BTreeMap<(ObjKey, u32), AutoSlot>,
     /// Heal marker buffs: serial -> the healer.
     marks: BTreeMap<u32, ObjKey>,
+    /// Damage / heal over time buffs by buff serial.
+    ticks: BTreeMap<u32, TickRec>,
     /// Misc `EtherealHealBonus` (a missing key reads 0.0).
     pub ethereal_heal_bonus: F32,
     /// Misc `IllusionsCanRestoreLife` / `IllusionsGetAutocast` (missing = off).
@@ -424,6 +450,18 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        UNHOLY_FRENZY => {
+            let t = gm.unit(target);
+            // targs: air,ground,organic (any player, no structures, no mechanical units).
+            if t.removed
+                || is_unit_type(gm, t, ty::STRUCTURE)
+                || is_unit_type(gm, t, ty::MECHANICAL)
+                || gm.unit_is_invulnerable(target)
+            {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         CRIPPLE | FAERIE_FIRE => {
             let t = gm.unit(target);
             // Cripple targs: air,ground,enemy,organic,neutral; Faerie Fire: air,ground,enemy,neutral.
@@ -451,6 +489,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             }
             true
         }
+        UNHOLY_FRENZY => {
+            if let CastTarget::Unit(t) = rec.target {
+                unholy_frenzy(game, rec, t);
+            }
+            true
+        }
         INNER_FIRE | BLOODLUST | CRIPPLE | FAERIE_FIRE => {
             if let CastTarget::Unit(t) = rec.target {
                 buff_spell(game, rec, t);
@@ -458,6 +502,128 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             true
         }
         _ => false,
+    }
+}
+
+/// Unholy Frenzy (`0x6F18C070`, CONFIRMED structure): duration by the hero rule, `DataA` and `DataB` into the buff apply
+/// `0x6F18BF60` (the buff is found by its code, `0x6F158DB0`, and re-applied through slot `0x37C`, else created).
+/// `CBuffUnholyFrenzy` is a `CBuffDoT`: attack speed sink with `DataA` (editor: attack speed bonus) and a
+/// damage-over-time tick of `DataB` (editor: damage per second) per period of 1.0 s, first tick 0.01 s after the
+/// apply, damage class `0x40000` (death), source the caster. The tick is skipped while the target carries the buff
+/// `BUsl` (`0x6F1D6000`; not modelled) or under the magic immunity rules of `MagicImmunesResistDamage` (`0x6F0D54B0`).
+fn unholy_frenzy(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let d = &rec.level.data;
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_UNHOLY_FRENZY)
+    };
+    let mods = UnitMods {
+        attack_delta: d[0],
+        ..UnitMods::default()
+    };
+    let serial = gm.apply_mods_buff(target, BUFF_UNHOLY_FRENZY, preds, mods, dur);
+    gm.register_tick(target, serial, rec.caster, d[1], false, DAMAGE_TYPE_DEATH, true);
+}
+
+impl Game {
+    /// Registers (or updates) the over-time effect of buff `serial`: a new one arms the first tick.
+    #[allow(clippy::too_many_arguments)]
+    fn register_tick(&mut self, target: ObjKey, serial: u32, source: ObjKey, amount: F32, hot: bool, damage_type: u32, first_delay: bool) {
+        if let Some(t) = self.spells.unit.ticks.get_mut(&serial) {
+            t.source = source;
+            t.amount = amount;
+            return;
+        }
+        let (seconds, kind) = if first_delay {
+            (F32::from_bits(TICK_FIRST_DELAY_BITS).to_f32(), KIND_TICK_FIRST)
+        } else {
+            (TICK_PERIOD, KIND_TICK)
+        };
+        let timer = self.timers.start(
+            seconds,
+            !first_delay,
+            Payload::Spell(SpellMsg::UnitSpell {
+                kind,
+                unit: target,
+                base: 0,
+                aux: serial,
+            }),
+        );
+        self.spells.unit.ticks.insert(
+            serial,
+            TickRec {
+                source,
+                amount,
+                hot,
+                damage_type,
+                timer: Some(timer),
+            },
+        );
+    }
+}
+
+/// One tick of buff `serial` on `unit`: damage (a kill runs the death dispatch with the source as the killer) or heal.
+fn run_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, serial: u32, first: bool) {
+    let killed;
+    let source;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(mut rec) = gm.spells.unit.ticks.get(&serial).copied() else {
+            return;
+        };
+        let alive = gm.alive(unit) && gm.unit(unit).buffs.iter().any(|b| b.serial == serial);
+        if !alive {
+            if let Some(t) = rec.timer {
+                gm.timers.cancel(t);
+            }
+            gm.spells.unit.ticks.remove(&serial);
+            return;
+        }
+        source = rec.source;
+        if first {
+            // `0xD01E2`: the 1.0 s repeating timer starts, then the first tick runs at once.
+            rec.timer = Some(gm.timers.start(
+                TICK_PERIOD,
+                true,
+                Payload::Spell(SpellMsg::UnitSpell {
+                    kind: KIND_TICK,
+                    unit,
+                    base: 0,
+                    aux: serial,
+                }),
+            ));
+            gm.spells.unit.ticks.insert(serial, rec);
+        }
+        if rec.hot {
+            let (life, max) = {
+                let u = gm.unit(unit);
+                (u.life, u.max_life)
+            };
+            let mut amount = rec.amount;
+            if gm.unit(unit).ethereal > 0 {
+                amount = arith::mul(amount, gm.spells.unit.ethereal_heal_bonus);
+            }
+            let sum = arith::add(amount, life);
+            let next = if arith::lt(max, sum) { max } else { sum };
+            set_life(&mut gm, unit, next);
+            killed = None;
+        } else {
+            killed = gm.unit_damage_target(rec.source, unit, rec.amount, false, false, 0, rec.damage_type);
+        }
+    }
+    if let Some(t) = killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(source));
     }
 }
 
@@ -559,6 +725,10 @@ fn heal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
 
 /// A timer of this module fired.
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, aux: u32) {
+    if kind == KIND_TICK || kind == KIND_TICK_FIRST {
+        run_tick(game, rt, unit, aux, kind == KIND_TICK_FIRST);
+        return;
+    }
     if kind != KIND_AUTOCAST {
         return;
     }
