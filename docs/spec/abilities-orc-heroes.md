@@ -401,3 +401,31 @@ The ability row is `AOsw` (code `AOwd`); order id 852504 (section 10). Unicorn r
   (class bit 4), timed life = the duration. The ward's own attack (a `Aatk` ability of `osp1..3`) and the ward target
   class come from the unit data. UNSURE: the buff's polarity and the unit creator's placement search (the target point
   may be occupied).
+
+## 16. S39: Hex (`AOhx`, `CAbilityHex`, vtable `0x6F8B1704`, a `CAbilityPolymorph`) - the creature pick (Unicorn)
+
+Order id 852502 (section 10). Unit-target slot `0x424` = `0x6F12F560` (shared with Polymorph). Unicorn run
+`tools/emu/hex_emu.py` (the real selector `0x6F12DAA0`, real class vtable, real token routine, vector helpers and roll
+wrapper; the profile lookup, Storm's tokenizer / allocator and the type database are Python hooks; 400 cases, 0
+mismatches including the stream state; `tests/data/orc/hex.txt`, `tests/orc_hex.rs`).
+
+* **Cast `0x6F12F560`.** A target whose `unit+0x5C` has bit `0x40000000` (an ILLUSION) is killed outright: the unit's slot
+  `0x124` (set life) is called with 0.0 and nothing else happens. Any other target: duration = `HeroDur` for a hero (the
+  hero test `0x6F1D2660`: hero-letter type id, a type flag, or the ability test `0x6F0766A0`) and `Dur + ability+0x9C`
+  (`0x6F02F880`) otherwise; the creature comes from `0x6F12DAA0(level, class)` with `class = unit+0x1FC` (the target's
+  `movetp` word); slot `0x43C` = `0x6F0BAD50` then builds the morph buff `BOhx` (helper `0x6F0BACD0`; the flag word of the
+  buff has bit 1 / bit 2 cleared by a switch on the class).
+* **The pick.** The list text is the level's `DataB` (default), `DataC` (class 2 = fly), `DataD` (class 32 = amphibious) or
+  `DataE` (class 16 = float), looked up by `0x6F113DE0` with the key text `Data?` + level; a missing or empty text falls back
+  to the class default of the class vtable: `nshe` (slot `0x42C`, default class), `nshf` (`0x430`, class 2), `nsha`
+  (`0x434`, class 32), `nshw` (`0x438`, class 16). The text is split by Storm's `SStrTokenize` with the delimiters blank,
+  comma, hyphen, underscore, tab; each token becomes its first four bytes as a big-endian word (`0x6F4C3F50`); a type
+  the unit database does not know (`0x6F29D2F0` -> `0x6F29A8C0`) is dropped. With NO candidate nothing is drawn and the
+  result is type 0; otherwise ONE draw of combat **stream 24** (`edx = 0x18` at `0x6F12DC14`): the roll wrapper `0x6F285350`
+  with count 1, `n` sides, bonus -1, multiplier 1.0 -> `R2I` -> index `0..n-1` into the candidate list in list order. Rust:
+  `orc::{hex_pick, polymorph_tokens, polymorph_code, polymorph_default_list, polymorph_data_column}`. The shipped data:
+  `DataB` = `npig,nsea,ncrb,nhmc,nrat,nfro,nech,necr,nrac`, `DataC` = `nalb,nvul,nsno`, `DataD` = `nsha,npng`, `DataE` =
+  `nshw,npnw`, `DataA` = 99 (not read by this path), `Dur` 15/30/45, `HeroDur` 4/5/6.
+* Model: `orc::hex_cast` (illusion dies; otherwise buff `BOhx` with the duration and the recorded form,
+  `Game::hex_form`; `Game::set_orc_lists` takes the level texts, the shipped lists are the default). NOT modelled: the
+  stat / ability swap of the morph (the hexed unit cannot attack or cast) and what the buff does when no candidate exists.

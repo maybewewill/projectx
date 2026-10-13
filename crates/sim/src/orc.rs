@@ -242,6 +242,7 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_122, FAR_SIGHT);
     ids.insert(852_126, FERAL_SPIRIT);
     ids.insert(852_504, SERPENT_WARD);
+    ids.insert(852_502, HEX);
     ids.insert(852_501, HEALING_WAVE);
     ids.insert(852_128, BLADESTORM);
 }
@@ -284,6 +285,10 @@ pub struct OrcState {
     blade_serial: u32,
     /// The `targs` word of each level of an ability (host data); absent = the shipped default.
     targs: BTreeMap<u32, Vec<u32>>,
+    /// The creature lists (`DataB`..`DataE` texts) of each level of an ability (host data).
+    lists: BTreeMap<u32, Vec<[String; 4]>>,
+    /// Hexed units: unit -> (buff serial, the creature it became).
+    hexed: BTreeMap<ObjKey, (u32, u32)>,
 }
 
 impl OrcState {
@@ -423,6 +428,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         MIRROR_IMAGE => mirror_image(game, rt, rec),
         FERAL_SPIRIT => feral_spirit(game, rec),
         SERPENT_WARD => serpent_ward(game, rec),
+        HEX => hex_cast(game, rt, rec),
         FAR_SIGHT => far_sight(game, rec),
         _ => return false,
     }
@@ -1274,6 +1280,161 @@ fn serpent_ward(game: &RefCell<Game>, rec: &CastRec) {
     }
 }
 
+// ---- Hex (`AOhx`, `CAbilityHex`, vtable `0x6F8B1704`, a `CAbilityPolymorph`): the creature pick ----
+
+/// Hex's base code.
+pub const HEX: u32 = code(b"AOhx");
+/// The combat RNG stream of the creature pick: the roll wrapper `0x6F285350` is called with `EDX = 0x18` at `0x6F12DC14`.
+pub const HEX_STREAM: usize = 24;
+
+/// The default list of a movement class when the ability row has none: slots `0x42C` / `0x430` / `0x434` / `0x438` of the
+/// class (`nshe`, `nshf`, `nsha`, `nshw` = the sheep family). The selector `0x6F12DAA0` maps the class value `unit+0x1FC`
+/// of the target: 2 -> slot `0x430`, 16 -> `0x438`, 32 -> `0x434`, anything else -> `0x42C`.
+pub fn polymorph_default_list(class: u32) -> &'static str {
+    match class {
+        2 => "nshf",
+        0x10 => "nshw",
+        0x20 => "nsha",
+        _ => "nshe",
+    }
+}
+
+/// The column of the level record's data list that the profile lookup `0x6F113DE0` reads for a class: 2 -> `DataC`
+/// (index 2), 16 -> `DataE` (index 4), 32 -> `DataD` (index 3), anything else -> `DataB` (index 1) (indices into
+/// `SpellLevel::data` where `DataA` is 0). Read from the key table at `0x6FA6F298..0x6FA6F2A4`.
+pub fn polymorph_data_column(class: u32) -> usize {
+    match class {
+        2 => 2,
+        0x10 => 4,
+        0x20 => 3,
+        _ => 1,
+    }
+}
+
+/// The type code of one list token: the first four bytes as a big-endian word (`0x6F4C3F50`; shorter tokens give a
+/// shorter number).
+pub fn polymorph_code(token: &str) -> u32 {
+    token.bytes().take(4).fold(0u32, |a, b| (a << 8) | u32::from(b))
+}
+
+/// The tokens of a list: Storm's `SStrTokenize` with the delimiters blank, comma, hyphen, underscore and tab (`0x6F88F9FC`).
+pub fn polymorph_tokens(text: &str) -> Vec<u32> {
+    text.split([' ', ',', '-', '_', '\t']).filter(|t| !t.is_empty()).map(polymorph_code).collect()
+}
+
+/// `0x6F12DAA0` (CONFIRMED by Unicorn, `tools/emu/hex_emu.py`): the creature a target becomes. `list` is the ability
+/// row's text for the class (`None` or empty = the class default); only the types the unit database knows (`exists`)
+/// count; with none left the result is `None` and NO draw is made, otherwise ONE draw of combat stream 24, `roll(1 die of
+/// n sides, bonus -1)` = an index `0..n-1`.
+pub fn hex_pick(
+    stream: &mut crate::rng::Rng,
+    table: &crate::rng::RngTable,
+    class: u32,
+    list: Option<&str>,
+    exists: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    let text = match list {
+        Some(t) if !t.is_empty() => t,
+        _ => polymorph_default_list(class),
+    };
+    let candidates: Vec<u32> = polymorph_tokens(text).into_iter().filter(|&c| exists(c)).collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let n = u32::try_from(candidates.len()).ok()?;
+    let index = crate::damage::roll_total(stream, table, 1, n, -1)?;
+    candidates.get(usize::try_from(index).ok()?).copied()
+}
+
+/// The shipped lists of Hex (`DataB`..`DataE` of AbilityData, the same on every level), used when the host gives none.
+const HEX_DEFAULT_LISTS: [&str; 4] = [
+    "npig,nsea,ncrb,nhmc,nrat,nfro,nech,necr,nrac",
+    "nalb,nvul,nsno",
+    "nsha,npng",
+    "nshw,npnw",
+];
+
+/// Buff code of Hex.
+pub const BUFF_HEX: u32 = code(b"BOhx");
+
+impl Game {
+    /// Installs the creature lists of an ability's levels (`DataB`, `DataC`, `DataD`, `DataE` texts per level).
+    pub fn set_orc_lists(&mut self, base: u32, lists: Vec<[String; 4]>) {
+        self.orc.lists.insert(base, lists);
+    }
+
+    fn orc_list(&self, base: u32, level_index: usize, column: usize) -> Option<String> {
+        let c = column.checked_sub(1)?;
+        match self.orc.lists.get(&base) {
+            Some(v) if !v.is_empty() => v.get(level_index.min(v.len() - 1)).map(|l| l[c].clone()),
+            _ if base == HEX => Some(HEX_DEFAULT_LISTS[c].to_owned()),
+            _ => None,
+        }
+    }
+
+    /// The creature a hexed unit became (for tests and hosts); `None` when the unit is not hexed.
+    pub fn hex_form(&self, unit: ObjKey) -> Option<u32> {
+        self.orc.hexed.get(&unit).map(|&(_, form)| form)
+    }
+}
+
+/// Hex (`CAbilityHex`, unit target slot `0x424` = `0x6F12F560`, shared with Polymorph; CONFIRMED by reading, the creature
+/// pick by Unicorn): an ILLUSION target dies at once (slot `0x124` with life 0.0). Otherwise the duration is `HeroDur`
+/// for a hero (the hero test `0x6F1D2660`) and `Dur + ability+0x9C` (`0x6F02F880`) for everyone else (`0x6F12F5C3`..
+/// `0x6F12F5DD`), the creature is [`hex_pick`] over the list of the target's movement class (2 fly -> `DataC`, 16 float ->
+/// `DataE`, 32 amphibious -> `DataD`, else `DataB`; the class is the target's `movetp` word), and slot `0x43C` =
+/// `0x6F0BAD50` applies the morph buff `BOhx` with the form and the duration. Not modelled: the stat and ability swap of the
+/// morph (the hexed unit cannot attack or cast), only the buff and the recorded form. A pick with no existing type
+/// leaves the target untouched (the original passes type 0 on; UNSURE what the buff does then).
+fn hex_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let CastTarget::Unit(target) = rec.target else {
+        return;
+    };
+    let mut killed = None;
+    {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(target) || !gm.alive(rec.caster) {
+            return;
+        }
+        if gm.unit(target).illusion {
+            if crate::natives::unit::set_life(&mut gm, target, F32::ZERO) {
+                killed = Some(target);
+            }
+        } else {
+            let hero = gm.target_hero(target);
+            let dur = effect_duration(&rec.level, hero, F32::ZERO);
+            let class = gm.unit_types().get(gm.unit(target).type_id).map_or(1, |t| t.movement);
+            let level_index =
+                usize::try_from(gm.unit(rec.caster).abilities.get(HEX).map_or(0, |a| a.level_index)).unwrap_or(0);
+            let list = gm.orc_list(HEX, level_index, polymorph_data_column(class));
+            let known: std::collections::BTreeSet<u32> = polymorph_tokens(list.as_deref().unwrap_or(""))
+                .into_iter()
+                .chain(polymorph_tokens(polymorph_default_list(class)))
+                .filter(|&c| gm.unit_types().get(c).is_some())
+                .collect();
+            let form = match gm.rng_parts() {
+                Some((table, streams)) => hex_pick(
+                    streams.stream_mut(HEX_STREAM),
+                    table,
+                    class,
+                    list.as_deref(),
+                    |c| known.contains(&c),
+                ),
+                None => None,
+            };
+            if let Some(form) = form {
+                let serial = gm.add_spell_buff(target, BUFF_HEX, BuffEffect::Marker, dur);
+                if serial != 0 {
+                    gm.orc.hexed.insert(target, (serial, form));
+                }
+            }
+        }
+    }
+    if let Some(t) = killed {
+        dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
 /// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for `Dur`.
 /// MODEL (UNSURE): a visible-state fog modifier started now and stopped when the marker buff on the caster ends.
 fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
@@ -1303,6 +1464,7 @@ fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
 
 /// Called by `Game::drop_spell_buff` when a spell buff ends: stops the Far Sight reveal tied to it.
 pub(crate) fn on_buff_dropped(game: &mut Game, serial: u32) {
+    game.orc.hexed.retain(|_, &mut (s, _)| s != serial);
     if let Some(key) = game.orc.reveals.remove(&serial) {
         game.fog_stop(key);
     }
