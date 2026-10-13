@@ -310,6 +310,9 @@ impl SpellSystem {
         ] {
             s.order_ids.insert(id, base);
         }
+        for &(id, base) in crate::undead_ne::S37_ORDERS {
+            s.order_ids.insert(id, base);
+        }
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).
         s.missile_speed.insert(STORM_BOLT, F32::from_bits(1000.0f32.to_bits()));
         s
@@ -507,6 +510,16 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// Replaces the slow amounts of a live spell buff (the Shadow Strike decay, S37) and recomputes the speed.
+    pub(crate) fn set_spell_buff_slow(&mut self, serial: u32, move_delta: F32, attack_delta: F32) {
+        let Some(b) = self.spells.buffs.get_mut(&serial) else {
+            return;
+        };
+        b.effect = BuffEffect::Slow { move_delta, attack_delta };
+        let unit = b.unit;
+        self.refresh_slow(unit);
     }
 
     /// Adds a spell buff: replaces a buff of the same code from an earlier cast (UNSURE: stacking), arms the
