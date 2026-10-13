@@ -178,6 +178,8 @@ struct Missile {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BuffEffect {
     Stun,
+    /// Sleep (`'BUsl'`, `undead_ne.rs`): disables like a stun and ends on damage.
+    Sleep,
     /// The move speed delta (negative slows) and the attack speed delta (stored only).
     Slow { move_delta: F32, attack_delta: F32 },
 }
@@ -294,6 +296,11 @@ impl Game {
     /// Sets the missile speed of an ability (0 = instant).
     pub fn set_spell_missile_speed(&mut self, base: u32, speed: F32) {
         self.spells.missile_speed.insert(base, speed);
+    }
+
+    /// The missile speed registered for `base` (0.0 when none).
+    pub fn spell_missile_speed_of(&self, base: u32) -> F32 {
+        self.spells.missile_speed.get(&base).copied().unwrap_or_default()
     }
 
     /// The ability handling `order_id`, if the unit has it.
@@ -485,7 +492,7 @@ impl Game {
             },
         );
         // Apply stun effect: increment stun counter
-        if code == BUFF_STUN {
+        if code == BUFF_STUN || matches!(effect, BuffEffect::Sleep) {
             self.unit_mut(unit).bonuses.stun += 1;
         }
         self.refresh_slow(unit);
@@ -500,7 +507,7 @@ impl Game {
             self.timers.cancel(t);
         }
         // Remove stun effect: decrement stun counter
-        if b.code == BUFF_STUN {
+        if b.code == BUFF_STUN || matches!(b.effect, BuffEffect::Sleep) {
             self.unit_mut(b.unit).bonuses.stun = self.unit(b.unit).bonuses.stun.saturating_sub(1);
         }
         self.unit_mut(b.unit).buffs.retain(|x| x.serial != serial);
@@ -615,6 +622,7 @@ pub fn begin_cast(
                 }
             }
             CastTarget::Point(..) => {}
+            CastTarget::None if crate::undead_ne::is_immediate(base) => {}
             CastTarget::None => return Err(CastError::BadTarget),
         }
         CastRec {

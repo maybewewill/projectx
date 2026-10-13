@@ -767,7 +767,7 @@ impl Game {
             return None;
         }
         match ty.missile_speed {
-            None => self.apply_damage(target, damage),
+            None => self.attack_damage(unit, target, damage),
             Some(speed) => {
                 // A launch also runs the `ChanceToMiss` tail of the gate: ONE stream-2 draw per launch, always
                 // (CONFIRMED, `docs/spec/missiles.md` section 9). A missed missile is not bound to its target and
@@ -972,6 +972,7 @@ impl Game {
         if arith::eq(amount, F32::ZERO) {
             return None;
         }
+        self.wake_sleeping(target);
         let next = arith::sub(life, amount);
         set_life(self, target, next).then_some(target)
     }
@@ -1022,6 +1023,13 @@ impl Game {
         self.combat.point_damages.remove(&id)
     }
 
+    /// An attack's damage: [`Self::apply_damage`], then Vampiric Aura's life steal of the attacker (`undead_ne.rs`).
+    fn attack_damage(&mut self, attacker: ObjKey, target: ObjKey, amount: F32) -> Option<ObjKey> {
+        let died = self.apply_damage(target, amount);
+        self.apply_lifesteal(attacker, target, amount);
+        died
+    }
+
     /// Applies `amount` to the life of `target` through the life setter (the death event fires from the caller when
     /// it returns the unit). Invulnerable and dead targets take nothing.
     fn apply_damage(&mut self, target: ObjKey, amount: F32) -> Option<ObjKey> {
@@ -1031,6 +1039,9 @@ impl Game {
         };
         if dead || removed || self.unit_is_invulnerable(target) {
             return None;
+        }
+        if arith::gt(amount, F32::ZERO) {
+            self.wake_sleeping(target);
         }
         let next = arith::sub(life, amount);
         set_life(self, target, next).then_some(target)
@@ -1145,7 +1156,7 @@ impl Game {
             missiles::FLAG_TARGET_BOUND,
             present,
         )) {
-            missiles::Arrival::Damage { .. } => self.apply_damage(target, damage),
+            missiles::Arrival::Damage { .. } => self.attack_damage(unit, target, damage),
             missiles::Arrival::Blocked | missiles::Arrival::NoTarget => None,
         }
     }
