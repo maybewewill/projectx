@@ -434,6 +434,51 @@ fn divine_shield(game: &RefCell<Game>, rec: &CastRec) {
     gm.apply_divine_shield(rec.caster, dur);
 }
 
+/// A candidate record of the Resurrection sort (`0x6F1D1720` fills 20 bytes): the corpse, an integer key (`+4`, meaning
+/// NOT FOUND: the filler `0x6F1CFF70` was not located), a real (`+8`), a flag (`+0xC`) and the caster's player
+/// (`+0x10`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResurrectionRec {
+    pub owner: i32,
+    pub key: i32,
+    pub real: F32,
+    pub flag: i32,
+    pub player: i32,
+    /// The corpse's agent id (`unit + 0xC`), the final tie break.
+    pub id: i32,
+}
+
+/// The sort comparator `0x6F19EA20` (CONFIRMED, Unicorn: 400 cases): negative when `a` goes first. The corpse of the
+/// caster's own player first; then the larger key first (`0x6F19E970`, with the wrapped difference test of the original),
+/// then a zero flag first, then the smaller real first (a NaN difference puts `a` last), then the larger agent id first.
+pub fn resurrection_compare(a: &ResurrectionRec, b: &ResurrectionRec) -> i32 {
+    if a.owner != b.owner {
+        if a.owner == a.player {
+            return -1;
+        }
+        if b.owner == b.player {
+            return 1;
+        }
+    }
+    let d = a.key.wrapping_sub(b.key);
+    if d != 0 {
+        return if d <= 0 { 1 } else { -1 };
+    }
+    if a.flag != b.flag {
+        return if b.flag == 0 { 1 } else { -1 };
+    }
+    let v = arith::sub(a.real, b.real).to_f32();
+    if v.is_nan() {
+        1
+    } else if v == 0.0 {
+        b.id.wrapping_sub(a.id)
+    } else if v > 0.0 {
+        1
+    } else {
+        -1
+    }
+}
+
 fn resurrection(game: &RefCell<Game>, rec: &CastRec) {
     let mut gm = game.borrow_mut();
     let max = conv::f2i(rec.level.data[0]);
@@ -442,8 +487,7 @@ fn resurrection(game: &RefCell<Game>, rec: &CastRec) {
         (c.x, c.y, c.owner)
     };
     let area2 = arith::mul(rec.level.area, rec.level.area);
-    let mut own = Vec::new();
-    let mut other = Vec::new();
+    let mut recs = Vec::new();
     for i in 0..gm.object_count() {
         let k = ObjKey(i as u32);
         if !matches!(gm.object(k), Object::Unit(_)) || k == rec.caster {
@@ -458,15 +502,23 @@ fn resurrection(game: &RefCell<Game>, rec: &CastRec) {
         if !arith::le(d2, area2) || gm.is_enemy(owner, u.owner) {
             continue;
         }
-        // UNSURE: the sort (`0x6F19EA20`) puts the caster's own corpses first; the rest keeps the walk order.
-        if u.owner == owner {
-            own.push(k);
-        } else {
-            other.push(k);
-        }
+        // The filler of the key fields is NOT FOUND (UNSURE): key, real and flag are all equal here, so the sort
+        // reduces to "the caster's player first, then the larger agent id".
+        recs.push((
+            k,
+            ResurrectionRec {
+                owner: u.owner as i32,
+                key: 0,
+                real: F32::ZERO,
+                flag: 0,
+                player: owner as i32,
+                id: k.0 as i32,
+            },
+        ));
     }
+    recs.sort_by(|a, b| resurrection_compare(&a.1, &b.1).cmp(&0));
     let count = usize::try_from(max).unwrap_or(0);
-    for k in own.into_iter().chain(other).take(count) {
+    for (k, _) in recs.into_iter().take(count) {
         gm.resurrect_unit(k);
     }
 }

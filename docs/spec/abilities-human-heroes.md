@@ -170,6 +170,13 @@ class stops orders and attacks the way a stun does; its class was not read beyon
   checked; the `Agyc` buff (graveyard timer) is removed (`0x6F0827D0`); the unit is revived with a **life fraction of
   1.0** (`vf 0x180(...)` with the fraction on the stack) at its own position; if slot `0x434` of the ability returns
   true the unit is marked summoned; the event for the reviver (JASS `RESURRECT`, `GetReviveUnit`) fires (not modelled).
+* **Sort comparator** `0x6F19EA20` (+ `0x6F19E970`) is now CONFIRMED (Unicorn 400 cases, 0 mismatches,
+  `human_heroes::resurrection_compare`): a different owner than the other record: the record whose owner equals its
+  `+0x10` field (the caster's player) goes first; then the larger `+4` key first (a wrapped difference test), then the
+  record with a zero `+0xC` flag first, then the smaller `+8` real first (a NaN difference puts the first record last),
+  then the larger agent id first. What fills `+4`, `+8`, `+0xC` is still NOT FOUND (`0x6F1CFF70`), so the model keeps
+  them equal and the order is "caster's player first, then the larger agent id" (UNSURE; before S30 the model used
+  creation order).
 * Model: `resurrection`: dead, not removed units within `Area` of the caster, not enemies of the caster, the caster's
   **own** corpses first (UNSURE: the sort keys), then the others in arena (creation) order (UNSURE), the first `f2i(DataA)`
   of them get `dead = false`, life = max life (`revive_unit`). Mana of the revived unit is left as it was (UNSURE), no revive
@@ -212,6 +219,15 @@ and unit target orders go through `spell_for_order` into the cast core (`CastTar
 | Bash effective chance (DataA bits, counter bits, incl. NaN, inf, negatives, huge counters) | `0x6F1A3470` -> `0x6F1D21F0` | 400 | 0 |
 | Bash proc compare (draw, chance bits incl. NaN) | `0x6F01FD60` | 400 | 0 |
 | Bash draw on stream 3 (random stream states) | `0x6F2853D0` | 400 | 0 |
+
+| Blizzard parameter hand-over `0x6F1B9E90` -> `0x6F1B9BB0` (random level records) | the real method | 400 | 0 |
+| Blizzard shard placement `0x6F1AF6E0` (permutation, 2 offsets per shard, final global and stream-4 states) | the real function | 400 | 0 |
+| Mass Teleport sort comparator `0x6F026120` | the real function | 400 | 0 |
+| Resurrection sort comparator `0x6F19EA20` | the real function | 400 | 0 |
+| order ids (vtable slot `0x308`) of 9 classes | the getters | 9 | 0 |
+
+Rust: `human_heroes2_vectors.rs` (the four vector checks; the placement needs `GAME_DLL`), `human_heroes_blizzard_mt.rs`
+(4 behaviour tests), harness `tools/emu/human_heroes2_emu.py`.
 
 Rust: `human_heroes_vectors.rs` (the three vector checks; the first and last need `GAME_DLL`), `human_heroes.rs` (12
 behaviour tests: Thunder Clap area/slow/durations/mana, Avatar sinks and undo, Divine Shield invulnerability and
@@ -287,3 +303,40 @@ counts, whether a stun or order change of the caster ends the channel (the model
 
 Model: `human_heroes::blizzard_*` (params, placement, damage numerics) and the effect timers (`SpellMsg::Human`). The
 model deals the damage directly at each damage wave (no buff, no strongest-wins), enemy units and structures.
+
+## 12. Mass Teleport in detail (S30)
+
+Class `CAbilityMassTeleport` (`0x6F88BEFC`). Data (stock): `Area` 700, `DataA` 24 (units teleported), `DataB` 3 (casting
+delay), `DataC` 1 (clustering), unit target (`ground,structure,vuln,invu,player,neutral,ally`), range 99999.
+
+* **Start** (unit form, slot `0x424`, `0x6F0565D0`, CONFIRMED structure): removes three buffs, flags the caster (`+0x60 |
+  0x200`) and the destination unit, stores the two positions (`+0x138`, `+0x13C`), creates the teleport art, arms a `0xD01C1`
+  timer of **1.0 s** on the ability (`+0x124`; its handler `0x6F0263F0` only reports progress to the unit). The point form
+  (slot `0x418`, `0x6F032CB0`) resolves a unit at the point and calls the unit form.
+* **Delay**: the level init (slot `0x80`, `0x6F060AE0`) copies **`DataB`** into the property at `+0x90`; the model uses
+  it as the channel time (LIKELY: the consumer in the cast framework was not read).
+* **Completion** (slot `0x39C`, `0x6F069D60`, CONFIRMED structure): `limit = f2i(DataA) - 1`; the group builder
+  `0x6F2A3270` (filter word `0x40303006`, centre = the **caster's** position, radius `Area`) runs the per-unit callback
+  `0x6F060B30` -> `0x6F056890`, which skips the caster and any unit failing `0x6F0485F0(caster)`, and appends a 20-byte
+  record: the unit, `f2i(squared 3D distance to the caster)` (`add(add(x*x, y*y), z*z)` by soft arithmetic,
+  `0x6F0201B0`), a level key (hero: the hero ability level `+0x8C`, `0x6F26EB30`; other units: the type record value
+  `+0x68` capped by Misc `MaxUnitLevel`, or `MaxHeroLevel` for hero-letter ids, `0x6F29DCA0`), the hero flag and the
+  "same player as the caster" flag. **When the record count is above `limit` as an unsigned compare (so a `DataA` below 1
+  never trims), the list is sorted with `0x6F026120` and cut to `limit`.** Then clustering is decided by Misc
+  `MassTeleportCluster` and `DataC != 0` (`0x6F0327E0`), and every record (and the caster) is moved by `0x6F056980`
+  -> `0x6F048AE0` to the destination unit's position; with clustering the unit keeps its offset (UNSURE: the offset
+  base, read from the argument flow only).
+* **Sort comparator** `0x6F026120` (CONFIRMED, Unicorn 400 cases, 0 mismatches): own units first, then heroes first,
+  then the larger key first, then the smaller distance first, then the larger agent id first. It never returns 0 for
+  different units, so the sort algorithm is irrelevant. `human_heroes::teleport_compare`, `teleport_select`.
+* Model: the effect is created at the effect stage, `DataB` seconds later the caster (if alive) and the destination
+  must be alive; candidates are the caster's allies and own non-structures in `Area` (UNSURE: the filter word is not
+  decoded), the hero key is the hero level, the other keys are 0 (UNSURE), the agent id is the arena index (UNSURE).
+  The cast is not interrupted by orders or stuns (NOT DONE).
+
+## 13. What S30 did not raise to CONFIRMED
+
+Thunder Clap (target set filter `targs`, the per-owner array), Divine Shield (the apply side of the buff, the Misc half of
+the cancel test), Avatar (the first-activation dispel) and Water Elemental (placement `0x6F1D26B0` / `0x6F4AFCD0`) keep the
+labels of sections 1 to 6; the time went into Blizzard, Mass Teleport and the Resurrection sort. Nothing in them changed
+except the order ids of section 8.

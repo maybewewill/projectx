@@ -139,6 +139,39 @@ def check_cmp(cases, r, rows):
         rows.append(tuple(a) + tuple(b) + (1 if res > 0 else (-1 if res < 0 else 0),))
 
 
+F_RESCMP = 0x6F19EA20
+
+
+def check_res_cmp(cases, r, rows):
+    """Resurrection corpse sort comparator 0x6F19EA20 on two 20-byte records with fake units (vtable slot 0xEC = owner)."""
+    code = DATA + 0x6500
+    mu.mem_write(code, bytes([0x8B, 0x41, 0x04, 0xC3]))   # mov eax,[ecx+4]; ret
+    vt = DATA + 0x6600
+    mu.mem_write(vt, b"\0" * 0x100)
+    wr(vt + 0xEC, code)
+    ua, ub, ra, rb = DATA + 0x6700, DATA + 0x6800, DATA + 0x6900, DATA + 0x6A00
+    reals = [0.0, 1.0, 2.0, -1.0, 0.5, float("nan"), 100.0]
+    for _ in range(cases):
+        def rec():
+            key = r.choice([0, 1, 2, 3, r.randint(-5, 5), 0x7FFFFFFF, 0x80000000 - (1 << 32)]) & 0xFFFFFFFF
+            real = f2u(r.choice(reals)) if r.random() < 0.8 else r.getrandbits(32)
+            return [r.randint(0, 2), key, real, r.choice([0, 0, 1, 2]), r.randint(0, 2), r.randint(0, 3)]
+        a, b = rec(), rec()
+        for u, rr, x in ((ua, ra, a), (ub, rb, b)):
+            mu.mem_write(u, b"\0" * 0x20)
+            wr(u, vt)
+            wr(u + 4, x[0])
+            wr(u + 0xC, x[5])
+            wr(rr, u)
+            wr(rr + 4, x[1])
+            wr(rr + 8, x[2])
+            wr(rr + 0xC, x[3])
+            wr(rr + 0x10, x[4])
+        res = emu.call(F_RESCMP, stack_args=(ra, rb))
+        res = res - (1 << 32) if res >= 1 << 31 else res
+        rows.append(tuple(a) + tuple(b) + (1 if res > 0 else (-1 if res < 0 else 0),))
+
+
 ORDER_CLASSES = [
     ("Blizzard", 0x6F910CAC), ("MassTeleport", 0x6F88BEFC), ("ThunderClap", 0x6F8F67C4), ("Avatar", 0x6F90998C),
     ("DivineShield", 0x6F894AEC), ("Resurrection", 0x6F91C1CC), ("WaterElemental", 0x6F89BF84),
@@ -163,10 +196,11 @@ def main():
     seed = int(args[1]) if len(args) > 1 else 30
     r = random.Random(seed)
     install()
-    a_rows, p_rows, c_rows = [], [], []
+    a_rows, p_rows, c_rows, rc_rows = [], [], [], []
     check_args(cases, r, a_rows)
     check_place(cases, r, p_rows)
     check_cmp(cases, r, c_rows)
+    check_res_cmp(cases, r, rc_rows)
     check_orders()
     print("rows: args %d, placement %d, compare %d" % (len(a_rows), len(p_rows), len(c_rows)))
     if dump:
@@ -175,6 +209,9 @@ def main():
             with open(os.path.join(dump, name), "w") as fh:
                 for row in rows:
                     fh.write(" ".join("%08x" % (x & 0xFFFFFFFF) for x in row) + "\n")
+        with open(os.path.join(dump, "res_compare.txt"), "w") as fh:
+            for row in rc_rows:
+                fh.write(" ".join("%08x" % (x & 0xFFFFFFFF) for x in row[:-1]) + " %d\n" % row[-1])
         with open(os.path.join(dump, "mt_compare.txt"), "w") as fh:
             for row in c_rows:
                 fh.write(" ".join(str(x) for x in row) + "\n")

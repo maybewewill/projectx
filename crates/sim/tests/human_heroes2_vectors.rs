@@ -4,7 +4,8 @@
 
 use sim::cast::SpellLevel;
 use sim::human_heroes::{
-    blizzard_params, blizzard_raw_counts, blizzard_shards, teleport_compare, teleport_select, TeleportRec,
+    blizzard_params, blizzard_raw_counts, blizzard_shards, resurrection_compare, teleport_compare, teleport_select,
+    ResurrectionRec, TeleportRec,
 };
 use sim::natives::game::ObjKey;
 use sim::rng::{Rng, RngTable};
@@ -127,4 +128,34 @@ fn teleport_selection_keeps_own_heroes_then_nearest() {
     assert_eq!(all.iter().map(|(k, _)| k.0).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
     // DataA = 0: the unsigned limit never trims (quirk of `0x6F069D60`).
     assert_eq!(teleport_select(list, 0).len(), 4);
+}
+
+#[test]
+fn resurrection_comparator_matches_the_original() {
+    let text = include_str!("data/human_heroes/res_compare.txt");
+    let data: Vec<Vec<u32>> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut w: Vec<&str> = l.split_whitespace().collect();
+            let sign: i32 = w.pop().unwrap().parse().unwrap();
+            let mut v: Vec<u32> = w.iter().map(|x| u32::from_str_radix(x, 16).unwrap()).collect();
+            v.push(sign as u32);
+            v
+        })
+        .collect();
+    assert!(data.len() >= 300);
+    let rec = |r: &[u32], o: usize| ResurrectionRec {
+        owner: r[o] as i32,
+        key: r[o + 1] as i32,
+        real: F32::from_bits(r[o + 2]),
+        flag: r[o + 3] as i32,
+        player: r[o + 4] as i32,
+        id: r[o + 5] as i32,
+    };
+    for r in &data {
+        let want = r[12] as i32;
+        let got = resurrection_compare(&rec(r, 0), &rec(r, 6)).signum();
+        assert_eq!(got, want, "{r:08x?}");
+    }
 }
