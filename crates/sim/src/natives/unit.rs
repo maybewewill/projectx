@@ -586,7 +586,7 @@ fn count_class(gm: &Game, type_id: u32) -> u32 {
 }
 
 /// Adds a new completed unit to its owner's counters (the registration of a created unit, flag 0x10).
-fn count_add_completed(gm: &mut Game, k: ObjKey) {
+pub(crate) fn count_add_completed(gm: &mut Game, k: ObjKey) {
     let (owner, type_id) = {
         let u = gm.unit(k);
         (u.owner, u.type_id)
@@ -687,6 +687,11 @@ pub(crate) fn set_life(gm: &mut Game, k: ObjKey, value: F32) -> bool {
     if newly_dead {
         // The death handler sets the dead flag and refreshes the regeneration modifiers (they go away).
         gm.stats_set_dead(k, true);
+        // The death handler `0x6F2A4880` ends in the leave-play routine `0x6F29D320`, which takes the unit out of its
+        // owner's counters (CONFIRMED structure, decompile): a dead structure no longer counts for
+        // `GetPlayerStructureCount`, which is what the melee defeat check relies on. Removal finds the entry gone.
+        count_unregister(gm, k);
+        gm.production_unit_died(k);
     }
     gm.push_unit_event(UnitEvent::Notify {
         unit: k,

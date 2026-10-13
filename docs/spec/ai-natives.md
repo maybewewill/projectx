@@ -718,3 +718,13 @@ Kills: p0 -> p1 56, p1 -> p0 25, p0 -> creeps 5, p1 -> creeps 15, creeps -> p0 2
 no game ended (no player lost all buildings by 1800 s; the sim has no defeat check wired here).
 Open: the original revive formula; whether the human attacks the orc base (its last goal is the orc camp area); the
 `first 400-pop` stall may hide a pathing defect worth a Unicorn comparison of a stuck request; invulnerable-target rule.
+
+### 12.1 S27 corrections to S22 (2026-10-13)
+
+Decoded in `docs/spec/revive.md`: (1) hero revive cost and time are the original formulas (Misc `Revive*` keys, `0x6F0340A0` /
+`0x6F030CF0`, **CONFIRMED**, Unicorn 400/400); the hero returns at the altar's position with life/mana by `HeroReviveLifeFactor` /
+`HeroReviveManaFactor` (LIKELY); the S22 factor model `0.4 + 0.1 * level` is gone. (2) The 20000-pop stuck retry is removed: the
+original calls the dispatcher once per request. (3) `GetCreepCamp`'s cost is the placement query `0x6F4758D0` -> `0x6F49A8F0`, not a path
+search, and the usability test `0x6F2E1D50` has no path test, so `path_reachable` is removed. (4) Unit counters leave at death
+(`0x6F2A4880` -> `0x6F29D320`), which makes Blizzard.j's melee defeat/victory work (`w3boot` 4-AI check: wiping players 3, 2, 1 gives
+defeat to those and **victory to player 0**).

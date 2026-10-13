@@ -782,6 +782,14 @@ impl Game {
         self.unit(hero).hero.as_ref().map_or(1, |h| h.level)
     }
 
+    /// The live structures of `owner` (test aid of `w3boot --wipe`).
+    pub fn structure_keys(&self, owner: u32) -> Vec<ObjKey> {
+        self.unit_objects()
+            .filter(|(_, u)| u.owner == owner && !u.dead && !u.removed && self.unit_types().is_building(u.type_id))
+            .map(|(k, _)| k)
+            .collect()
+    }
+
     /// Installs the `[Misc]` revive keys.
     pub fn set_revive_config(&mut self, cfg: crate::revive::ReviveConfig) {
         self.production.revive_config = Some(cfg);
@@ -866,6 +874,7 @@ impl Game {
         }
         self.unit_mut(h).dead = false;
         self.stats_set_dead(h, false);
+        crate::natives::unit::count_add_completed(self, h);
         let cfg = self.production.revive_config.unwrap_or_default();
         let max = self.life_cells(h).max;
         let max_mana = self.mana_cells(h).max;
@@ -1316,6 +1325,18 @@ impl Game {
         self.production.unit_upgrades.insert(unit, UnitUpgrade { to, done_at, cd });
         self.production.events.push(ProdEvent::UnitUpgradeStarted { unit, to });
         Ok(())
+    }
+
+    /// A unit died: an upgrade it was running is cancelled and its in-progress entry leaves the owner's counters (the
+    /// target type would otherwise count as a structure for ever, which the melee defeat check would see). The
+    /// original removes the abilities of a dead unit, which cancels their work (LIKELY; the cancel path was not run).
+    pub(crate) fn production_unit_died(&mut self, unit: ObjKey) {
+        let Some(up) = self.production.unit_upgrades.remove(&unit) else { return };
+        let owner = self.unit(unit).owner;
+        let class = self.type_class(up.to);
+        if let Some(p) = self.player_mut(owner) {
+            p.counts.remove_in_progress(up.to, class, false);
+        }
     }
 
     fn finish_unit_upgrade(&mut self, unit: ObjKey) {

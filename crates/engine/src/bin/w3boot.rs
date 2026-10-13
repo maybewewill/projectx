@@ -39,6 +39,8 @@ struct Args {
     /// `--check-sync`: with `--replay`, compare the replay's 0x22 sync records with the model (no map needed).
     check_sync: bool,
     steps: u64,
+    /// `--wipe SLOT@STEP`: at STEP set the life of every structure of SLOT to zero (test aid for the melee defeat check).
+    wipe: Vec<(u32, u64)>,
 }
 
 /// A `NAME=PATH` argument of `--ai-script`.
@@ -114,6 +116,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .boot
                 .computers
                 .push(parse_computer(&value("--computer")?)?),
+            "--wipe" => {
+                let v = value("--wipe")?;
+                let (a, b) = v.split_once('@').ok_or("--wipe: expected SLOT@STEP")?;
+                args.wipe.push((
+                    a.parse().map_err(|_| "--wipe: bad slot".to_string())?,
+                    b.parse().map_err(|_| "--wipe: bad step".to_string())?,
+                ));
+            }
             "--steps" => {
                 let v = value("--steps")?;
                 args.steps = v
@@ -161,6 +171,12 @@ fn run(argv: &[String]) -> Result<(), String> {
     let mut last_pvp = 0usize;
     for i in 0..args.steps {
         engine.step();
+        for &(slot, at) in &args.wipe {
+            if i == at {
+                let n = engine.host_mut().kill_units_zero_life(slot);
+                println!("wipe: {n} structures of p{slot} set to zero life at step {i}");
+            }
+        }
         // Player-versus-player kills as they happen (both killer and victim a real player slot).
         let pvp = engine
             .host()
@@ -227,6 +243,24 @@ fn run(argv: &[String]) -> Result<(), String> {
                         d.size,
                         d.goal,
                         kinds.join(",")
+                    );
+                }
+            }
+        }
+        // Game results (RemovePlayer) and living structures per player.
+        {
+            let game = engine.host().game();
+            for p in 0..12u32 {
+                let structures = game
+                    .unit_objects()
+                    .filter(|(_, u)| u.owner == p && !u.dead && !u.removed && game.unit_types().is_building(u.type_id))
+                    .count();
+                let result = game.lane.result_of(p);
+                if structures > 0 || result != 3 || args.boot.computers.iter().any(|&(s, _)| s == p) {
+                    println!(
+                        "result p{p}: game result {} (0 victory, 1 defeat, 2 tie, 3 none), slot state {}, structures {structures}",
+                        result,
+                        game.player(p).slot_state
                     );
                 }
             }
