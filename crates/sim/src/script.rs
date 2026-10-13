@@ -257,6 +257,7 @@ impl ScriptHost {
             fired += self.pump(target);
             self.game.borrow_mut().production_tick(self.clock.absolute());
             self.continue_threads(target);
+            crate::cast::process_interrupts(&self.game, &mut self.vm);
             if self.at_batch_boundary() {
                 self.batch();
             }
@@ -343,6 +344,8 @@ impl ScriptHost {
                     self.game.borrow_mut().vision_refresh();
                 }
             }
+            // Casts that an order, a death or a stun interrupted end here (cast.rs, the channel lifecycle).
+            crate::cast::process_interrupts(&self.game, &mut self.vm);
         }
         self.vm.set_now(F32::from_bits(target.to_bits()));
         self.game.borrow_mut().set_game_clock(F32::from_bits(target.to_bits()), row);

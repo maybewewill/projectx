@@ -17,10 +17,29 @@
 //! 4. Stage 3 (`0x6F063760`): readiness again (stage 3), event EFFECT (`0x6F29A410`, key `0x80312`/`0x80323`), then
 //!    the effect body `0x6F05C840`: **pays the mana** (`0x6F283DB0`), runs the **class effect** (slot `0x424`),
 //!    then starts the **cooldown** (slot `0x3A4` = `0x6F050B70`) when `Cool > 0`. Then the finish (`0x6F05BCD0` ->
-//!    `0x6F050AF0`): event FINISH (`0x6F29A5A0`, key `0x80313`/`0x80324`). A channel time would insert a timer
-//!    `0xD01BD` first (this model has no channelled spell).
+//!    `0x6F050AF0`): event FINISH (`0x6F29A5A0`, key `0x80313`/`0x80324`). **The finish is not immediate** (S35, see
+//!    "The channel lifecycle" below): it waits for the channel time.
 //! 5. ENDCAST (`0x6F050950` -> `0x6F29A730`, key `0x80314`/`0x80325`) is posted when the cast ends; the model fires
 //!    it after FINISH on completion and alone when a recheck fails (LIKELY).
+//!
+//! ## The channel lifecycle (S35, `docs/spec/abilities-human-heroes.md` section 14)
+//! Shared by every spell; Blizzard and Mass Teleport are the channelled ones.
+//! * Stage 1 sets flag `0x1000` ("channel hook active") before the CHANNEL event and calls the class slot `0x384`
+//!   (hook, no-op except ANcl) after it.
+//! * The tail of stage 3 (`0x6F063760`, CONFIRMED by disassembly) reads the property at ability `+0x90`, a real
+//!   that holds the **channel time**. By default it is the unit type's backswing (`castbsw`, `0x6F29BD70`, set by the
+//!   base init `0x6F05C6C0`); Blizzard overwrites it at cast time with `waves * Cast` (Unicorn 400 cases), Mass
+//!   Teleport at level init with `DataB`. When it is not above zero ([`prop_above`], Unicorn 400) the cast finishes
+//!   at once (slot `0x39C(1)`); otherwise slot `0x398` runs (no simulation effect found) and, unless the value is
+//!   `FLT_MAX` ([`prop_differs`]), a `0xD01BD` timer of that many seconds is armed on the cast's stage timer
+//!   (`+0xBC`); a `FLT_MAX` channel stays open until an order ends it.
+//! * `0xD01BD` runs slot `0x39C(1)`: the class completion (Mass Teleport teleports here), then the finish
+//!   `0x6F05BCD0` -> `0x6F050AF0`: FINISH event, the class channel-end hook (slot `0x388`: Blizzard destroys its
+//!   effect, Mass Teleport clears its flags; both post ENDCAST themselves), the unit's order queue drain.
+//! * An order message `0xD0144` reaches slot `0x3A0` -> `0x6F050BE0`: when the order's id differs from the ability's
+//!   own order id the stage timer is cancelled, the channel-end hook runs (flag `0x1000`) and ENDCAST follows -- no
+//!   FINISH event. [`process_interrupts`] applies this to replacing orders, to the death of the caster and (LIKELY,
+//!   game behaviour, not read) to a stun of a channelling caster; silence does not end a channel (LIKELY).
 //!
 //! ## Rules
 //! * Mana check `0x6F283C70` (Unicorn): true iff `mana >= cost` as an x87 compare (NaN is false); the cost value
@@ -153,6 +172,8 @@ pub enum SpellMsg {
     Stage3(u32),
     /// `0xD01BE`: the cooldown of `base` on `unit` ends.
     CooldownEnd { unit: ObjKey, base: u32 },
+    /// `0xD01BD`: the channel time (the property at ability `+0x90`) of cast `id` has run out.
+    ChannelEnd(u32),
     /// A missile of Storm Bolt arrives.
     Impact(u32),
     /// A spell buff runs out.
@@ -169,6 +190,8 @@ pub enum SpellMsg {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct CastRec {
+    /// The cast id (the key of `SpellSystem::casts`), so a class effect can tie its objects to the channel.
+    pub(crate) id: u32,
     pub(crate) caster: ObjKey,
     pub(crate) base: u32,
     pub(crate) target: CastTarget,
@@ -212,6 +235,13 @@ pub struct SpellSystem {
     next_id: u32,
     casts: BTreeMap<u32, CastRec>,
     current: BTreeMap<ObjKey, u32>,
+    /// The `0xD01BD` channel timers of the casts in their channel phase (cast id -> timer). A cast with an entry in
+    /// `channeling` but none here is an open-ended channel (`FLT_MAX`).
+    channel_timers: BTreeMap<u32, TimerId>,
+    /// The casts whose effect stage has passed with a channel time above zero.
+    channeling: std::collections::BTreeSet<u32>,
+    /// Orders that replaced a unit's orders since the last [`process_interrupts`]: `(unit, new order id)`.
+    interrupts: Vec<(ObjKey, u32)>,
     cooling: BTreeMap<(ObjKey, u32), TimerId>,
     missiles: BTreeMap<u32, Missile>,
     buffs: BTreeMap<u32, SpellBuff>,
@@ -278,6 +308,30 @@ pub fn effect_duration(level: &SpellLevel, hero: bool, bonus: F32) -> F32 {
 /// The cost value handed to the unit check: `add(I2R(Cost), 0.0)`.
 pub fn cost_value(cost: i32) -> F32 {
     crate::abilities::cast_cost_value(cost)
+}
+
+/// `0x6FAAE47C` after start-up: the compare epsilon `0.001`.
+const PROP_EPS: F32 = F32::from_bits(0x3A83_126F);
+/// `0x6FAAE624` after start-up: `FLT_MAX`, the "no end" value of the channel property.
+pub const FLT_MAX: F32 = F32::from_bits(0x7F7F_FFFF);
+
+fn abs_bits(x: F32) -> F32 {
+    F32::from_bits(x.to_bits() & 0x7FFF_FFFF)
+}
+
+/// The "property is above the constant" test of the cast tail (`0x6F022270`, CONFIRMED, Unicorn 400 cases): an
+/// ordered `c < p` as an x87 compare, then not (`0.001 > |p - c|`). False for a NaN on either side.
+pub fn prop_above(p: F32, c: F32) -> bool {
+    if !(f64::from(c.to_f32()) < f64::from(p.to_f32())) {
+        return false;
+    }
+    !(f64::from(PROP_EPS.to_f32()) > f64::from(abs_bits(arith::sub(p, c)).to_f32()))
+}
+
+/// The "property differs from the constant" test (`0x6F022340`, CONFIRMED, Unicorn 400 cases): not
+/// (`0.001 > |c - p|`); a NaN difference counts as different.
+pub fn prop_differs(p: F32, c: F32) -> bool {
+    !(f64::from(PROP_EPS.to_f32()) > f64::from(abs_bits(arith::sub(c, p)).to_f32()))
 }
 
 // ---- registry API ----
@@ -572,6 +626,10 @@ impl Game {
         if b.code == BUFF_STUN || matches!(b.effect, BuffEffect::Sleep) {
             self.unit_mut(b.unit).bonuses.stun = self.unit(b.unit).bonuses.stun.saturating_sub(1);
         }
+        // Banish (`BHbn`, ethereal): the removal lowers the unit's ethereal counter (`0x6F07F630` -> `0x6F0796A0`).
+        if b.code == crate::human_heroes::BUFF_BANISH {
+            self.unit_mut(b.unit).ethereal -= 1;
+        }
         self.unit_mut(b.unit).buffs.retain(|x| x.serial != serial);
         crate::orc::on_buff_dropped(self, serial);
         self.refresh_slow(b.unit);
@@ -713,6 +771,7 @@ pub fn begin_cast(
             }
         }
         CastRec {
+            id: 0,
             caster,
             base,
             target,
@@ -728,7 +787,7 @@ pub fn begin_cast(
         let mut gm = game.borrow_mut();
         gm.spells.next_id += 1;
         let id = gm.spells.next_id;
-        gm.spells.casts.insert(id, rec);
+        gm.spells.casts.insert(id, CastRec { id, ..rec });
         gm.spells.current.insert(caster, id);
         id
     };
@@ -766,7 +825,10 @@ fn stage1(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
         end_cast(game, rt, id, false);
         return;
     }
-    if waits(rec.level.cast) && !crate::undead_ne::cast_field_is_period(rec.base) {
+    if waits(rec.level.cast)
+        && !crate::undead_ne::cast_field_is_period(rec.base)
+        && !crate::human_heroes::cast_field_is_wave_interval(rec.base)
+    {
         game.borrow_mut().timers.start(
             rec.level.cast.to_f32(),
             false,
@@ -825,10 +887,44 @@ fn stage3(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
     }
     run_effect(game, rt, &rec);
     game.borrow_mut().start_cooldown(rec.caster, rec.base, rec.level.cool);
+    // The tail of `0x6F063760`: the channel time decides whether the cast finishes now.
+    let t = channel_time(&game.borrow(), &rec);
+    if prop_above(t, F32::ZERO) {
+        let mut gm = game.borrow_mut();
+        gm.spells.channeling.insert(id);
+        if prop_differs(t, FLT_MAX) {
+            let timer = gm
+                .timers
+                .start(t.to_f32(), false, Payload::Spell(SpellMsg::ChannelEnd(id)));
+            gm.spells.channel_timers.insert(id, timer);
+        }
+    } else {
+        complete_cast(game, rt, id);
+    }
+}
+
+/// The channel time of a cast (the property at ability `+0x90`): the class value when it sets one, else the
+/// backswing of the caster's unit type (`castbsw`, installed with `set_cast_timing`; 0.0 when none).
+fn channel_time(gm: &Game, rec: &CastRec) -> F32 {
+    if let Some(t) = crate::human_heroes::channel_time_override(rec.base, &rec.level) {
+        return t;
+    }
+    gm.spells
+        .timings
+        .get(&gm.unit(rec.caster).type_id)
+        .map_or(F32::ZERO, |t| t.backswing)
+}
+
+/// Slot `0x39C(1)`: the class completion (Mass Teleport teleports here), then the finish.
+fn complete_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
+    let Some(rec) = game.borrow().spells.casts.get(&id).copied() else {
+        return;
+    };
+    crate::human_heroes::on_channel_complete(game, &rec);
     end_cast(game, rt, id, true);
 }
 
-/// Ends a cast: FINISH when it completed, then ENDCAST.
+/// Ends a cast: FINISH when it completed, the class channel-end hook (slot `0x388`), then ENDCAST.
 fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed: bool) {
     let Some(rec) = game.borrow().spells.casts.get(&id).copied() else {
         return;
@@ -836,6 +932,10 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
     {
         let mut gm = game.borrow_mut();
         gm.spells.casts.remove(&id);
+        gm.spells.channeling.remove(&id);
+        if let Some(t) = gm.spells.channel_timers.remove(&id) {
+            gm.timers.cancel(t);
+        }
         if gm.spells.current.get(&rec.caster) == Some(&id) {
             gm.spells.current.remove(&rec.caster);
         }
@@ -843,8 +943,67 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
     if completed {
         fire_spell_event(game, rt, SPELL_FINISH, &rec);
     }
+    crate::human_heroes::on_cast_end(game, &rec);
     fire_spell_event(game, rt, SPELL_ENDCAST, &rec);
     crate::item_abilities::on_cast_end(game, rt, &rec, completed);
+}
+
+impl Game {
+    /// Records that `new_order` replaced the orders of `unit` (called by the order dispatcher). A cast of the unit
+    /// whose own order id differs from it ends at the next [`process_interrupts`] (message `0xD0144`).
+    pub(crate) fn note_order_replaced(&mut self, unit: ObjKey, new_order: u32) {
+        if self.spells.current.contains_key(&unit) {
+            self.spells.interrupts.push((unit, new_order));
+        }
+    }
+
+    /// The spell buffs (serial, base code) currently on `unit`, in serial order (the dispel of Divine Shield and Avatar
+    /// walks them, `human_heroes::magic_immunity_dispel`).
+    pub(crate) fn spell_buffs_of(&self, unit: ObjKey) -> Vec<(u32, u32)> {
+        self.spells
+            .buffs
+            .iter()
+            .filter(|(_, b)| b.unit == unit)
+            .map(|(s, b)| (*s, b.code))
+            .collect()
+    }
+
+    /// The order id of the spell `base` (the reverse of the order table), if one is registered.
+    fn spell_order_id(&self, base: u32) -> Option<u32> {
+        self.spells.order_ids.iter().find(|(_, b)| **b == base).map(|(id, _)| *id)
+    }
+}
+
+/// The casts to interrupt now: a replacing order of another id, a dead or removed caster, a stunned caster in
+/// the channel phase.
+fn next_interrupted(game: &RefCell<Game>) -> Option<u32> {
+    let mut gm = game.borrow_mut();
+    while let Some((unit, new_id)) = (!gm.spells.interrupts.is_empty()).then(|| gm.spells.interrupts.remove(0)) {
+        let Some(&cid) = gm.spells.current.get(&unit) else {
+            continue;
+        };
+        let Some(rec) = gm.spells.casts.get(&cid).copied() else {
+            continue;
+        };
+        if gm.spell_order_id(rec.base) != Some(new_id) {
+            return Some(cid);
+        }
+    }
+    let found = gm.spells.casts.iter().find_map(|(&cid, rec)| {
+        let gone = !gm.alive(rec.caster);
+        let stunned = gm.spells.channeling.contains(&cid) && gm.is_stunned(rec.caster);
+        (gone && gm.spells.channeling.contains(&cid) || stunned).then_some(cid)
+    });
+    found
+}
+
+/// Ends the casts that an order, a death or a stun interrupted (slot `0x3A0` -> `0x6F050BE0`, see the module
+/// documentation): no FINISH, the class hook, ENDCAST. Called by the script host after every timer event and at
+/// the end of every tick.
+pub fn process_interrupts(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime) {
+    while let Some(id) = next_interrupted(game) {
+        end_cast(game, rt, id, false);
+    }
 }
 
 // ---- the class effects (slot 0x424) ----
@@ -1020,6 +1179,10 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
     match msg {
         SpellMsg::Stage2(id) => stage2(game, rt, id),
         SpellMsg::Stage3(id) => stage3(game, rt, id),
+        SpellMsg::ChannelEnd(id) => {
+            game.borrow_mut().spells.channel_timers.remove(&id);
+            complete_cast(game, rt, id);
+        }
         SpellMsg::Impact(id) => impact(game, rt, id),
         SpellMsg::CooldownEnd { unit, base } => {
             let mut gm = game.borrow_mut();

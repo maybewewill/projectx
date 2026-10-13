@@ -392,10 +392,13 @@ impl Game {
         }
         if order.id == ORDER_STOP && order.class == OrderClass::Immediate {
             // Stop clears everything and is not queued (its ability is not found: UNVERIFIED).
+            self.note_order_replaced(unit, order.id);
             self.clear_orders(unit);
             return None;
         }
         if replace {
+            // Message `0xD0144` reaches the unit's spell: a channel ends unless this is its own order (cast.rs).
+            self.note_order_replaced(unit, order.id);
             self.clear_orders(unit);
         }
         if self.orders.total(unit) > ORDER_LIMIT {

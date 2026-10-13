@@ -84,7 +84,7 @@ function shield takes nothing returns nothing
     set accepted = IssueImmediateOrderById(pal, 852090)
 endfunction
 function unshield takes nothing returns nothing
-    set accepted = IssueImmediateOrderById(pal, 852056)
+    set accepted = IssueImmediateOrderById(pal, 852091)
 endfunction
 function resurrect takes nothing returns nothing
     set accepted = IssueImmediateOrderById(pal, 852094)
@@ -359,11 +359,33 @@ fn divine_shield_makes_the_caster_invulnerable_for_its_duration() {
 }
 
 #[test]
+fn divine_shield_and_avatar_dispel_magical_buffs_on_apply() {
+    use sim::cast::{BuffEffect, BUFF_SLOW};
+    let mut h = started(None);
+    let (pal, king) = (unit(&h, "pal"), unit(&h, "king"));
+    let slow = BuffEffect::Slow { move_delta: f(-0.5), attack_delta: f(-0.5) };
+    for k in [pal, king] {
+        h.game_mut().add_spell_buff(k, BUFF_SLOW, slow, f(30.0));
+        assert!(has_buff(&h, k, BUFF_SLOW));
+    }
+    call(&mut h, "shield");
+    call(&mut h, "avatar");
+    run(&mut h, 1);
+    assert!(!has_buff(&h, pal, BUFF_SLOW), "Divine Shield dispels a magical negative buff (0x6F07D180)");
+    assert!(!has_buff(&h, king, BUFF_SLOW), "so does the first immunity count of Avatar (0x6F07A3A0)");
+}
+
+#[test]
 fn divine_shield_can_be_cancelled_when_data_a_allows_it() {
     let mut h = started(None);
     let pal = unit(&h, "pal");
+    // Stock game: Misc `CanDeactivateDivineShield` is absent (default 0), so the order is refused.
     call(&mut h, "shield");
     run(&mut h, 1);
+    call(&mut h, "unshield");
+    run(&mut h, 1);
+    assert!(!accepted(&h) && h.game().unit_is_invulnerable(pal), "no cancel without the Misc key");
+    h.game_mut().set_can_deactivate_divine_shield(true);
     call(&mut h, "unshield");
     run(&mut h, 1);
     assert!(accepted(&h));
@@ -397,13 +419,14 @@ fn resurrection_revives_allied_corpses_in_the_area_up_to_data_a() {
     call(&mut h, "resurrect");
     run(&mut h, 1);
     assert!(accepted(&h));
-    // DataA = 2: all keys tie, so the sort (0x6F19EA20, CONFIRMED) puts the larger agent ids first: C and B come back
-    // at full life; A and the enemy's corpse stay dead.
-    assert!(!h.game().unit(c).dead);
+    // DataA = 2: the corpse keys tie (all level 0), so the sort (0x6F19EA20, CONFIRMED) goes by the record's real
+    // `+8` = the squared distance to the caster (CONFIRMED, S35): the nearest corpses A and B come back at full life;
+    // C and the enemy's corpse stay dead.
+    assert!(!h.game().unit(a).dead);
     assert!(!h.game().unit(b).dead);
-    assert_eq!(life(&h, c), 500.0);
+    assert_eq!(life(&h, a), 500.0);
     assert_eq!(life(&h, b), 500.0);
-    assert!(h.game().unit(a).dead);
+    assert!(h.game().unit(c).dead);
     assert!(h.game().unit(foe_corpse).dead);
     assert!(h.game().is_cooling(unit(&h, "pal"), RESURRECTION));
 }
