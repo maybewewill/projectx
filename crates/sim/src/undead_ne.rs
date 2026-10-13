@@ -511,6 +511,146 @@ fn blink(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, x: F32, y: F3
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// The swath engine shared by Carrion Swarm (`AUcs`) and Shockwave (`AOsh`, `CAbilityShockwave` derives from
+// `CAbilityCarrionSwarm`, so the orc lane reuses everything below; only the level data differ). S37.
+
+/// The "safe division" of the property helpers `0x6F022530` / `0x6F0223C0`: `a / b` through the soft divide unless
+/// `b == 0.0` (x87 compare: `-0.0` is zero, NaN is not); then `a == 0.0` gives `1.0` (`0x6FAAE4F4`), `a < 0.0` gives
+/// `-FLT_MAX` (`0x6FAAE628`), anything else (also NaN) `+FLT_MAX` (`0x6FAAE624`).
+pub fn safe_div(a: F32, b: F32, t: &Tables) -> F32 {
+    if b.to_f32() != 0.0 {
+        return arith::div(a, b, t);
+    }
+    let af = a.to_f32();
+    if af == 0.0 {
+        F32::from_bits(0x3F80_0000)
+    } else if af < 0.0 {
+        F32::from_bits(0xFF7F_FFFF)
+    } else {
+        F32::from_bits(0x7F7F_FFFF)
+    }
+}
+
+/// The robust "greater than" `0x6F07C450` (also the test of `0x6F022270` against 0.0): true when `a > b` by the x87
+/// compare and `|soft_sub(a, b)| >= 0.001` (`0x6FAAE47C`). `0x6F022270(prop, &0.0)` is `gt_eps(prop, 0.0)`.
+pub fn gt_eps(a: F32, b: F32) -> bool {
+    if !(b.to_f32() < a.to_f32()) {
+        return false;
+    }
+    let d = F32::from_bits(arith::sub(a, b).to_bits() & 0x7FFF_FFFF);
+    f32::from_bits(0x3A83_126F) <= d.to_f32()
+}
+
+/// `0x6F07B870`: rescales `(x, y)` to length `len`: `k = len * recip(sqrt(x*x + y*y))`, `(x*k, y*k)` (the same
+/// normalisation Blink uses, CONFIRMED by Unicorn there and here).
+pub fn rescale(x: F32, y: F32, len: F32, t: &Tables) -> (F32, F32) {
+    let yy = arith::mul(y, y);
+    let xx = arith::mul(x, x);
+    let n2 = arith::add(xx, yy);
+    let inv = arith::recip(softfloat::math::sqrt(n2, t), t);
+    let k = arith::mul(len, inv);
+    (arith::mul(x, k), arith::mul(y, k))
+}
+
+/// The start and end point of a swath missile (`0x6F1DD4F0`, CONFIRMED by Unicorn): with `(dx, dy)` the vector from
+/// the caster to the target point and `d2 = dx*dx + dy*dy`, the direction is `(dx, dy)` rescaled to length `area`
+/// when `d2 >= 20.0^2` (`0x6FAB35F4` squared by the soft multiply; NaN and smaller use the facing), else the polar
+/// vector `(area * cos(facing), area * sin(facing))` (`0x6F10E370`, the facing in radians). `start = caster + v1`
+/// (so the swarm starts `Area` units in front of the caster), `end = start + v1 rescaled to length distance`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SwathLaunch {
+    pub start: (F32, F32),
+    pub end: (F32, F32),
+}
+
+pub fn swath_launch(
+    caster: (F32, F32),
+    target: (F32, F32),
+    facing: F32,
+    area: F32,
+    distance: F32,
+    t: &Tables,
+) -> SwathLaunch {
+    let dy = arith::sub(target.1, caster.1);
+    let dx = arith::sub(target.0, caster.0);
+    let yy = arith::mul(dy, dy);
+    let xx = arith::mul(dx, dx);
+    let d2 = arith::add(xx, yy);
+    let twenty = F32::from_bits(0x41A0_0000);
+    let v1 = if d2.to_f32() >= arith::mul(twenty, twenty).to_f32() {
+        rescale(dx, dy, area, t)
+    } else {
+        let s = softfloat::math::sin(facing, t);
+        let c = softfloat::math::cos(facing, t);
+        let y = arith::mul(area, s);
+        let x = arith::mul(area, c);
+        (x, y)
+    };
+    let start = (arith::add(caster.0, v1.0), arith::add(caster.1, v1.1));
+    let v2 = rescale(v1.0, v1.1, distance, t);
+    SwathLaunch { start, end: (arith::add(start.0, v2.0), arith::add(start.1, v2.1)) }
+}
+
+/// The swath data of a running missile (`CMissileCarrionSwarm` properties, CONFIRMED mapping by the setup
+/// `0x6F1F28C0`): `start` (`+0x90`/`+0x98`), `distance` = DataC (`+0xA0`), `width0` = Area (`+0xC8`), `width1` =
+/// DataD (`+0xD0`, the final width), `damage` = DataA (`+0xD8`), `cap` = DataB (`+0xE0`, the total that may still be
+/// dealt; the stock rows call it "max damage").
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SwathData {
+    pub start: (F32, F32),
+    pub distance: F32,
+    pub width0: F32,
+    pub width1: F32,
+    pub damage: F32,
+    pub cap: F32,
+}
+
+/// The radius of the query circle at the missile position (`0x6F1EF6D0`): `dist = |pos - start|` (soft sqrt of
+/// `dx*dx + dy*dy`), `frac = safe_div(dist, distance)`, `radius = width0 + (width1 - width0) * frac`.
+pub fn swath_radius(d: &SwathData, pos: (F32, F32), t: &Tables) -> F32 {
+    let dy = arith::sub(pos.1, d.start.1);
+    let dx = arith::sub(pos.0, d.start.0);
+    let yy = arith::mul(dy, dy);
+    let xx = arith::mul(dx, dx);
+    let dist = softfloat::math::sqrt(arith::add(xx, yy), t);
+    let frac = safe_div(dist, d.distance, t);
+    arith::add(d.width0, arith::mul(arith::sub(d.width1, d.width0), frac))
+}
+
+/// The damage each unit found by one tick receives: `share = safe_div(cap, I2R(n))`; `damage` when `share > damage`
+/// (robust compare), else `share` (the remaining total is spread equally over the units of this tick).
+pub fn swath_damage_each(d: &SwathData, n: usize, t: &Tables) -> F32 {
+    let share = safe_div(d.cap, softfloat::conv::i2r(n as i32), t);
+    if gt_eps(share, d.damage) {
+        d.damage
+    } else {
+        share
+    }
+}
+
+/// The cap after a unit lost `before - after` life: `cap - (before - after)` (the cap counts the life really lost,
+/// not the nominal damage, CONFIRMED order and operands).
+pub fn swath_cap_after(cap: F32, before: F32, after: F32) -> F32 {
+    arith::sub(cap, arith::sub(before, after))
+}
+
+/// Whether the tick re-arms its 0.1 s timer: the remaining cap is above 0.01 by the robust compare.
+pub fn swath_rearm(cap: F32) -> bool {
+    gt_eps(cap, F32::from_bits(0x3C23_D70A))
+}
+
+/// The property `+0xEC` after a tick: `3.0 - (0.1 + 0.02)`, one soft subtract per tick (a countdown the original
+/// keeps; nothing found reads it for gameplay).
+pub fn swath_countdown(ec: F32) -> F32 {
+    arith::sub(ec, arith::add(F32::from_bits(0x3DCC_CCCD), F32::from_bits(0x3CA3_D70A)))
+}
+
+/// Tick period (`0x6FAB35F8` = 0.1) and the lifetime of the "hit" marker buff (`0.1 + 0.02`, `0x6F1E79E0`).
+pub const SWATH_TICK_BITS: u32 = 0x3DCC_CCCD;
+/// The query cap of the swarm callback `0x6F1E7B00`: at most 64 units per tick.
+pub const SWATH_MAX_UNITS: usize = 64;
+
+// ---------------------------------------------------------------------------------------------------------------
 // Carrion Swarm
 
 /// `CAbilityCarrionSwarm` effect (`0x6F1DD4F0`, argument roles CONFIRMED, geometry and hit order UNSURE). The caster
