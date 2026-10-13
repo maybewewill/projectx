@@ -70,6 +70,7 @@ pub const FIGURINE_GUARD: u32 = code(b"AIfu");
 pub const BUFF_FIGURINE: u32 = code(b"BFig");
 pub const ORB_FIRE: u32 = code(b"AIfb");
 pub const ORB_FROST: u32 = code(b"AIob");
+pub const ITEM_REINCARNATION: u32 = code(b"AIrc");
 pub const ITEM_INVIS: u32 = code(b"AIvi");
 pub const ITEM_INVUL: u32 = code(b"AIvu");
 pub const ITEM_RAISE_DEAD: u32 = code(b"AIrd");
@@ -140,6 +141,9 @@ pub enum Family {
     /// `CAbilityFigurine*` (`AIfs`, `AIfr`, `AIfu`; every figurine row of the item table uses the code `AIfs`): summons
     /// `f2i(DataA)` units of type `DataC` and `f2i(DataB)` of type `DataD` for `Dur` seconds.
     Figurine,
+    /// `CAbilityItemReincarnation` (`AIrc`, the Ankh): a passive; the carrier that dies revives after `DataA` seconds and the
+    /// item uses its charge (`0x6F2B8390`).
+    ItemReincarnation,
     /// `CAbilityItemInvis` (`AIvi`): the buff `Binv` for the hero-rule duration.
     Invis,
     /// `CAbilityItemInvul` (`AIvu`): the buff `Bvul` for the hero-rule duration; the holder is invulnerable meanwhile.
@@ -165,6 +169,7 @@ impl Family {
                 | Family::BonusVampire
                 | Family::OrbFire
                 | Family::OrbFrost
+                | Family::ItemReincarnation
         )
     }
 
@@ -202,6 +207,7 @@ impl Family {
             BONUS_SPELL_REDUCTION => Family::BonusSpellReduction,
             BONUS_VAMPIRE => Family::BonusVampire,
             FIGURINE | FIGURINE_GOLEM | FIGURINE_GUARD => Family::Figurine,
+            ITEM_REINCARNATION => Family::ItemReincarnation,
             ORB_FIRE => Family::OrbFire,
             ORB_FROST => Family::OrbFrost,
             ITEM_INVIS => Family::Invis,
@@ -914,6 +920,33 @@ fn orb_fire(gm: &mut Game, attacker: ObjKey, victim: ObjKey, level: &SpellLevel,
             }
         }
     }
+}
+
+/// The Ankh of Reincarnation when its carrier dies (`0x6F1F1D50`, the death handler of `CAbilityItemReincarnation`,
+/// structure CONFIRMED by reading): the carrier must not be an illusion; the effect starts with the delay `DataA` (the
+/// same revival timer as `AOre`), the item uses a charge (`0x6F2B8390`, which destroys the perishable Ankh) and the
+/// unit gets flag `0x1000`. UNSURE: the other conditions of the handler (`0x6F1DB690`, the pathing probe at the death
+/// point, `0x6F1D2F20`), and the roles of `DataB` (500, clamped to at least 1.0) and `DataC` (-1, a negative value
+/// selects a unit stat): the model revives with full life, like Reincarnation.
+pub(crate) fn on_unit_died(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey) {
+    let (item, delay) = {
+        let gm = game.borrow();
+        if gm.unit(unit).illusion {
+            return;
+        }
+        let found = gm.unit(unit).abilities.iter().find_map(|a| {
+            (!a.is_removed() && gm.spells.item.family(a.base) == Some(Family::ItemReincarnation)).then_some(a.base)
+        });
+        let Some(alias) = found else {
+            return;
+        };
+        let Some(&item) = gm.spells.item.holders.get(&(unit, alias)).and_then(|v| v.first()) else {
+            return;
+        };
+        (item, level_of(&gm, alias).data[0].to_f32())
+    };
+    game.borrow_mut().start_reincarnation(unit, delay);
+    use_charge(game, rt, item);
 }
 
 // ---- the effects ----

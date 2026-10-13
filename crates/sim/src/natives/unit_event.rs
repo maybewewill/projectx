@@ -171,6 +171,8 @@ pub(crate) fn dispatch_unit_death_by(
         gm.kill_log.push((killer_owner, owner, ty));
         gm.orc_on_unit_died(unit);
     }
+    // The Ankh of Reincarnation (`AIrc`) carried by the dying unit.
+    crate::item_abilities::on_unit_died(game, rt, unit);
     // The death handler `0x6F2A4880` gives the kill experience first (UNSURE order against the JASS events).
     if let Some(k) = killer {
         crate::kill_xp::grant_kill_xp(&mut game.borrow_mut(), unit, k);

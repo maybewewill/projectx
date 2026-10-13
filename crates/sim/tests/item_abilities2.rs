@@ -27,6 +27,8 @@ native UnitUseItem takes unit whichUnit, item whichItem returns boolean
 native UnitUseItemPoint takes unit whichUnit, item whichItem, real x, real y returns boolean
 native GetItemCharges takes item whichItem returns integer
 native GetUnitX takes unit whichUnit returns real
+native GetWidgetLife takes widget whichWidget returns real
+native GetItemTypeId takes item whichItem returns integer
 "#;
 
 const SRC: &str = r#"
@@ -102,6 +104,14 @@ endfunction
 function drop_a takes nothing returns nothing
     call UnitRemoveItem(u, a)
 endfunction
+function setup_ankh takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set a = CreateItem('ankh', 0.0, 0.0)
+    call UnitAddItem(u, a)
+endfunction
+function kill_u takes nothing returns nothing
+    call SetWidgetLife(u, 0.0)
+endfunction
 function setup_ring takes nothing returns nothing
     set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
     set ring = CreateItem('rlif', 0.0, 0.0)
@@ -136,6 +146,8 @@ const SKEL: u32 = 0x6E73_6365; // 'nsce' skeleton warrior
 const AFIG: u32 = 0x4149_6673; // 'AIfs'
 const ENDU: u32 = 0x656E_6475; // 'endu' an Endurance aura item
 const AENDU: u32 = 0x4149_6165; // 'AIae'
+const ANKH: u32 = 0x616E_6B68; // 'ankh'
+const A_ANKH: u32 = 0x4149_7263; // 'AIrc'
 const A_VAMP: u32 = 0x4149_7661; // 'AIva'
 const A_SR: u32 = 0x4149_7372; // 'AIsr'
 
@@ -238,7 +250,9 @@ fn host() -> ScriptHost {
                 targs: "air,ground,friend,self,vuln,invu".to_string(),
             }],
         );
+        add(ANKH, A_ANKH, ITEM_REINCARNATION, level(0.0, 0.0, 7.0), &|s| s.perishable = true);
         g.install_item_abilities(&data);
+        g.item_types_mut().insert(ANKH, item_type(1, true));
         g.unit_types_mut().insert(
             SKEL,
             UnitType {
@@ -461,4 +475,19 @@ fn item_aura_starts_while_carried_and_stops_with_the_item() {
         h.step();
     }
     assert!(!h.game().unit(u).buffs.iter().any(|b| b.base == sim::abilities::code(b"BOae")), "aura gone with the item");
+}
+
+#[test]
+fn ankh_revives_the_carrier_after_its_delay_and_is_used_up() {
+    let mut h = started("setup_ankh");
+    let u = global_unit(&h, "u");
+    call(&mut h, "kill_u");
+    assert!(h.game().unit(u).dead, "killed");
+    assert!(h.game().reincarnation_pending(u), "the Ankh started the revival");
+    // 7 s later the carrier lives again; the perishable Ankh used its only charge.
+    for _ in 0..90 {
+        h.step();
+    }
+    assert!(!h.game().unit(u).dead, "revived");
+    assert!(!h.game().unit(u).abilities.contains(A_ANKH), "the Ankh is gone");
 }
