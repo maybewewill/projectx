@@ -28,6 +28,7 @@ native IssueTargetOrderById takes unit whichUnit, integer order, widget target r
 native IssueTargetOrder takes unit whichUnit, string order, widget target returns boolean
 native IssueImmediateOrderById takes unit whichUnit, integer order returns boolean
 native IssuePointOrderById takes unit whichUnit, integer order, real x, real y returns boolean
+native IssuePointOrder takes unit whichUnit, string order, real x, real y returns boolean
 "#;
 
 const SRC: &str = r#"
@@ -61,6 +62,18 @@ function curse_ally takes nothing returns nothing
 endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
+endfunction
+function foe_walks takes nothing returns nothing
+    call IssuePointOrder(foe, "move", 6500.0, 0.0)
+endfunction
+function ensnare_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852106, foe)
+endfunction
+function ensnare_ally takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852106, grunt)
+endfunction
+function web_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852211, foe)
 endfunction
 function shield_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852110, grunt)
@@ -280,6 +293,79 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     call(&mut h2, "foe_attacks");
     run(&mut h2, 80);
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
+}
+
+// ---- Ensnare / Web ----
+
+fn with_nets(h: &ScriptHost, speed: f32) {
+    let k = {
+        let id = h.vm().global("shaman").and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    for base in [ENSNARE, WEB] {
+        g.ability_types_mut().insert(base, AbilityType { max_level: Some(1) });
+        g.set_spell_missile_speed(base, f(speed));
+        // Ensnare: range 500, cooldown 16, DataA 0.6, DataB 200, DataC 128; Dur 12 / HeroDur 3 (shortened to 6 / 3).
+        g.set_spell_levels(
+            base,
+            vec![SpellLevel {
+                cost: 0,
+                cool: f(1.0),
+                dur: f(6.0),
+                hero_dur: f(3.0),
+                rng: f(500.0),
+                data: data(&[(0, 0.6), (1, 200.0), (2, 128.0)]),
+                ..Default::default()
+            }],
+        );
+        g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(base, None));
+    }
+}
+
+fn x_of(h: &ScriptHost, k: ObjKey) -> f32 {
+    h.game().unit(k).x.to_f32()
+}
+
+#[test]
+fn ensnare_roots_a_moving_enemy_for_its_duration_and_the_net_takes_time_to_fly() {
+    let mut h = started();
+    with_nets(&h, 1000.0);
+    let foe = unit(&h, "foe");
+    let x0 = x_of(&h, foe);
+    call(&mut h, "foe_walks");
+    run(&mut h, 5);
+    assert!(x_of(&h, foe) > x0 + 10.0, "the control unit walks: {} -> {}", x0, x_of(&h, foe));
+    call(&mut h, "ensnare_foe");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    // The net flies: distance / 1000 s; the buff is not there yet at once (the foe is ~400 away: 0.4 s).
+    assert!(!has_buff(&h, foe, BUFF_ENSNARE_GROUND));
+    run(&mut h, 5);
+    assert!(has_buff(&h, foe, BUFF_ENSNARE_GROUND));
+    assert!(h.game().is_rooted(foe));
+    let x1 = x_of(&h, foe);
+    run(&mut h, 20);
+    let x2 = x_of(&h, foe);
+    assert!((x2 - x1).abs() < 1.0, "a rooted unit stays: {x1} -> {x2}");
+    // 6 s duration: after it ends the unit walks again.
+    run(&mut h, 50);
+    assert!(!has_buff(&h, foe, BUFF_ENSNARE_GROUND));
+    assert!(!h.game().is_rooted(foe));
+    run(&mut h, 10);
+    assert!(x_of(&h, foe) > x2 + 10.0, "walks again");
+}
+
+#[test]
+fn web_takes_air_units_only_and_ensnare_refuses_structures_and_friends() {
+    let mut h = started();
+    with_nets(&h, 0.0);
+    call(&mut h, "web_foe");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "Web: air units only");
+    call(&mut h, "ensnare_ally");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "Ensnare: enemies only");
 }
 
 // ---- Lightning Shield ----

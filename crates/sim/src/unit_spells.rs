@@ -82,6 +82,12 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+pub const ENSNARE: u32 = code(b"Aens");
+pub const BUFF_ENSNARE_AIR: u32 = code(b"Bena");
+pub const BUFF_ENSNARE_GROUND: u32 = code(b"Beng");
+pub const WEB: u32 = code(b"Aweb");
+pub const BUFF_WEB_AIR: u32 = code(b"Bwea");
+pub const BUFF_WEB_GROUND: u32 = code(b"Bweb");
 pub const LIGHTNING_SHIELD: u32 = code(b"Alsh");
 pub const BUFF_LIGHTNING_SHIELD: u32 = code(b"Blsh");
 pub const PURGE: u32 = code(b"Aprg");
@@ -104,6 +110,8 @@ pub const KIND_PURGE_MOVE: u8 = 4;
 pub const KIND_PURGE_ATTACK: u8 = 5;
 /// Lightning Shield's tick timer (message `0xD01C1` on the buff; a one-shot re-armed by each tick).
 pub const KIND_SHIELD: u8 = 6;
+/// A net (Ensnare / Web) arrives at its target.
+pub const KIND_NET: u8 = 7;
 /// The tick period (`CBuffDoT` slot `0x35C` = `0x6F0ADBE0`: the constant `0x6FAAE4F4` = 1.0).
 const TICK_PERIOD: f32 = 1.0;
 /// The first-tick delay (`0x6F0ADBD0`: the constant `0x6FAAE480`).
@@ -122,7 +130,9 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 13] = [
+pub const SPELL_ORDERS: [(u32, u32); 15] = [
+    (852_106, ENSNARE),
+    (852_211, WEB),
     (852_110, LIGHTNING_SHIELD),
     (852_111, PURGE),
     (852_190, CURSE),
@@ -139,7 +149,8 @@ pub const SPELL_ORDERS: [(u32, u32); 13] = [
 ];
 
 /// `(autocast on order, autocast off order, ability)`.
-const TOGGLES: [(u32, u32, u32); 5] = [
+const TOGGLES: [(u32, u32, u32); 6] = [
+    (852_212, 852_213, WEB),
     (852_191, 852_192, CURSE),
     (852_198, 852_199, RAISE_DEAD),
     (ORDER_HEAL_ON, ORDER_HEAL_OFF, HEAL),
@@ -183,6 +194,8 @@ pub struct UnitMods {
     /// The attacker's chance to miss (Curse, `CBuffCurse` holder `+0xD0`). Not a stat sink: the attacker-side walk
     /// of the miss gate reads it from the buff ([`Game::attacker_miss_scores`]).
     pub miss_chance: F32,
+    /// One root count while the buff exists (Ensnare, Web).
+    pub root: bool,
 }
 
 impl Default for UnitMods {
@@ -195,6 +208,7 @@ impl Default for UnitMods {
             life_regen: F32::ZERO,
             mana_regen: F32::ZERO,
             miss_chance: F32::ZERO,
+            root: false,
         }
     }
 }
@@ -224,6 +238,14 @@ impl Game {
         if nonzero(m.mana_regen) {
             self.add_mana_regen(unit, m.mana_regen);
         }
+        if m.root {
+            *self.spells.unit.rooted.entry(unit).or_insert(0) += 1;
+        }
+    }
+
+    /// Whether `unit` is rooted by a net (Ensnare, Web): its mover is halted while the count is above zero.
+    pub fn is_rooted(&self, unit: ObjKey) -> bool {
+        self.spells.unit.rooted.get(&unit).is_some_and(|&n| n > 0)
     }
 
     /// Takes the modifiers of a removed buff off `unit`.
@@ -236,8 +258,14 @@ impl Game {
             life_regen: arith::neg(m.life_regen),
             mana_regen: arith::neg(m.mana_regen),
             miss_chance: F32::ZERO,
+            root: false,
         };
         self.apply_mods(unit, &neg);
+        if m.root {
+            if let Some(n) = self.spells.unit.rooted.get_mut(&unit) {
+                *n = n.saturating_sub(1);
+            }
+        }
     }
 
     /// Applies (or refreshes) the buff `base` with the stat modifiers `mods` for `duration` seconds. An existing buff
@@ -338,6 +366,11 @@ pub struct State {
     purge: BTreeMap<u32, PurgeRec>,
     /// Lightning Shield buffs by serial.
     shield: BTreeMap<u32, ShieldRec>,
+    /// Root counts (Ensnare, Web) by unit: a rooted unit's mover is halted.
+    rooted: BTreeMap<ObjKey, u32>,
+    /// Nets in flight by id (the timer's `aux`): (caster, target, base, the level record at the cast).
+    nets: BTreeMap<u32, (ObjKey, ObjKey, u32, crate::cast::SpellLevel)>,
+    next_net: u32,
     /// Misc `EtherealHealBonus` (a missing key reads 0.0).
     pub ethereal_heal_bonus: F32,
     /// Misc `IllusionsCanRestoreLife` / `IllusionsGetAutocast` (missing = off).
@@ -662,6 +695,18 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        ENSNARE | WEB => {
+            // targs: Ensnare ground,air,enemy,neutral; Web air,enemy,neutral. Extra rule (slot 0x3F0): the target needs a
+            // mover (error 0x69), modelled as "not a structure and has a movement type".
+            let w = targs_word(if base == WEB { "air,enemy,neutral" } else { "ground,air,enemy,neutral" });
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            if is_unit_type(gm, gm.unit(target), ty::STRUCTURE) {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         LIGHTNING_SHIELD => {
             // targs: ground,friend,enemy,neutral (any ground unit, no structures: the kind group names only ground).
             let w = targs_word("ground,friend,enemy,neutral");
@@ -744,6 +789,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         LIGHTNING_SHIELD => {
             if let CastTarget::Unit(t) = rec.target {
                 lightning_shield(game, rec, t);
+            }
+            true
+        }
+        ENSNARE | WEB => {
+            if let CastTarget::Unit(t) = rec.target {
+                net_spell(game, rec, t);
             }
             true
         }
@@ -1111,6 +1162,88 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
     }
+}
+
+/// Ensnare (`Aens`, `CAbilityEnsnare` vtable `0x6F8A5B4C`, effect slot `0x424` = `0x6F0AAB90`) and Web (`Aweb`,
+/// `CAbilityWeb` `0x6F8A5F7C`, an AutoTargetSpell, effect `0x6F0AADD0`). CONFIRMED structure: the effect reads the hero
+/// rule duration (`HeroDur`, else `Dur` + the ability's `+0x9C`), `DataA`, `DataB`, `DataC` and builds a net MISSILE
+/// from the caster towards the target (the missile object, `0x6F07EAE0`); the buff is applied when the net arrives
+/// (`CBuffEnsnareGround` / `CBuffEnsnareAir`, `Beng` / `Bena`; Web: `Bweb` / `Bwea`, `CBuffWeb` derives from
+/// `CBuffEnsnareGround`). The extra target rule (slot `0x3F0`, `0x6F07F1E0` / `0x6F07F260`): the target must have a
+/// mover (`+0x1EC`), else the error `0x69`. The buff (`CBuffEnsnare` slots `0x2D4/0x2D8/0x314`, apply
+/// `0x6F09B6C0`) disables the target's movement (`0x6F2031D0`, the same call Purge's pause uses; it is cleared on
+/// removal) and rewrites the melee weapons' attack range from `DataC` (UNSURE: the weapon kinds checked are the melee
+/// ones, `0x6F0C6B30` / `0x6F0C6AE0`; not modelled). `DataA` (air unit lower duration 0.6) and `DataB` (height 200)
+/// drive the descent of a flying target (not modelled). Model: the net arrives after distance / missile speed
+/// (`Game::set_spell_missile_speed`, instant when none: UNSURE, the flight arithmetic is open) and roots the target
+/// for the duration; the buff is negative, magic and dispellable (LIKELY). `Bens` is also a shared-vision/detected
+/// buff (the ensnared unit is revealed): not modelled.
+fn net_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let speed = gm.spell_missile_speed_of(rec.base);
+    if arith::lt(F32::ZERO, speed) {
+        let (a, b) = (gm.unit(rec.caster), gm.unit(target));
+        let (dx, dy) = (arith::sub(b.x, a.x), arith::sub(b.y, a.y));
+        let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
+        let dist = F32::from_bits(d2.to_f32().sqrt().to_bits());
+        let t = gm.soft_div(dist, speed);
+        gm.spells.unit.next_net += 1;
+        let id = gm.spells.unit.next_net;
+        gm.spells.unit.nets.insert(id, (rec.caster, target, rec.base, rec.level));
+        gm.timers.start(
+            t.to_f32(),
+            false,
+            Payload::Spell(SpellMsg::UnitSpell {
+                kind: KIND_NET,
+                unit: target,
+                base: rec.base,
+                aux: id,
+            }),
+        );
+    } else {
+        apply_net(&mut gm, rec.base, &rec.level, target);
+    }
+}
+
+fn apply_net(gm: &mut Game, base: u32, level: &crate::cast::SpellLevel, target: ObjKey) {
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = effect_duration(level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let flying = gm.unit_types().get(gm.unit(target).type_id).is_some_and(|t| t.movement & 2 != 0);
+    let code = match (base == WEB, flying) {
+        (false, true) => BUFF_ENSNARE_AIR,
+        (false, false) => BUFF_ENSNARE_GROUND,
+        (true, true) => BUFF_WEB_AIR,
+        (true, false) => BUFF_WEB_GROUND,
+    };
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(code)
+    };
+    let mods = UnitMods {
+        root: true,
+        ..UnitMods::default()
+    };
+    gm.apply_mods_buff(target, code, preds, mods, dur);
+}
+
+/// A net arrived.
+fn net_arrives(game: &RefCell<Game>, id: u32) {
+    let mut gm = game.borrow_mut();
+    let Some((_, target, base, level)) = gm.spells.unit.nets.remove(&id) else {
+        return;
+    };
+    apply_net(&mut gm, base, &level, target);
 }
 
 /// Lightning Shield (`Alsh`, `CAbilityLightningShield` vtable `0x6F8DB48C`, effect slot `0x424` = `0x6F13C690`):
@@ -1665,6 +1798,10 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         shield_tick(game, rt, unit, aux);
         return;
     }
+    if kind == KIND_NET {
+        net_arrives(game, aux);
+        return;
+    }
     if kind != KIND_AUTOCAST {
         return;
     }
@@ -1814,6 +1951,12 @@ fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
                 }
             }
             true
+        }
+        WEB => {
+            // `0x6F07F220` (CONFIRMED structure): the base filter, then the candidate must not have an ability whose slot
+            // `0x18C` is nonzero (the movement-disabled test: Purge's version reads its pause holder) and must pass the
+            // negated slot `0x19C` scan (taken as "not stunned"). The model reads the root count and the stun count.
+            !gm.is_rooted(k) && !gm.is_stunned(k)
         }
         CURSE => {
             // `0x6F09BF80` (CONFIRMED structure): the base filter, then the candidate must have the attack ability and
