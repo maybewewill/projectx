@@ -62,6 +62,12 @@ endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
 endfunction
+function purge_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852111, foe)
+endfunction
+function purge_grunt takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852111, grunt)
+endfunction
 function dispel_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852057, foe)
 endfunction
@@ -271,6 +277,101 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     call(&mut h2, "foe_attacks");
     run(&mut h2, 80);
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
+}
+
+// ---- Purge ----
+
+fn with_purge(h: &ScriptHost, dur: f32, hero_dur: f32) {
+    let k = {
+        let id = h.vm().global("shaman").and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    g.ability_types_mut().insert(PURGE, AbilityType { max_level: Some(1) });
+    // Purge: cost 75, cooldown 1, range 700, DataA 5 (movement updates), DataC 400 (summoned damage); Dur 15 / HeroDur 5.
+    g.set_spell_levels(
+        PURGE,
+        vec![SpellLevel {
+            cost: 75,
+            cool: f(1.0),
+            dur: f(dur),
+            hero_dur: f(hero_dur),
+            rng: f(700.0),
+            data: data(&[(0, 5.0), (2, 400.0)]),
+            ..Default::default()
+        }],
+    );
+    g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(PURGE, None));
+}
+
+fn speed_mult(h: &ScriptHost, k: ObjKey) -> f32 {
+    h.game().unit(k).bonuses.move_mult.to_f32()
+}
+
+#[test]
+fn purge_slows_an_enemy_fully_then_decays_linearly_over_its_duration() {
+    let mut h = started();
+    with_purge(&h, 15.0, 5.0);
+    let foe = unit(&h, "foe");
+    let before = speed_mult(&h, foe);
+    call(&mut h, "purge_foe");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, foe, BUFF_PURGE));
+    // A full slow: the movement multiplier fell by 1.0.
+    assert!((before - speed_mult(&h, foe) - 1.0).abs() < 1e-6);
+    // Dur 15, DataA 5: one update every 3.0 s, each takes 0.2 of the slow off.
+    run(&mut h, 28);
+    assert!((before - speed_mult(&h, foe) - 1.0).abs() < 1e-6, "no update before 3.0 s");
+    run(&mut h, 4);
+    assert!((before - speed_mult(&h, foe) - 0.8).abs() < 1e-5, "0.8 left after 3.0 s: {}", speed_mult(&h, foe));
+    run(&mut h, 30);
+    assert!((before - speed_mult(&h, foe) - 0.6).abs() < 1e-5);
+    // After the whole duration the buff ends and nothing of the slow is left.
+    run(&mut h, 130);
+    assert!(!has_buff(&h, foe, BUFF_PURGE));
+    assert!((before - speed_mult(&h, foe)).abs() < 1e-5, "restored: {}", speed_mult(&h, foe));
+}
+
+#[test]
+fn purge_removes_positive_buffs_of_enemies_and_spares_allies_from_the_slow_and_the_summoned_damage() {
+    let mut h = started();
+    with_purge(&h, 15.0, 5.0);
+    let (foe, grunt) = (unit(&h, "foe"), unit(&h, "grunt"));
+    {
+        let mut g = h.game_mut();
+        let preds = sim::abilities::BuffPredicates { positive: true, magic: true, dispellable: true, ..Default::default() };
+        g.apply_mods_buff(foe, BUFF_BLOODLUST, preds, UnitMods::default(), f(60.0));
+        g.apply_mods_buff(grunt, BUFF_BLOODLUST, preds, UnitMods::default(), f(60.0));
+        g.unit_mut(grunt).summoned = true;
+    }
+    call(&mut h, "purge_foe");
+    run(&mut h, 1);
+    assert!(!has_buff(&h, foe, BUFF_BLOODLUST), "an enemy loses its positive buffs");
+    assert!(has_buff(&h, foe, BUFF_PURGE));
+    run(&mut h, 12); // the 1 s cooldown
+    call(&mut h, "purge_grunt");
+    run(&mut h, 30);
+    assert!(accepted(&h), "no relation token in targs: allies can be purged");
+    assert_eq!(life(&h, grunt), 500.0, "the summoned damage needs rel != 0 (an enemy); an ally takes none");
+    assert!(has_buff(&h, grunt, BUFF_BLOODLUST), "an ally loses only negative buffs");
+    assert!(!has_buff(&h, grunt, BUFF_PURGE), "no slow for a passively allied unit");
+}
+
+#[test]
+fn a_second_purge_restarts_the_slow() {
+    let mut h = started();
+    with_purge(&h, 15.0, 5.0);
+    let foe = unit(&h, "foe");
+    let before = speed_mult(&h, foe);
+    call(&mut h, "purge_foe");
+    run(&mut h, 1);
+    run(&mut h, 35);
+    assert!((before - speed_mult(&h, foe) - 0.8).abs() < 1e-5);
+    // The cooldown is 1 s: cast again; the old buff is removed (its remaining slow taken off) and a new one applied.
+    call(&mut h, "purge_foe");
+    run(&mut h, 1);
+    assert!((before - speed_mult(&h, foe) - 1.0).abs() < 1e-5, "a fresh full slow: {}", speed_mult(&h, foe));
 }
 
 // ---- Dispel Magic through the worker `0x6F0EEF00` ----

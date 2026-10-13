@@ -82,6 +82,8 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+pub const PURGE: u32 = code(b"Aprg");
+pub const BUFF_PURGE: u32 = code(b"Bprg");
 /// Anti-magic Shell's buff code, the one the dispel worker looks for (`0x6F110530` returns `0x42616D73`).
 pub const BUFF_ANTI_MAGIC_SHELL: u32 = code(b"Bams");
 
@@ -95,6 +97,9 @@ pub const KIND_AUTOCAST: u8 = 1;
 pub const KIND_TICK: u8 = 2;
 /// The first tick of a damage-over-time buff, 0.01 s after the apply (`0xD01E2`, constant `0x6FAAE480`).
 pub const KIND_TICK_FIRST: u8 = 3;
+/// Purge's movement update (message `0xD01C1` on the buff) and attack update (`0xD01C3`), repeating timers.
+pub const KIND_PURGE_MOVE: u8 = 4;
+pub const KIND_PURGE_ATTACK: u8 = 5;
 /// The tick period (`CBuffDoT` slot `0x35C` = `0x6F0ADBE0`: the constant `0x6FAAE4F4` = 1.0).
 const TICK_PERIOD: f32 = 1.0;
 /// The first-tick delay (`0x6F0ADBD0`: the constant `0x6FAAE480`).
@@ -113,7 +118,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 11] = [
+pub const SPELL_ORDERS: [(u32, u32); 12] = [
+    (852_111, PURGE),
     (852_190, CURSE),
     (852_164, ROAR),
     (852_197, RAISE_DEAD),
@@ -280,6 +286,19 @@ struct TickRec {
     timer: Option<TimerId>,
 }
 
+/// The decaying slow of one Purge buff (the fields of `CBuffPurge`): the current slow magnitudes of the movement and
+/// attack speed sinks (`+0xDC`, `+0xE4`), their steps (`+0xEC`, `+0xF4`, the soft reciprocal of `DataA` / `DataB`) and the
+/// repeating update timers.
+#[derive(Debug, Clone, Copy)]
+struct PurgeRec {
+    move_value: F32,
+    move_step: F32,
+    attack_value: F32,
+    attack_step: F32,
+    move_timer: Option<TimerId>,
+    attack_timer: Option<TimerId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AutoSlot {
     on: bool,
@@ -299,6 +318,8 @@ pub struct State {
     pub raise_dead_second: u32,
     /// Misc `InvulnSummonDispelDamage` (read by the dispel worker; a missing key reads 0).
     pub invuln_summon_dispel_damage: bool,
+    /// The decaying slows of Purge buffs by buff serial.
+    purge: BTreeMap<u32, PurgeRec>,
     /// Misc `EtherealHealBonus` (a missing key reads 0.0).
     pub ethereal_heal_bonus: F32,
     /// Misc `IllusionsCanRestoreLife` / `IllusionsGetAutocast` (missing = off).
@@ -623,6 +644,14 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        PURGE => {
+            // targs: air,ground,ward,vuln,invu,tree (no relation: friends can be purged too).
+            let w = targs_word("air,ground,ward,vuln,invu,tree");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         CURSE => {
             // targs: air,ground,enemy,organic,neutral (`AbilityData.slk`, S32 predicate + relation stage).
             let w = targs_word("air,ground,enemy,organic,neutral");
@@ -677,6 +706,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         CURSE => {
             if let CastTarget::Unit(t) = rec.target {
                 curse(game, rec, t);
+            }
+            true
+        }
+        PURGE => {
+            if let CastTarget::Unit(t) = rec.target {
+                purge(game, rt, rec, t);
             }
             true
         }
@@ -915,6 +950,170 @@ pub fn dispel_worker(i: &WorkerIn) -> (Vec<WorkerStep>, u32) {
         }
     }
     (out, 0)
+}
+
+/// `CBuffPurge` apply `0x6F0EF400` for one of its two schedules (CONFIRMED by Unicorn, `tools/emu/purge_apply_emu.py` and
+/// `tools/emu/purge_steps_emu.py`: the real apply and update code, 600 random cases, 0 mismatches,
+/// `tests/purge_vectors.rs`). `data` is `DataA` (movement) or `DataB` (attack speed): the initial slow magnitude is 1.0
+/// (a full slow) when it is nonzero, else 0.0; the step is the soft reciprocal `1 / data`; the repeating update timer
+/// (message `0xD01C1` movement, `0xD01C3` attack) is started only for a magnitude that is not approximately zero, with
+/// the timeout `dur / data` (soft division; `dur` is the hero rule `HeroDur` / `Dur` without the `0.01` that the buff's
+/// own duration adds). So the slow falls linearly to zero over `dur`: in `data` equal steps.
+pub fn purge_schedule(data: F32, dur: F32, div: &dyn Fn(F32, F32) -> F32) -> (F32, F32, Option<F32>) {
+    let nonzero = data.to_f32() != 0.0;
+    let value = if nonzero { F32::ONE } else { F32::ZERO };
+    let step = if nonzero { div(F32::ONE, data) } else { F32::ZERO };
+    let timeout = if arith::approx_eq(value, F32::ZERO) { None } else { Some(div(dur, data)) };
+    (value, step, timeout)
+}
+
+/// One movement update of `CBuffPurge` (`0x6F0D9EE0`, message `0xD01C1`): nothing while the slow is approximately zero
+/// (`|v| < 0.001`, `0x6F0222E0`), else `new = v - step` and the movement sink receives `v - new`. Returns `(new, sink)`.
+pub fn purge_move_update(value: F32, step: F32) -> Option<(F32, F32)> {
+    if arith::approx_eq(value, F32::ZERO) {
+        return None;
+    }
+    let new = arith::sub(value, step);
+    Some((new, arith::sub(value, new)))
+}
+
+/// One attack speed update (`0x6F0D9F80`, message `0xD01C3`): same stop rule; the attack sink first receives `+v`
+/// (the old slow is taken off), then `-new` (the reduced one is put on). Returns `(new, first, second)`.
+pub fn purge_attack_update(value: F32, step: F32) -> Option<(F32, F32, F32)> {
+    if arith::approx_eq(value, F32::ZERO) {
+        return None;
+    }
+    let new = arith::sub(value, step);
+    Some((new, value, arith::neg(new)))
+}
+
+impl Game {
+    fn soft_div(&self, a: F32, b: F32) -> F32 {
+        match self.order_tables() {
+            Some(t) => arith::div(a, b, t),
+            // Without the soft-float tables (unit tests) a plain division stands in.
+            None => F32::from_bits((a.to_f32() / b.to_f32()).to_bits()),
+        }
+    }
+
+    /// Removes the buff with code `base` from `unit` (the removal routine `0x6F079CC0`): timers cancelled and effects
+    /// undone.
+    fn remove_buff_code(&mut self, unit: ObjKey, base: u32) {
+        if let Some(i) = self.buff_position(unit, base) {
+            let mut b = self.unit_mut(unit).buffs.remove(i);
+            self.finish_buff(unit, &mut b);
+        }
+    }
+}
+
+/// Purge (`Aprg`, `CAbilityPurge` vtable `0x6F8C46CC`, effect slot `0x424` = `0x6F107E10`, CONFIRMED flow):
+/// 1. the target goes through the dispel worker (`0x6F0EEF00`, [`dispel_worker`]) with the summoned-unit damage `DataC`
+///    (400) and the mana loss `DataF`;
+/// 2. a dead target (`+0x5C & 0x100`) or one the caster's player is passively allied with (`0x6F285AC0`) gets nothing
+///    more;
+/// 3. otherwise the hero rule picks `HeroDur` / `Dur`, an existing `Bprg` buff is removed (`0x6F079CC0`, so a second
+///    Purge restarts the slow) and a new one is applied (`0x6F0EF400`): the buff lasts `dur + 0.01`, starts a full slow
+///    of movement (when `DataA != 0`) and attack speed (when `DataB != 0`) and decays them linearly
+///    ([`purge_schedule`], [`purge_move_update`], [`purge_attack_update`]); when the buff ends its remaining slow is
+///    taken off (the removal slot `0x6F0E2C70`). Pause durations `DataD` / `DataE` (0 in 1.26a data) stop the target
+///    for that long (not modelled: 0 in the data). The buff is negative and not magic (CBuffPurge overrides slot 118
+///    to 0 and slot 120 to 1), so it is not dispellable (LIKELY: slot 204 reuses the magic test).
+fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target: ObjKey) {
+    let killed = {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(target) {
+            return;
+        }
+        let killed = dispel_one(&mut gm, rec.caster, target, rec.level.data[2], rec.level.data[5]);
+        if killed.is_none() && gm.alive(target) {
+            let owner = gm.unit(rec.caster).owner;
+            if gm.is_enemy(owner, gm.unit(target).owner) {
+                let hero = gm.target_hero(target);
+                let dur = if hero { rec.level.hero_dur } else { rec.level.dur };
+                let div = |a: F32, b: F32| gm.soft_div(a, b);
+                let (mv, mstep, mtime) = purge_schedule(rec.level.data[0], dur, &div);
+                let (av, astep, atime) = purge_schedule(rec.level.data[1], dur, &div);
+                gm.remove_buff_code(target, BUFF_PURGE);
+                let preds = crate::abilities::BuffPredicates {
+                    negative: true,
+                    ..buff_predicates(BUFF_PURGE)
+                };
+                let mods = UnitMods {
+                    move_delta: arith::neg(mv),
+                    attack_delta: arith::neg(av),
+                    ..UnitMods::default()
+                };
+                let buff_dur = arith::add(dur, F32::from_bits(MARK_EXTRA_BITS));
+                let serial = gm.apply_mods_buff(target, BUFF_PURGE, preds, mods, buff_dur);
+                let start = |gm: &mut Game, kind: u8, timeout: Option<F32>| {
+                    timeout.map(|t| {
+                        gm.timers.start(
+                            t.to_f32(),
+                            true,
+                            Payload::Spell(SpellMsg::UnitSpell {
+                                kind,
+                                unit: target,
+                                base: 0,
+                                aux: serial,
+                            }),
+                        )
+                    })
+                };
+                let move_timer = start(&mut gm, KIND_PURGE_MOVE, mtime);
+                let attack_timer = start(&mut gm, KIND_PURGE_ATTACK, atime);
+                gm.spells.unit.purge.insert(
+                    serial,
+                    PurgeRec {
+                        move_value: mv,
+                        move_step: mstep,
+                        attack_value: av,
+                        attack_step: astep,
+                        move_timer,
+                        attack_timer,
+                    },
+                );
+            }
+        }
+        killed
+    };
+    if let Some(t) = killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+/// A Purge update timer fired for buff `serial` on `unit`.
+fn purge_tick(game: &RefCell<Game>, kind: u8, unit: ObjKey, serial: u32) {
+    let mut gm = game.borrow_mut();
+    let Some(mut rec) = gm.spells.unit.purge.get(&serial).copied() else {
+        return;
+    };
+    let alive = gm.alive(unit) && gm.unit(unit).buffs.iter().any(|b| b.serial == serial);
+    if !alive {
+        for t in [rec.move_timer, rec.attack_timer].into_iter().flatten() {
+            gm.timers.cancel(t);
+        }
+        gm.spells.unit.purge.remove(&serial);
+        return;
+    }
+    if kind == KIND_PURGE_MOVE {
+        if let Some((new, sink)) = purge_move_update(rec.move_value, rec.move_step) {
+            gm.add_move(unit, sink);
+            rec.move_value = new;
+        }
+    } else if let Some((new, first, second)) = purge_attack_update(rec.attack_value, rec.attack_step) {
+        gm.add_attack_speed(unit, first);
+        gm.add_attack_speed(unit, second);
+        rec.attack_value = new;
+    }
+    gm.spells.unit.purge.insert(serial, rec);
+    // The removal of the buff takes the remaining slow off again: keep the recorded modifiers equal to what is applied.
+    if let Some(i) = gm.unit(unit).buffs.iter().position(|b| b.serial == serial) {
+        gm.unit_mut(unit).buffs[i].effect = Some(crate::auras::BuffEffect::Mods(UnitMods {
+            move_delta: arith::neg(rec.move_value),
+            attack_delta: arith::neg(rec.attack_value),
+            ..UnitMods::default()
+        }));
+    }
 }
 
 /// Damage type of Dispel Magic's summoned-unit damage: the class word `0x4000` of the worker `0x6F0EEF00` is bit 14,
@@ -1319,6 +1518,10 @@ fn heal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, aux: u32) {
     if kind == KIND_TICK || kind == KIND_TICK_FIRST {
         run_tick(game, rt, unit, aux, kind == KIND_TICK_FIRST);
+        return;
+    }
+    if kind == KIND_PURGE_MOVE || kind == KIND_PURGE_ATTACK {
+        purge_tick(game, kind, unit, aux);
         return;
     }
     if kind != KIND_AUTOCAST {
