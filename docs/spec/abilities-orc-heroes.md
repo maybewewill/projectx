@@ -567,3 +567,51 @@ Data: `Cast` 3, `Dur`/`HeroDur` 0, `Cool` 240, `Cost` empty, `DataA` 7, effect `
 * **Model (UNSURE).** `Game::orc_on_unit_died` (called from `dispatch_unit_death_by`) starts the cooldown and a timer of `DataA`
   seconds (LIKELY the effect delay: DataA 7 matches the known 7-second delay of the hero ability), then `resurrect_unit` (full life at the
   death point). The pathing probe, the pause counter and the readiness slot are not modelled; the death events fire as for any death.
+
+## 23. S39: leftovers - Mirror Image pass two, Wind Walk cancel, Chain Lightning damage timing, corrections
+
+### 23.1 Mirror Image, pass two of the handler `0x6F13D990` (CONFIRMED by reading; corrects 7.1)
+
+Pass one (per slot, ascending): `0x6F127E00` creates the unit (placement search + creator); a created unit's handle pair is copied
+into the 12-byte array entry at `+0x14/+0x18` of the unit's agent record and the **buff** (`0x6F13A5A0` factory, init slot `0x324`, apply
+slot `0x364` with the unit and the ability, add `0x6F079CA0`, `0x6F052BC0(buff, 1, 1)`) is put on EVERY created unit, the hero's
+placeholder included. A failed creation leaves a 0 in the array.
+
+Pass two (ascending, `h` = the hero slot):
+* **Creation failed** (entry 0): if `i == h` the caster's state is restored by `0x6F1280D0(flag 1)` with no unit (so the hero stays where
+  it stood) and the ability's bookkeeping cells `+0xE4/+0xE8` are set to -1; any other failed slot is simply skipped (fewer images).
+* **Created and standing EXACTLY on the requested point** (soft compare of x, y, z against the slot's point): `0x6F1280D0(flag = i == h)`:
+  for an image (`flag 0`) the unit's slot `0x80` runs (activate); for the hero slot (`flag 1`) the placeholder is removed (`0x6F2A63B0(unit, 1,
+  0)`), the CASTER is moved to its point (virtual `0x180`) and the caster's state is undone: `0x6F2A3DA0`, unit flag `+0x20 &= ~0x800000`,
+  `0x6F26FE20`, `0x6F0767F0(unit, 1, 0, 0, 0)` (releases the ability pause counters), `0x6F079730(unit, 1)` (decrements the invulnerability
+  counter `+0xE8`; at 0 the unit flag 8 is cleared) and `0x6F2A4B80(unit, 1)` (a stop order, order id `0xD0004`).
+* **Created but NOT on the requested point** (the placement search moved it): a separate path builds a record and calls the virtual `0xC8` of
+  a factory object (`[0x6F48AB80 result + 0x54]`) with the unit, the flag `i == h` and the ability's value at `+0x180`; not decoded.
+* **The caster during the delay** (the cast effect `0x6F135740`, read): invulnerable (counter `+0xE8`, unit flag 8), its abilities paused
+  (pause counters by `0x6F0767F0`) and `+0x20 |= 0x800000`; all undone in the hero-slot branch above. Model: `mirror_image` / `mirror_fire` now
+  give the caster one invulnerability count for the delay (`tests/orc_spells.rs`); the pause counters, the flag and the stop order are not modelled.
+
+### 23.2 Wind Walk: the "cancel on cast" (S34 LIKELY) is NOT supported
+
+The buff vtable slot `0x178` (`0x6F15A270`, six arguments, removal) is never called through a virtual call anywhere in the image (the
+scans found only field loads at `+0x178` of other classes). The `0xD000F` broadcast `0x6F281580` (callers `0x6F0CD722`, `0x6F0D0CE5` only: the
+attack) calls the arming slot `0x124` of every ability and buff of the attacker with the target; it does not run for spell casts. The
+mechanism that ends Wind Walk when a spell is cast was not found; the first strike (section 11) is the only confirmed end. The Wind Walk
+arming slot `0x6F171870` clears flag `0x200`, does nothing without a target or with buff flag `0x100`, and otherwise asks the filter
+`0x6F26D590(owner, target, buff+0xB8)`: ZERO arms the strike (flag `0x200`, event 0xE), NON-ZERO removes the buff. The buff word `+0xB8` is
+the ability's `targs` (`air,ground,enemy,neutral`), so an attack on an ally or other non-enemy removes the invisibility instead of arming it.
+
+### 23.3 Chain Lightning: when the damage lands
+
+The hop (section 4) copies the record into the bolt effect (`0x6F2BF7F0`: source and target smart pointers, amount cell `+0x44`, class and
+flags words) and the effect start `0x6F1B09C0` creates the lightning object (`0x6F040160`), then registers the callback `0x6F2BF8B0` with the
+lightning table (`0x6F00E0E0` stores the callback and the effect at `+0x84/+0x88` of the lightning entry). The callback `0x6F2BF8B0` is the
+only place that reads the effect's source, target and record and calls the effect's virtual `+0x7C` with them (the damage delivery); WHEN the
+lightning table invokes it was not decoded (LIKELY at the creation of the bolt, i.e. in the same tick as the hop; the 0.1 s repeating timer
+`0xD01A3` only fades the art). The model keeps the instant damage.
+
+### 23.4 Corrections to sections 17 and 20
+
+The three buffs that the Voodoo effect `0x6F18C340` and the Earthquake cast `0x6F08AE40` remove from the caster (ids from `0x6F10F990`,
+`0x6F07D0B0`, `0x6F159120`) are `Bvul` (invulnerable), `BHds` (divine shield) and `BOvd` (the voodoo buff itself); the call `0x6F077630(unit)`
+then sets `unit+0x20 |= 0x40000000`.

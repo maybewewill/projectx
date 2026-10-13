@@ -983,7 +983,13 @@ fn mirror_image(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
     let mut gm = game.borrow_mut();
     gm.orc.mirror_serial = gm.orc.mirror_serial.wrapping_add(1);
     let serial = gm.orc.mirror_serial;
-    gm.orc.mirror_pending.insert(rec.caster, (serial, rec.level));
+    // The cast effect `0x6F135740` makes the caster invulnerable for the delay (`0x6F0796F0`: counter `+0xE8`, unit flag 8),
+    // disables its abilities (`0x6F0767F0`, pause counters) and sets `+0x20 |= 0x800000`; the hero-slot branch of the handler
+    // undoes all three (`0x6F1280D0` -> `0x6F079730`, `0x6F0767F0`, flag clear) and issues a stop order (`0x6F2A4B80`).
+    let had = gm.orc.mirror_pending.insert(rec.caster, (serial, rec.level)).is_some();
+    if !had {
+        gm.unit_mut(rec.caster).invuln_count += 1;
+    }
     gm.timers_start_hero(rec.level.data[3].to_f32(), TICK_MIRROR, rec.caster, serial);
 }
 
@@ -1011,6 +1017,10 @@ fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey,
         return;
     }
     gm.orc.mirror_pending.remove(&caster);
+    {
+        let u = gm.unit_mut(caster);
+        u.invuln_count = (u.invuln_count - 1).max(0);
+    }
     if gm.unit(caster).removed {
         return;
     }
