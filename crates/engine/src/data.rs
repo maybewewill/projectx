@@ -629,5 +629,6 @@ pub fn install_sites(game: &mut Game, archives: &[&[u8]], data: &GameData, notes
             },
         );
     }
+    game.set_frost_misc(data.misc.frost_move_speed_decrease, data.misc.frost_attack_speed_decrease);
     game.production_mut().building_angle = sim::ai_site::building_angle(data.misc.building_angle);
 }

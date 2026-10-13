@@ -118,6 +118,10 @@ pub struct MiscData {
     /// `BuildingAngle`: the orientation of the AI's building footprints in degrees (`0x6F020D30`; the engine passes
     /// it through `i2r(f2i(..))`). `0.0` when absent.
     pub building_angle: F32,
+    /// `FrostMoveSpeedDecrease`: the movement slow of the Frost buff (Frost Nova), stock 0.5. `0.0` when absent.
+    pub frost_move_speed_decrease: F32,
+    /// `FrostAttackSpeedDecrease`: the attack-rate slow of the Frost buff, stock 0.25. `0.0` when absent.
+    pub frost_attack_speed_decrease: F32,
 }
 
 impl MiscData {
@@ -173,6 +177,8 @@ impl MiscData {
         let dawn = reader.real("Dawn").unwrap_or(F32::ZERO);
         let dusk = reader.real("Dusk").unwrap_or(F32::ZERO);
         let building_angle = reader.real("BuildingAngle").unwrap_or(F32::ZERO);
+        let frost_move_speed_decrease = reader.real("FrostMoveSpeedDecrease").unwrap_or(F32::ZERO);
+        let frost_attack_speed_decrease = reader.real("FrostAttackSpeedDecrease").unwrap_or(F32::ZERO);
         let hero = HeroMisc::read(&mut reader);
         let Reader {
             defaulted, notes, ..
@@ -200,6 +206,8 @@ impl MiscData {
             dawn,
             dusk,
             building_angle,
+            frost_move_speed_decrease,
+            frost_attack_speed_decrease,
         }
     }
 
@@ -238,6 +246,8 @@ impl MiscData {
             dawn: F32::ZERO,
             dusk: F32::ZERO,
             building_angle: F32::ZERO,
+            frost_move_speed_decrease: F32::ZERO,
+            frost_attack_speed_decrease: F32::ZERO,
         }
     }
 }

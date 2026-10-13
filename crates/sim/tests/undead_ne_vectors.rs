@@ -2,7 +2,7 @@
 //! Death Pact `0x6F09FD50`, Vampiric Aura handler `0x6F1AD980`, Blink point validation `0x6F1AEB10`.
 //! The Blink vectors need the soft-float tables (`GAME_DLL=...`); the others run from the committed files.
 
-use sim::undead_ne::{blink_project, death_pact_amounts, nonzero, vampiric_outcome, VampiricGate};
+use sim::undead_ne::{blink_project, frost_strength, pulse, Pulse, PulseInput, death_pact_amounts, nonzero, vampiric_outcome, VampiricGate};
 use softfloat::{Tables, F32};
 
 fn hex(s: &str) -> u32 {
@@ -107,4 +107,64 @@ fn blink_projection_matches_the_original() {
         n += 1;
     }
     assert!(n >= 500);
+}
+
+#[test]
+fn frost_nova_strengths_match_the_original() {
+    // `tools/emu/undead_ne3_emu.py` CHECK=frost: `CBuffFrost` slot 0x360 hands the Misc values to the shared setter
+    // negated (both zero, negated, when the 4th argument is non-zero).
+    let text = include_str!("data/undead_ne/frost.txt");
+    let mut n = 0;
+    for line in text.lines() {
+        let (head, tail) = line.split_once(" | ").expect("separator");
+        let h: Vec<&str> = head.split_whitespace().collect();
+        let t: Vec<&str> = tail.split_whitespace().collect();
+        let flag: u32 = h[0].parse().unwrap();
+        let (m, a) = if flag != 0 { (F32::ZERO, F32::ZERO) } else { (f(h[1]), f(h[2])) };
+        assert_eq!(frost_strength(m).to_bits(), hex(t[0]), "move {line}");
+        assert_eq!(frost_strength(a).to_bits(), hex(t[1]), "attack {line}");
+        n += 1;
+    }
+    assert!(n >= 300);
+}
+
+#[test]
+fn periodic_pulse_matches_the_original() {
+    // `CHECK=pulse`: the real `0x6F0D54B0` of `CBuffEntanglingRoots` with the world replaced by recording hooks.
+    let text = include_str!("data/undead_ne/pulse.txt");
+    let (mut damage, mut addlife, mut skip) = (0, 0, 0);
+    for line in text.lines() {
+        let (head, tail) = line.split_once(" | ").expect("separator");
+        let h: Vec<&str> = head.split_whitespace().collect();
+        let flag = |i: usize| h[i] == "1";
+        let input = PulseInput {
+            asleep: flag(0),
+            gate: flag(1),
+            class_a: flag(2),
+            class_b: flag(3),
+            ethereal_bonus: f(h[4]),
+            first_pulse: hex(h[5]) & 0x800_0000 != 0,
+            immune_b: flag(6),
+            immune_a: flag(7),
+            // h[8] is the attacker reference validity
+        };
+        let attacker = if flag(8) { 0x7777 } else { 0 };
+        let amount = f(h[9]);
+        let got = match pulse(&input, amount) {
+            Pulse::Skip => {
+                skip += 1;
+                "lookup:4255736c".to_string()
+            }
+            Pulse::Damage { amount, record_flags } => {
+                damage += 1;
+                format!("lookup:4255736c record:{:x}:100000:{:x}:{:x}:0 damage:1", amount.to_bits(), attacker, record_flags)
+            }
+            Pulse::AddLife(v) => {
+                addlife += 1;
+                format!("lookup:4255736c heal:{:x}", v.to_bits())
+            }
+        };
+        assert_eq!(got, tail, "row {line}");
+    }
+    assert!(damage >= 100 && addlife >= 30 && skip >= 100, "{damage} {addlife} {skip}");
 }

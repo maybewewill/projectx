@@ -142,8 +142,10 @@ fn host() -> ScriptHost {
         }
         // Death Coil: heal / damage amount DataA = 100.
         g.set_spell_levels(DEATH_COIL, vec![level(75, 9.0, 0.0, 0.0, 0.0, &[100.0])]);
-        // Frost Nova: DataA area damage 50, DataB primary damage 100, DataC slow 0.5 (UNSURE source), area 200.
-        g.set_spell_levels(FROST_NOVA, vec![level(100, 8.0, 4.0, 2.0, 200.0, &[50.0, 100.0, 0.5, 0.5])]);
+        // Frost Nova: DataA area damage 50, DataB primary damage 100, area 200; the slow comes from Misc
+        // (FrostMoveSpeedDecrease 0.5, FrostAttackSpeedDecrease 0.25 in the stock MiscGame.txt).
+        g.set_spell_levels(FROST_NOVA, vec![level(100, 8.0, 4.0, 2.0, 200.0, &[50.0, 100.0])]);
+        g.set_frost_misc(f(0.5), f(0.25));
         // Entangling Roots: DataA = 10 damage per second, Dur 10.
         g.set_spell_levels(ENTANGLING_ROOTS, vec![level(100, 10.0, 10.0, 5.0, 0.0, &[10.0])]);
         // Force of Nature: DataA = 3 trees at most, area 800, Dur 30.
@@ -261,7 +263,7 @@ fn frost_nova_hits_primary_and_area_enemies_and_slows_them() {
     call(&mut h, "nova");
     run(&mut h, 1);
     assert!(accepted(&h));
-    assert_eq!(life(&h, enemy), 400.0, "primary takes DataB");
+    assert_eq!(life(&h, enemy), 350.0, "primary takes the nova DataA (it is inside Area) and DataB");
     assert_eq!(life(&h, enemy2), 450.0, "area unit takes DataA");
     assert_eq!(life(&h, far), 500.0, "outside Area");
     assert_eq!(life(&h, mine), 500.0, "allies are not hit");
@@ -288,7 +290,7 @@ fn entangling_roots_hold_the_target_and_tick_damage() {
     assert_eq!(h.game().unit(enemy).move_speed.to_f32(), 0.0, "rooted: cannot move");
     assert!(!h.game().is_stunned(enemy), "a rooted unit can still attack");
     run(&mut h, 35);
-    assert_eq!(life(&h, enemy), 470.0, "three one-second ticks of DataA");
+    assert_eq!(life(&h, enemy), 460.0, "ticks at 0.01, 1.01, 2.01 and 3.01 s (first pulse 0.01 s after the cast)");
     run(&mut h, 80);
     assert!(!has_buff(&h, enemy, BUFF_ROOTS));
     assert_eq!(h.game().unit(enemy).move_speed.to_f32(), 270.0);

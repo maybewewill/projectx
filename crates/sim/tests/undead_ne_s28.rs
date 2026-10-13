@@ -11,7 +11,7 @@ use sim::combat::AttackType;
 use sim::natives::game::{ObjKey, UnitType};
 use sim::orders::{AbilityKind, TypeOrderData};
 use sim::undead_ne::{
-    BLINK, BUFF_IMMOLATION, BUFF_SHADOW_STRIKE, BUFF_SLEEP, BUFF_SLEEP_PAUSE, CARRION_SWARM, DEATH_PACT, IMMOLATION,
+    BLINK, BUFF_IMMOLATION, BUFF_SHADOW_STRIKE, BUFF_SLEEP, BUFF_SLEEP_PAUSE, CARRION_SWARM, DARK_RITUAL, DEATH_PACT, IMMOLATION,
     SHADOW_STRIKE, SLEEP, VAMPIRIC_AURA,
 };
 use sim::ScriptHost;
@@ -49,6 +49,7 @@ function setup takes nothing returns nothing
     set enemy3 = CreateUnit(Player(1), 'hfoo', 600.0, 900.0, 0.0)
     set friend = CreateUnit(Player(0), 'hfoo', 100.0, 0.0, 0.0)
     call UnitAddAbility(caster, 'AUdp')
+    call UnitAddAbility(caster, 'AUdr')
     call UnitAddAbility(caster, 'AEbl')
     call UnitAddAbility(caster, 'AUcs')
     call UnitAddAbility(caster, 'AUsl')
@@ -58,6 +59,9 @@ function setup takes nothing returns nothing
 endfunction
 function pact takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852218, friend)
+endfunction
+function ritual takes nothing returns nothing
+    set accepted = IssueTargetOrderById(caster, 852219, friend)
 endfunction
 function blink_to takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852525, 0.0, 500.0)
@@ -144,7 +148,7 @@ fn host() -> ScriptHost {
                 ..Default::default()
             },
         );
-        for code in [DEATH_PACT, BLINK, CARRION_SWARM, SLEEP, SHADOW_STRIKE, IMMOLATION, VAMPIRIC_AURA] {
+        for code in [DEATH_PACT, DARK_RITUAL, BLINK, CARRION_SWARM, SLEEP, SHADOW_STRIKE, IMMOLATION, VAMPIRIC_AURA] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         // Death Pact: DataA 0.5 (mana factor of the life), DataB 1.0 (life factor), C = D = E = 0.
@@ -154,11 +158,16 @@ fn host() -> ScriptHost {
         // Carrion Swarm: Area (start width) 100, DataA damage 75, DataB distance 800, DataC end width 200, DataD max 150.
         g.set_spell_levels(CARRION_SWARM, vec![level(110, 6.0, 0.0, 0.0, 100.0, &[75.0, 800.0, 200.0, 150.0])]);
         // Sleep: Dur 20, HeroDur 10.
-        g.set_spell_levels(SLEEP, vec![level(125, 10.0, 20.0, 10.0, 0.0, &[0.0])]);
+        g.set_spell_levels(SLEEP, vec![level(125, 10.0, 20.0, 10.0, 0.0, &[2.0])]);
         // Shadow Strike: DataA 10 per second (UNSURE role), DataB slow 0.5, DataE initial damage 50, Dur 5.
-        g.set_spell_levels(SHADOW_STRIKE, vec![level(75, 8.0, 5.0, 5.0, 0.0, &[10.0, 0.5, 0.0, 0.0, 50.0])]);
+        let mut strike = level(75, 8.0, 5.0, 5.0, 0.0, &[10.0, 0.5, 0.0, 3.0, 50.0]);
+        strike.cast = f(2.0); // Cast = the pulse period (S33, CONFIRMED)
+        g.set_spell_levels(SHADOW_STRIKE, vec![strike]);
         // Immolation: Area 200, DataA 20 per pulse, DataB drain 10 mana per second, DataC buffer 10.
         g.set_spell_levels(IMMOLATION, vec![level(0, 0.0, 0.0, 0.0, 200.0, &[20.0, 10.0, 10.0])]);
+        // Dark Ritual: DataA 0.33 of the sacrificed life as mana, DataB 0.
+        g.set_spell_levels(DARK_RITUAL, vec![level(0, 0.0, 0.0, 0.0, 0.0, &[0.33, 0.0, 0.0, 0.0, 0.0])]);
+        g.set_spell_order(852219, DARK_RITUAL);
         g.set_spell_order(852218, DEATH_PACT);
         g.set_spell_order(852525, BLINK);
         g.set_spell_order(852129, CARRION_SWARM);
@@ -232,6 +241,21 @@ fn death_pact_kills_the_friend_and_pays_the_caster() {
 }
 
 #[test]
+fn dark_ritual_shares_the_death_pact_effect_and_pays_mana_only() {
+    let mut h = host();
+    let (c, friend) = (unit(&h, "caster"), unit(&h, "friend"));
+    h.game_mut().unit_mut(c).life = f(100.0);
+    h.game_mut().unit_mut(c).mana = f(200.0);
+    call(&mut h, "ritual");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(h.game().unit(friend).dead);
+    assert_eq!(life(&h, c), 100.0, "DataB = 0: no life for the caster");
+    let m = mana(&h, c);
+    assert!((m - (200.0 + 500.0 * 0.33)).abs() < 0.01, "mana {m}");
+}
+
+#[test]
 fn death_pact_heal_is_capped_at_the_maximum_life() {
     let mut h = host();
     let (c, friend) = (unit(&h, "caster"), unit(&h, "friend"));
@@ -291,9 +315,14 @@ fn sleep_disables_until_damaged_unless_a_keeper_buff_is_present() {
     assert!(accepted(&h));
     assert!(has_buff(&h, e1, BUFF_SLEEP));
     assert!(h.game().is_stunned(e1), "asleep = disabled");
-    // Time passes: still asleep before the duration (20 s for a non-hero).
+    // The second buff 'BUsp' lasts DataA = 2 s and holds the sleep against damage (S33, CONFIRMED).
+    assert!(has_buff(&h, e1, BUFF_SLEEP_PAUSE));
+    h.game_mut().unit_damage_target(c, e1, f(5.0), false, false, 0, 9);
+    assert!(has_buff(&h, e1, BUFF_SLEEP), "damage inside the first DataA seconds does not wake");
+    // Time passes: still asleep before the duration (20 s for a non-hero), the keeper has expired.
     run(&mut h, 100);
     assert!(has_buff(&h, e1, BUFF_SLEEP));
+    assert!(!has_buff(&h, e1, BUFF_SLEEP_PAUSE));
     // Damage wakes it.
     h.game_mut().unit_damage_target(c, e1, f(5.0), false, false, 0, 9);
     assert!(!has_buff(&h, e1, BUFF_SLEEP));
@@ -304,7 +333,6 @@ fn sleep_disables_until_damaged_unless_a_keeper_buff_is_present() {
     call(&mut h, "sleep_enemy");
     run(&mut h, 1);
     assert!(has_buff(&h, e1, BUFF_SLEEP));
-    h.game_mut().add_buff(e1, BUFF_SLEEP_PAUSE, Default::default());
     h.game_mut().unit_damage_target(c, e1, f(5.0), false, false, 0, 9);
     assert!(has_buff(&h, e1, BUFF_SLEEP), "the keeper buff holds the sleep");
     // Duration: it ends after 20 s from the second cast.
@@ -323,11 +351,11 @@ fn shadow_strike_hits_slows_and_ticks() {
     assert_eq!(life(&h, e1), l0 - 50.0, "initial damage DataE");
     assert!(has_buff(&h, e1, BUFF_SHADOW_STRIKE));
     assert_eq!(h.game().unit(e1).move_speed.to_f32(), 135.0, "slowed by half");
-    // 1.0 s ticks of 10 for the duration 5 s.
+    // Pulses every Cast = 2 s (the first one too) of DataA = 10 for the duration 5 s: at 2 s and 4 s.
     run(&mut h, 25);
-    assert_eq!(life(&h, e1), l0 - 50.0 - 20.0);
+    assert_eq!(life(&h, e1), l0 - 50.0 - 10.0);
     run(&mut h, 40);
-    assert_eq!(life(&h, e1), l0 - 50.0 - 40.0, "four ticks: the fifth coincides with the expiry, which runs first");
+    assert_eq!(life(&h, e1), l0 - 50.0 - 20.0, "two pulses before the expiry");
     assert!(!has_buff(&h, e1, BUFF_SHADOW_STRIKE));
     assert_eq!(h.game().unit(e1).move_speed.to_f32(), 270.0, "speed restored");
 }

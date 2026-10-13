@@ -45,6 +45,9 @@ pub const FROST_NOVA: u32 = code(b"AUfn");
 pub const ENTANGLING_ROOTS: u32 = code(b"AEer");
 pub const FORCE_OF_NATURE: u32 = code(b"AEfn");
 pub const DEATH_PACT: u32 = code(b"AUdp");
+/// Dark Ritual shares the effect `0x6F09FD50` with Death Pact (`CAbilityDeathPact` derives from `CAbilityDarkRitual`;
+/// both have slot `0x424` = `0x6F09FD50`, S33). Order id 852219 (getter `0x6F0BD230`).
+pub const DARK_RITUAL: u32 = code(b"AUdr");
 pub const CARRION_SWARM: u32 = code(b"AUcs");
 pub const SLEEP: u32 = code(b"AUsl");
 pub const SHADOW_STRIKE: u32 = code(b"AEsh");
@@ -74,8 +77,12 @@ pub const BUFF_TREANT_LIFE: u32 = code(b"BEfn");
 /// `unit_damage_target` takes the bit index.
 const DEATH_COIL_DAMAGE_TYPE: u32 = 18;
 const FROST_NOVA_DAMAGE_TYPE: u32 = 9;
-/// UNSURE: the class of the roots' damage.
-const ROOTS_DAMAGE_TYPE: u32 = 9;
+/// CONFIRMED (S33): the periodic pulse of `CBuffEntanglingRoots` hands the class word `0x100000` (slot `0x374` =
+/// `0x6F0AEED0`) to the damage record, i.e. damage type 20.
+const ROOTS_DAMAGE_TYPE: u32 = 20;
+/// CONFIRMED (S33): the first pulse comes 0.01 s after the buff is applied (slot `0x358` = `0x6F0ADBD0` returns the
+/// start-up value 0.01 of `0x6FAAE480`), then every 1.0 s (slot `0x35C` = `0x6F0ADBE0` returns `0x6FAAE4F4`).
+const ROOT_FIRST_TICK_SECONDS: f32 = 0.01;
 
 /// The unit class bit of UNDEAD and the race value of undead (`0x6F08EAC0`: `+0x248 & 2` or `0x6F29C1B0 == 5`).
 const CLASS_UNDEAD: u32 = 0x2;
@@ -93,7 +100,12 @@ pub fn relation(table: &[i32; 8], enemy: bool, ally: bool, undead: bool) -> i32 
 /// One-second period of the roots' damage (UNSURE).
 const ROOT_TICK_SECONDS: f32 = 1.0;
 /// Shadow Strike damage tick and Immolation pulse periods (UNSURE: public data).
-const STRIKE_TICK_SECONDS: f32 = 1.0;
+/// CONFIRMED (S33, Unicorn `tools/emu/undead_ne3_emu.py` CHECK=launch / buffinit): the pulse period of
+/// `CBuffShadowStrike` is the ability's Cast field (stored as a property at `+0x128`, read back by slots `0x358` and
+/// `0x35C` = `0x6F1F61B0` / `0x6F1F61C0`), also for the first pulse. The pulse class is `0x2000000` (slot `0x374`).
+const STRIKE_DOT_DAMAGE_TYPE: u32 = 25;
+/// The CAgentTimer start clamp (`0x6F477F80`): a timeout below 1e-4 becomes 1e-4.
+const MIN_PERIOD_SECONDS: f32 = 1.0e-4;
 const IMMOLATION_PULSE_SECONDS: f32 = 1.0;
 /// UNSURE: Shadow Strike's damage class (the spell class `0x200` like Frost Nova).
 const SHADOW_STRIKE_DAMAGE_TYPE: u32 = 9;
@@ -111,9 +123,12 @@ pub struct State {
     immolations: BTreeMap<(ObjKey, u32), Immolation>,
     /// Shadow Strike missiles in flight: id -> record.
     strikes: BTreeMap<u32, Strike>,
-    /// Running Shadow Strike damage over time: buff serial -> (caster, damage per tick).
-    strike_dots: BTreeMap<u32, (ObjKey, F32)>,
+    /// Running Shadow Strike damage over time: buff serial -> (caster, damage per tick, period in seconds).
+    strike_dots: BTreeMap<u32, (ObjKey, F32, f32)>,
     next_strike: u32,
+    /// Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (S33, CONFIRMED source of the Frost Nova slow);
+    /// `0.0` when the key is absent, as the original's reader defaults.
+    frost_misc: (F32, F32),
     /// Units hit by Carrion Swarm, `(caster, victim, damage)` in hit order (for tests and the host).
     pub swarm_hits: Vec<(ObjKey, ObjKey, F32)>,
 }
@@ -148,6 +163,13 @@ pub const TICK_STRIKE_HIT: u8 = 3;
 /// A Shadow Strike damage tick (`aux` = the buff serial).
 pub const TICK_STRIKE_DOT: u8 = 4;
 
+/// Whether the level's `Cast` field of `base` is not a cast-time delay: Shadow Strike's Cast (3 s in the stock data)
+/// is the pulse period of its buff (S33, CONFIRMED by the property flow of the launcher and the buff init), so the
+/// cast pipeline must not wait on it.
+pub fn cast_field_is_period(base: u32) -> bool {
+    base == SHADOW_STRIKE
+}
+
 /// Whether `base` is cast without a target (an immediate order). Only Immolation (the toggle).
 pub fn is_immediate(base: u32) -> bool {
     base == IMMOLATION || base == IMMOLATION_UNDEAD
@@ -167,14 +189,14 @@ pub(crate) fn run_effect(
         (FROST_NOVA, CastTarget::Unit(t)) => frost_nova(game, rt, caster, level, t),
         (ENTANGLING_ROOTS, CastTarget::Unit(t)) => entangling_roots(game, caster, level, t),
         (FORCE_OF_NATURE, CastTarget::Point(x, y)) => force_of_nature(game, rt, caster, level, x, y),
-        (DEATH_PACT, CastTarget::Unit(t)) => death_pact(game, rt, caster, level, t),
+        (DEATH_PACT | DARK_RITUAL, CastTarget::Unit(t)) => death_pact(game, rt, caster, level, t),
         (SLEEP, CastTarget::Unit(t)) => sleep(game, caster, level, t),
         (SHADOW_STRIKE, CastTarget::Unit(t)) => shadow_strike(game, rt, caster, level, t),
         (BLINK, CastTarget::Point(x, y)) => blink(game, caster, level, x, y),
         (CARRION_SWARM, CastTarget::Point(x, y)) => carrion_swarm(game, rt, caster, level, x, y),
         (IMMOLATION | IMMOLATION_UNDEAD, CastTarget::None) => immolation(game, caster, base, level),
         (
-            DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | SLEEP | SHADOW_STRIKE | BLINK
+            DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | DARK_RITUAL | SLEEP | SHADOW_STRIKE | BLINK
             | CARRION_SWARM | IMMOLATION | IMMOLATION_UNDEAD,
             _,
         ) => {}
@@ -227,18 +249,12 @@ fn frost_nova(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey, 
         }
         let c_owner = gm.unit(caster).owner;
         let (tx, ty) = (gm.unit(target).x, gm.unit(target).y);
-        // Primary target: DataB, then the slow (0x6F1606C0).
-        let invulnerable = gm.unit_is_invulnerable(target);
-        if !invulnerable {
-            if let Some(d) = gm.unit_damage_target(caster, target, level.data[1], false, false, 0, FROST_NOVA_DAMAGE_TYPE) {
-                deaths.push(d);
-            }
-            apply_frost_slow(&mut gm, target, level);
-        }
-        // Area: every other live enemy of the caster within Area of the target (0x6F1607B0).
+        // The area part runs FIRST (`0x6F1606C0` calls slot 0x434 before its own damage). Every enemy within Area
+        // of the target (the target included: nothing in the per-unit callback `0x6F1607B0` excludes it, LIKELY)
+        // takes DataA and, when it is not invulnerable and survives, the slow buff of slot 0x430.
         let victims: Vec<ObjKey> = circle_candidates(&gm, tx, ty, level.area)
             .into_iter()
-            .filter(|&k| k != target && gm.object_is_live_unit(k) && gm.is_enemy(c_owner, gm.unit(k).owner))
+            .filter(|&k| gm.object_is_live_unit(k) && gm.is_enemy(c_owner, gm.unit(k).owner))
             .collect();
         for k in victims {
             if gm.unit_is_invulnerable(k) {
@@ -250,23 +266,36 @@ fn frost_nova(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey, 
                 apply_frost_slow(&mut gm, k, level);
             }
         }
+        // Primary target: DataB through the damage slot with class `0x200`, no buff of its own (`0x6F1606C0`).
+        if gm.object_is_live_unit(target) && !gm.unit_is_invulnerable(target) {
+            if let Some(d) = gm.unit_damage_target(caster, target, level.data[1], false, false, 0, FROST_NOVA_DAMAGE_TYPE) {
+                deaths.push(d);
+            }
+        }
     }
     for t in deaths {
         dispatch_unit_death_by(game, rt, t, Some(caster));
     }
 }
 
+/// The slow buff of slot `0x430` (`0x6F18A830`): duration HeroDur for a hero else Dur (+ the `+0x9C` term); the
+/// strengths are NOT ability data but the Misc keys `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease`, handed to
+/// `CBuffFrost` slot `0x360` (`0x6F199F40`) and negated (Unicorn, `tools/emu/undead_ne3_emu.py` CHECK=frost, 400
+/// cases, 0 mismatches). Stock Misc values are 0.5 and 0.25.
 fn apply_frost_slow(gm: &mut Game, unit: ObjKey, level: &SpellLevel) {
     if !gm.object_is_live_unit(unit) {
         return;
     }
     let hero = gm.unit(unit).hero.is_some() || is_hero_id(gm.unit(unit).type_id);
     let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
-    let effect = BuffEffect::Slow {
-        move_delta: arith::neg(level.data[2]),
-        attack_delta: arith::neg(level.data[3]),
-    };
+    let (mv, at) = gm.spells_hero_state_mut().frost_misc;
+    let effect = BuffEffect::Slow { move_delta: frost_strength(mv), attack_delta: frost_strength(at) };
     gm.add_spell_buff(unit, BUFF_FROST_NOVA, effect, dur);
+}
+
+/// The stored strength of the Frost buff: the Misc value with the sign bit flipped (`xor 0x80000000`).
+pub fn frost_strength(misc: F32) -> F32 {
+    F32::from_bits(misc.to_bits() ^ 0x8000_0000)
 }
 
 fn is_hero_id(type_id: u32) -> bool {
@@ -290,7 +319,7 @@ fn entangling_roots(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, ta
         return;
     }
     gm.spells_hero_state_mut().roots.insert(serial, (caster, level.data[0]));
-    gm.timers_start_hero(ROOT_TICK_SECONDS, TICK_ROOTS, target, serial);
+    gm.timers_start_hero(ROOT_FIRST_TICK_SECONDS, TICK_ROOTS, target, serial);
 }
 
 fn force_of_nature(
@@ -578,6 +607,17 @@ fn sleep(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, target: ObjKe
     let hero = gm.unit(target).hero.is_some() || is_hero_id(gm.unit(target).type_id);
     let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
     gm.add_spell_buff(target, BUFF_SLEEP, BuffEffect::Sleep, dur);
+    // The second buff (S33, CONFIRMED: `0x6F1FBA80` looks up `'BUst'` and `'BUsp'` after the main buff): DataA is the
+    // duration handed to it. A target that already has `'BUst'` gets that buff refreshed (BuffID list index 2),
+    // otherwise `'BUsp'` (index 1; `CBuffSleepPause`, ctor `0x6F1F9DA0`) is created or refreshed. While either exists
+    // damage does not wake the sleeper. A zero DataA gives a buff without a timer in the original (UNSURE what ends
+    // it); the model applies none.
+    let keeper = if gm.unit(target).buffs.iter().any(|b| b.base == BUFF_SLEEP_STATIONARY) {
+        BUFF_SLEEP_STATIONARY
+    } else {
+        BUFF_SLEEP_PAUSE
+    };
+    gm.add_spell_buff(target, keeper, BuffEffect::Marker, level.data[0]);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -634,8 +674,9 @@ fn strike_hit(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
             let effect = BuffEffect::Slow { move_delta: slow, attack_delta: slow };
             let serial = gm.add_spell_buff(st.target, BUFF_SHADOW_STRIKE, effect, dur);
             if serial != 0 {
-                gm.spells_hero_state_mut().strike_dots.insert(serial, (caster, level.data[0]));
-                gm.timers_start_hero(STRIKE_TICK_SECONDS, TICK_STRIKE_DOT, st.target, serial);
+                let period = level.cast.to_f32().max(MIN_PERIOD_SECONDS);
+                gm.spells_hero_state_mut().strike_dots.insert(serial, (caster, level.data[0], period));
+                gm.timers_start_hero(period, TICK_STRIKE_DOT, st.target, serial);
             }
         }
     }
@@ -649,7 +690,7 @@ fn strike_dot(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, se
     let caster;
     {
         let mut gm = game.borrow_mut();
-        let Some(&(c, dmg)) = gm.spells_hero_state_mut().strike_dots.get(&serial) else {
+        let Some(&(c, dmg, period)) = gm.spells_hero_state_mut().strike_dots.get(&serial) else {
             return;
         };
         caster = c;
@@ -658,10 +699,10 @@ fn strike_dot(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, se
             return;
         }
         if gm.object_is_live_unit(unit) {
-            killed = gm.unit_damage_target(c, unit, dmg, false, false, 0, SHADOW_STRIKE_DAMAGE_TYPE);
+            killed = gm.unit_damage_target(c, unit, dmg, false, false, 0, STRIKE_DOT_DAMAGE_TYPE);
         }
         if killed.is_none() {
-            gm.timers_start_hero(STRIKE_TICK_SECONDS, TICK_STRIKE_DOT, unit, serial);
+            gm.timers_start_hero(period, TICK_STRIKE_DOT, unit, serial);
         } else {
             gm.spells_hero_state_mut().strike_dots.remove(&serial);
         }
@@ -782,7 +823,10 @@ fn roots_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, au
             return;
         }
         caster = Some(c);
-        if gm.object_is_live_unit(unit) {
+        // The pulse does nothing while the target has the Sleep buff `'BUsl'` (`0x6F0D54B0` looks it up first); the
+        // timer is re-armed before the pulse body runs, so the ticks go on.
+        let asleep = gm.object_is_live_unit(unit) && gm.unit(unit).buffs.iter().any(|b| b.base == BUFF_SLEEP);
+        if gm.object_is_live_unit(unit) && !asleep {
             killed = gm.unit_damage_target(c, unit, dmg, false, false, 0, ROOTS_DAMAGE_TYPE);
         }
         if killed.is_none() {
@@ -800,6 +844,11 @@ impl Game {
     /// Host API: the unit type Force of Nature creates (the level's UnitID, which `SpellLevel` does not carry).
     pub fn set_summon_unit(&mut self, base: u32, unit_type: u32) {
         self.spells_hero_state_mut().set_summon_unit(base, unit_type);
+    }
+
+    /// Sets the Misc `FrostMoveSpeedDecrease` and `FrostAttackSpeedDecrease` used by Frost Nova's slow.
+    pub fn set_frost_misc(&mut self, move_decrease: F32, attack_decrease: F32) {
+        self.spells_hero_state_mut().frost_misc = (move_decrease, attack_decrease);
     }
 
     /// The treants Force of Nature created, `(caster, unit)` in creation order.
@@ -861,4 +910,47 @@ impl Game {
     pub(crate) fn spell_missile_speed(&self, base: u32) -> F32 {
         self.spell_missile_speed_of(base)
     }
+}
+
+/// What one periodic pulse of a buff of the `0x6F0D54B0` family does (CONFIRMED structure, Unicorn
+/// `tools/emu/undead_ne3_emu.py` CHECK=pulse on `CBuffEntanglingRoots`, 600 cases, 0 mismatches).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Pulse {
+    /// The pulse does nothing (the target sleeps, or the Misc immunity gate rejects it).
+    Skip,
+    /// A damage record with this amount (class `0x100000` for Roots) and record flags `2` (`0` while the buff's
+    /// first-pulse bit `0x8000000` is still set) is delivered to the target.
+    Damage { amount: F32, record_flags: u32 },
+    /// A negative amount: multiplied by Misc `EtherealHealBonus` and added through AddLife (`0x6F277C20`).
+    AddLife(F32),
+}
+
+/// Inputs of [`pulse`]: the target's sleep state, the Misc gate `MagicImmunesResistDamage`, the class tests of the
+/// damage class word (`0x6F2555E0` / `0x6F2555F0`), the target's immunity counters (`+0x15C` / `+0x158`) and the
+/// buff's first-pulse bit.
+#[derive(Debug, Clone, Copy)]
+pub struct PulseInput {
+    pub asleep: bool,
+    pub gate: bool,
+    pub class_a: bool,
+    pub class_b: bool,
+    pub immune_a: bool,
+    pub immune_b: bool,
+    pub first_pulse: bool,
+    pub ethereal_bonus: F32,
+}
+
+/// The pulse body of `0x6F0D54B0` for an amount (`buff + 0xEC`).
+pub fn pulse(input: &PulseInput, amount: F32) -> Pulse {
+    if input.asleep {
+        return Pulse::Skip;
+    }
+    if input.gate && ((input.immune_a && input.class_a) || (input.immune_b && input.class_b)) {
+        return Pulse::Skip;
+    }
+    // x87 `fcompp` of 0.0 against the amount: the damage branch is taken unless `amount < 0.0` (NaN included).
+    if arith::lt(amount, F32::ZERO) {
+        return Pulse::AddLife(arith::mul(amount, input.ethereal_bonus));
+    }
+    Pulse::Damage { amount, record_flags: if input.first_pulse { 0 } else { 2 } }
 }
