@@ -114,6 +114,9 @@ pub struct State {
     /// Running Shadow Strike damage over time: buff serial -> (caster, damage per tick).
     strike_dots: BTreeMap<u32, (ObjKey, F32)>,
     next_strike: u32,
+    /// Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (S33, CONFIRMED source of the Frost Nova slow);
+    /// `0.0` when the key is absent, as the original's reader defaults.
+    frost_misc: (F32, F32),
     /// Units hit by Carrion Swarm, `(caster, victim, damage)` in hit order (for tests and the host).
     pub swarm_hits: Vec<(ObjKey, ObjKey, F32)>,
 }
@@ -227,18 +230,12 @@ fn frost_nova(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey, 
         }
         let c_owner = gm.unit(caster).owner;
         let (tx, ty) = (gm.unit(target).x, gm.unit(target).y);
-        // Primary target: DataB, then the slow (0x6F1606C0).
-        let invulnerable = gm.unit_is_invulnerable(target);
-        if !invulnerable {
-            if let Some(d) = gm.unit_damage_target(caster, target, level.data[1], false, false, 0, FROST_NOVA_DAMAGE_TYPE) {
-                deaths.push(d);
-            }
-            apply_frost_slow(&mut gm, target, level);
-        }
-        // Area: every other live enemy of the caster within Area of the target (0x6F1607B0).
+        // The area part runs FIRST (`0x6F1606C0` calls slot 0x434 before its own damage). Every enemy within Area
+        // of the target (the target included: nothing in the per-unit callback `0x6F1607B0` excludes it, LIKELY)
+        // takes DataA and, when it is not invulnerable and survives, the slow buff of slot 0x430.
         let victims: Vec<ObjKey> = circle_candidates(&gm, tx, ty, level.area)
             .into_iter()
-            .filter(|&k| k != target && gm.object_is_live_unit(k) && gm.is_enemy(c_owner, gm.unit(k).owner))
+            .filter(|&k| gm.object_is_live_unit(k) && gm.is_enemy(c_owner, gm.unit(k).owner))
             .collect();
         for k in victims {
             if gm.unit_is_invulnerable(k) {
@@ -250,23 +247,36 @@ fn frost_nova(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey, 
                 apply_frost_slow(&mut gm, k, level);
             }
         }
+        // Primary target: DataB through the damage slot with class `0x200`, no buff of its own (`0x6F1606C0`).
+        if gm.object_is_live_unit(target) && !gm.unit_is_invulnerable(target) {
+            if let Some(d) = gm.unit_damage_target(caster, target, level.data[1], false, false, 0, FROST_NOVA_DAMAGE_TYPE) {
+                deaths.push(d);
+            }
+        }
     }
     for t in deaths {
         dispatch_unit_death_by(game, rt, t, Some(caster));
     }
 }
 
+/// The slow buff of slot `0x430` (`0x6F18A830`): duration HeroDur for a hero else Dur (+ the `+0x9C` term); the
+/// strengths are NOT ability data but the Misc keys `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease`, handed to
+/// `CBuffFrost` slot `0x360` (`0x6F199F40`) and negated (Unicorn, `tools/emu/undead_ne3_emu.py` CHECK=frost, 400
+/// cases, 0 mismatches). Stock Misc values are 0.5 and 0.25.
 fn apply_frost_slow(gm: &mut Game, unit: ObjKey, level: &SpellLevel) {
     if !gm.object_is_live_unit(unit) {
         return;
     }
     let hero = gm.unit(unit).hero.is_some() || is_hero_id(gm.unit(unit).type_id);
     let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
-    let effect = BuffEffect::Slow {
-        move_delta: arith::neg(level.data[2]),
-        attack_delta: arith::neg(level.data[3]),
-    };
+    let (mv, at) = gm.spells_hero_state_mut().frost_misc;
+    let effect = BuffEffect::Slow { move_delta: frost_strength(mv), attack_delta: frost_strength(at) };
     gm.add_spell_buff(unit, BUFF_FROST_NOVA, effect, dur);
+}
+
+/// The stored strength of the Frost buff: the Misc value with the sign bit flipped (`xor 0x80000000`).
+pub fn frost_strength(misc: F32) -> F32 {
+    F32::from_bits(misc.to_bits() ^ 0x8000_0000)
 }
 
 fn is_hero_id(type_id: u32) -> bool {
@@ -800,6 +810,11 @@ impl Game {
     /// Host API: the unit type Force of Nature creates (the level's UnitID, which `SpellLevel` does not carry).
     pub fn set_summon_unit(&mut self, base: u32, unit_type: u32) {
         self.spells_hero_state_mut().set_summon_unit(base, unit_type);
+    }
+
+    /// Sets the Misc `FrostMoveSpeedDecrease` and `FrostAttackSpeedDecrease` used by Frost Nova's slow.
+    pub fn set_frost_misc(&mut self, move_decrease: F32, attack_decrease: F32) {
+        self.spells_hero_state_mut().frost_misc = (move_decrease, attack_decrease);
     }
 
     /// The treants Force of Nature created, `(caster, unit)` in creation order.
