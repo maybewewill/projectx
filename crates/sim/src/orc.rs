@@ -152,15 +152,15 @@ pub const TICK_MIRROR: u8 = 0x81;
 /// The next-hop timer of Chain Lightning.
 pub const TICK_CHAIN: u8 = 0x82;
 
-/// Order ids (UNSURE: the public order-id list, like the three spells of `cast.rs`).
+/// Original cast-order getters (slot 0x348), Unicorn-checked by tools/analysis/ability_orders.py.
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_127, WAR_STOMP);
     ids.insert(852_125, SHOCKWAVE);
     ids.insert(852_119, CHAIN_LIGHTNING);
     ids.insert(852_129, WIND_WALK);
-    ids.insert(852_093, MIRROR_IMAGE);
+    ids.insert(852_123, MIRROR_IMAGE);
     ids.insert(852_122, FAR_SIGHT);
-    ids.insert(852_120, FERAL_SPIRIT);
+    ids.insert(852_126, FERAL_SPIRIT);
 }
 
 /// Abilities cast without a target (`targs` empty or area around the caster).

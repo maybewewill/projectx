@@ -273,12 +273,27 @@ pub fn cost_value(cost: i32) -> F32 {
 impl SpellSystem {
     pub fn new() -> Self {
         let mut s = Self::default();
-        // Order ids of the three spells: UNSURE (taken from the public order-id lists, not read from the DLL).
+        // Original cast-order getters (slot 0x348), Unicorn-checked in tools/analysis/ability_orders.py.
         s.order_ids.insert(852_095, STORM_BOLT);
-        s.order_ids.insert(852_089, HOLY_LIGHT);
+        s.order_ids.insert(852_092, HOLY_LIGHT);
         s.order_ids.insert(852_075, SLOW);
         crate::orc::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
+            s.order_ids.insert(id, base);
+        }
+        // Undead / night elf hero spells: cast getters (slot 0x348) from tools/analysis/ability_orders.py.
+        for (id, base) in [
+            (852_222, crate::undead_ne::DEATH_COIL),
+            (852_226, crate::undead_ne::FROST_NOVA),
+            (852_171, crate::undead_ne::ENTANGLING_ROOTS),
+            (852_176, crate::undead_ne::FORCE_OF_NATURE),
+            (852_223, crate::undead_ne::DEATH_PACT),
+            (852_218, crate::undead_ne::CARRION_SWARM),
+            (852_227, crate::undead_ne::SLEEP),
+            (852_527, crate::undead_ne::SHADOW_STRIKE),
+            (852_525, crate::undead_ne::BLINK),
+            (852_177, crate::undead_ne::IMMOLATION),
+        ] {
             s.order_ids.insert(id, base);
         }
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).

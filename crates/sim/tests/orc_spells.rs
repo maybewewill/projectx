@@ -2,7 +2,7 @@
 //! War Stomp, Chain Lightning, Shockwave, Wind Walk, Mirror Image, Feral Spirit and Far Sight.
 //!
 //! The level data are pinned values of the tests (the 1.26a first-level numbers), not game data. The spells are cast
-//! through the by-id order natives with the order ids of the model (UNSURE source, see `orc::register_orders`).
+//! through the by-id order natives with the original's Unicorn-checked cast order ids (see `orc::register_orders`).
 
 use jass::compile::compile;
 use jass::vm::NativeRegistry;
@@ -68,10 +68,10 @@ function walk takes nothing returns nothing
     set accepted = IssueImmediateOrderById(caster, 852129)
 endfunction
 function mirror takes nothing returns nothing
-    set accepted = IssueImmediateOrderById(caster, 852093)
+    set accepted = IssueImmediateOrderById(caster, 852123)
 endfunction
 function wolves takes nothing returns nothing
-    set accepted = IssueImmediateOrderById(caster, 852120)
+    set accepted = IssueImmediateOrderById(caster, 852126)
 endfunction
 function sight takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852122, 2000.0, 0.0)
