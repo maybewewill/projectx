@@ -80,6 +80,8 @@ pub const ROAR: u32 = code(b"Aroa");
 pub const BUFF_ROAR: u32 = code(b"Broa");
 pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
+pub const CURSE: u32 = code(b"Acrs");
+pub const BUFF_CURSE: u32 = code(b"Bcrs");
 
 pub const ORDER_HEAL: u32 = 852_063;
 pub const ORDER_HEAL_ON: u32 = 852_064;
@@ -109,7 +111,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 10] = [
+pub const SPELL_ORDERS: [(u32, u32); 11] = [
+    (852_190, CURSE),
     (852_164, ROAR),
     (852_197, RAISE_DEAD),
     (852_057, DISPEL_MAGIC),
@@ -123,7 +126,8 @@ pub const SPELL_ORDERS: [(u32, u32); 10] = [
 ];
 
 /// `(autocast on order, autocast off order, ability)`.
-const TOGGLES: [(u32, u32, u32); 4] = [
+const TOGGLES: [(u32, u32, u32); 5] = [
+    (852_191, 852_192, CURSE),
     (852_198, 852_199, RAISE_DEAD),
     (ORDER_HEAL_ON, ORDER_HEAL_OFF, HEAL),
     (852_067, 852_068, INNER_FIRE),
@@ -163,6 +167,9 @@ pub struct UnitMods {
     pub damage_pct: F32,
     pub life_regen: F32,
     pub mana_regen: F32,
+    /// The attacker's chance to miss (Curse, `CBuffCurse` holder `+0xD0`). Not a stat sink: the attacker-side walk
+    /// of the miss gate reads it from the buff ([`Game::attacker_miss_scores`]).
+    pub miss_chance: F32,
 }
 
 impl Default for UnitMods {
@@ -174,6 +181,7 @@ impl Default for UnitMods {
             damage_pct: F32::ZERO,
             life_regen: F32::ZERO,
             mana_regen: F32::ZERO,
+            miss_chance: F32::ZERO,
         }
     }
 }
@@ -214,6 +222,7 @@ impl Game {
             damage_pct: arith::neg(m.damage_pct),
             life_regen: arith::neg(m.life_regen),
             mana_regen: arith::neg(m.mana_regen),
+            miss_chance: F32::ZERO,
         };
         self.apply_mods(unit, &neg);
     }
@@ -423,6 +432,77 @@ fn is_ally(gm: &Game, caster: ObjKey, other: ObjKey) -> bool {
     a == b || !gm.is_enemy(a, b)
 }
 
+/// The `targs` word of an ability level from the editor's token list (`AbilityData.slk` column `targs`). Bit values
+/// are those of the weapon predicate (`target_accept.rs`: kinds `0x2..0x400`, relations `0x1000..0x10000`, vulnerable
+/// `0x100000`, invulnerable `0x200000`, hero/nonhero, alive/dead, organic/mechanical, sapper, ancient). `friend`
+/// stands for player + ally (LIKELY: the editor's friend group; a unit of the caster's own player is a friend).
+pub fn targs_word(list: &str) -> u32 {
+    let mut w = 0u32;
+    for tok in list.split(',') {
+        w |= match tok.trim() {
+            "ground" => 0x2,
+            "air" => 0x4,
+            "structure" => 0x8,
+            "ward" => 0x10,
+            "item" => 0x20,
+            "tree" => 0x40,
+            "wall" => 0x80,
+            "debris" => 0x100,
+            "decoration" => 0x200,
+            "bridge" => 0x400,
+            "self" => 0x1000,
+            "player" => 0x2000,
+            "ally" => 0x4000,
+            "friend" => 0x6000,
+            "neutral" => 0x8000,
+            "enemy" => 0x1_0000,
+            "vuln" => 0x10_0000,
+            "invu" => 0x20_0000,
+            "hero" => 0x40_0000,
+            "nonhero" => 0x80_0000,
+            "alive" => 0x100_0000,
+            "dead" => 0x200_0000,
+            "organic" => 0x400_0000,
+            "mechanical" => 0x800_0000,
+            "nonsapper" => 0x1000_0000,
+            "sapper" => 0x2000_0000,
+            "nonancient" => 0x4000_0000,
+            "ancient" => 0x8000_0000,
+            "none" => 0x1,
+            _ => 0,
+        };
+    }
+    w
+}
+
+/// Whether `caster` may target `target` with the `targs` word `w`: the weapon predicate of S32 (`target_accept::predicate`,
+/// CONFIRMED by Unicorn: kinds, alive/dead, vulnerable, organic/mechanical, hero, sapper, ancient, with the unnamed
+/// groups widened by `expand`) plus the relation stage of `0x6F25D390` (structure CONFIRMED, spec `weapon-target.md`
+/// section 3: self, same player, then the passive alliance row decides enemy against ally/neutral; the shared-spells
+/// row that splits ally from neutral is not in the model, so a non-enemy of another player is an ally, and a
+/// neutral-hostile owner (index 12 and up) that the passive row calls non-enemy a neutral: UNSURE).
+pub fn targs_ok(gm: &Game, caster: ObjKey, target: ObjKey, w: u32) -> bool {
+    if crate::target_accept::predicate(gm.target_flag_word(target), w) != 0 {
+        return false;
+    }
+    if w & 0x1_F000 == 0 {
+        return true;
+    }
+    let (co, to) = (gm.unit(caster).owner, gm.unit(target).owner);
+    let rel = if caster == target {
+        0x1000
+    } else if co == to {
+        0x2000
+    } else if gm.is_enemy(co, to) {
+        0x1_0000
+    } else if to >= 12 {
+        0x8000
+    } else {
+        0x4000
+    };
+    w & rel != 0
+}
+
 /// The deficit rule of Heal's slot `0x3F0`: `max life - life >= 1.0` (the error `0x1C` otherwise). A NaN deficit
 /// passes (the unordered compare).
 fn heal_needs(gm: &Game, target: ObjKey) -> bool {
@@ -539,6 +619,14 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        CURSE => {
+            // targs: air,ground,enemy,organic,neutral (`AbilityData.slk`, S32 predicate + relation stage).
+            let w = targs_word("air,ground,enemy,organic,neutral");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -579,6 +667,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         INNER_FIRE | BLOODLUST | CRIPPLE | FAERIE_FIRE => {
             if let CastTarget::Unit(t) = rec.target {
                 buff_spell(game, rec, t);
+            }
+            true
+        }
+        CURSE => {
+            if let CastTarget::Unit(t) = rec.target {
+                curse(game, rec, t);
             }
             true
         }
@@ -945,6 +1039,72 @@ fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     }
 }
 
+/// The epsilon of the Curse compare: the runtime value of `0x6FAAE47C` (`0x3A83126F` = 0.001f, read from the emulator's
+/// start-up image, `tools/emu/curse_emu.py`).
+const CURSE_EPS_BITS: u32 = 0x3A83_126F;
+
+/// `CBuffCurse::EvadeAttack` (`0x6F07F850`, the walk-B execute slot `0x168`, with the helper `0x6F07C4C0`): CONFIRMED
+/// by Unicorn (`tools/emu/curse_emu.py`, 1,800 cases over three seeds with NaN/infinity/denormal/epsilon-edge bit
+/// patterns, 0 mismatches; `tests/curse_vectors.rs`). One draw of combat stream 2 is taken first (the same
+/// `0x6F2853D0` call with EDX = 2 as the evasion roll); the helper subtracts by soft float `|draw - chance|`
+/// (`0x6F6EEEF0`, sign bit cleared) and reports "no evade" when that is below the epsilon `0.001` or when
+/// `chance < draw`; otherwise (`chance > draw` by at least the epsilon, or an unordered value) the attack misses.
+pub fn curse_evades(chance: F32, draw: F32) -> bool {
+    let diff = arith::sub(draw, chance);
+    let abs = f32::from_bits(diff.to_bits() & 0x7FFF_FFFF);
+    let eps = f32::from_bits(CURSE_EPS_BITS);
+    if eps > abs {
+        return false;
+    }
+    !(chance.to_f32() < draw.to_f32())
+}
+
+impl Game {
+    /// The scores of the attacker-side walk B of the miss gate (`0x6F077420`, score slot `0x15C`): one per buff of the
+    /// attacker whose class implements the walk, in buff list order (CONFIRMED structure, `attack-damage.md` 12.7).
+    /// `CBuffCurse` scores its chance holder (`0x6F07F8A0` returns the value at `+0xD0`). Drunken Haze, Silence and
+    /// Cloud of Fog share the walk and are not modelled.
+    pub fn attacker_miss_scores(&self, attacker: ObjKey) -> Vec<F32> {
+        self.unit(attacker)
+            .buffs
+            .iter()
+            .filter(|b| b.base == BUFF_CURSE)
+            .filter_map(|b| match b.effect {
+                Some(crate::auras::BuffEffect::Mods(m)) => Some(m.miss_chance),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Curse (`Acrs`, `CAbilityCurse` vtable `0x6F8A9694`, an AutoTargetSpell; effect slot `0x424` = `0x6F0B8450`,
+/// CONFIRMED structure): the hero rule duration (`HeroDur`, else `Dur` + the ability's `+0x9C`, 0 here), `DataA` (the
+/// chance to miss, 0.33) and the creator go to the buff code `Bcrs` (`0x6F07F800`, found by its code, then the buff's
+/// slot `0x358` = set-duration (never shorten, `0x6F0D4EF0`) + the chance holder + creator, else created through slot
+/// `0x354`). The buff has no stat sink; its effect is the attacker-side miss walk (`curse_evades`).
+fn curse(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let hero = gm.target_hero(target);
+    let dur = effect_duration(&rec.level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_CURSE)
+    };
+    let mods = UnitMods {
+        miss_chance: rec.level.data[0],
+        ..UnitMods::default()
+    };
+    gm.apply_mods_buff(target, BUFF_CURSE, preds, mods, dur);
+}
+
 /// `0x6F108280`: heal, then the marker buff.
 fn heal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let mut gm = game.borrow_mut();
@@ -1125,6 +1285,22 @@ fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
                 }
             }
             true
+        }
+        CURSE => {
+            // `0x6F09BF80` (CONFIRMED structure): the base filter, then the candidate must have the attack ability and
+            // a current attack target whose owner satisfies the relation `0x6F285B60` against the caster's owner
+            // (an alliance row test, which row UNSURE: taken as "not an enemy of the caster's player", i.e. the
+            // candidate is attacking one of ours), and must not carry `Bcrs` yet.
+            let Some(target) = gm.attack_view(k).and_then(|v| v.target) else {
+                return false;
+            };
+            if !gm.alive(target) {
+                return false;
+            }
+            if gm.is_enemy(gm.unit(unit).owner, gm.unit(target).owner) {
+                return false;
+            }
+            gm.buff_position(k, BUFF_CURSE).is_none()
         }
         INNER_FIRE | BLOODLUST => {
             let (buff, threshold) = if base == INNER_FIRE {

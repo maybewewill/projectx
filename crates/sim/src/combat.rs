@@ -920,7 +920,7 @@ impl Game {
         // the target routine. For missiles the gate runs at launch too (`0x6F2C3F70` calls it before the flight);
         // that an evaded missile deals no direct damage is UNSURE (the original scales the flight's damage by
         // MissDamageReduction, not modelled).
-        if self.evasion_check(target) {
+        if self.evasion_check(target) || self.attacker_miss_check(unit) {
             self.bash_clear(unit);
             return Vec::new();
         }
@@ -1042,6 +1042,24 @@ impl Game {
             .stream_mut(crate::damage::EVASION_STREAM)
             .random_fraction(table);
         crate::damage::evades(chance, draw)
+    }
+
+    /// Walk B of the miss gate `0x6F2BEAC0` (`0x6F077420`, slots `0x15C` / `0x168`, CONFIRMED structure in
+    /// `attack-damage.md` 12.7): the buffs of the ATTACKER that carry a miss chance (Curse) are scored in list order, the
+    /// best one (strict, starting from 0.0) takes one draw of stream 2 and decides ([`crate::unit_spells::curse_evades`],
+    /// CONFIRMED by Unicorn). It runs after the target-side walk A fails; no draw without an entry above zero.
+    fn attacker_miss_check(&mut self, attacker: ObjKey) -> bool {
+        let scores = self.attacker_miss_scores(attacker);
+        let Some(chance) = crate::damage::evasion_select(scores) else {
+            return false;
+        };
+        let Some((table, streams)) = self.rng_parts() else {
+            return false;
+        };
+        let draw = streams
+            .stream_mut(crate::damage::EVASION_STREAM)
+            .random_fraction(table);
+        crate::unit_spells::curse_evades(chance, draw)
     }
 
     /// The `ChanceToMiss` tail of the miss gate `0x6F2BEAC0` for a missile launch (`a3 != 0`), reached when no
