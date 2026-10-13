@@ -465,8 +465,7 @@ computes per weapon slot `w` (`unit+0x1E8` is the attack ability): `X = 0x6F26D5
 getter does not). So the aura scales the AVERAGE damage `bonus + count (sides + 1) / 2`, not the minimum roll. CONFIRMED by
 Unicorn (`tools/emu/cmdaura_emu.py`: 200 `0x6F0C6D00` + 200 `0x6F26D5F0` cases incl. negative and huge counts, 0
 mismatches; `tests/data/orc/cmdaura.txt`, `tests/orc_cmdaura.rs`). Rust: `orc::command_base_damage`; `auras.rs`
-(`aura_damage_amount`) now calls it. Worked example, the Blademaster (`1d..` weapon 2d6 + 21): average 28, level 1 Command
-Aura `DataA` 0.1 -> `F2I(2.8 + 0.5)` = 3. Also read: `0x6F1ACC00` (illusion caster: bonus only when the Misc flag at `0x6F8B4ABC` is
+(`aura_damage_amount`) now calls it. Worked example (made-up weapon, 1 die of 6 sides, bonus 20): average 23.5; `DataA` 0.1 -> `F2I(2.35 + 0.5)` = 2. Also read: `0x6F1ACC00` (illusion caster: bonus only when the Misc flag at `0x6F8B4ABC` is
 set), the weapon-type filters (`+0xDC + 4w` == 1 for ranged or `2..8` for the other kinds, `+0x218 + 4w` targs masks `0x80`, 1,
 `0x40`, `0x100` allowed) which stay as in `buffs.md`.
 
