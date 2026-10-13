@@ -148,6 +148,8 @@ pub struct State {
     /// Running Impales (S37).
     impales: BTreeMap<u32, Impale>,
     next_impale: u32,
+    /// Running Frost Armors: buff serial -> record (S37).
+    frost_armors: BTreeMap<u32, FrostArmor>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -207,6 +209,8 @@ pub const TICK_DND: u8 = 9;
 pub const TICK_DND_PULSE: u8 = 10;
 /// An Impale spike (`aux` = the impale id), S37.
 pub const TICK_IMPALE: u8 = 11;
+/// A Frost Armor ends (`aux` = the buff serial), S37.
+pub const TICK_FROST_ARMOR_END: u8 = 12;
 /// A swath missile arrives (`aux` = the swarm id), S37.
 pub const TICK_SWARM_ARRIVE: u8 = 6;
 
@@ -244,10 +248,11 @@ pub(crate) fn run_effect(
         (INFERNO, CastTarget::Point(x, y)) => inferno(game, rt, caster, level, x, y),
         (DEATH_AND_DECAY, CastTarget::Point(x, y)) => death_and_decay(game, caster, level, x, y),
         (IMPALE, CastTarget::Point(x, y)) => impale(game, caster, level, x, y),
+        (FROST_ARMOR, CastTarget::Unit(t)) => frost_armor(game, caster, level, t),
         (IMMOLATION, CastTarget::None) => immolation(game, caster, base, level),
         (
             DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | DARK_RITUAL | SLEEP | SHADOW_STRIKE | BLINK
-            | CARRION_SWARM | IMMOLATION | INFERNO | DEATH_AND_DECAY | IMPALE,
+            | CARRION_SWARM | IMMOLATION | INFERNO | DEATH_AND_DECAY | IMPALE | FROST_ARMOR,
             _,
         ) => {}
         _ => return false,
@@ -947,7 +952,7 @@ pub const INFERNO: u32 = code(b"AUin");
 
 /// Cast-order ids of the S37 abilities (the original getters, `tools/analysis/ability_orders.py --verify`: AUin
 /// 852224, AUdd 852221, AEsf 852183, AEtq 852184, AEme 852180).
-pub const S37_ORDERS: &[(u32, u32)] = &[(852_224, INFERNO), (852_221, DEATH_AND_DECAY), (852_555, IMPALE)];
+pub const S37_ORDERS: &[(u32, u32)] = &[(852_224, INFERNO), (852_221, DEATH_AND_DECAY), (852_555, IMPALE), (852_225, FROST_ARMOR)];
 /// The Infernal's timed-life buff id (`'BNin'`, the level's BuffID).
 pub const BUFF_INFERNAL: u32 = code(b"BNin");
 /// `targs` of `AUin`: ground, structure (+ debris, enemy, neutral): the relation is the enemy test.
@@ -1382,6 +1387,139 @@ fn impale_spike(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Frost Armor, Thorns Aura, Spiked Carapace: retaliation against melee attackers (S37)
+
+pub const FROST_ARMOR: u32 = code(b"AUfa");
+pub const FROST_ARMOR_AUTO: u32 = code(b"AUfu");
+pub const BUFF_FROST_ARMOR: u32 = code(b"BUfa");
+pub const THORNS_AURA: u32 = code(b"AEah");
+pub const SPIKED_CARAPACE: u32 = code(b"AUts");
+/// The sim's damage type of reflected damage (class `0x100000`, the record class of `0x6F1AD4E0`): bit 20.
+const THORNS_DAMAGE_TYPE: u32 = 20;
+
+/// The reflected damage of a Thorns buff (`CBuffAuraThorns` event handler `0x6F1AD4E0`, slot 63; gates and arithmetic read
+/// from the machine code, LIKELY): `strength * (amount - reduced)` with the soft multiply, where `amount` is the damage
+/// record's amount (`+0x10`) and `reduced` its `+0x18` (0.0 at creation, `0x6F2556E0`; the writer of that field was not found,
+/// the model takes 0.0), raised to 1.0 when it is below 1.0 (`0x6F00C110`, `lt(amount, 1.0)`). Gates in the original order:
+/// the record's ignore flag (bit 0, "ranged"), a class other than `0x10` (a basic attack), an allied attacker (`0x6F285AC0`),
+/// an invulnerable attacker (slot `0x11C`), a blocked attacker (`0x6F28D750`); an illusion owner reflects nothing but still
+/// plays the effect.
+pub fn thorns_reflect(strength: F32, amount: F32, reduced: F32) -> F32 {
+    let d = arith::sub(amount, reduced);
+    let v = arith::mul(strength, d);
+    if arith::lt(v, F32::ONE) {
+        F32::ONE
+    } else {
+        v
+    }
+}
+
+/// A Frost Armor on a unit: the armor it added, the chill the attackers get and when it ends.
+#[derive(Debug, Clone, Copy)]
+struct FrostArmor {
+    unit: ObjKey,
+    armor: F32,
+    /// The ability level the chill takes its durations from (Dur / HeroDur, the Misc strengths are the Frost Nova's).
+    chill: SpellLevel,
+}
+
+/// `CAbilityFrostArmor` effect (unit target, `0x6F0BA520`): the buff creator receives `(info, DataA, DataB, Dur or HeroDur)`
+/// (CONFIRMED by a Unicorn run of the effect): the buff `'BUfa'` lasts DataA (45 s: the buff creator's duration argument),
+/// adds DataB armor (the strength cell, LIKELY) and chills melee attackers for Dur / HeroDur (`CBuffFrostArmor`'s event
+/// handler `0x6F0BA3F0` applies the Frost Nova buff `'Bfro'`, id getter `0x6F1998D0`, to a non-invulnerable attacker of a
+/// basic attack). UNSURE: the sign and role of the armor cell, the autocast variant `AUfu`.
+fn frost_armor(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, target: ObjKey) {
+    let _ = caster;
+    let mut gm = game.borrow_mut();
+    if !gm.object_is_live_unit(target) {
+        return;
+    }
+    let serial = gm.add_spell_buff(target, BUFF_FROST_ARMOR, BuffEffect::Marker, level.data[0]);
+    if serial == 0 {
+        return;
+    }
+    // A second application replaces the first (`add_spell_buff` drops the old buff): take the old armor back first.
+    let old: Vec<u32> = gm.spells_hero_state_mut().frost_armors.iter().filter(|(_, f)| f.unit == target).map(|(s, _)| *s).collect();
+    for s in old {
+        if let Some(f) = gm.spells_hero_state_mut().frost_armors.remove(&s) {
+            gm.add_armor(f.unit, arith::neg(f.armor));
+        }
+    }
+    gm.add_armor(target, level.data[1]);
+    gm.spells_hero_state_mut().frost_armors.insert(serial, FrostArmor { unit: target, armor: level.data[1], chill: *level });
+    gm.timers_start_hero(level.data[0].to_f32().max(MIN_PERIOD_SECONDS), TICK_FROST_ARMOR_END, target, serial);
+}
+
+fn frost_armor_end(game: &RefCell<Game>, aux: u32) {
+    let mut gm = game.borrow_mut();
+    if let Some(f) = gm.spells_hero_state_mut().frost_armors.remove(&aux) {
+        gm.add_armor(f.unit, arith::neg(f.armor));
+    }
+}
+
+impl Game {
+    /// What a basic attack of `attacker` that hit `victim` for `damage` triggers on the victim's side: the chill of a Frost
+    /// Armor, the reflection of Thorns Aura and Spiked Carapace. Only melee attackers (no missile) that are enemies of the
+    /// victim and not invulnerable trigger them (the ranged exclusion is the damage record's ignore flag, LIKELY). Returns
+    /// the units that died.
+    pub(crate) fn apply_retaliation(&mut self, attacker: ObjKey, victim: ObjKey, damage: F32) -> Vec<ObjKey> {
+        let mut died = Vec::new();
+        if !self.object_is_live_unit(attacker) || !self.object_is_live_unit(victim) {
+            return died;
+        }
+        let a_ty = self.unit(attacker).type_id;
+        if self.attack_type(a_ty).missile_speed.is_some() {
+            return died;
+        }
+        let (a_owner, v_owner) = (self.unit(attacker).owner, self.unit(victim).owner);
+        if !self.is_enemy(v_owner, a_owner) || self.unit_is_invulnerable(attacker) {
+            return died;
+        }
+        // Frost Armor: the chill (a live buff is a record).
+        let chills: Vec<SpellLevel> = self
+            .spells_hero_state_mut()
+            .frost_armors
+            .values()
+            .filter(|f| f.unit == victim)
+            .map(|f| f.chill)
+            .collect();
+        for level in chills {
+            apply_frost_slow(self, attacker, &level);
+        }
+        // Thorns: the strongest of the victim's own Spiked Carapace and the Thorns Auras of friends within Area.
+        let mut strength: Option<F32> = None;
+        let mut consider = |s: F32| {
+            if strength.is_none_or(|cur| arith::lt(cur, s)) {
+                strength = Some(s);
+            }
+        };
+        if let Some(l) = self.ability_level_record(victim, SPIKED_CARAPACE) {
+            consider(l.data[0]);
+        }
+        for k in (0..self.object_count()).map(|i| ObjKey(i as u32)) {
+            if !self.object_is_live_unit(k) || self.is_enemy(v_owner, self.unit(k).owner) {
+                continue;
+            }
+            if let Some(l) = self.ability_level_record(k, THORNS_AURA) {
+                let (vx, vy, kx, ky) = (self.unit(victim).x, self.unit(victim).y, self.unit(k).x, self.unit(k).y);
+                if within(vx, vy, kx, ky, l.area) {
+                    consider(l.data[0]);
+                }
+            }
+        }
+        if let Some(s) = strength {
+            if !self.unit(victim).illusion {
+                let reflect = thorns_reflect(s, damage, F32::ZERO);
+                if let Some(d) = self.unit_damage_target(victim, attacker, reflect, false, false, 0, THORNS_DAMAGE_TYPE) {
+                    died.push(d);
+                }
+            }
+        }
+        died
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Sleep
 
 /// `CAbilitySleep` effect (`0x6F1FBA80`): the target gets the Sleep buff `'BUsl'` for HeroDur (hero) or Dur and is
@@ -1701,6 +1839,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_DND => dnd_poll(game, aux),
         TICK_DND_PULSE => dnd_pulse(game, rt, unit, aux),
         TICK_IMPALE => impale_spike(game, rt, aux),
+        TICK_FROST_ARMOR_END => frost_armor_end(game, aux),
         TICK_SWARM_ARRIVE => swarm_arrive(game, rt, aux),
         _ => {}
     }
