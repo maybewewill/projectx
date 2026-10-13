@@ -50,7 +50,9 @@ use softfloat::{arith, math, Tables, F32};
 
 use crate::abilities::ATTACK;
 use crate::natives::game::{Game, ObjKey, Object, Payload};
-use crate::natives::{circle_candidates, dispatch_unit_death_by, set_life, ScriptRuntime};
+use crate::natives::{circle_candidates, dispatch_unit_death_by, group_origin, in_ring, set_life, ScriptRuntime};
+use crate::target_accept::{choose_for_unit, unit_target_flags, UnitChecks, WeaponSlot};
+use crate::{bounce, splash};
 use crate::orders::{Order, OrderClass, ORDER_AIMOVE, ORDER_ATTACK};
 use crate::pathing::scale_by_1_32;
 use crate::attack_timing;
@@ -126,6 +128,27 @@ pub struct AttackType {
     pub damage_class: u32,
 }
 
+/// The per-weapon data beyond [`AttackType`]: the target flags the weapon chooser matches, the weapon kind and the
+/// splash, bounce and line parameters (`docs/spec/weapon-target.md`, `docs/spec/weapon-splash.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WeaponExtra {
+    /// `targs` of the weapon (`A+0x218+4w`).
+    pub targs: u32,
+    /// The `weapTp` enum (1 normal, 2 missile, 3 artillery, 4 instant, 5 msplash, 6 mbounce, 7 mline, 8 aline).
+    pub kind: u32,
+    /// `splashTargs`.
+    pub splash_targs: u32,
+    /// `Farea`, `Harea`, `Qarea`.
+    pub area: [F32; 3],
+    /// `Hfact`, `Qfact` (a zero is replaced by 0.5 / 0.25 at launch, [`bounce::launch_factors`]).
+    pub hfact: F32,
+    pub qfact: F32,
+    /// `targCount` (the bounce hit count).
+    pub targ_count: i32,
+    /// `damageLoss` (the fraction lost per bounce).
+    pub damage_loss: F32,
+}
+
 /// What a missile launch reads from the shooter's unit type besides the speed (`docs/spec/missiles.md` section 11):
 /// the launch offset in the unit's frame (`launchX/Y/Z` of the weapon row, rotated by the facing and added to the unit's
 /// position by `0x6F29E6A0`), the launch Z under water, the impact height added to the target's height
@@ -162,6 +185,9 @@ pub struct CombatMisc {
     /// The Misc `ChanceToMiss` (CONFIRMED key, `0x6F2BEAC0`): the probability of the uphill miss of a missile. A
     /// missing key reads `0.0` in the original, which is also the default here.
     pub chance_to_miss: F32,
+    /// The Misc `MagicImmunesResistDamage` flag (CONFIRMED key): with it, Magic attacks cannot target magic immune units
+    /// and physical attacks cannot target ethereal units (the weapon choosers and the splash filter).
+    pub magic_immunes_resist: bool,
 }
 
 /// The terrain level of a pathing cell, as the miss gate reads it (`0x6F0128C0`): the host adapter over the map's
@@ -185,6 +211,23 @@ pub trait DamageModel: std::fmt::Debug {
         target: ObjKey,
         weapon: &AttackType,
     ) -> F32;
+
+    /// Like [`DamageModel::roll`], but also returns the raw record amount (after the dice and Critical Strike, before
+    /// the target side) when the model has one; the splash and bounce code scales it per victim.
+    fn roll_split(
+        &mut self,
+        game: &mut Game,
+        attacker: ObjKey,
+        target: ObjKey,
+        weapon: &AttackType,
+    ) -> (F32, Option<F32>) {
+        (self.roll(game, attacker, target, weapon), None)
+    }
+
+    /// The target side of a basic attack record of amount `raw` on `victim`. The default passes `raw` through.
+    fn attack_side(&mut self, _game: &Game, _victim: ObjKey, _weapon: &AttackType, raw: F32) -> F32 {
+        raw
+    }
 
     /// The amount of life `target` loses from a script damage event (`UnitDamageTarget`): the target side of the
     /// record the native builds. The default passes the raw amount through (the placeholder model has no armor).
@@ -250,7 +293,9 @@ pub enum AttackMsg {
     /// the attack's timer sub-object at `+0x1D8`, its message is not named).
     Cooldown,
     /// A missile hits: the damage rolled at the execute point is applied to `target` (phases 2 to 8, UNSURE timing).
-    Impact { target: ObjKey, damage: F32 },
+    Impact { target: ObjKey, damage: F32, raw: F32, weapon: u8 },
+    /// A bounce missile reaches its next target (chain `id` of [`CombatSystem`]).
+    Bounce { id: u32 },
 }
 
 impl AttackMsg {
@@ -262,7 +307,7 @@ impl AttackMsg {
             AttackMsg::SwingEnd => Some(MSG_SWING_END),
             AttackMsg::Execute => Some(MSG_EXECUTE),
             AttackMsg::Cooldown => Some(crate::attack_timing::MSG_COOLDOWN_END),
-            AttackMsg::Impact { .. } => None,
+            AttackMsg::Impact { .. } | AttackMsg::Bounce { .. } => None,
         }
     }
 }
@@ -281,6 +326,8 @@ pub(crate) enum CombatKind {
 /// timer queue ([`Game::attack_view`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AttackObj {
+    /// The weapon (0 or 1) the weapon chooser picked for the current target.
+    pub weapon: usize,
     /// The unit being attacked, if any.
     pub target: Option<ObjKey>,
     /// Set when the reaction delay has ended and the next gate pass starts the swing.
@@ -315,6 +362,10 @@ pub struct AttackView {
 #[derive(Debug, Default)]
 pub struct CombatSystem {
     types: BTreeMap<u32, AttackType>,
+    types2: BTreeMap<u32, AttackType>,
+    extras: BTreeMap<(u32, u8), WeaponExtra>,
+    bounces: BTreeMap<u32, BounceChain>,
+    next_bounce: u32,
     missile_data: BTreeMap<u32, MissileData>,
     defense: BTreeMap<u32, Defense>,
     states: BTreeMap<ObjKey, AttackObj>,
@@ -323,6 +374,21 @@ pub struct CombatSystem {
     point_damages: BTreeMap<u32, PointDamage>,
     next_point_damage: u32,
     cliffs: Option<Box<dyn CliffLevels>>,
+}
+
+/// A bounce missile in flight between two targets.
+#[derive(Debug, Clone)]
+pub struct BounceChain {
+    attacker: ObjKey,
+    weapon: usize,
+    /// The unit the missile is flying to.
+    next: ObjKey,
+    /// The units already hit (the primary target and every bounce target).
+    hit: Vec<ObjKey>,
+    /// The raw amount for the next hit.
+    raw: F32,
+    /// The remaining hit counter (`CMissileBounce +0xB4`).
+    counter: i32,
 }
 
 /// The parameters of one `UnitDamagePoint` call (`0x6F3C8770`), kept until a delayed call comes due.
@@ -365,6 +431,79 @@ impl Game {
     /// Sets the attack data of unit type `type_id` (see [`AttackType`]).
     pub fn set_attack_type(&mut self, type_id: u32, ty: AttackType) {
         self.combat.types.insert(type_id, ty);
+    }
+
+    /// Sets the attack data of weapon 2 of unit type `type_id`.
+    pub fn set_attack_type2(&mut self, type_id: u32, ty: AttackType) {
+        self.combat.types2.insert(type_id, ty);
+    }
+
+    /// The attack data of weapon 2 of unit type `type_id`, if it has one.
+    pub fn attack_type2(&self, type_id: u32) -> Option<AttackType> {
+        self.combat.types2.get(&type_id).copied()
+    }
+
+    /// Sets the per-weapon data of weapon `w` (0 or 1) of unit type `type_id`.
+    pub fn set_weapon_extra(&mut self, type_id: u32, w: usize, extra: WeaponExtra) {
+        self.combat.extras.insert((type_id, w as u8), extra);
+    }
+
+    /// The per-weapon data of weapon `w` of unit type `type_id`, if the host filled it.
+    pub fn weapon_extra(&self, type_id: u32, w: usize) -> Option<WeaponExtra> {
+        self.combat.extras.get(&(type_id, w as u8)).copied()
+    }
+
+    /// The attack data of weapon `w` of a unit type (`None` when the type has no such weapon).
+    fn weapon_type(&self, type_id: u32, w: usize) -> Option<AttackType> {
+        if w == 0 {
+            self.combat.types.get(&type_id).copied()
+        } else {
+            self.combat.types2.get(&type_id).copied()
+        }
+    }
+
+    /// The target flag word of a unit (`0x6F25D280`, [`crate::target_accept::unit_target_flags`]). A type without a `targType`
+    /// (host did not fill it) derives it: structure `8`, flying `4`, otherwise ground `2`.
+    pub fn target_flag_word(&self, k: ObjKey) -> u32 {
+        let u = self.unit(k);
+        let ty = self.unit_types().get(u.type_id);
+        let mut targ = ty.map_or(0, |t| t.targ_type);
+        if targ == 0 {
+            targ = if self.unit_types().is_building(u.type_id) {
+                8
+            } else if ty.is_some_and(|t| t.movement & 2 != 0) {
+                4
+            } else {
+                2
+            };
+        }
+        unit_target_flags(u.dead, self.unit_is_invulnerable(k), targ, (u.type_id >> 24) as u8, u.class_flags)
+    }
+
+    /// The weapon chooser (`0x6F0C93E0`, [`crate::target_accept::choose_for_unit`]): the weapon of `attacker` that may attack
+    /// `target`, or `None` when no weapon accepts it. A type whose weapon data the host did not fill with
+    /// [`WeaponExtra`] keeps weapon 0 without a check (tests and hosts without `targs` data).
+    pub fn choose_weapon(&self, attacker: ObjKey, target: ObjKey) -> Option<usize> {
+        let tid = self.unit(attacker).type_id;
+        if !(0..2).any(|w| self.combat.extras.contains_key(&(tid, w as u8))) {
+            return Some(0);
+        }
+        let slot = |w: usize| match self.weapon_type(tid, w) {
+            Some(a) => WeaponSlot {
+                enabled: true,
+                targs: self.weapon_extra(tid, w).map_or(0, |e| e.targs),
+                atk_type: u32::from(a.damage_type),
+            },
+            None => WeaponSlot::default(),
+        };
+        let tu = self.unit(target);
+        let checks = UnitChecks {
+            magic_immune: tu.magic_immune > 0,
+            ethereal: tu.ethereal > 0,
+            misc_flag: self.combat.misc.magic_immunes_resist,
+        };
+        let c = choose_for_unit(self.target_flag_word(target), [slot(0), slot(1)], checks);
+        (c.code == 0).then_some(c.index as usize)
     }
 
     /// Sets the missile launch data of unit type `type_id` (see [`MissileData`]).
@@ -565,6 +704,10 @@ impl Game {
 
     /// The decisions of an attack with a target: swing when in range and ready, else chase.
     fn drive_target(&mut self, unit: ObjKey, target: ObjKey, snap: &AttackObj) {
+        // The weapon is chosen between swings (the timers are idle here, see `combat_tick`).
+        if let Some(w) = self.choose_weapon(unit, target) {
+            self.st(unit).weapon = w;
+        }
         let ty = self.attack_type_of(unit);
         if self.in_attack_range(unit, target, &ty) {
             self.stop_route(unit);
@@ -706,40 +849,41 @@ impl Game {
 
     /// Runs the handler of an attack timer. Returns the target that died from it, so the caller can run the death
     /// dispatch after its borrow is released.
-    fn combat_fire(&mut self, unit: ObjKey, msg: AttackMsg) -> Option<ObjKey> {
+    fn combat_fire(&mut self, unit: ObjKey, msg: AttackMsg) -> Vec<ObjKey> {
         match msg {
             AttackMsg::Scan => {
                 self.fire_scan(unit);
-                None
+                Vec::new()
             }
             AttackMsg::Reaction => {
                 let st = self.st(unit);
                 st.reaction = None;
                 st.armed = true;
                 self.combat_tick(unit);
-                None
+                Vec::new()
             }
             AttackMsg::SwingEnd => {
                 self.st(unit).swing_end = None;
                 self.combat_tick(unit);
-                None
+                Vec::new()
             }
             AttackMsg::Cooldown => {
                 self.st(unit).cooldown = None;
                 self.combat_tick(unit);
-                None
+                Vec::new()
             }
             AttackMsg::Execute => self.fire_execute(unit),
-            AttackMsg::Impact { target, damage } => {
+            AttackMsg::Impact { target, damage, raw, weapon } => {
                 self.pr_missile_impact();
-                self.missile_arrive(unit, target, damage)
+                self.missile_arrive(unit, target, damage, raw, weapon as usize)
             }
+            AttackMsg::Bounce { id } => self.bounce_hit(unit, id),
         }
     }
 
     /// The execute point (`0xD01B1` to `0x6F0CF660`, CONFIRMED order): the damage is rolled, then applied at once
     /// (instant) or on impact (missile).
-    fn fire_execute(&mut self, unit: ObjKey) -> Option<ObjKey> {
+    fn fire_execute(&mut self, unit: ObjKey) -> Vec<ObjKey> {
         self.st(unit).execute = None;
         // The backswing timer (`0xD01B2`) is armed first thing, before any check (`0x6F0CF6CF`, CONFIRMED order).
         if self.attacker_live(unit) {
@@ -758,15 +902,19 @@ impl Game {
             }
         }
         if !self.attacker_live(unit) {
-            return None;
+            return Vec::new();
         }
-        let target = self.snap(unit).target?;
+        let Some(target) = self.snap(unit).target else {
+            return Vec::new();
+        };
         if !self.attackable(unit, target) {
-            return None;
+            return Vec::new();
         }
         let ty = self.attack_type_of(unit);
+        let weapon = self.snap(unit).weapon;
         self.bash_on_attack_start(unit, target);
-        let damage = self.roll_damage(unit, target, &ty);
+        let (damage, raw) = self.roll_split(unit, target, &ty);
+        let raw = raw.unwrap_or(damage);
         let damage = self.bash_modify_damage(unit, damage);
         // Order CONFIRMED (execute `0x6F0CF660`): the dice first, then the miss gate; an evaded attack stops before
         // the target routine. For missiles the gate runs at launch too (`0x6F2C3F70` calls it before the flight);
@@ -774,22 +922,22 @@ impl Game {
         // MissDamageReduction, not modelled).
         if self.evasion_check(target) {
             self.bash_clear(unit);
-            return None;
+            return Vec::new();
         }
         match ty.missile_speed {
-            None => self.hit_with_bash(unit, target, damage),
+            None => self.arrive(unit, target, damage, raw, weapon),
             Some(speed) => {
                 // A launch also runs the `ChanceToMiss` tail of the gate: ONE stream-2 draw per launch, always
                 // (CONFIRMED, `docs/spec/missiles.md` section 9). A missed missile is not bound to its target and
                 // deals no direct damage (LIKELY).
                 if self.chance_to_miss_check(unit, target) {
                     self.bash_clear(unit);
-                    return None;
+                    return Vec::new();
                 }
                 let delay = self.impact_delay(unit, target, speed);
                 self.pr_missile_launch();
-                self.arm(delay, unit, AttackMsg::Impact { target, damage });
-                None
+                self.arm(delay, unit, AttackMsg::Impact { target, damage, raw, weapon: weapon as u8 });
+                Vec::new()
             }
         }
     }
@@ -851,7 +999,12 @@ impl Game {
                     return false;
                 }
                 let u = self.unit(c);
-                !u.dead && !u.removed && !u.hidden && self.is_enemy(owner, u.owner) && !self.unit_is_invulnerable(c)
+                !u.dead
+                    && !u.removed
+                    && !u.hidden
+                    && self.is_enemy(owner, u.owner)
+                    && !self.unit_is_invulnerable(c)
+                    && self.choose_weapon(unit, c).is_some()
             })
     }
 
@@ -927,16 +1080,28 @@ impl Game {
         missiles::chance_to_miss(chance, draw, exempt, || (level(cells.0), level(cells.1)))
     }
 
-    /// The damage of one execute, through the installed model.
-    fn roll_damage(&mut self, attacker: ObjKey, target: ObjKey, ty: &AttackType) -> F32 {
+    /// The damage of one execute, through the installed model, with the raw record amount when the model has one.
+    fn roll_split(&mut self, attacker: ObjKey, target: ObjKey, ty: &AttackType) -> (F32, Option<F32>) {
         let mut model: Box<dyn DamageModel> = self
             .combat
             .damage
             .take()
             .unwrap_or_else(|| Box::new(PlaceholderDamage));
-        let damage = model.roll(self, attacker, target, ty);
+        let out = model.roll_split(self, attacker, target, ty);
         self.combat.damage = Some(model);
-        damage
+        out
+    }
+
+    /// The target side of a basic attack record of amount `raw` on `victim` (splash and bounce victims).
+    fn attack_side(&mut self, victim: ObjKey, ty: &AttackType, raw: F32) -> F32 {
+        let mut model: Box<dyn DamageModel> = self
+            .combat
+            .damage
+            .take()
+            .unwrap_or_else(|| Box::new(PlaceholderDamage));
+        let amount = model.attack_side(self, victim, ty, raw);
+        self.combat.damage = Some(model);
+        amount
     }
 
     /// `UnitDamageTarget` on a unit target: builds the record, runs the model's target side and applies the result
@@ -1163,15 +1328,218 @@ impl Game {
 
     /// The arrival of a missile (slot 47, [`crate::missiles::arrival`]): the rolled damage goes through when the target
     /// is still a live unit. The attacker may be dead or gone: the missile keeps its own target (CONFIRMED gate).
-    fn missile_arrive(&mut self, unit: ObjKey, target: ObjKey, damage: F32) -> Option<ObjKey> {
+    fn missile_arrive(
+        &mut self,
+        unit: ObjKey,
+        target: ObjKey,
+        damage: F32,
+        raw: F32,
+        weapon: usize,
+    ) -> Vec<ObjKey> {
         let present = self.target_valid(unit, target);
         match missiles::arrival(missiles::GateInputs::plain(
             missiles::FLAG_TARGET_BOUND,
             present,
         )) {
-            missiles::Arrival::Damage { .. } => self.hit_with_bash(unit, target, damage),
-            missiles::Arrival::Blocked | missiles::Arrival::NoTarget => None,
+            missiles::Arrival::Damage { .. } => self.arrive(unit, target, damage, raw, weapon),
+            missiles::Arrival::Blocked | missiles::Arrival::NoTarget => Vec::new(),
         }
+    }
+
+    /// The hit on the primary target, then the splash or the bounce chain of the weapon kind. Returns the units that
+    /// died, in order.
+    fn arrive(&mut self, unit: ObjKey, target: ObjKey, damage: F32, raw: F32, weapon: usize) -> Vec<ObjKey> {
+        let mut died: Vec<ObjKey> = self.hit_with_bash(unit, target, damage).into_iter().collect();
+        let tid = self.unit(unit).type_id;
+        let Some(extra) = self.weapon_extra(tid, weapon) else {
+            return died;
+        };
+        match extra.kind {
+            // artillery and msplash carry the ring spec (`0x6F0C5510`); the primary target was hit above with factor 1.0
+            3 | 5 => self.splash_hits(unit, target, raw, weapon, &extra, &mut died),
+            6 => self.bounce_start(unit, target, raw, weapon, &extra),
+            _ => {}
+        }
+        died
+    }
+
+    /// The area part of an msplash or artillery hit (`CMissileSplash` arrival `0x6F2C2C80`, docs/spec/weapon-splash.md):
+    /// every unit in the circle of the outermost ring that passes the splash filter takes `raw` times the factor of its
+    /// ring, through the target side of its own armor. The primary target is excluded (it took slot 51 directly).
+    fn splash_hits(
+        &mut self,
+        attacker: ObjKey,
+        primary: ObjKey,
+        raw: F32,
+        weapon: usize,
+        extra: &WeaponExtra,
+        died: &mut Vec<ObjKey>,
+    ) {
+        let [farea, harea, qarea] = extra.area;
+        let (hf, qf) = bounce::launch_factors(extra.hfact, extra.qfact);
+        let radius = splash::query_radius(farea, harea, qarea);
+        let (cx, cy) = self.pos(primary);
+        let ty = self.weapon_type(self.unit(attacker).type_id, weapon).unwrap_or_default();
+        let (owner, src) = match self.object(attacker) {
+            Object::Unit(a) if !a.removed => (a.owner, splash::Source::Other(a.owner)),
+            Object::Unit(a) => (a.owner, splash::Source::Gone),
+            _ => (u32::MAX, splash::Source::Gone),
+        };
+        let origin = group_origin(self);
+        let (mb, pb) = splash::attack_type_blocks(self.combat.misc.magic_immunes_resist, u32::from(ty.damage_type));
+        let candidates = circle_candidates(self, cx, cy, radius);
+        let mut hits = Vec::new();
+        for c in candidates {
+            if c == primary {
+                continue;
+            }
+            let u = self.unit(c);
+            if u.dead || u.removed {
+                continue;
+            }
+            let cand = splash::Candidate {
+                dead: u.dead,
+                invulnerable_flag: self.unit_is_invulnerable(c),
+                targ_type: self.target_flag_word(c) & 0x1E,
+                type_char: (u.type_id >> 24) as u8,
+                class_word: u.class_flags,
+                ethereal: u.ethereal,
+                magic_immune: u.magic_immune,
+                invulnerable: self.unit_is_invulnerable(c),
+                owner: u.owner,
+            };
+            let passive = |a: u32, b: u32| a < 16 && b < 16 && self.player(a).alliances[0] & (1 << b) != 0;
+            let shared = |a: u32, b: u32| a < 16 && b < 16 && self.player(a).alliances[4] & (1 << b) != 0;
+            if !splash::candidate_filter(&cand, extra.splash_targs, src, owner, mb, pb, passive, shared) {
+                continue;
+            }
+            let (ux, uy) = (u.x, u.y);
+            if let Some(f) = splash::ring_factor(farea, harea, qarea, hf, qf, |r| in_ring(ux, uy, cx, cy, r, origin)) {
+                hits.push((c, f));
+            }
+        }
+        for (c, f) in hits {
+            let amount = self.attack_side(c, &ty, arith::mul(raw, f));
+            if let Some(d) = self.apply_damage(c, amount) {
+                died.push(d);
+            }
+        }
+    }
+
+    /// Starts the bounce chain after the first hit (`CMissileBounce` arrival `0x6F2C5ED0`).
+    fn bounce_start(&mut self, attacker: ObjKey, primary: ObjKey, raw: F32, weapon: usize, extra: &WeaponExtra) {
+        let mut counter = extra.targ_count;
+        let Some(raw) = bounce::after_hit(&mut counter, raw, extra.damage_loss) else {
+            return;
+        };
+        let hit = vec![primary];
+        self.bounce_next(attacker, primary, hit, raw, counter, weapon, extra);
+    }
+
+    /// Picks the next bounce target (the nearest accepted unit around the current target, `0x6F2BD090`) and sends the
+    /// missile after it.
+    #[allow(clippy::too_many_arguments)]
+    fn bounce_next(
+        &mut self,
+        attacker: ObjKey,
+        from: ObjKey,
+        hit: Vec<ObjKey>,
+        raw: F32,
+        counter: i32,
+        weapon: usize,
+        extra: &WeaponExtra,
+    ) {
+        let (cx, cy) = self.pos(from);
+        let radius = extra.area[0];
+        let w = bounce::bounce_targs(Some(extra.splash_targs));
+        let ty = self.weapon_type(self.unit(attacker).type_id, weapon).unwrap_or_default();
+        let (owner, src) = match self.object(attacker) {
+            Object::Unit(a) if !a.removed => (a.owner, splash::Source::Other(a.owner)),
+            Object::Unit(a) => (a.owner, splash::Source::Gone),
+            _ => (u32::MAX, splash::Source::Gone),
+        };
+        let (mb, pb) = splash::attack_type_blocks(self.combat.misc.magic_immunes_resist, u32::from(ty.damage_type));
+        let origin = group_origin(self);
+        let mut cands: Vec<(ObjKey, bool, F32)> = Vec::new();
+        for c in circle_candidates(self, cx, cy, radius) {
+            let u = self.unit(c);
+            let dist = arith::dist2(
+                scale_by_1_32(arith::sub(u.x, origin.0)),
+                scale_by_1_32(arith::sub(u.y, origin.1)),
+                scale_by_1_32(arith::sub(cx, origin.0)),
+                scale_by_1_32(arith::sub(cy, origin.1)),
+            );
+            let mut ok = !u.dead && !u.removed && !hit.contains(&c);
+            if ok {
+                let cand = splash::Candidate {
+                    dead: u.dead,
+                    invulnerable_flag: self.unit_is_invulnerable(c),
+                    targ_type: self.target_flag_word(c) & 0x1E,
+                    type_char: (u.type_id >> 24) as u8,
+                    class_word: u.class_flags,
+                    ethereal: u.ethereal,
+                    magic_immune: u.magic_immune,
+                    invulnerable: self.unit_is_invulnerable(c),
+                    owner: u.owner,
+                };
+                let passive = |a: u32, b: u32| a < 16 && b < 16 && self.player(a).alliances[0] & (1 << b) != 0;
+                let shared = |a: u32, b: u32| a < 16 && b < 16 && self.player(a).alliances[4] & (1 << b) != 0;
+                ok = splash::candidate_filter(&cand, w, src, owner, mb, pb, passive, shared);
+            }
+            cands.push((c, ok, dist));
+        }
+        let list: Vec<(bool, F32)> = cands.iter().map(|&(_, ok, d)| (ok, d)).collect();
+        let (Some(i), _) = bounce::pick_nearest(&list) else {
+            return;
+        };
+        let next = cands[i].0;
+        let Some(speed) = ty.missile_speed else {
+            return;
+        };
+        let delay = self.flight_between((cx, cy), self.pos(next), speed);
+        let id = self.combat.next_bounce;
+        self.combat.next_bounce += 1;
+        let mut hit = hit;
+        hit.push(next);
+        self.combat.bounces.insert(id, BounceChain { attacker, weapon, next, hit, raw, counter });
+        self.arm(delay, attacker, AttackMsg::Bounce { id });
+    }
+
+    /// The flight time of a bounce between two points: the path request's horizontal distance over the speed.
+    fn flight_between(&self, a: (F32, F32), b: (F32, F32), speed: F32) -> F32 {
+        let Some(tables) = self.order_tables() else {
+            return F32::ZERO;
+        };
+        let origin = match self.world_bounds().or_else(|| self.playable()) {
+            Some(p) => (p.min_x, p.min_y),
+            None => (F32::ZERO, F32::ZERO),
+        };
+        missiles::flight_duration(a, b, origin, speed, crate::movement::LAYER_HORIZON, tables)
+    }
+
+    /// The bounce missile arrives at its next target: the damage of the chain, then the next leg.
+    fn bounce_hit(&mut self, unit: ObjKey, id: u32) -> Vec<ObjKey> {
+        let Some(chain) = self.combat.bounces.remove(&id) else {
+            return Vec::new();
+        };
+        let tid = self.unit(chain.attacker).type_id;
+        let Some(extra) = self.weapon_extra(tid, chain.weapon) else {
+            return Vec::new();
+        };
+        let ty = self.weapon_type(tid, chain.weapon).unwrap_or_default();
+        let mut died = Vec::new();
+        if !self.target_valid(unit, chain.next) {
+            return died;
+        }
+        let amount = self.attack_side(chain.next, &ty, chain.raw);
+        if let Some(d) = self.apply_damage(chain.next, amount) {
+            died.push(d);
+        }
+        let mut counter = chain.counter;
+        if let Some(raw) = bounce::after_hit(&mut counter, chain.raw, extra.damage_loss) {
+            self.bounce_next(chain.attacker, chain.next, chain.hit, raw, counter, chain.weapon, &extra);
+        }
+        died
     }
 
     /// Whether the swing predicate holds for `unit` and `target` with the attacker's weapon `ty`.
@@ -1219,7 +1587,9 @@ impl Game {
 
     /// The attack data of the unit's type.
     fn attack_type_of(&self, unit: ObjKey) -> AttackType {
-        self.attack_type(self.unit(unit).type_id)
+        let w = self.snap(unit).weapon;
+        let tid = self.unit(unit).type_id;
+        self.weapon_type(tid, w).unwrap_or_else(|| self.attack_type(tid))
     }
 
     /// The position of unit `k` (world units).
@@ -1239,7 +1609,9 @@ impl Game {
     /// weapon whose targs name `invulnerable`, which no melee-map unit has (the sim has no targs check otherwise,
     /// UNSURE for the other classes). Without this gate a captain's members attack an invulnerable camp forever.
     fn attackable(&self, unit: ObjKey, target: ObjKey) -> bool {
-        self.target_valid(unit, target) && !self.unit_is_invulnerable(target)
+        self.target_valid(unit, target)
+            && !self.unit_is_invulnerable(target)
+            && self.choose_weapon(unit, target).is_some()
     }
 
     /// Whether `target` is a live unit other than `unit`.
@@ -1284,7 +1656,7 @@ pub fn expire_attack_timer(
     msg: AttackMsg,
 ) {
     let died = game.borrow_mut().combat_fire(unit, msg);
-    if let Some(target) = died {
+    for target in died {
         dispatch_unit_death_by(game, rt, target, Some(unit));
     }
 }

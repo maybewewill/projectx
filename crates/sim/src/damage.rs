@@ -593,25 +593,10 @@ impl SpecDamage {
     }
 }
 
-impl DamageModel for SpecDamage {
-    fn native_hit(&mut self, game: &Game, hit: &NativeHit) -> F32 {
-        self.hit_amount(game, hit)
-    }
-
-    fn roll(
-        &mut self,
-        game: &mut Game,
-        attacker: ObjKey,
-        target: ObjKey,
-        weapon: &AttackType,
-    ) -> F32 {
-        let Some(raw) = self.raw(game, attacker, weapon) else {
-            // No RNG table, or more dice than the known sampler handles: the placeholder value (documented).
-            return weapon.damage;
-        };
-        // Critical Strike multiplies the raw record damage right after the dice (`orc.rs`).
-        let raw = game.orc_crit_raw(attacker, raw);
-        let defense = game.unit_defense(target);
+impl SpecDamage {
+    /// The target side of a basic attack record of amount `raw` on `victim` (class and table row of the weapon).
+    fn side_of(&self, game: &Game, victim: ObjKey, weapon: &AttackType, raw: F32) -> F32 {
+        let defense = game.unit_defense(victim);
         let side = TargetSide {
             raw,
             class: weapon.damage_class,
@@ -629,5 +614,41 @@ impl DamageModel for SpecDamage {
             relation: None,
         };
         target_side_amount(&side, &self.misc, &self.rules, &self.negative, &self.tables)
+    }
+}
+
+impl DamageModel for SpecDamage {
+    fn native_hit(&mut self, game: &Game, hit: &NativeHit) -> F32 {
+        self.hit_amount(game, hit)
+    }
+
+    fn roll(
+        &mut self,
+        game: &mut Game,
+        attacker: ObjKey,
+        target: ObjKey,
+        weapon: &AttackType,
+    ) -> F32 {
+        self.roll_split(game, attacker, target, weapon).0
+    }
+
+    fn roll_split(
+        &mut self,
+        game: &mut Game,
+        attacker: ObjKey,
+        target: ObjKey,
+        weapon: &AttackType,
+    ) -> (F32, Option<F32>) {
+        let Some(raw) = self.raw(game, attacker, weapon) else {
+            // No RNG table, or more dice than the known sampler handles: the placeholder value (documented).
+            return (weapon.damage, None);
+        };
+        // Critical Strike multiplies the raw record damage right after the dice (`orc.rs`).
+        let raw = game.orc_crit_raw(attacker, raw);
+        (self.side_of(game, target, weapon, raw), Some(raw))
+    }
+
+    fn attack_side(&mut self, game: &Game, victim: ObjKey, weapon: &AttackType, raw: F32) -> F32 {
+        self.side_of(game, victim, weapon, raw)
     }
 }
