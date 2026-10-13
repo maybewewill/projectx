@@ -141,6 +141,9 @@ pub struct State {
     /// Inferno landings waiting for their impact delay (S37).
     infernos: BTreeMap<u32, Inferno>,
     next_inferno: u32,
+    /// Running Death and Decay effects (S37).
+    dnds: BTreeMap<u32, DeathAndDecay>,
+    next_dnd: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -194,6 +197,10 @@ pub const TICK_SWARM: u8 = 5;
 pub const TICK_STRIKE_SLOW: u8 = 7;
 /// The impact of an Inferno (`aux` = the landing id), S37.
 pub const TICK_INFERNO: u8 = 8;
+/// The 0.1 s poll of a Death and Decay effect (`aux` = the effect id), S37.
+pub const TICK_DND: u8 = 9;
+/// A Death and Decay victim pulse (`unit` = the victim, `aux` = `(effect id << 16) | victim index`), S37.
+pub const TICK_DND_PULSE: u8 = 10;
 /// A swath missile arrives (`aux` = the swarm id), S37.
 pub const TICK_SWARM_ARRIVE: u8 = 6;
 
@@ -229,10 +236,11 @@ pub(crate) fn run_effect(
         (BLINK, CastTarget::Point(x, y)) => blink(game, caster, level, x, y),
         (CARRION_SWARM, CastTarget::Point(x, y)) => carrion_swarm(game, rt, caster, level, x, y),
         (INFERNO, CastTarget::Point(x, y)) => inferno(game, rt, caster, level, x, y),
+        (DEATH_AND_DECAY, CastTarget::Point(x, y)) => death_and_decay(game, caster, level, x, y),
         (IMMOLATION | IMMOLATION_UNDEAD, CastTarget::None) => immolation(game, caster, base, level),
         (
             DEATH_COIL | FROST_NOVA | ENTANGLING_ROOTS | FORCE_OF_NATURE | DEATH_PACT | DARK_RITUAL | SLEEP | SHADOW_STRIKE | BLINK
-            | CARRION_SWARM | IMMOLATION | IMMOLATION_UNDEAD | INFERNO,
+            | CARRION_SWARM | IMMOLATION | IMMOLATION_UNDEAD | INFERNO | DEATH_AND_DECAY,
             _,
         ) => {}
         _ => return false,
@@ -927,7 +935,7 @@ pub const INFERNO: u32 = code(b"AUin");
 
 /// Cast-order ids of the S37 abilities (the original getters, `tools/analysis/ability_orders.py --verify`: AUin
 /// 852224, AUdd 852221, AEsf 852183, AEtq 852184, AEme 852180).
-pub const S37_ORDERS: &[(u32, u32)] = &[(852_224, INFERNO)];
+pub const S37_ORDERS: &[(u32, u32)] = &[(852_224, INFERNO), (852_221, DEATH_AND_DECAY)];
 /// The Infernal's timed-life buff id (`'BNin'`, the level's BuffID).
 pub const BUFF_INFERNAL: u32 = code(b"BNin");
 /// `targs` of `AUin`: ground, structure (+ debris, enemy, neutral): the relation is the enemy test.
@@ -1034,6 +1042,144 @@ fn inferno_land(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
     }
     for d in deaths {
         dispatch_unit_death_by(game, rt, d, Some(caster));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Death and Decay (S37)
+
+pub const DEATH_AND_DECAY: u32 = code(b"AUdd");
+/// The victim buff `'BUdd'` (`CBuffDeathAndDecayAoe`).
+pub const BUFF_DEATH_AND_DECAY: u32 = code(b"BUdd");
+/// `targs` of `AUdd`: air, ground, structure, ward (the original's relation test is the range listener's, UNSURE:
+/// the model hurts enemies only).
+pub const DND_TARGS: u32 = 0x4 | 0x2 | 0x8 | 0x10;
+/// The damage record class of a pulse (`0x4000000`, `0x6F098180`): bit 26.
+pub const DND_DAMAGE_TYPE: u32 = 26;
+/// The RNG stream of the first pulse's random delay (`0x6F09FBF0` calls `0x6F2853D0` with EDX = `0x16`).
+const DND_STREAM: usize = 0x16;
+
+/// What one pulse of a Death and Decay victim buff (`CBuffDeathAndDecayAoe` message handler `0x6F098180`, CONFIRMED
+/// by Unicorn, 320 cases) damages: `DataA * max_life` through the soft multiply, class `0x4000000`, attacker = the
+/// source unit of the buff, record flags 0. The pulse re-arms its timer with 1.0 s first (`0x6FAAE4F4`), delivers the
+/// damage even when the amount is 0.0, and removes the buff afterwards when the victim's dead flag (`+0x5C & 0x100`)
+/// is set.
+pub fn dnd_pulse_amount(fraction: F32, max_life: F32) -> F32 {
+    arith::mul(fraction, max_life)
+}
+
+/// A running Death and Decay.
+#[derive(Debug, Clone)]
+struct DeathAndDecay {
+    caster: ObjKey,
+    center: (F32, F32),
+    area: F32,
+    fraction: F32,
+    /// Seconds the effect has left to run (Dur / HeroDur: the level's Dur, 35 s in the stock data).
+    left: f32,
+    /// Victims inside the area: unit -> pulse generation (a stale pulse timer is ignored).
+    members: BTreeMap<ObjKey, u32>,
+}
+
+/// `CAbilityDeathAndDecay` effect (`0x6F0A98F0`): a channelled area effect `XUdd` at the point for the level's
+/// Dur (the channel ends it early, [`dnd_stop`]). The model polls the area every 0.1 s (the original uses the effect's
+/// range listener: UNSURE), gives each unit that enters the buff `'BUdd'` and a first pulse after a stream-22 draw
+/// `U` (seconds, `0x6F09FBF0`), then pulses every 1.0 s while the unit stays inside. LOCAL channel model: to be
+/// replaced by the shared channel lifecycle of S35.
+fn death_and_decay(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, x: F32, y: F32) {
+    let mut gm = game.borrow_mut();
+    if !gm.object_is_live_unit(caster) {
+        return;
+    }
+    // The effect function removes the caster's earlier channel effects first (`0x6F0A98F0` looks up and removes three
+    // buff kinds): a second Death and Decay of the same caster replaces the first.
+    let old: Vec<u32> = gm.spells_hero_state_mut().dnds.iter().filter(|(_, d)| d.caster == caster).map(|(k, _)| *k).collect();
+    for id in old {
+        gm.spells_hero_state_mut().dnds.remove(&id);
+    }
+    let hero = gm.unit(caster).hero.is_some() || is_hero_id(gm.unit(caster).type_id);
+    let dur = crate::cast::effect_duration(level, hero, F32::ZERO).to_f32();
+    let st = gm.spells_hero_state_mut();
+    st.next_dnd += 1;
+    let id = st.next_dnd;
+    st.dnds.insert(
+        id,
+        DeathAndDecay { caster, center: (x, y), area: level.area, fraction: level.data[0], left: dur, members: BTreeMap::new() },
+    );
+    gm.timers_start_hero(DND_POLL_SECONDS, TICK_DND, caster, id);
+}
+
+const DND_POLL_SECONDS: f32 = 0.1;
+
+/// Stops the Death and Decay of `caster` (the channel ended). Hook for the shared channel lifecycle.
+pub fn dnd_stop(game: &RefCell<Game>, caster: ObjKey) {
+    let mut gm = game.borrow_mut();
+    let ids: Vec<u32> = gm.spells_hero_state_mut().dnds.iter().filter(|(_, d)| d.caster == caster).map(|(k, _)| *k).collect();
+    for id in ids {
+        gm.spells_hero_state_mut().dnds.remove(&id);
+    }
+}
+
+fn dnd_poll(game: &RefCell<Game>, id: u32) {
+    let mut gm = game.borrow_mut();
+    let Some(mut d) = gm.spells_hero_state_mut().dnds.get(&id).cloned() else {
+        return;
+    };
+    d.left -= DND_POLL_SECONDS;
+    if d.left <= 0.0 || !gm.object_is_live_unit(d.caster) {
+        gm.spells_hero_state_mut().dnds.remove(&id);
+        return;
+    }
+    let owner = gm.unit(d.caster).owner;
+    let inside: Vec<ObjKey> = circle_candidates(&gm, d.center.0, d.center.1, d.area)
+        .into_iter()
+        .filter(|&k| gm.object_is_live_unit(k) && gm.is_enemy(owner, gm.unit(k).owner))
+        .filter(|&k| crate::target_accept::predicate(gm.target_flag_word(k), DND_TARGS) == 0)
+        .collect();
+    d.members.retain(|k, _| inside.contains(k));
+    for k in inside {
+        if d.members.contains_key(&k) {
+            continue;
+        }
+        let gen = d.members.values().max().copied().unwrap_or(0) + 1;
+        d.members.insert(k, gen);
+        // The first pulse comes after a random delay U in [0, 1) of stream 22; later pulses every 1.0 s.
+        let delay = match gm.rng_parts() {
+            Some((table, streams)) => {
+                let u = streams.stream_mut(DND_STREAM).random_fraction(table);
+                arith::add(F32::ZERO, arith::mul(F32::ONE, u)).to_f32()
+            }
+            None => 1.0,
+        };
+        let aux = (id << 16) | (k.0 & 0xFFFF);
+        gm.timers_start_hero(delay.max(MIN_PERIOD_SECONDS), TICK_DND_PULSE, k, aux);
+    }
+    let caster = d.caster;
+    gm.spells_hero_state_mut().dnds.insert(id, d);
+    gm.timers_start_hero(DND_POLL_SECONDS, TICK_DND, caster, id);
+}
+
+fn dnd_pulse(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, victim: ObjKey, aux: u32) {
+    let id = aux >> 16;
+    let death;
+    let caster;
+    {
+        let mut gm = game.borrow_mut();
+        let Some(d) = gm.spells_hero_state_mut().dnds.get(&id).cloned() else {
+            return;
+        };
+        caster = d.caster;
+        if !d.members.contains_key(&victim) || !gm.object_is_live_unit(victim) {
+            return;
+        }
+        let amount = dnd_pulse_amount(d.fraction, gm.unit(victim).max_life);
+        death = gm.unit_damage_target(caster, victim, amount, false, false, 0, DND_DAMAGE_TYPE);
+        if death.is_none() {
+            gm.timers_start_hero(1.0, TICK_DND_PULSE, victim, aux);
+        }
+    }
+    if let Some(t) = death {
+        dispatch_unit_death_by(game, rt, t, Some(caster));
     }
 }
 
@@ -1354,6 +1500,8 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_SWARM => swarm_tick(game, rt, aux),
         TICK_STRIKE_SLOW => strike_slow_tick(game, unit, aux),
         TICK_INFERNO => inferno_land(game, rt, aux),
+        TICK_DND => dnd_poll(game, aux),
+        TICK_DND_PULSE => dnd_pulse(game, rt, unit, aux),
         TICK_SWARM_ARRIVE => swarm_arrive(game, rt, aux),
         _ => {}
     }

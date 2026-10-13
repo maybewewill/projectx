@@ -50,3 +50,28 @@ fn inferno_context_roles_match_the_original() {
     }
     assert!(n >= 300);
 }
+
+#[test]
+fn death_and_decay_pulse_matches_the_original() {
+    // CHECK=dnd: the real `0x6F098180` of `CBuffDeathAndDecayAoe` with the world replaced by recording hooks.
+    let text = include_str!("data/undead_ne/dnd_pulse.txt");
+    let mut n = 0;
+    let mut removed = 0;
+    for line in text.lines() {
+        let (head, tail) = line.split_once(" | ").expect("separator");
+        let h: Vec<&str> = head.split_whitespace().collect();
+        let amount = sim::undead_ne::dnd_pulse_amount(f(h[0]), f(h[1]));
+        let dead = hex(h[2]) & 0x100 != 0;
+        let mut want = format!(
+            "timer:3f800000:000d01c1 record:{:08x}:04000000:00207c00:00000000:00000000 damage",
+            amount.to_bits()
+        );
+        if dead {
+            want.push_str(" remove");
+            removed += 1;
+        }
+        assert_eq!(tail.trim(), want, "row {line}");
+        n += 1;
+    }
+    assert!(n >= 300 && removed >= 50, "{n} {removed}");
+}

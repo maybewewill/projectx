@@ -490,6 +490,60 @@ def run_inferno_ctx(cases, r):
     return rows
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Death and Decay victim pulse: `CBuffDeathAndDecayAoe` message handler 0x6F098180 (message 0xD01C1)
+
+def run_dnd_pulse(cases, r):
+    A.setup_stubs()
+    buff = DATA + 0x7000
+    victim = DATA + 0x7800
+    caster = DATA + 0x7C00
+    uvt = DATA + 0x9000
+    mu.mem_write(uvt, bytes(0x800))
+    st = {}
+    calls = []
+
+    s130 = stub_slot()
+    hook_fn(s130, lambda uc, esp, ecx: (wr(rd(esp + 4), f2u(st["maxlife"])), rd(esp + 4))[1], 4)
+    wr(uvt + 0x130, s130)
+    s120 = stub_slot()
+    hook_fn(s120, lambda uc, esp, ecx: calls.append(("damage",)) or 0, 16)
+    wr(uvt + 0x120, s120)
+    hook_fn(0x6F4786B0, lambda uc, esp, ecx: caster, 0)
+    hook_fn(0x6F4778F0, lambda uc, esp, ecx: calls.append(("timer", rd(rd(esp + 4)), rd(esp + 8))) or 0, 20)
+    hook_fn(0x6F29EEB0, lambda uc, esp, ecx: 0, 8)
+    hook_fn(0x6F052EC0, lambda uc, esp, ecx: 0, 4)
+    hook_fn(0x6F079CC0, lambda uc, esp, ecx: calls.append(("remove",)) or 0, 4)
+
+    def record(uc, esp, ecx):
+        a = [rd(esp + 4 + 4 * i) for i in range(5)]
+        calls.append(("record", rd(a[0]), a[1], a[2], a[3], a[4]))
+        return ecx
+
+    hook_fn(0x6F2556E0, record, 20)
+    msg = DATA + 0x6E00
+    rows = []
+    for i in range(cases):
+        dataa = r.choice((0.04, 0.0, rand_f(r, 0.0, 0.5), 1.0))
+        maxlife = r.choice((rand_f(r, 1, 3000), 450.0, 5000.0, 0.0))
+        dead = r.choice((0, 0, 0x100))
+        mu.mem_write(buff, bytes(0x300))
+        wr(buff, 0x6F89442C)
+        wr(buff + 0x30, victim)
+        wr(buff + 0xD8, 0x1111)
+        wr(buff + 0xDC, 0x2222)
+        wr(buff + 0xE8, f2u(dataa))
+        mu.mem_write(victim, bytes(0x200))
+        wr(victim, uvt)
+        wr(victim + 0x5C, dead)
+        wr(msg + 8, 0xD01C1)
+        st["maxlife"] = maxlife
+        calls.clear()
+        emu.call(0x6F098180, ecx=buff, stack_args=(msg,))
+        rows.append((f2u(dataa), f2u(maxlife), dead, list(calls)))
+    return rows
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -534,6 +588,18 @@ def main():
             with open(os.path.join(dump, "strike_apply.txt"), "w") as fh:
                 for v, m, a, f, flags, rec in rows:
                     fh.write("%s %s %s %s %s | %s\n" % (hexf(v), hexf(m), hexf(a), hexf(f), hexf(flags), " ".join("%s:%s" % (x[0], ":".join(hexf(y) for y in x[1:])) for x in rec)))
+    if which == "dnd":
+        rows = run_dnd_pulse(cases, r)
+        for row in rows[:3]:
+            print("dnd", [hexf(x) for x in row[:3]], row[3])
+        print("dnd: %d cases run" % len(rows))
+        if dump:
+            with open(os.path.join(dump, "dnd_pulse.txt"), "w") as fh:
+                for dataa, maxlife, dead, calls in rows:
+                    ev = []
+                    for c in calls:
+                        ev.append(":".join([c[0]] + [hexf(x) for x in c[1:]]))
+                    fh.write("%s %s %s | %s\n" % (hexf(dataa), hexf(maxlife), hexf(dead), " ".join(ev) or "none"))
     if which == "inferno":
         rows = run_inferno_ctx(cases, r)
         print("inferno: %d cases run" % len(rows), rows[0])

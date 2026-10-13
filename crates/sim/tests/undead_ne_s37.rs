@@ -8,7 +8,7 @@ use sim::cast::SpellLevel;
 use sim::combat::AttackType;
 use sim::natives::game::{ObjKey, UnitType};
 use sim::orders::{AbilityKind, TypeOrderData};
-use sim::undead_ne::{CARRION_SWARM, INFERNO};
+use sim::undead_ne::{CARRION_SWARM, DEATH_AND_DECAY, INFERNO};
 use sim::ScriptHost;
 use softfloat::F32;
 
@@ -39,10 +39,14 @@ function setup takes nothing returns nothing
     set hero = CreateUnit(Player(1), 'Hamg', 330.0, 40.0, 0.0)
     call UnitAddAbility(caster, 'AUcs')
     call UnitAddAbility(caster, 'AUin')
+    call UnitAddAbility(caster, 'AUdd')
     call SetUnitState(caster, 2, 2000.0)
 endfunction
 function swarm takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852218, 1000.0, 0.0)
+endfunction
+function decay takes nothing returns nothing
+    set accepted = IssuePointOrderById(caster, 852221, 300.0, 0.0)
 endfunction
 function inferno takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852224, 300.0, 0.0)
@@ -110,7 +114,7 @@ fn host() -> ScriptHost {
                 ..Default::default()
             },
         );
-        for code in [CARRION_SWARM, INFERNO] {
+        for code in [CARRION_SWARM, INFERNO, DEATH_AND_DECAY] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         // Carrion Swarm: Area 100 (start width), DataA 75, DataB cap 150, DataC distance 800, DataD final width 200.
@@ -120,6 +124,8 @@ fn host() -> ScriptHost {
         let mut inf = level(175, 180.0, 4.0, 2.0, 250.0, &[50.0, 180.0, 1.0]);
         inf.unit_id = NINF;
         g.set_spell_levels(INFERNO, vec![inf]);
+        // Death and Decay (stock): Dur 35, Area 300, DataA 0.04 of the maximum life per second, DataB 1.
+        g.set_spell_levels(DEATH_AND_DECAY, vec![level(250, 150.0, 35.0, 35.0, 300.0, &[0.04, 1.0])]);
     }
     h.start("setup", &[]).expect("setup");
     h.step();
@@ -191,4 +197,24 @@ fn inferno_lands_after_its_delay_with_damage_and_a_stun() {
     assert!(!h.game().is_stunned(hero));
     run(&mut h, 20);
     assert!(!h.game().is_stunned(near));
+}
+
+#[test]
+fn death_and_decay_burns_a_fraction_of_the_maximum_life_each_second_inside_the_area() {
+    let mut h = host();
+    let (near, far) = (unit(&h, "near"), unit(&h, "far"));
+    let (ln, lf) = (life(&h, near), life(&h, far));
+    call(&mut h, "decay");
+    run(&mut h, 5);
+    assert_eq!(life(&h, near), ln, "no pulse in the first second");
+    run(&mut h, 30);
+    // 4% of the maximum life 500 = 20 per pulse; three pulses by 3.5 s (first after the delay, then every 1.0 s).
+    let lost = ln - life(&h, near);
+    assert!(lost == 40.0 || lost == 60.0, "{lost}");
+    assert_eq!(life(&h, far), lf, "outside Area 300");
+    // The effect ends after Dur = 35 s.
+    run(&mut h, 400);
+    let after = life(&h, near);
+    run(&mut h, 50);
+    assert_eq!(life(&h, near), after);
 }
