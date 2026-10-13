@@ -34,6 +34,7 @@ TOK = EXTRA + 0x7000        # position tokens, 0x10 apart
 ALLY, SHARED, SRC_PTR = 0x6F3A3400, 0x6F3A36D0, 0x6F4786B0
 MISC, HOLD, MEMBER, RECORD, OWNER = 0x6F009F90, 0x6F038450, 0x6F476C40, 0x6F2BE8B0, 0x6F282F60
 F_SPEC, F_FILTER, F_SLOT51 = 0x6F0C5510, 0x6F2BF020, 0x6F2BF160
+F_PICK, DIST, ACCEPT_STUB = 0x6F2BBAF0, 0x6F476860, EXTRA + 0x350
 ST = {"pass": 0, "shared": 0, "misc": 0, "src": 0, "a": 0, "b": 0, "calls": [], "amount_nonzero": 1, "ma": 0, "mb": 0}
 
 
@@ -90,6 +91,12 @@ def hook(uc, eip, size, user):
         ret_to(0xC, FOUT)
     elif eip == OWNER:
         ret_to(0, 0)
+    elif eip == ACCEPT_STUB:
+        ret_to(8, ST["pick"][ST["pi"]][0])
+    elif eip == DIST:
+        esp = mu.reg_read(UC_X86_REG_ESP)
+        w32(r32(esp + 4), ST["pick"][ST["pi"]][1])
+        ret_to(0x10, 0)
 
 
 def patch_seh():
@@ -183,6 +190,25 @@ def run(kind, c):
         emu.call(F_SLOT51, ecx=M, stack_args=(U, OUTB))
         calls = ST["calls"]
         return [len(calls), calls[0][1] if calls else 0xFFFFFFFF, len(ST["tests"])]
+    if kind == "pick":
+        ctx = EXTRA + 0x6C00
+        mu.mem_write(ctx, b"\0" * 0x40)
+        mu.mem_write(M, b"\0" * 0x400)
+        w32(M, VTM)
+        w32(VTM + 0xCC, ACCEPT_STUB)
+        w32(ctx, M)
+        w32(ctx + 0x10, r32(0x6FAAE624))
+        w32(VT + 0xB8, CODE + 0x40)
+        for i in range(4):
+            mu.mem_write(EXTRA + 0x7800 + 0x40 * i, b"\0" * 0x40)
+            w32(EXTRA + 0x7800 + 0x40 * i, VT)
+        ST["pick"] = c["pick"]
+        for i in range(len(c["pick"])):
+            ST["pi"] = i
+            emu.call(F_PICK, ecx=EXTRA + 0x7800 + 0x40 * i, edx=ctx)
+        best = r32(ctx + 0xC)
+        idx = 0xFFFFFFFF if best == 0 else (best - (EXTRA + 0x7800)) // 0x40
+        return [idx, r32(ctx + 0x10)]
     raise ValueError(kind)
 
 
@@ -229,6 +255,8 @@ def gen(rng, kind):
     c["ma"] = rng.choice([0, 1])
     c["mb"] = rng.choice([0, 1])
     c["nz"] = rng.choice([0, 1])
+    k = rng.randrange(1, 5)
+    c["pick"] = [(rng.choice([0, 1, 1]), rng.choice([fb(1.0), fb(2.5), fb(0.0), fb(1e9), fb(100.0), fb(rng.uniform(0, 5000)), fb(3.0e38), 0x80000000, 0x7FC00000])) for _ in range(k)]
     return c
 
 
@@ -238,6 +266,8 @@ def row(kind, c, out):
     elif kind == "filter":
         head = [c["u5c"], c["u20"], c["u24c"], c["u33"], c["u248"], c["eth"], c["mim"], c["inv"], c["towner"],
                 c["sowner"], c["atk"], c["w"], c["misc"], c["src"], c["pass"], c["shared"]]
+    elif kind == "pick":
+        head = [len(c["pick"])] + [v for p in c["pick"] for v in p] + [0] * (8 - 2 * len(c["pick"]))
     else:
         head = [c["a"], c["b"], c["c"], c["hf"], c["qf"], c["ma"], c["mb"], c["nz"]]
     return head + out
@@ -253,7 +283,7 @@ def main():
         out_dir = args[1]
     rng = random.Random(20261015)
     total = 0
-    for kind in ("spec", "filter", "ring"):
+    for kind in ("spec", "filter", "ring", "pick"):
         rows = []
         for _ in range(n):
             c = gen(rng, kind)

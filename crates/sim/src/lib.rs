@@ -25,6 +25,7 @@ pub mod cast;
 pub mod auras;
 pub mod combat;
 pub mod commands;
+pub mod bounce;
 pub mod construction;
 pub mod damage;
 pub mod daynight;
