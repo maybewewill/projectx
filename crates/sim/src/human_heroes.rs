@@ -663,12 +663,21 @@ pub fn blizzard_shards(
     ShardWave { perm, offsets }
 }
 
-/// The damage one unit takes in one wave (`0x6F1AF950`, from the disassembly; not Unicorn-run, LIKELY): the wave cap
-/// divides the damage when `damage * count` exceeds it, then the building factor applies to structures.
-pub fn blizzard_unit_damage(p: &BlizzardParams, count: i32, structure: bool, tables: Option<&Tables>) -> F32 {
+/// The damage value one unit gets in one wave (`0x6F1AF950`, CONFIRMED, **Unicorn 400 cases**,
+/// `tools/emu/human_heroes3_emu.py`): with a non-zero cap `DataF` and `cap < mul(I2R(n), d)` (ordered) the value is
+/// `div(cap, I2R(n))` (`n` = the count of units of the same relation kind the area helper counted); the sign is flipped
+/// when the effect's slot `0x8C` says "heal" (always 0 for Blizzard); a structure (`unit+0x5C` bit 16) or a unit with
+/// `unit+0x20` bit `0x200000` (`flagged`) takes `mul(d, building)`.
+pub fn blizzard_unit_damage(
+    p: &BlizzardParams,
+    count: i32,
+    structure_like: bool,
+    negate: bool,
+    tables: Option<&Tables>,
+) -> F32 {
     let mut d = p.damage;
     if nonzero(p.cap) {
-        let total = arith::mul(d, conv::i2r(count));
+        let total = arith::mul(conv::i2r(count), d);
         if arith::lt(p.cap, total) {
             // The division needs the soft-float tables; without them the cap cannot be applied.
             if let Some(t) = tables {
@@ -676,10 +685,19 @@ pub fn blizzard_unit_damage(p: &BlizzardParams, count: i32, structure: bool, tab
             }
         }
     }
-    if structure {
-        d = arith::mul(d, p.building);
+    if negate {
+        d = F32::from_bits(d.to_bits() ^ 0x8000_0000);
+    }
+    if structure_like {
+        d = arith::mul(p.building, d);
     }
     d
+}
+
+/// "The strongest wins": an existing `BHbz` buff keeps its value unless it is smaller than the new one (ordered
+/// compare `existing < new`, CONFIRMED in `0x6F1AF950`, Unicorn 400 cases); the update also refreshes the duration.
+pub fn blizzard_buff_replaces(existing: F32, new: F32) -> bool {
+    arith::lt(existing, new)
 }
 
 #[derive(Debug, Clone)]
@@ -708,6 +726,8 @@ pub struct State {
     next: u32,
     blizzards: std::collections::BTreeMap<u32, BlizzardFx>,
     teleports: std::collections::BTreeMap<u32, TeleportFx>,
+    /// The `BHbz` marker of each unit: `(spell buff serial, stored wave value)`.
+    markers: std::collections::BTreeMap<ObjKey, (u32, F32)>,
     /// Every shard wave placed, `(effect id, wave)`, for tests and the renderer.
     pub log: Vec<(u32, ShardWave)>,
 }
@@ -796,10 +816,12 @@ fn blizzard_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
     let (targets, tables) = {
         let gm = game.borrow();
         let owner = gm.unit(fx.caster).owner;
-        // UNSURE: the stock `targs` is empty (`_`); the model hits enemy units and structures.
+        // The enumeration filter is the ability's flag word (`'_'` = `0xFDD1F00E`, section 15): alive, vulnerable
+        // (the `invu` bit is clear), ground/air/structure, all relations. UNSURE: where allies are excluded (the
+        // original does not hurt them in play, the word does not say); the model hits enemies only.
         let t: Vec<ObjKey> = circle_candidates(&gm, fx.x, fx.y, fx.p.area)
             .into_iter()
-            .filter(|&k| gm.alive(k) && gm.is_enemy(owner, gm.unit(k).owner))
+            .filter(|&k| gm.alive(k) && !gm.unit_is_invulnerable(k) && gm.is_enemy(owner, gm.unit(k).owner))
             .collect();
         (t, gm.order_tables().cloned())
     };
@@ -811,8 +833,15 @@ fn blizzard_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
                 continue;
             }
             let structure = gm.unit_types().is_building(gm.unit(t).type_id);
-            blizzard_unit_damage(&fx.p, count, structure, tables.as_ref())
+            blizzard_unit_damage(&fx.p, count, structure, false, tables.as_ref())
         };
+        // The `BHbz` marker decides (`0x6F1AF950`, `0x6F2C31D0`): a unit without the marker gets one (duration
+        // `interval - 0.01`) and takes the damage at once; a unit that has it takes none, and a larger value only
+        // replaces the stored one and refreshes the duration ("strongest wins": Blizzards do not stack).
+        let fresh = blizzard_marker(game, t, amount, fx.p.interval);
+        if !fresh {
+            continue;
+        }
         let died = game
             .borrow_mut()
             .unit_damage_target(fx.caster, t, amount, false, false, 0, BLIZZARD_DAMAGE_TYPE);
@@ -834,6 +863,43 @@ fn blizzard_damage(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
 
 /// Damage type of Blizzard: the effect's class word is `0x200` (`0x6F1B45F0`), `1 << 9` = `DAMAGE_TYPE_COLD`.
 const BLIZZARD_DAMAGE_TYPE: u32 = 9;
+
+/// The marker buff `BHbz` (`CBuffBlizzardAoe`, parent `CBuffAoe`): it holds the wave value and ends after
+/// `interval - 0.01` (`0x6F0D6040` subtracts the constant `0x6FAAE480`).
+pub const BUFF_BLIZZARD_AOE: u32 = code(b"BHbz");
+
+/// The marker rule of `0x6F1AF950` / `0x6F1CADD0` / `0x6F0D6040`. Returns whether the unit takes this wave's damage
+/// (it had no marker). With a marker: a smaller stored value is replaced and the duration refreshed, no damage.
+fn blizzard_marker(game: &RefCell<Game>, unit: ObjKey, value: F32, interval: F32) -> bool {
+    let mut gm = game.borrow_mut();
+    let dur = if arith::lt(F32::ZERO, interval) {
+        arith::sub(interval, F32::from_bits(0x3C23_D70A))
+    } else {
+        F32::ZERO
+    };
+    let existing = gm
+        .spells
+        .human
+        .markers
+        .get(&unit)
+        .copied()
+        .filter(|(serial, _)| gm.spell_buff_alive(unit, *serial));
+    match existing {
+        None => {
+            let serial = gm.add_spell_buff(unit, BUFF_BLIZZARD_AOE, crate::cast::BuffEffect::Marker, dur);
+            gm.spells.human.markers.insert(unit, (serial, value));
+            true
+        }
+        Some((serial, old)) => {
+            if blizzard_buff_replaces(old, value) {
+                gm.drop_spell_buff(serial);
+                let serial = gm.add_spell_buff(unit, BUFF_BLIZZARD_AOE, crate::cast::BuffEffect::Marker, dur);
+                gm.spells.human.markers.insert(unit, (serial, value));
+            }
+            false
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Mass Teleport (`AHmt`). Spec section 12.

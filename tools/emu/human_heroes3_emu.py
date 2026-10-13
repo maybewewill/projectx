@@ -89,6 +89,93 @@ def check_prop_compare(cases, r, rows):
         rows.append((prop, c, a, b))
 
 
+F_WAVE_UNIT = 0x6F1AF950
+EFFECT = DATA + 0x9000      # fake CEffectBlizzard
+EVT = DATA + 0x9400         # its vtable (slots 0x80, 0x84, 0x8C are code stubs)
+TARGET = DATA + 0x9800      # fake target unit
+BUFFOBJ = DATA + 0x9C00     # fake existing BHbz buff (property at +0xCC, value at +0xD0)
+BVT = DATA + 0xA000         # its vtable (slot 0x350 stub)
+CAPT = DATA + 0xA400        # capture cells
+DPTR = DATA + 0xA480        # the damage cell passed by pointer
+CODE = DATA + 0xA800
+
+
+def asm_stubs():
+    """Machine code for the three effect slots and the buff's set-duration slot (records its arguments)."""
+    def a32(x):
+        return struct.pack("<I", x)
+    # slot 0x8C: mov eax,[CAPT+0x20]; ret
+    neg = bytes([0xA1]) + a32(CAPT + 0x20) + b"\xC3"
+    # slot 0x84 (unit, &interval, &damage): record unit, damage, interval, bump the call counter; return the buff
+    s84 = (b"\x8B\x44\x24\x04" + b"\xA3" + a32(CAPT + 0x00)
+           + b"\x8B\x44\x24\x0C\x8B\x00" + b"\xA3" + a32(CAPT + 0x04)
+           + b"\x8B\x44\x24\x08\x8B\x00" + b"\xA3" + a32(CAPT + 0x08)
+           + b"\xA1" + a32(CAPT + 0x0C) + b"\x40" + b"\xA3" + a32(CAPT + 0x0C)
+           + b"\xA1" + a32(CAPT + 0x24) + b"\xC2\x0C\x00")
+    # slot 0x80: ret 0xC (the optional debuff; the numeric test keeps its durations at 0)
+    s80 = b"\xC2\x0C\x00"
+    # buff slot 0x350 (set duration, two arguments): mov [CAPT+0x10],1; ret 8
+    s350 = b"\xC7\x05" + a32(CAPT + 0x10) + a32(1) + b"\xC2\x08\x00"
+    # the smart-pointer assignment 0x6F038450 does a run-time type check through the agent registry; replace it by
+    # its effect (store the pointer, add one reference), `ret 4`
+    sp = b"\x8B\x44\x24\x04\x89\x01\x85\xC0\x74\x03\xFF\x40\x04\x8B\xC1\xC2\x04\x00"
+    mu.mem_write(CODE + 0x200, sp)
+    A.patch_jump(0x6F038450, CODE + 0x200)
+    mu.mem_write(CODE + 0x240, sp[:-3] + b"\xC2\x08\x00")
+    A.patch_jump(0x6F042B20, CODE + 0x240)   # the same for the buff reference (two arguments)
+    mu.mem_write(CODE, neg)
+    mu.mem_write(CODE + 0x40, s84)
+    mu.mem_write(CODE + 0x100, s80)
+    mu.mem_write(CODE + 0x140, s350)
+    mu.mem_write(EVT, b"\0" * 0x400)
+    wr(EVT + 0x8C, CODE)
+    wr(EVT + 0x84, CODE + 0x40)
+    wr(EVT + 0x80, CODE + 0x100)
+    mu.mem_write(BVT, b"\0" * 0x400)
+    wr(BVT + 0x350, CODE + 0x140)
+
+
+def check_wave_unit(cases, r, rows):
+    asm_stubs()
+    for _ in range(cases):
+        n = r.choice([1, 1, 2, 3, 4, 5, 8, 12, r.randint(1, 60)])
+        cap = r.choice([0, f2u(0.0), f2u(r.uniform(1, 300)), f2u(r.uniform(-5, 5)), f2u(float(r.randint(1, 200)))]) \
+            if r.random() < 0.9 else rbits(r)
+        d = rbits(r) if r.random() < 0.15 else f2u(r.choice([r.uniform(1, 80), float(r.randint(1, 60))]))
+        building = rbits(r) if r.random() < 0.2 else f2u(r.choice([0.5, 0.25, 1.0, r.uniform(0, 1.5)]))
+        structure = r.random() < 0.3
+        ward = r.random() < 0.15
+        negate = int(r.random() < 0.2)
+        has_buff = r.random() < 0.5
+        old = rbits(r) if r.random() < 0.15 else f2u(r.choice([r.uniform(0, 80), float(r.randint(0, 60))]))
+        mu.mem_write(EFFECT, b"\0" * 0x400)
+        wr(EFFECT, EVT)
+        wr(EFFECT + 0x80, f2u(1.0))
+        wr(EFFECT + 0x94, cap)
+        wr(EFFECT + 0xAC, building)
+        for off in (0x35C, 0x364):             # the optional debuff durations: properties with value 0.0
+            wr(EFFECT + off, FLOATMINI_VT)
+            wr(EFFECT + off + 4, 0)
+        mu.mem_write(TARGET, b"\0" * 0x400)
+        wr(TARGET + 4, 100)                    # reference count
+        mu.mem_write(TARGET + 0x33, b"A")      # a hero id: the hero branch needs no helper
+        wr(TARGET + 0x5C, 0x10000 if structure else 0)
+        wr(TARGET + 0x20, 0x200000 if ward else 0)
+        mu.mem_write(BUFFOBJ, b"\0" * 0x200)
+        wr(BUFFOBJ, BVT)
+        wr(BUFFOBJ + 4, 100)
+        wr(BUFFOBJ + 0xCC, FLOATMINI_VT)
+        wr(BUFFOBJ + 0xD0, old)
+        mu.mem_write(CAPT, b"\0" * 0x40)
+        wr(CAPT + 0x20, negate)
+        wr(CAPT + 0x24, BUFFOBJ if has_buff else 0)
+        dptr = DPTR
+        wr(dptr, d)
+        emu.call(F_WAVE_UNIT, ecx=EFFECT, stack_args=(TARGET, n, dptr))
+        out = [rd(CAPT + 0x04), rd(CAPT + 0x00), rd(CAPT + 0x0C), rd(BUFFOBJ + 0xD0), rd(CAPT + 0x10), rd(CAPT + 0x08)]
+        rows.append([n, cap, d, building, int(structure), int(ward), negate, int(has_buff), old] + out)
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -98,11 +185,12 @@ def main():
     seed = int(args[1]) if len(args) > 1 else 35
     r = random.Random(seed)
     install()
-    ch, pc = [], []
+    ch, pc, wv = [], [], []
     check_channel_time(cases, r, ch)
     check_prop_compare(cases, r, pc)
-    print("channel time rows %d, property compare rows %d" % (len(ch), len(pc)))
-    for row in ch[:8]:
+    check_wave_unit(cases, r, wv)
+    print("channel time rows %d, property compare rows %d, wave unit rows %d" % (len(ch), len(pc), len(wv)))
+    for row in wv[:10]:
         print(" ".join("%08x" % x for x in row))
     if dump:
         os.makedirs(dump, exist_ok=True)
@@ -112,6 +200,9 @@ def main():
         with open(os.path.join(dump, "prop_compare.txt"), "w") as fh:
             for row in pc:
                 fh.write("%08x %08x %d %d\n" % row)
+        with open(os.path.join(dump, "wave_unit.txt"), "w") as fh:
+            for row in wv:
+                fh.write(" ".join("%08x" % x for x in row) + "\n")
 
 
 if __name__ == "__main__":

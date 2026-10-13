@@ -24,6 +24,7 @@ native IssueImmediateOrderById takes unit whichUnit, integer order returns boole
 native KillUnit takes unit whichUnit returns nothing
 globals
     unit mage = null
+    unit mage2 = null
     unit near = null
     unit nearB = null
     unit far = null
@@ -48,6 +49,12 @@ function setup takes nothing returns nothing
     set nearB = CreateUnit(Player(0), 'hfoo', 0.0, 300.0, 0.0)
     set allyFar = CreateUnit(Player(0), 'hfoo', 3000.0, 0.0, 0.0)
     set dest = CreateUnit(Player(0), 'hfoo', 5000.0, 5000.0, 0.0)
+    set mage2 = CreateUnit(Player(0), 'Hamg', 0.0, -3000.0, 0.0)
+    call UnitAddAbility(mage2, 'AHbz')
+    call SetUnitState(mage2, 2, 500.0)
+endfunction
+function blizzard2 takes nothing returns nothing
+    set accepted = IssuePointOrderById(mage2, 852089, 1050.0, 0.0)
 endfunction
 function blizzard takes nothing returns nothing
     set accepted = IssuePointOrderById(mage, 852089, 1050.0, 0.0)
@@ -279,6 +286,23 @@ fn the_stop_order_ends_a_channel_and_death_ends_it_too() {
     let ev = events(&h, mage, BLIZZARD);
     assert_eq!(&ev[4..], &[0, 1, 2, 4], "the second cast ended by death");
     assert!(life(&h, a) > 400.0, "waves stop with the caster");
+}
+
+#[test]
+fn two_blizzards_do_not_stack_and_invulnerable_units_are_skipped() {
+    let mut h = started();
+    let (a, b) = (unit(&h, "foeA"), unit(&h, "foeB"));
+    h.game_mut().ability_types_mut().insert(BLIZZARD, AbilityType { max_level: Some(1) });
+    // The shield of foeB: an invulnerability count, like Divine Shield / 'Avul' (the enumeration word has no `invu`).
+    h.game_mut().unit_mut(b).invuln_count += 1;
+    h.start("blizzard", &[]).unwrap();
+    h.start("blizzard2", &[]).unwrap();
+    run(&mut h, 12); // first wave at 0.9 s from both casters
+    // One marker per unit (`BHbz`): the second Blizzard's wave in the same window deals nothing.
+    assert_eq!(life(&h, a), 470.0, "30, not 60");
+    assert_eq!(life(&h, b), 500.0, "an invulnerable unit is not enumerated");
+    run(&mut h, 10); // the next waves come after the marker (interval - 0.01) has run out
+    assert_eq!(life(&h, a), 440.0);
 }
 
 #[test]

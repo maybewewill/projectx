@@ -396,3 +396,60 @@ runs after every timer event and tick (the original reacts inside the order call
 
 Open: the unit-side meaning of slot `0x398`; who posts ENDCAST for classes without a hook; whether a re-issue of the same
 order id restarts a channel in the original (the model restarts the cast, ending the old one).
+
+## 15. Blizzard damage delivery (S35)
+
+**Data of the shipped 1.26a patch** (`War3Patch.mpq`, `Units\AbilityData.slk`; the older archives differ): `AHbz`:
+`targs` `_`, `Cast` 1, `Dur`/`HeroDur` 0, `BuffID` `BHbd,BHbz`, `EfctID` `XHbz`. `AHmt`: ability `targs`
+`ground,structure,vuln,invu,player,neutral,ally`.
+
+**Argument capture** (Unicorn: the real `0x6F1B9DB0` against a fake effect, `tools/emu/human_heroes3_emu.py`): the damage
+wave calls the area helper `0x6F2C31D0` with: a shape list `{area (+0x74), value (+0x8C)}` (count 1), the damage class
+`0x200` (effect slot `0x88`), **the effect's flag word `+0xC0`** (= the ability's flag word `+0x4C`), the caster, the
+owner index `+0xBC`, the callback `0x6F1B6CB0` and the effect as context; the circle centre is `(+0x64, +0x6C)` (x, y).
+
+**The flag word** (`targs` table in the file at `0x6FA6F478..0x6FA6F608`, 8-byte records name/value; values read as data):
+air `0x4`, alive `0x1000000`, ally `0x4000`, ancient `0x80000000`, bridge `0x400`, dead `0x2000000`, debris `0x100`,
+decoration `0x200`, enemy `0x10000`, friend `0x6000`, ground `0x2`, hero `0x400000`, invulnerable `0x200000`, item `0x20`,
+mechanical `0x8000000`, neutral `0x8000`, none `0x1`, nonancient `0x40000000`, nonhero `0x800000`, nonsapper `0x10000000`,
+notself `0x1E000`, organic `0x4000000`, player `0x2000`, sapper `0x20000000`, self `0x1000`, structure `0x8`, totem/ward
+`0x10`, tree `0x40`, vulnerable `0x100000`, wall `0x80`. The normaliser `0x6F2552F0` adds the default of every group the
+word leaves empty (relations: all; alive/dead: alive; classes: ground+air+structure; vulnerable/invulnerable:
+vulnerable; hero, ancient, sapper, organic/mechanical: both). So `_` = `0xFDD1F00E` means: **alive, vulnerable (not
+invulnerable), ground/air/structure, all relations including self and allies**. Where the original keeps allies out of a
+Blizzard is not found (the damage target side has a relation case, `attack-damage.md` section 11.6); the model hits
+enemies only (UNSURE). Mass Teleport's group filter `0x40303006` (nonancient, player, vulnerable, invulnerable, air,
+ground; item 17 of the op list `0x1D`) = **units of the caster's own player**, alive, not structures, not ancient,
+vulnerable or invulnerable alike.
+
+**The per-unit callback `0x6F1AF950`** (CONFIRMED structure; numbers **Unicorn 400/400** against the real function with a
+fake effect, target and buff, `human_heroes::blizzard_unit_damage`, `blizzard_buff_replaces`): arguments (unit, `n`, pointer
+to the value `d`).
+1. A non-immune target (`unit+0x15C <= 0`) with a non-zero optional debuff duration (`HeroDur` for heroes, else `Dur`;
+   0 for the stock ability) gets the `BHbd` debuff through effect slot `0x80` (not modelled; the stock ability skips it).
+2. **Cap**: `DataF != 0` (NaN counts as non-zero) and `cap < mul(I2R(n), d)` (ordered) -> `d = div(cap, I2R(n))`.
+3. The sign flips when effect slot `0x8C` is true (0 for Blizzard).
+4. **Building factor**: a structure (`unit+0x5C` bit 16, test `0x6F26DE50`) or a unit with `unit+0x20` bit `0x200000`
+   (`0x6F26DE80`, meaning unknown; the model treats it as false) takes `mul(DataD, d)`.
+5. Effect slot `0x84` (`0x6F1CADD0`) gets or creates the **`BHbz` marker buff** on the unit (duration `interval - 0.01`,
+   `0x6F0D6040`: `sub(interval, 0.01)` when the interval is above zero, else a zero-length buff that ends at once). A
+   **new** marker makes the callback return **1** (slot `0x84` returned 0); an **existing** one keeps its
+   value unless `existing < d` (ordered), in which case the stored value (`+0xD0`) is replaced and the duration refreshed
+   through slot `0x350`; the callback returns **0**.
+6. The area helper applies the damage only when the callback returned non-zero (`0x6F2C3597`: `test eax, eax`, then the
+   record builder `0x6F2556E0` and the target's damage slot `0x120`; `0x6F2BFED0`): **a unit that already carries `BHbz`
+   takes no damage from this wave**. Consequences: two overlapping Blizzards do not stack within the marker window
+   (`interval - 0.01`); successive waves of one Blizzard (`interval` apart) each hit.
+7. Damage record: amount `d`, class word `0x200` (type 9) from the effect (slot `0x88`), plus bit `0x10` when `d == 0.0`
+   exactly; a negative `d` takes the heal path (`0x6F277C20`, `-d`; not modelled). The record goes through the target side
+   `0x6F2A40D0` (`attack-damage.md` section 11): class `0x200` is not the armor class `0x10`, so only the type table and
+   the min-1 rule apply.
+
+`BHbz` itself (`CBuffAoe` slots: `0x354` returns 1, so its apply/remove hooks `0x6F0AE0B0`/`0x6F0AE0D0` do nothing; the
+`0x44/0x48/0x4C` overrides are save/load of the stored value) deals **no damage of its own** (the earlier "life loss from
+the buff" question is answered: there is none). `n` in step 2 is the number of enumerated units of the same relation kind
+(the area helper's kind buckets `+0x4C..+0x54`, kind from the record `+8`); the model uses the number of enemy targets
+(UNSURE).
+
+Model: `human_heroes::blizzard_damage` (marker map `State::markers`, spell buff `BHbz`), tests
+`two_blizzards_do_not_stack_and_invulnerable_units_are_skipped`, `human_heroes3_vectors.rs`.
