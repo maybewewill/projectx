@@ -380,3 +380,24 @@ functions; vectors `tests/data/orc/feral.txt`, tests `tests/orc_feral.rs`). Orde
   placement search is not decoded: UNSURE). Rust: `orc::feral_place` (needs the soft-float tables; without them the model
   places the wolves at the caster).
 * Wired: `feral_spirit` uses both. The wolf abilities, the `BOsf` buff polarity and the placement search stay UNSURE.
+
+## 15. S39: Serpent Ward (`AOsw`, base `AOwd`, `CAbilityWard`, vtable `0x6F8F91E4`) - point cast (Unicorn)
+
+The ability row is `AOsw` (code `AOwd`); order id 852504 (section 10). Unicorn run `tools/emu/ward_emu.py` (the real slot
+`0x418` = `0x6F162DC0` on a fake ability; 400 cases, 0 mismatches; `tests/data/orc/ward.txt`, `tests/orc_ward.rs`).
+
+* The ward cast has the same shape as the Feral Spirit loop: `n = F2I(DataA)` (`0x6F02E9E0`; 1 in the data) wards of the
+  level's `UnitID` (slot `0x434` = `0x6F190980`) for the caster's owner (slot `0x42C` = `0x6F190960` -> caster `vf 0xEC`),
+  duration `Dur + ability+0x9C` (**no `HeroDur`**), creator flag `0x502` when that duration is zero else `2`.
+* Every ward is created AT THE TARGET POINT: the creator `0x6F29F990` receives the cast's own x and y pointers (the values
+  equal the ordered point bit for bit, no offset, no range pull) and a pointer to the facing, which is the Misc
+  `BuildingAngle` (read through `0x6F009EE0`, key `BuildingAngle` of section `Misc`) rounded down to a multiple of 90
+  degrees: `v = F2I(a) % 360; if v != 0 && v % 90 != 0 { v -= v % 90 }; if v < 0 { v += 360 }; facing = I2R(v) * (pi/180)`.
+  With the shipped Misc value 270 the facing is `4.712389`. `ai_site::building_angle` (AI code) has no rounding; the ward
+  uses `orc::building_angle_radians`. The sixth creator argument is -1 (no cell id; Feral Spirit passes a cell id).
+* Afterwards slot `0x430` (`0x6F18C650`) builds the ward buff `BOwd` (factory `0x6F189900`, init slot `0x324`, apply slot
+  `0x31C` with the ward and a pointer to the duration; `0x6F079CA0` adds it) and `0x6F299390` releases the unit.
+* Model: `orc::serpent_ward` (wired in `run_effect`, order 852504, `takes_point`): builds the wards, marks them summoned
+  (class bit 4), timed life = the duration. The ward's own attack (a `Aatk` ability of `osp1..3`) and the ward target
+  class come from the unit data. UNSURE: the buff's polarity and the unit creator's placement search (the target point
+  may be occupied).

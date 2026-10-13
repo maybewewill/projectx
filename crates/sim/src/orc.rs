@@ -212,6 +212,8 @@ pub const WAR_STOMP: u32 = code(b"AOws");
 pub const CHAIN_LIGHTNING: u32 = code(b"AOcl");
 pub const FAR_SIGHT: u32 = code(b"AOfs");
 pub const FERAL_SPIRIT: u32 = code(b"AOsf");
+/// Serpent Ward: the ability id is `AOsw` (its base code in the factory is `AOwd`, class `CAbilityWard`).
+pub const SERPENT_WARD: u32 = code(b"AOsw");
 pub const HEALING_WAVE: u32 = code(b"AOhw");
 pub const BLADESTORM: u32 = code(b"AOww");
 pub const BUFF_BLADESTORM: u32 = code(b"BOww");
@@ -239,6 +241,7 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_123, MIRROR_IMAGE);
     ids.insert(852_122, FAR_SIGHT);
     ids.insert(852_126, FERAL_SPIRIT);
+    ids.insert(852_504, SERPENT_WARD);
     ids.insert(852_501, HEALING_WAVE);
     ids.insert(852_128, BLADESTORM);
 }
@@ -250,7 +253,7 @@ pub fn takes_no_target(base: u32) -> bool {
 
 /// Abilities cast on a point.
 pub fn takes_point(base: u32) -> bool {
-    matches!(base, SHOCKWAVE | FAR_SIGHT)
+    matches!(base, SHOCKWAVE | FAR_SIGHT | SERPENT_WARD)
 }
 
 /// Per-game state of the orc abilities.
@@ -419,6 +422,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         WIND_WALK => wind_walk(game, rec),
         MIRROR_IMAGE => mirror_image(game, rt, rec),
         FERAL_SPIRIT => feral_spirit(game, rec),
+        SERPENT_WARD => serpent_ward(game, rec),
         FAR_SIGHT => far_sight(game, rec),
         _ => return false,
     }
@@ -1199,6 +1203,63 @@ fn feral_spirit(game: &RefCell<Game>, rec: &CastRec) {
         Some(t) => feral_place(x, y, facing, rec.level.area, &t),
         None => (x, y),
     };
+    for _ in 0..plan.count.max(0) {
+        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, unit_type, px, py, rad_to_deg(facing), true)
+        else {
+            continue;
+        };
+        {
+            let u = gm.unit_mut(k);
+            u.summoned = true;
+            u.class_flags |= 0x4;
+        }
+        gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, plan.duration);
+    }
+}
+
+/// The facing the wards are created with: the Misc `BuildingAngle` through `0x6F020D30` / the ward cast's copy of it:
+/// `v = F2I(misc) % 360` (C remainder), rounded toward zero to a multiple of 90 (`v - v % 90`), a negative result gets
+/// +360, then `I2R(v) * (pi / 180)` (`0x6FAAE5E8`, soft multiply). CONFIRMED by Unicorn (`tools/emu/ward_emu.py`; the
+/// DLL's value of 90 / 180 / 270 gives 1.5708 / 3.1416 / 4.7124 exactly as the creator receives them). The AI helper
+/// `ai_site::building_angle` has no rounding (it only ever sees 0/90/180/270).
+pub fn building_angle_radians(misc: F32) -> F32 {
+    let mut v = conv::f2i(misc).wrapping_rem(360);
+    let r = v % 90;
+    if v != 0 && r != 0 {
+        v -= r;
+    }
+    if v < 0 {
+        v += 360;
+    }
+    arith::mul(conv::i2r(v), F32::from_bits(0x3C8E_FA35))
+}
+
+/// Serpent Ward point cast (class `CAbilityWard`, slot `0x418` = `0x6F162DC0`): `n = F2I(DataA)` wards of the level's
+/// `UnitID` for the caster's owner, each created AT THE TARGET POINT (the creator `0x6F29F990` receives the cast's own
+/// x and y pointers) facing [`building_angle_radians`] with the same count / duration / flag arithmetic as Feral Spirit
+/// (`Dur + ability+0x9C`, no `HeroDur`; flag `0x502` for a zero duration else `2`; `ward_plan` = `feral_plan`), then the
+/// ward buff `BOwd` through slot `0x430` (`0x6F18C650`: buff factory `0x6F189900`, init `0x324`, apply `0x31C` with the
+/// unit and a pointer to the duration). CONFIRMED by Unicorn (`ward_emu.py`, 400 cases).
+pub fn ward_plan(dur: F32, plus_9c: F32, data_a: F32) -> FeralPlan {
+    feral_plan(dur, plus_9c, data_a)
+}
+
+fn serpent_ward(game: &RefCell<Game>, rec: &CastRec) {
+    let CastTarget::Point(px, py) = rec.target else {
+        return;
+    };
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let level_index =
+        usize::try_from(gm.unit(rec.caster).abilities.get(SERPENT_WARD).map_or(0, |a| a.level_index)).unwrap_or(0);
+    let Some(&unit_type) = gm.orc.summon_units.get(&SERPENT_WARD).and_then(|v| v.get(level_index)) else {
+        return;
+    };
+    let plan = ward_plan(rec.level.dur, F32::ZERO, rec.level.data[0]);
+    let owner = gm.unit(rec.caster).owner;
+    let facing = building_angle_radians(gm.production().building_angle);
     for _ in 0..plan.count.max(0) {
         let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, unit_type, px, py, rad_to_deg(facing), true)
         else {
