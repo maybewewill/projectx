@@ -46,6 +46,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(caster, 'AOws')
     call UnitAddAbility(caster, 'AOsw')
     call UnitAddAbility(caster, 'AOhx')
+    call UnitAddAbility(caster, 'AOvd')
     call SetUnitState(caster, 2, 1000.0)
 endfunction
 function stomp takes nothing returns nothing
@@ -53,6 +54,9 @@ function stomp takes nothing returns nothing
 endfunction
 function ward takes nothing returns nothing
     set accepted = IssuePointOrderById(caster, 852504, 300.0, 50.0)
+endfunction
+function voodoo takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(caster, 852503)
 endfunction
 function hex takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852502, ground)
@@ -121,13 +125,14 @@ fn host(with_tables: bool) -> Option<ScriptHost> {
                 },
             );
         }
-        for code in [WAR_STOMP, SERPENT_WARD, HEX] {
+        for code in [WAR_STOMP, SERPENT_WARD, HEX, VOODOO] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
         g.set_spell_levels(WAR_STOMP, vec![lvl(90, 6.0, 3.0, 2.0, 250.0, 0.0, [25.0, 0.0, 0.0])]);
         g.set_spell_levels(SERPENT_WARD, vec![lvl(30, 6.5, 40.0, 40.0, 0.0, 500.0, [1.0, 0.0, 0.0])]);
         g.set_summon_units(SERPENT_WARD, vec![WARD]);
         g.set_spell_levels(HEX, vec![lvl(70, 7.0, 15.0, 4.0, 0.0, 800.0, [99.0, 0.0, 0.0])]);
+        g.set_spell_levels(VOODOO, vec![lvl(200, 180.0, 3.0, 3.0, 800.0, 0.0, [0.0, 0.0, 0.0])]);
         g.set_orc_lists(HEX, vec![["nrat".into(), "nalb".into(), "nsha".into(), "nshw".into()]]);
         g.production_mut().building_angle = f(270.0);
     }
@@ -215,4 +220,20 @@ fn hex_picks_a_creature_with_one_stream_24_draw() {
     let got = sim::damage::roll_total(expect.stream_mut(HEX_STREAM), &table, 1, 1, -1).unwrap();
     assert_eq!(got, 0);
     assert_eq!(after, expect, "exactly one stream-24 step");
+}
+
+#[test]
+fn voodoo_makes_friends_in_the_area_invulnerable_while_it_pulses() {
+    let mut h = host(false).unwrap();
+    let (c, ally, ground, far) = (unit(&h, "caster"), unit(&h, "ally"), unit(&h, "ground"), unit(&h, "far"));
+    cast(&mut h, "voodoo");
+    assert!(h.game().unit_is_invulnerable(ally), "a friend in the area");
+    assert!(!h.game().unit_is_invulnerable(c), "no `self` in the targs: the caster is not an area target");
+    assert!(!h.game().unit_is_invulnerable(ground), "an enemy");
+    let _ = far;
+    run(&mut h, 20);
+    assert!(h.game().unit_is_invulnerable(ally), "refreshed by the pulses");
+    run(&mut h, 80);
+    assert!(!h.game().unit_is_invulnerable(ally), "the voodoo ended after Dur and the last buff ran out");
+    assert_eq!(voodoo_buff_duration().to_f32(), 1.0);
 }

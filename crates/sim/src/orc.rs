@@ -243,13 +243,14 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_126, FERAL_SPIRIT);
     ids.insert(852_504, SERPENT_WARD);
     ids.insert(852_502, HEX);
+    ids.insert(852_503, VOODOO);
     ids.insert(852_501, HEALING_WAVE);
     ids.insert(852_128, BLADESTORM);
 }
 
 /// Abilities cast without a target (`targs` empty or area around the caster).
 pub fn takes_no_target(base: u32) -> bool {
-    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT | BLADESTORM)
+    matches!(base, WAR_STOMP | WIND_WALK | MIRROR_IMAGE | FERAL_SPIRIT | BLADESTORM | VOODOO)
 }
 
 /// Abilities cast on a point.
@@ -289,6 +290,10 @@ pub struct OrcState {
     lists: BTreeMap<u32, Vec<[String; 4]>>,
     /// Hexed units: unit -> (buff serial, the creature it became).
     hexed: BTreeMap<ObjKey, (u32, u32)>,
+    /// Big Bad Voodoos in progress, by serial, and the buffs they gave (buff serial -> unit, for the invulnerability count).
+    voodoos: BTreeMap<u32, VoodooState>,
+    voodoo_serial: u32,
+    voodoo_buffs: BTreeMap<u32, ObjKey>,
 }
 
 impl OrcState {
@@ -309,6 +314,7 @@ impl Game {
             Some(v) if !v.is_empty() => v[level_index.min(v.len() - 1)],
             _ => match base {
                 WAR_STOMP => STOMP_TARGS_DEFAULT,
+                VOODOO => VOODOO_TARGS_DEFAULT,
                 _ => 0,
             },
         }
@@ -429,6 +435,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         FERAL_SPIRIT => feral_spirit(game, rec),
         SERPENT_WARD => serpent_ward(game, rec),
         HEX => hex_cast(game, rt, rec),
+        VOODOO => voodoo(game, rec),
         FAR_SIGHT => far_sight(game, rec),
         _ => return false,
     }
@@ -1147,6 +1154,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_CHAIN => chain_next(game, rt, aux),
         TICK_WW_END => game.borrow_mut().drop_spell_buff(aux),
         TICK_BLADE => blade_tick(game, rt, aux),
+        TICK_VOODOO => voodoo_tick(game, aux),
         _ => {}
     }
 }
@@ -1435,6 +1443,105 @@ fn hex_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
     }
 }
 
+// ---- Big Bad Voodoo (`AOvd`, `CAbilityVoodoo`, vtable `0x6F8F8124`) ----
+
+/// Big Bad Voodoo's ability id (its factory base code is the same).
+pub const VOODOO: u32 = code(b"AOvd");
+/// The buff the units in the area carry (`BOvd`; `BOvc` is the caster's channel buff, not modelled).
+pub const BUFF_VOODOO: u32 = code(b"BOvd");
+/// The pulse timer kind of the voodoo (`SpellMsg::HeroSpell`).
+pub const TICK_VOODOO: u8 = 0x85;
+/// The pulse period: the float at `0x6FAAE4D0`, 0.5 s (the timer message `0xD01C1` of the effect `0x6F18C340`).
+pub const VOODOO_PULSE_BITS: u32 = 0x3F00_0000;
+/// The shipped `targs` of Big Bad Voodoo (`air,ground,friend,vuln,invu`): air 4, ground 2, friend `0x6000`, vulnerable
+/// `0x100000`, invulnerable `0x200000`. `friend` carries no `self` bit, so the area predicate never accepts the caster.
+pub const VOODOO_TARGS_DEFAULT: u32 = 0x0030_6006;
+
+/// The duration of the buff each pulse gives (`0x6F18C580`: `add(0.5, 0.5)` through the soft add, i.e. 1.0 s; an
+/// existing buff is refreshed through its slot `0x350` instead of getting a second one). CONFIRMED by reading.
+pub fn voodoo_buff_duration() -> F32 {
+    arith::add(F32::from_bits(VOODOO_PULSE_BITS), F32::from_bits(VOODOO_PULSE_BITS))
+}
+
+/// A Big Bad Voodoo in progress.
+#[derive(Debug, Clone)]
+pub(crate) struct VoodooState {
+    caster: ObjKey,
+    left: F32,
+    area: F32,
+    word: u32,
+}
+
+/// Big Bad Voodoo cast (effect `0x6F18C340`, CONFIRMED structure): clears the caster's earlier voodoo buffs, starts the
+/// pulse timer (message `0xD01C1`, 0.5 s) and creates an area watcher of radius `Area` around the caster (message
+/// `0xD01C7` per unit that enters; the handler `0x6F18C630` -> `0x6F18C580` gives each accepted unit the buff `BOvd` for
+/// [`voodoo_buff_duration`], refreshing a buff it already has). While the buff lasts the unit is invulnerable. MODEL (UNSURE):
+/// the watcher is a pulse every 0.5 s over the circle (no per-entry events), the run lasts `Dur` (the channel; the real
+/// one also ends when the channel is interrupted, see the shared channel code), the per-unit gate of slot `0x3EC` is not
+/// decoded, the caster is not affected (no `self` in `targs`).
+fn voodoo(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(rec.caster) {
+        return;
+    }
+    let level_index =
+        usize::try_from(gm.unit(rec.caster).abilities.get(VOODOO).map_or(0, |a| a.level_index)).unwrap_or(0);
+    let word = gm.orc_targs(VOODOO, level_index);
+    gm.orc.voodoo_serial = gm.orc.voodoo_serial.wrapping_add(1);
+    let serial = gm.orc.voodoo_serial;
+    gm.orc.voodoos.insert(serial, VoodooState { caster: rec.caster, left: rec.level.dur, area: rec.level.area, word });
+    voodoo_pulse(&mut gm, serial);
+}
+
+fn voodoo_pulse(gm: &mut Game, serial: u32) {
+    let Some(st) = gm.orc.voodoos.get(&serial).cloned() else {
+        return;
+    };
+    let (cx, cy) = {
+        let u = gm.unit(st.caster);
+        (u.x, u.y)
+    };
+    let dur = voodoo_buff_duration();
+    for k in crate::natives::group::circle_candidates(gm, cx, cy, st.area) {
+        {
+            let u = gm.unit(k);
+            if u.removed || u.hidden {
+                continue;
+            }
+        }
+        if !area_predicate(gm, st.caster, k, st.word) {
+            continue;
+        }
+        let buff = gm.add_spell_buff(k, BUFF_VOODOO, BuffEffect::Marker, dur);
+        if buff != 0 {
+            gm.unit_mut(k).invuln_count += 1;
+            gm.orc.voodoo_buffs.insert(buff, k);
+        }
+    }
+    let period = F32::from_bits(VOODOO_PULSE_BITS);
+    let left = arith::sub(st.left, period);
+    if left.to_f32() > 0.0 {
+        if let Some(s) = gm.orc.voodoos.get_mut(&serial) {
+            s.left = left;
+        }
+        gm.timers_start_hero(f32::from_bits(VOODOO_PULSE_BITS), TICK_VOODOO, st.caster, serial);
+    } else {
+        gm.orc.voodoos.remove(&serial);
+    }
+}
+
+fn voodoo_tick(game: &RefCell<Game>, serial: u32) {
+    let mut gm = game.borrow_mut();
+    let Some(st) = gm.orc.voodoos.get(&serial).cloned() else {
+        return;
+    };
+    if !gm.alive(st.caster) {
+        gm.orc.voodoos.remove(&serial);
+        return;
+    }
+    voodoo_pulse(&mut gm, serial);
+}
+
 /// Far Sight (class `0x6F88B25C`): reveals the circle of `Area` around the point to the caster's owner for `Dur`.
 /// MODEL (UNSURE): a visible-state fog modifier started now and stopped when the marker buff on the caster ends.
 fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
@@ -1465,6 +1572,10 @@ fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
 /// Called by `Game::drop_spell_buff` when a spell buff ends: stops the Far Sight reveal tied to it.
 pub(crate) fn on_buff_dropped(game: &mut Game, serial: u32) {
     game.orc.hexed.retain(|_, &mut (s, _)| s != serial);
+    if let Some(k) = game.orc.voodoo_buffs.remove(&serial) {
+        let u = game.unit_mut(k);
+        u.invuln_count = (u.invuln_count - 1).max(0);
+    }
     if let Some(key) = game.orc.reveals.remove(&serial) {
         game.fog_stop(key);
     }

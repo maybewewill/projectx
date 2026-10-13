@@ -429,3 +429,26 @@ mismatches including the stream state; `tests/data/orc/hex.txt`, `tests/orc_hex.
 * Model: `orc::hex_cast` (illusion dies; otherwise buff `BOhx` with the duration and the recorded form,
   `Game::hex_form`; `Game::set_orc_lists` takes the level texts, the shipped lists are the default). NOT modelled: the
   stat / ability swap of the morph (the hexed unit cannot attack or cast) and what the buff does when no candidate exists.
+
+## 17. S39: Big Bad Voodoo (`AOvd`, `CAbilityVoodoo`, vtable `0x6F8F8124`) - structure (reading only, no Unicorn run)
+
+Order id 852503 (section 10). Data: `Dur` = `HeroDur` 30, `Area` 800, `Cool` 180, `Cost` 200, `targs` `air,ground,friend,vuln,invu`,
+buffs `BOvd,BOvc`.
+
+* **Effect `0x6F18C340` (slot `0x3C0`), CONFIRMED by reading.** It first removes the caster's earlier buffs of three types
+  (`0x6F10F990`, `0x6F07D0B0`, `0x6F159120`) through `0x6F079CC0`, starts the ability's timer (message `0xD01C1`, period
+  the float at `0x6FAAE4D0` = 0.5 s) and creates an area watcher (`0x6F474720`) of radius `Area` (`0x6F02E900`) around the
+  caster with the message `0xD01C7`, stored at ability `+0x138`. The message handler `0x6F191220` routes `0xD01C1` ->
+  `0x6F1592E0` (restart the watcher), `0xD01C2` -> `0x6F1592F0`, `0xD01C3` -> `0x6F14BE50`, `0xD01C7` -> `0x6F18C630`:
+  resolve the unit of the message (`0x6F282F60`) and run `0x6F18C580` on it.
+* **Per unit `0x6F18C580`.** The class gate slot `0x3EC` returns non-zero -> nothing. Otherwise the buff duration is
+  `add(0.5, 0.5)` = **1.0 s** (soft add, `0x6FAAE4D0` twice); a unit that already has the buff (lookup `0x6F0787D0` by the id of
+  `0x6F159120`) gets it refreshed through the buff's slot `0x350`, else a new buff (`0x6F189830`) is initialised (slot
+  `0x324`), applied (slot `0x31C` with the unit and the duration) and added (`0x6F079CA0`). So the effect is a pulsing aura
+  of 1-second buffs, not one 30-second buff per unit.
+* **`targs`.** The area predicate of section 13 with the unmodified ability word (`friend` = `0x6000`: player and ally;
+  there is NO `self` bit, so the area never selects the caster; `vuln` and `invu` both named: any vulnerability state).
+* Model: `orc::voodoo` (pulse every 0.5 s over the circle for `Dur`, buff `BOvd` 1.0 s on every friend that passes
+  `area_predicate`, each live buff holds one invulnerability count). UNSURE: the slot `0x3EC` gate, the watcher's own enter
+  events (the model pulses), the channel interruption (shared channel lifecycle, other agent), `BOvc`, the healing
+  (the 1.26a buff `BOvd` only grants invulnerability, LIKELY from the tooltip).
