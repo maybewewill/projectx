@@ -260,6 +260,8 @@ fn mirror_image_makes_illusions_that_expire() {
     let mut h = host();
     let before = unit_count(&h);
     cast(&mut h, "mirror");
+    assert_eq!(unit_count(&h), before, "the images appear after DataD (0.5 s)");
+    run(&mut h, 6);
     assert_eq!(unit_count(&h), before + 2);
     let images: Vec<ObjKey> = h.game().unit_objects().filter(|(_, u)| u.illusion).map(|(k, _)| k).collect();
     assert_eq!(images.len(), 2);

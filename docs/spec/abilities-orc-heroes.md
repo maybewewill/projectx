@@ -121,13 +121,48 @@ buff (UNSURE: flat versus percent, order against the crit). Invisibility, the fa
 
 ## 7. Mirror Image (`AOmi`) and Feral Spirit (`AOsf`)
 
-Mirror Image (vtable `0x6F8D9E5C`, effect `0x6F135740`): `DataA` images (1/2/3), `DataB` damage dealt 0, `DataC` damage taken
-2.0, `DataD` 0.5 (animation delay), `Dur` 60, `Area` 1000. Feral Spirit (vtable `0x6F927B2C`, effect `0x6F1DF330`): `UnitID`
-`osw1..3`, `DataB` = 2 wolves, `Dur` 60. A direct-call search to depth 5 from both effects (and from the summon helpers
-`0x6F1D27A0`, `0x6F299390`, `0x6F1DD4F0`) finds NO draw of the RNG helpers `0x6F2853D0/0x6F285320/0x6F285350`: no stream
-draw is known for the placement (virtual calls not followed: UNSURE). Model: units built at the caster (illusion flag with
-the damage factors; summoned flag), timed life `Dur`/`HeroDur` through BTLF. UNSURE: placement offsets, life of the images,
-abilities of the images, where the taken factor applies.
+### 7.1 Mirror Image (task S29; CONFIRMED numeric cores, LIKELY structure)
+
+The earlier search for an RNG draw (S25) only followed direct calls from the cast effect. The draw is in the **delayed
+handler**, not in the effect. Level getters (Unicorn, `tools/emu` probe with a numbered level record): `0x6F02E760` Dur,
+`0x6F02E7D0` HeroDur, `0x6F02E900` Area, `0x6F02E970` **Rng**, `0x6F02E9E0` DataA, `0x6F02EA50` DataB, `0x6F02EAC0` DataC,
+`0x6F02EB30` DataD, `0x6F02EBA0` DataE.
+
+* Cast effect `0x6F135740` (slot `0x3C0`): (1) class slot `0x3E4` = `0x6F11B0C0` walks the images of the previous cast
+  (12-byte handle pairs at ability `+0xF4`, count `+0xF0`) and calls the unit slot `0x124` with `0.0` on each (LIKELY
+  "set life 0": a recast kills the old images); (2) buff / state calls on the caster (`0x6F0767F0`, `0x6F076700` with the
+  callback `0x6F1128B0`, `0x6F0796F0`, caster flag `+0x20 |= 0x800000`, cleared again at the end of the handler); (3) the
+  timer message **`0xD01C1`** (`ability+0x16C`) with `DataD` seconds (0.5). The class message slot 3 (`0x6F1432F0`) routes
+  `0xD01C1` to `0x6F13D990`.
+* Handler `0x6F13D990` (read in full, the numeric cores run in Unicorn):
+  1. `n = F2I(DataA)`, `c = min(n, 9)`, the polygon has `c + 1` slots. The hero's slot is drawn FIRST:
+     `h = R2I(roll(1 die, n + 1 sides)) - 1` with the roll wrapper `0x6F285350` on **combat stream 12** (EDX = 0xC at
+     `0x6F13DA6C`), count 1, bonus 0, multiplier 1.0. One draw per cast. The sides use `n`, not the capped `c`.
+  2. Slot `i` is placed at `centre + M * (r sin a_i, r cos a_i, 0)` with `a_i = (I2R(i) * 2 pi) / I2R(c + 1)`
+     (`0x6F1127D0`; `r` = **Rng**, 128; `2 pi` = the constant `0x6FAAE608`), `M` = the rotation about `(0, 0, 1)` by the
+     caster's facing (`0x6F4AFCD0`, flag 1 = axis not normalised), applied by `0x6F07B950`
+     (`out[c] = (v0*M[c] + v1*M[3+c]) + v2*M[6+c]`), then added to the caster's position (`add(rotated, centre)`).
+     The matrix is `[c, s, -0, -s, c, +0, +0, -0, c + (1 - c)]` with the soft `c + (1 - c)` = `0.99999994`.
+  3. Pass one (ascending): `0x6F127E00` -> placement search `0x6F11AD50` -> **`0x6F29F990`** (the unit creator) builds a
+     unit of the caster's type for the caster's owner at every slot. A failed placement search returns 0 and the slot has
+     no unit. Pass two (ascending): for the hero slot (`i == h`) the created unit is the placeholder: the caster is moved
+     to its position (virtual `+0x180` of the caster with the position) and the placeholder is removed (`0x6F1280D0`);
+     every other unit gets the Mirror Image buff (`vcall 0xC8`) with `DataB`/`DataC` (damage dealt / taken factors), and
+     the duration `Dur + ability+0x9C` (soft add `0x6F6EF000`; no HeroDur in this path).
+* Unicorn (`tools/emu/mirror_emu.py`, vectors `crates/sim/tests/data/orc/mirror.txt`, `crates/sim/tests/orc_mirror.rs`):
+  slot pick on stream 12 (400 cases incl. the full stream state after), polygon offset (400), rotation matrix (400),
+  transform (400): **0 mismatches**. Rust: `orc::{mirror_pick, mirror_offset, mirror_rotation, mirror_transform}`.
+* Model (`orc::mirror_image` / `mirror_fire`, `tests/orc_mirror_cast.rs`): the delay is a `HeroSpell` timer (kind `0x81`);
+  without the soft-float or RNG tables (a host that has none) the images stand at the caster and no draw is made.
+* UNSURE: which of the two branches of pass two is the real hero swap (read from the arguments of the calls, not run),
+  the failure drop of a slot, the caster's state during the 0.5 s, the abilities of the images, the exact meaning of
+  `vcall 0xC8`, where the taken factor (DataC = 2) applies, `unit slot 0x124` = kill.
+
+### 7.2 Feral Spirit (`AOsf`)
+
+Feral Spirit (vtable `0x6F927B2C`, effect `0x6F1DF330`): `UnitID` `osw1..3`, `DataB` = 2 wolves, `Dur` 60. A direct-call
+search to depth 5 from the effect finds no draw of the RNG helpers. Model: units built at the caster (summoned flag),
+timed life `Dur`/`HeroDur` through BTLF. UNSURE: placement offsets, life of the wolves, abilities of the wolves.
 
 ## 8. Far Sight (`AOfs`, `CAbilityFarSight`, vtable `0x6F88B25C`)
 
@@ -144,5 +179,6 @@ Model: a visible-state fog modifier over the circle for the owner, stopped with 
 | Chain Lightning | hop arithmetic and selection rule read | components only | yes (no hop delay) |
 | Shockwave | data + launcher only | no | MODEL |
 | Wind Walk | effect read | no | MODEL |
-| Mirror Image / Feral Spirit | effect entry points, no RNG found | no | MODEL |
+| Mirror Image | cast effect, delayed handler, RNG stream 12, polygon | yes: pick, offset, rotation, transform (4 x 400, 0 mismatches) | yes (hero swap LIKELY) |
+| Feral Spirit | effect entry point, no RNG found | no | MODEL |
 | Far Sight | slots only | no | MODEL |

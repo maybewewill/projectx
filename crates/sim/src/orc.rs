@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use softfloat::{arith, conv, F32};
 
 use crate::abilities::code;
-use crate::cast::{effect_duration, BuffEffect, CastRec, CastTarget, BUFF_STUN};
+use crate::cast::{effect_duration, BuffEffect, CastRec, CastTarget, SpellLevel, BUFF_STUN};
 use crate::natives::game::{Game, ObjKey};
 use crate::natives::unit_attr::is_unit_type;
 use crate::natives::{dispatch_unit_death_by, ScriptRuntime};
@@ -81,6 +81,55 @@ pub fn crit_damage(damage: F32, mult: F32) -> F32 {
     arith::add(arith::sub(damage, F32::ZERO), bonus)
 }
 
+// ---- Mirror Image numeric cores (CONFIRMED in Unicorn: `tools/emu/mirror_emu.py`, `tests/data/orc/mirror.txt`) ----
+
+/// The combat RNG stream of the slot pick of Mirror Image: the roll wrapper `0x6F285350` is called with `EDX = 0xC`
+/// at `0x6F13DA6C` (CONFIRMED by disassembly and by the Unicorn run of the wrapper on stream 12).
+pub const MIRROR_STREAM: usize = 12;
+/// The cap of the polygon: `min(DataA, 9)` images (`cmp ebx, 9` at `0x6F13DAAC`).
+pub const MIRROR_MAX_IMAGES: i32 = 9;
+/// `2 pi` as the float constant `0x6FAAE608`.
+const TWO_PI: F32 = F32::from_bits(0x40C9_0FDB);
+
+/// The slot of the real hero among the `images + 1` polygon slots: `R2I(roll(1 die of images + 1 sides, stream
+/// 12)) - 1` (`0x6F13DA6C..0x6F13DA82`). The sides use `DataA` itself, not the capped count.
+pub fn mirror_pick(stream: &mut crate::rng::Rng, table: &crate::rng::RngTable, images: i32) -> Option<i32> {
+    let sides = u32::try_from(images.saturating_add(1)).unwrap_or(0);
+    let total = crate::damage::roll_total(stream, table, 1, sides, 0)?;
+    Some(total.wrapping_sub(1))
+}
+
+/// `0x6F1127D0`: the offset of slot `k` of `n` on the circle of radius `r`: `(r * sin(a), r * cos(a))` with
+/// `a = (I2R(k) * 2 pi) / I2R(n)` (soft float throughout).
+pub fn mirror_offset(k: i32, n: i32, r: F32, t: &softfloat::Tables) -> (F32, F32) {
+    let angle = arith::div(arith::mul(conv::i2r(k), TWO_PI), conv::i2r(n), t);
+    let s = softfloat::math::sin(angle, t);
+    let c = softfloat::math::cos(angle, t);
+    (arith::mul(r, s), arith::mul(r, c))
+}
+
+/// `0x6F4AFCD0` for the axis `(0, 0, 1)`: the 3x3 rotation matrix (row-major) of the caster's facing, as the axis-angle
+/// formula leaves it in the soft float: `m22 = c + (1 - c)` (so `0.99999994` for most angles), signed zeros as in the
+/// original.
+pub fn mirror_rotation(angle: F32, t: &softfloat::Tables) -> [F32; 9] {
+    let s = softfloat::math::sin(angle, t);
+    let c = softfloat::math::cos(angle, t);
+    let neg_zero = F32::from_bits(0x8000_0000);
+    [c, s, neg_zero, arith::neg(s), c, F32::ZERO, F32::ZERO, neg_zero, arith::add(c, arith::sub(F32::ONE, c))]
+}
+
+/// `0x6F07B950`: `out[c] = (v0 * m[c] + v1 * m[3 + c]) + v2 * m[6 + c]` (soft float, that association).
+pub fn mirror_transform(m: &[F32; 9], v: [F32; 3]) -> [F32; 3] {
+    let mut out = [F32::ZERO; 3];
+    for (c, o) in out.iter_mut().enumerate() {
+        let a = arith::mul(v[0], m[c]);
+        let b = arith::mul(v[1], m[3 + c]);
+        let d = arith::mul(v[2], m[6 + c]);
+        *o = arith::add(arith::add(a, b), d);
+    }
+    out
+}
+
 /// The other seven abilities' base codes.
 pub const WIND_WALK: u32 = code(b"AOwk");
 pub const MIRROR_IMAGE: u32 = code(b"AOmi");
@@ -96,6 +145,10 @@ pub const BUFF_FAR_SIGHT: u32 = code(b"BOfs");
 /// Damage type of the spell hits (the class word `0x8000` of the stomp record, slot `0x42C` = `0x6F18F880`; the same
 /// bit index as Storm Bolt in `cast.rs`).
 const SPELL_DAMAGE_TYPE: u32 = 15;
+
+/// Timer kinds of [`crate::cast::SpellMsg::HeroSpell`] used by the orc spells (the undead / night elf spells use
+/// the small numbers).
+pub const TICK_MIRROR: u8 = 0x81;
 
 /// Order ids (UNSURE: the public order-id list, like the three spells of `cast.rs`).
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -131,6 +184,11 @@ pub struct OrcState {
     illusions: BTreeMap<ObjKey, (F32, F32)>,
     /// Far Sight reveals: marker buff serial -> fog modifier.
     reveals: BTreeMap<u32, ObjKey>,
+    /// Mirror Image: the images of the last cast of each caster (killed by the next cast).
+    mirror_images: BTreeMap<ObjKey, Vec<ObjKey>>,
+    /// Mirror Image casts waiting for the `DataD` delay: caster -> (cast serial, level record).
+    mirror_pending: BTreeMap<ObjKey, (u32, SpellLevel)>,
+    mirror_serial: u32,
 }
 
 impl OrcState {
@@ -228,7 +286,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         CHAIN_LIGHTNING => chain_lightning(game, rt, rec),
         SHOCKWAVE => shockwave(game, rt, rec),
         WIND_WALK => wind_walk(game, rec),
-        MIRROR_IMAGE => mirror_image(game, rec),
+        MIRROR_IMAGE => mirror_image(game, rt, rec),
         FERAL_SPIRIT => feral_spirit(game, rec),
         FAR_SIGHT => far_sight(game, rec),
         _ => return false,
@@ -416,29 +474,120 @@ fn rad_to_deg(r: F32) -> F32 {
     arith::mul(r, F32::from_bits(0x4265_2EE1))
 }
 
-/// Mirror Image (class `0x6F8D9E5C`, effect `0x6F135740`): `DataA` copies of the caster, with `DataB` as the damage
-/// they deal and `DataC` as the damage they take (factors), living `Dur`/`HeroDur`. No RNG draw is reachable from the
-/// effect through direct calls (checked to depth 5). UNSURE: the placement (all copies at the caster's position here;
-/// the engine's push-apart spreads them), the copies' life and abilities, where the taken factor applies.
-fn mirror_image(game: &RefCell<Game>, rec: &CastRec) {
+/// Mirror Image (class `0x6F8D9E5C`, cast effect `0x6F135740`, delayed handler `0x6F13D990`). Spec section 7.
+///
+/// The cast effect (CONFIRMED structure) first runs the class slot `0x3E4` = `0x6F11B0C0`, which walks the list of the
+/// images of the previous cast (12-byte entries at ability `+0xF4`, count `+0xF0`) and calls the unit slot `0x124` with
+/// `0.0` on each (LIKELY: that slot sets the life, so they die), then marks the caster and starts the timer message
+/// `0xD01C1` with `DataD` seconds (`0x6F02EB30`, 0.5). Everything else happens in the handler ([`mirror_fire`]).
+fn mirror_image(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let old: Vec<ObjKey> = {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(rec.caster) {
+            return;
+        }
+        gm.orc.mirror_images.remove(&rec.caster).unwrap_or_default()
+    };
+    for k in old {
+        let died = {
+            let mut gm = game.borrow_mut();
+            gm.alive(k) && crate::natives::set_life(&mut gm, k, F32::ZERO)
+        };
+        if died {
+            dispatch_unit_death_by(game, rt, k, None);
+        }
+    }
     let mut gm = game.borrow_mut();
-    if !gm.alive(rec.caster) {
+    gm.orc.mirror_serial = gm.orc.mirror_serial.wrapping_add(1);
+    let serial = gm.orc.mirror_serial;
+    gm.orc.mirror_pending.insert(rec.caster, (serial, rec.level));
+    gm.timers_start_hero(rec.level.data[3].to_f32(), TICK_MIRROR, rec.caster, serial);
+}
+
+/// The timer handler of Mirror Image (message `0xD01C1`, `0x6F13D990`). CONFIRMED by disassembly, the numeric cores by
+/// Unicorn ([`mirror_pick`], [`mirror_offset`], [`mirror_rotation`], [`mirror_transform`]):
+/// 1. `n = F2I(DataA)`, slots `c + 1` with `c = min(n, 9)`; the hero's slot `h = R2I(roll(1 die of n + 1 sides, stream
+///    12)) - 1` is drawn FIRST (one draw per cast).
+/// 2. The polygon: slot `i` is at `centre + M * (r sin a_i, r cos a_i, 0)`, `a_i = 2 pi i / (c + 1)`, `r` = the level's
+///    `Rng` (128), `M` the rotation about the vertical axis by the caster's facing.
+/// 3. Pass one creates a unit of the caster's type at every slot, in ascending slot order (each allocates its handle id
+///    when built). Pass two (ascending): the slot `h` takes the hero (the caster is moved there, the placeholder unit is
+///    removed, freeing its id), every other unit becomes an image (illusion with the factors `DataB`/`DataC`, living
+///    `Dur + ability+0x9C` seconds). LIKELY structure (the slot-`h` branch is read from the arguments of the pass-two
+///    calls, not run); UNSURE: placement failures (the original drops the slot when the placement search fails), the
+///    state of the caster during the delay, abilities and the 0xC8 buff application of the images.
+///
+/// Without the soft-float or RNG tables (a host that has none) the images stand at the caster, no draw is made.
+fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey, serial: u32) {
+    let _ = rt;
+    let mut gm = game.borrow_mut();
+    let Some((s, level)) = gm.orc.mirror_pending.get(&caster).copied() else {
+        return;
+    };
+    if s != serial {
         return;
     }
-    let count = conv::f2i(rec.level.data[0]).max(0);
-    let (owner, type_id, x, y, facing) = {
-        let u = gm.unit(rec.caster);
+    gm.orc.mirror_pending.remove(&caster);
+    if gm.unit(caster).removed {
+        return;
+    }
+    let n = conv::f2i(level.data[0]);
+    let c = n.min(MIRROR_MAX_IMAGES);
+    let slots = c.saturating_add(1);
+    let (owner, type_id, cx, cy, facing) = {
+        let u = gm.unit(caster);
         (u.owner, u.type_id, u.x, u.y, u.facing)
     };
-    let hero = gm.target_hero(rec.caster);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
-    for _ in 0..count {
-        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, type_id, x, y, rad_to_deg(facing), true) else {
+    let tables = gm.softfloat_tables().cloned();
+    let mut chosen: Option<i32> = None;
+    if tables.is_some() {
+        if let Some((table, streams)) = gm.rng_parts() {
+            chosen = mirror_pick(streams.stream_mut(MIRROR_STREAM), table, n);
+        }
+    }
+    // Pass one: the polygon and the units.
+    let mut made: Vec<(i32, ObjKey, F32, F32)> = Vec::new();
+    for i in 0..slots.max(0) {
+        let (px, py) = match tables.as_ref() {
+            Some(t) => {
+                let (o1, o2) = mirror_offset(i, slots, level.rng, t);
+                let m = mirror_rotation(facing, t);
+                let o = mirror_transform(&m, [o1, o2, F32::ZERO]);
+                (arith::add(o[0], cx), arith::add(o[1], cy))
+            }
+            None => (cx, cy),
+        };
+        // Without the tables there is no hero slot: only the images are made.
+        if tables.is_none() && i >= c {
+            continue;
+        }
+        let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, type_id, px, py, rad_to_deg(facing), true) else {
             continue;
         };
+        made.push((i, k, px, py));
+    }
+    // Pass two.
+    let dur = arith::add(level.dur, F32::ZERO);
+    let mut images = Vec::new();
+    for (i, k, px, py) in made {
+        if chosen == Some(i) {
+            let (x, y) = gm.clamp_unit_move(px, py);
+            gm.store_unit_position(caster, x, y);
+            crate::natives::unit::remove_unit(&mut gm, k);
+            continue;
+        }
         gm.unit_mut(k).illusion = true;
-        gm.orc.illusions.insert(k, (rec.level.data[1], rec.level.data[2]));
+        gm.orc.illusions.insert(k, (level.data[1], level.data[2]));
         gm.apply_timed_life(k, crate::abilities::TIMED_LIFE, dur);
+        images.push(k);
+    }
+    gm.orc.mirror_images.insert(caster, images);
+}
+
+/// Timer dispatch of the orc spells (`SpellMsg::HeroSpell` kinds from `0x80`).
+pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, aux: u32) {
+    if kind == TICK_MIRROR {
+        mirror_fire(game, rt, unit, aux);
     }
 }
 
