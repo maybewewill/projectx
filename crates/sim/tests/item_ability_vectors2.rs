@@ -154,3 +154,20 @@ fn life_steal_handler_matches_the_original() {
     }
     assert!(healed > 20 && shown > healed, "the rows reach the heal and the blocked-heal paths");
 }
+
+#[test]
+fn orb_of_frost_duration_matches_the_original() {
+    let rs = rows("FR");
+    assert!(rs.len() >= 300);
+    for r in &rs {
+        let (hero, dur, herodur, ill) = (h(r[1]) != 0, h(r[2]), h(r[3]), h(r[4]));
+        assert_eq!(r[5], "|");
+        let level = SpellLevel {
+            dur: f(dur),
+            hero_dur: f(herodur),
+            ..Default::default()
+        };
+        assert_eq!(orb_frost_duration(&level, hero).to_bits(), h(r[6]), "row {r:?}");
+        assert_eq!(ill, h(r[7]), "the illusion bit passed to the buff apply, row {r:?}");
+    }
+}

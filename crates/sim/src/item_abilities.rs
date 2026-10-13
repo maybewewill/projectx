@@ -63,6 +63,8 @@ pub const BONUS_LIFE_REGEN: u32 = code(b"Arel");
 pub const BONUS_MANA_REGEN: u32 = code(b"AIrm");
 pub const BONUS_SPELL_REDUCTION: u32 = code(b"AIsr");
 pub const BONUS_VAMPIRE: u32 = code(b"AIva");
+pub const ORB_FIRE: u32 = code(b"AIfb");
+pub const ORB_FROST: u32 = code(b"AIob");
 pub const ITEM_INVIS: u32 = code(b"AIvi");
 pub const ITEM_INVUL: u32 = code(b"AIvu");
 pub const ITEM_RAISE_DEAD: u32 = code(b"AIrd");
@@ -126,6 +128,10 @@ pub enum Family {
     BonusSpellReduction,
     /// `CAbilityVampireBonus` (`AIva`): the carrier heals `DataA` times the damage its attacks deal.
     BonusVampire,
+    /// `CAbilityFireDamageBonus` (`AIfb`, the Orb of Fire): `DataA` fire damage with `Area` splash after every hit.
+    OrbFire,
+    /// `CAbilityFrostDamageBonus` (`AIob`, the Orb of Frost): the Frost buff `Bfro` after every hit.
+    OrbFrost,
     /// `CAbilityItemInvis` (`AIvi`): the buff `Binv` for the hero-rule duration.
     Invis,
     /// `CAbilityItemInvul` (`AIvu`): the buff `Bvul` for the hero-rule duration; the holder is invulnerable meanwhile.
@@ -149,6 +155,8 @@ impl Family {
                 | Family::BonusManaRegen
                 | Family::BonusSpellReduction
                 | Family::BonusVampire
+                | Family::OrbFire
+                | Family::OrbFrost
         )
     }
 
@@ -185,6 +193,8 @@ impl Family {
             BONUS_MANA_REGEN => Family::BonusManaRegen,
             BONUS_SPELL_REDUCTION => Family::BonusSpellReduction,
             BONUS_VAMPIRE => Family::BonusVampire,
+            ORB_FIRE => Family::OrbFire,
+            ORB_FROST => Family::OrbFrost,
             ITEM_INVIS => Family::Invis,
             ITEM_INVUL => Family::Invul,
             _ => return None,
@@ -688,6 +698,20 @@ pub fn life_steal_outcome(i: &LifeStealInput, damage: F32, data_a: F32) -> (bool
     (true, (!blocked).then_some(heal))
 }
 
+/// The duration the Orb of Frost hands to the Frost buff (`0x6F108FC0`, Unicorn `FR` rows): `HeroDur` for a hero victim,
+/// else `Dur` as it is (no extra term), plus the carrier's illusion bit.
+pub fn orb_frost_duration(level: &SpellLevel, hero: bool) -> F32 {
+    if hero {
+        level.hero_dur
+    } else {
+        level.dur
+    }
+}
+
+/// The damage type index of the orb damage: the record class `0x4000000` that the slot `0x324` of the damage bonus
+/// classes returns (`0x6F100880` for `AIfb`) is `1 << 26`.
+pub const ORB_DAMAGE_TYPE: u32 = 26;
+
 /// The hero term of the mana regeneration item (`0x6F2082C0`, Unicorn `RH` rows): `Misc IntRegenBonus * I2R(int)`.
 pub fn hero_int_regen_term(misc: F32, int_total: i32) -> F32 {
     arith::mul(misc, conv::i2r(int_total))
@@ -771,29 +795,74 @@ pub(crate) fn spell_reduction(gm: &Game, target: ObjKey, row: u32, flags: u32, r
 }
 
 /// The on-hit hook of a basic attack that dealt `damage` to `victim` (called by the attack arrival after the damage):
-/// the life steal of `AIva`. The pre-damage arming of the original (`0x6F0F54A0`: the carrier is enabled and not
-/// paused, the target filter `air,ground,enemy` accepts the victim) is modelled by the enemy test.
-pub fn on_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32) {
+/// the life steal of `AIva` and the orbs. The pre-damage arming of the original (`0x6F0F54A0` / `0x6F0F2B40`: the
+/// carrier is enabled and not paused, not an illusion for the orbs, the target filter accepts the victim) is modelled
+/// by the enemy test. Returns the units the orb damage killed, in order.
+pub fn on_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32, victim_alive: bool) -> Vec<ObjKey> {
+    let mut died = Vec::new();
     if !gm.alive(attacker) {
-        return;
+        return died;
     }
-    let levels = passive_levels(gm, attacker, Family::BonusVampire);
-    if levels.is_empty() {
-        return;
-    }
+    let abilities: Vec<u32> = gm
+        .unit(attacker)
+        .abilities
+        .iter()
+        .filter(|a| !a.is_removed())
+        .map(|a| a.base)
+        .collect();
     let (a_owner, v_owner) = (gm.unit(attacker).owner, gm.unit(victim).owner);
-    let input = LifeStealInput {
-        armed: true,
-        filter_refused: !gm.is_enemy(a_owner, v_owner),
-        immune: false,
-        victim: true,
-        owner_illusion: gm.unit(attacker).illusion,
-        victim_illusion: gm.unit(victim).illusion,
-        misc: gm.spells.item.illusions_heal,
-    };
-    for level in levels {
-        if let (_, Some(heal)) = life_steal_outcome(&input, damage, level.data[0]) {
-            add_life(gm, attacker, heal);
+    let enemy = gm.is_enemy(a_owner, v_owner);
+    for alias in abilities {
+        let level = level_of(gm, alias);
+        match gm.spells.item.family(alias) {
+            Some(Family::BonusVampire) => {
+                let input = LifeStealInput {
+                    armed: true,
+                    filter_refused: !enemy,
+                    immune: false,
+                    victim: true,
+                    owner_illusion: gm.unit(attacker).illusion,
+                    victim_illusion: gm.unit(victim).illusion,
+                    misc: gm.spells.item.illusions_heal,
+                };
+                if let (_, Some(heal)) = life_steal_outcome(&input, damage, level.data[0]) {
+                    add_life(gm, attacker, heal);
+                }
+            }
+            Some(Family::OrbFire) if enemy && !gm.unit(attacker).illusion => {
+                orb_fire(gm, attacker, victim, &level, &mut died);
+            }
+            Some(Family::OrbFrost) if enemy && victim_alive && !gm.unit(attacker).illusion => {
+                gm.frost_apply(victim, &level);
+            }
+            _ => {}
+        }
+    }
+    died
+}
+
+/// The Orb of Fire after a hit (`0x6F0F2CD0`, CONFIRMED structure: a damage record of the bonus value `DataA` (slot
+/// `0x320` returns the value stored at init), class `0x4000000` and the ability's `Area`, delivered to the victim). UNSURE:
+/// how the record's area is used by the target side; the model hits every other enemy in `Area` of the victim with the
+/// same amount. The damage goes through `unit_damage_target` as Spells-row damage (armor does not apply).
+fn orb_fire(gm: &mut Game, attacker: ObjKey, victim: ObjKey, level: &SpellLevel, died: &mut Vec<ObjKey>) {
+    let amount = level.data[0];
+    if let Some(k) = gm.unit_damage_target(attacker, victim, amount, false, false, 0, ORB_DAMAGE_TYPE) {
+        died.push(k);
+    }
+    if arith::lt(F32::ZERO, level.area) {
+        let (vx, vy) = (gm.unit(victim).x, gm.unit(victim).y);
+        let owner = gm.unit(attacker).owner;
+        for k in crate::natives::circle_candidates(gm, vx, vy, level.area) {
+            if k == victim || !gm.alive(k) {
+                continue;
+            }
+            if !gm.is_enemy(owner, gm.unit(k).owner) {
+                continue;
+            }
+            if let Some(d) = gm.unit_damage_target(attacker, k, amount, false, false, 0, ORB_DAMAGE_TYPE) {
+                died.push(d);
+            }
         }
     }
 }

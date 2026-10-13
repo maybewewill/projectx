@@ -1435,6 +1435,12 @@ impl Game {
         if !targs_ok(self, attacker, target, targs_word("air,ground")) {
             return;
         }
+        self.frost_apply(target, &level);
+    }
+
+    /// The Frost buff `Bfro` on `target` for the level's `HeroDur` / `Dur` (the body of Frost Attack, shared with the
+    /// Orb of Frost, whose post-hit handler `0x6F108FC0` hands the same buff the same duration rule).
+    pub(crate) fn frost_apply(&mut self, target: ObjKey, level: &crate::cast::SpellLevel) {
         let hero = self.target_hero(target);
         let dur = if hero { level.hero_dur } else { level.dur };
         if !arith::lt(F32::ZERO, dur) {

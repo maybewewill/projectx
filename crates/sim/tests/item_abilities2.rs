@@ -32,6 +32,8 @@ const SRC: &str = r#"
 globals
     unit u = null
     unit foe = null
+    unit foe2 = null
+    unit foe3 = null
     item a = null
     item b = null
     item ring = null
@@ -76,6 +78,14 @@ function setup_duel takes nothing returns nothing
     call UnitAddItem(foe, b)
     call SetWidgetLife(u, 100.0)
 endfunction
+function setup_orbs takes nothing returns nothing
+    set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
+    set foe = CreateUnit(Player(1), 'hpk2', 100.0, 0.0, 0.0)
+    set foe2 = CreateUnit(Player(1), 'hpk2', 160.0, 0.0, 0.0)
+    set foe3 = CreateUnit(Player(1), 'hpk2', 900.0, 0.0, 0.0)
+    set a = CreateItem('ofir', 0.0, 0.0)
+    call UnitAddItem(u, a)
+endfunction
 function setup_ring takes nothing returns nothing
     set u = CreateUnit(Player(0), 'hpk2', 0.0, 0.0, 0.0)
     set ring = CreateItem('rlif', 0.0, 0.0)
@@ -101,6 +111,10 @@ const A_BLINK: u32 = 0x4149_626B; // 'AIbk'
 const A_REL: u32 = 0x4172_656C; // 'Arel'
 const MDTH: u32 = 0x6D64_7468; // 'mdth' Mask of Death
 const BRAC: u32 = 0x6272_6163; // 'brac' Runed Bracers
+const OFIR: u32 = 0x6F66_6972; // 'ofir' Orb of Fire
+const OFRO: u32 = 0x6F66_726F; // 'ofro' Orb of Frost
+const A_FIRE: u32 = 0x4149_6662; // 'AIfb'
+const A_FROST: u32 = 0x4149_6F62; // 'AIob'
 const A_VAMP: u32 = 0x4149_7661; // 'AIva'
 const A_SR: u32 = 0x4149_7372; // 'AIsr'
 
@@ -182,7 +196,15 @@ fn host() -> ScriptHost {
         let mut bracers = level(0.0, 0.0, 0.0);
         bracers.data[1] = f(0.33);
         add(BRAC, A_SR, BONUS_SPELL_REDUCTION, bracers, &|_| {});
+        let mut fire = level(0.0, 0.0, 5.0);
+        fire.area = f(140.0);
+        add(OFIR, A_FIRE, ORB_FIRE, fire, &|_| {});
+        let mut frost = level(0.0, 3.0, 6.0);
+        frost.hero_dur = f(1.0);
+        add(OFRO, A_FROST, ORB_FROST, frost, &|_| {});
         g.install_item_abilities(&data);
+        g.item_types_mut().insert(OFIR, item_type(0, false));
+        g.item_types_mut().insert(OFRO, item_type(0, false));
         g.item_types_mut().insert(MDTH, item_type(0, false));
         g.item_types_mut().insert(BRAC, item_type(0, false));
         g.item_types_mut().insert(CDQ1, item_type(0, false));
@@ -294,10 +316,10 @@ fn mask_of_death_heals_half_of_the_damage_dealt() {
     {
         let mut g = h.game_mut();
         assert_eq!(g.unit(u).life.to_f32(), 100.0);
-        on_hit(&mut g, u, foe, f(60.0));
+        on_hit(&mut g, u, foe, f(60.0), true);
         assert_eq!(g.unit(u).life.to_f32(), 130.0, "DataA 0.5 of 60 damage");
         // An ally is not a target of `air,ground,enemy`.
-        on_hit(&mut g, u, u, f(60.0));
+        on_hit(&mut g, u, u, f(60.0), true);
         assert_eq!(g.unit(u).life.to_f32(), 130.0);
     }
 }
@@ -317,4 +339,37 @@ fn runed_bracers_scale_spells_damage_only() {
     g.unit_damage_target(u, foe, f(100.0), false, false, 1, 5);
     let lost = before - g.unit(foe).life.to_f32();
     assert!(lost > 67.5, "a Normal record is not reduced, lost {lost}");
+}
+
+#[test]
+fn orb_of_fire_hits_the_victim_and_the_enemies_around_it() {
+    let h = started("setup_orbs");
+    let (u, foe, foe2, foe3) = (global_unit(&h, "u"), global_unit(&h, "foe"), global_unit(&h, "foe2"), global_unit(&h, "foe3"));
+    let mut g = h.game_mut();
+    let before: Vec<f32> = [foe, foe2, foe3].iter().map(|&k| g.unit(k).life.to_f32()).collect();
+    let died = on_hit(&mut g, u, foe, f(30.0), true);
+    assert!(died.is_empty());
+    let after: Vec<f32> = [foe, foe2, foe3].iter().map(|&k| g.unit(k).life.to_f32()).collect();
+    assert_eq!(before[0] - after[0], 5.0, "DataA to the victim");
+    assert_eq!(before[1] - after[1], 5.0, "an enemy inside Area 140 of the victim");
+    assert_eq!(before[2], after[2], "an enemy outside the area");
+}
+
+#[test]
+fn orb_of_frost_slows_the_victim_for_its_duration() {
+    let mut h = started("setup_orbs");
+    let (u, foe) = (global_unit(&h, "u"), global_unit(&h, "foe"));
+    {
+        // Swap the carried orb: the pack holds the fire orb; give the unit the frost ability directly.
+        let mut g = h.game_mut();
+        g.unit_mut(u).abilities.attach(sim::abilities::Ability::new(A_FROST, None));
+        let died = on_hit(&mut g, u, foe, f(30.0), true);
+        assert!(died.is_empty());
+        assert!(g.unit(foe).buffs.iter().any(|b| b.base == sim::unit_spells::BUFF_FROST), "Bfro on the victim");
+    }
+    for _ in 0..50 {
+        h.step();
+    }
+    let g = h.game();
+    assert!(!g.unit(foe).buffs.iter().any(|b| b.base == sim::unit_spells::BUFF_FROST), "the 3 s buff ended");
 }

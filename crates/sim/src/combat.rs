@@ -1223,12 +1223,13 @@ impl Game {
 
     /// The main damage of an attack, then Bash's on-hit effects of the attacker (stun and flat damage, docs/spec/
     /// abilities-human-heroes.md section 3; the order of the two is UNSURE). Returns the unit that died.
-    fn hit_with_bash(&mut self, attacker: ObjKey, target: ObjKey, damage: F32) -> Option<ObjKey> {
+    fn hit_with_bash(&mut self, attacker: ObjKey, target: ObjKey, damage: F32) -> Vec<ObjKey> {
         let killed = self.apply_damage(target, damage);
         // Vampiric Aura's life steal of the attacker (`undead_ne.rs`).
         self.apply_lifesteal(attacker, target, damage);
-        // The item abilities that act on a hit (`item_abilities`: the life steal of `AIva`).
-        crate::item_abilities::on_hit(self, attacker, target, damage);
+        // The item abilities that act on a hit (`item_abilities`: the life steal of `AIva`, the orbs); the orb damage can
+        // kill (the victim or units around it).
+        let mut died = crate::item_abilities::on_hit(self, attacker, target, damage, killed.is_none());
         if killed.is_none() {
             // Passive on-hit buffs of `unit_spells.rs` (Frost Attack, Slow Poison).
             self.spell_on_hit(attacker, target);
@@ -1239,7 +1240,10 @@ impl Game {
             None
         };
         self.bash_clear(attacker);
-        killed.or(bash)
+        let mut all: Vec<ObjKey> = killed.into_iter().collect();
+        all.extend(bash);
+        all.append(&mut died);
+        all
     }
 
     /// Applies `amount` to the life of `target` through the life setter (the death event fires from the caller when
@@ -1383,7 +1387,7 @@ impl Game {
     /// The hit on the primary target, then the splash or the bounce chain of the weapon kind. Returns the units that
     /// died, in order.
     fn arrive(&mut self, unit: ObjKey, target: ObjKey, damage: F32, raw: F32, weapon: usize) -> Vec<ObjKey> {
-        let mut died: Vec<ObjKey> = self.hit_with_bash(unit, target, damage).into_iter().collect();
+        let mut died: Vec<ObjKey> = self.hit_with_bash(unit, target, damage);
         // Frost Armor / Thorns retaliation of the victim (`undead_ne.rs`).
         died.extend(self.apply_retaliation(unit, target, damage));
         let tid = self.unit(unit).type_id;

@@ -16,6 +16,8 @@ Row kinds (hex unless noted, `|` separates input from output):
   RH  misc inttotal                | x                 hero int regen term 0x6F2082C0: mul(Misc IntRegenBonus, I2R(int))
   SR  recflags rec20 illusion dataB null | called factor     AIsr damage handler 0x6F0F5730: scales a Spells-type record by 1 - DataB
   RS  a b factor                   | a' b'             the record scale 0x6F255800: both amounts times the factor
+  FR  hero dur herodur ownill     | dur ill           Orb of Frost post-hit 0x6F108FC0: duration (hero rule) and illusion
+                                                        bit handed to the buff apply of 'Bfro'
   VA  armed filt immune vict ownill victill misc amount v88 | healed heal fx
                                                         AIva post-damage handler 0x6F0F53A0: life adder gets DataA * damage
 
@@ -256,8 +258,46 @@ def case_va(r):
                                                           1 if 'heal' in got else 0, got.get('heal', 0), got.get('fx', 0))
 
 
+VT_AIOB = 0x6F8BF34C
+
+
+def case_fr(r):
+    hero = r.choice([0, 1])
+    dur, herodur = rand_real(r), rand_real(r)
+    ownill = r.choice([0, 1])
+    T.setup(VT_AIOB, flags=0x100)
+    rec = bytearray(bytes(mu.mem_read(T.REC, 0x68)))
+    struct.pack_into('<I', rec, 0x08, dur)
+    struct.pack_into('<I', rec, 0x0C, herodur)
+    mu.mem_write(T.REC, bytes(rec))
+    w32(T.UNIT + 0x5C, 0x40000000 if ownill else 0)
+    mu.mem_write(VICTIM, bytes(0x100))
+    w32(VICTIM, T.UVT)
+    mu.mem_write(C.BUFF, bytes(0x200))
+    mu.mem_write(C.BVT, bytes(0x800))
+    w32(C.BUFF, C.BVT)
+    w32(C.BVT + 0x360, FAKE)
+    mu.mem_write(RECORD, bytes(0x40))
+    got = {}
+
+    def resolve(uc, c, d, st):
+        w32(c, VICTIM)
+        return c
+
+    def apply(uc, c, d, st):
+        got['dur'] = r32(st[1])
+        got['ill'] = st[3]
+        return 0
+
+    T.trace_call(0x6F108FC0, T.ABIL, (RECORD, 0),
+                 stub_fn={0x6F0F2BE0: lambda *x: 1, 0x6F282F60: lambda *x: RECORD, 0x6F038450: resolve,
+                          HERO_TEST: lambda *x: hero, 0x6F0787D0: lambda *x: C.BUFF, FAKE: apply},
+                 span=0x300, cleanup={0x6F0F2BE0: 8, 0x6F038450: 4, 0x6F0787D0: 20, FAKE: 16, T.RETSTUB: 16})
+    return 'FR %x %x %x %x | %x %x' % (hero, dur, herodur, ownill, got.get('dur', 0xdeadbeef), got.get('ill', 0xdead))
+
+
 GENS = [('GR', case_gr), ('VI', case_vi), ('RL', case_rl), ('RM', case_rm), ('RH', case_rh), ('SR', case_sr),
-        ('RS', case_rs), ('VA', case_va)]
+        ('RS', case_rs), ('VA', case_va), ('FR', case_fr)]
 
 
 def main():
