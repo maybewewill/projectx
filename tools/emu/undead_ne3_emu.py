@@ -359,6 +359,58 @@ def run_buff_init():
     return res, raws
 
 
+VT_AB_IMMO = 0x6F8D7DD4
+F_IMMO_TOGGLE = 0x6F13B550
+
+
+def run_immolation_toggle():
+    """`CAbilityImmolation` slot 0x3C0: which level fields reach the buff constructor slot 0x368 (`0x6F12C4D0`)."""
+    A.setup_stubs()
+    A.make_ability(VT_AB_IMMO, 0x41456D69, 0)
+    tag = {"DataA": 11.0, "Area": 22.0, "Dur": 33.0, "DataB": 44.0}
+    wr(A.LVL + 0x20, f2u(tag["DataA"]))
+    wr(A.LVL + 0x18, f2u(tag["Area"]))
+    wr(A.LVL + 0x08, f2u(tag["Dur"]))
+    wr(A.LVL + 0x24, f2u(tag["DataB"]))
+    wr(A.OBJ + 0x9C, f2u(0.0))
+    wr(A.OBJ + 0xE4, 0xFFFFFFFF)
+    wr(A.OBJ + 0xE8, 0xFFFFFFFF)
+    seen = {}
+    # the existing-buff lookup (0x6F11D050): leaves the out slot [esp+0x14] as 0 -> creation path
+    hook_fn(0x6F11D050, lambda uc, esp, ecx: wr(ecx, 0) or 0, 4)
+    fake = DATA + 0x7400
+    mu.mem_write(fake, b"\0" * 0x400)
+    fvt = DATA + 0x7800
+    mu.mem_write(fvt, b"\0" * 0x500)
+    s324, s368, s348 = stub_slot(), stub_slot(), stub_slot()
+    hook_fn(s324, lambda uc, esp, ecx: 0, 4)
+
+    def s368_h(uc, esp, ecx):
+        args = [rd(esp + 4 + 4 * i) for i in range(10)]
+        seen["args"] = args
+        seen["vals"] = [(a, rd(a)) if (DATA <= a < DATA + 0x10000 or 0x100000 <= a < 0x110000 or 0x6F000000 <= a < 0x6FB00000) else (a, None) for a in args]
+        return 0
+
+    hook_fn(s368, s368_h, 40)
+    wr(fvt + 0x324, s324)
+    wr(fvt + 0x368, s368)
+    wr(fake, fvt)
+    hook_fn(0x6F139490, lambda uc, esp, ecx: fake, 0)
+    hook_fn(F_SRC_INFO, lambda uc, esp, ecx: ecx, 8)
+    hook_fn(0x6F079CA0, lambda uc, esp, ecx: 0, 4)
+    hook_fn(F_SMARTPTR, lambda uc, esp, ecx: 0, 4)
+    # owner unit: vtable slot 0x64 (player id)
+    s64 = stub_slot()
+    hook_fn(s64, lambda uc, esp, ecx: 3, 0)
+    uvt = DATA + 0x7D00
+    mu.mem_write(uvt, b"\0" * 0x400)
+    wr(uvt + 0x64, s64)
+    wr(A.UNIT, uvt)
+    # ability order-id getter (slot 0x348) is real; keep it
+    emu.call(F_IMMO_TOGGLE, ecx=A.OBJ)
+    return seen, tag
+
+
 def fmt_calls(calls):
     out = []
     for c in calls:
@@ -377,6 +429,11 @@ def main():
     which = os.environ.get("CHECK", "frost")
     if dump:
         os.makedirs(dump, exist_ok=True)
+    if which == "immo":
+        seen, tag = run_immolation_toggle()
+        print("immo tags", tag)
+        for i, (a, v) in enumerate(seen["vals"]):
+            print("immo arg%d" % (i + 1), hex(a), None if v is None else u2f(v))
     if which == "launch":
         out, raw, base_args, names = run_launch()
         for o in out:
