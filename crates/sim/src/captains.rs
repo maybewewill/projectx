@@ -901,21 +901,8 @@ impl Camps {
     }
 
     /// `GetCreepCamp` for the captain at `from`: the first living member of the chosen camp.
-    pub fn creep_camp(&mut self, gm: &mut Game, from: (f32, f32), min: i32, max: i32, flyers_ok: bool) -> Option<ObjKey> {
+    pub fn creep_camp(&mut self, gm: &Game, from: (f32, f32), min: i32, max: i32, flyers_ok: bool) -> Option<ObjKey> {
         self.build(gm);
-        // A camp whose first living member the ground search cannot reach has no path cost in the original and is skipped
-        // (UNSURE stand-in: `Game::path_reachable`). Without a pathing map every camp counts as reachable.
-        let reach: Vec<bool> = (0..self.camps.len())
-            .map(|i| match self.first_living(gm, i) {
-                Some(m) => {
-                    let (f, t) = (pos(gm, m), from);
-                    let fl = |v: f32| F32::from_bits(v.to_bits());
-                    gm.path_reachable((fl(t.0), fl(t.1)), (fl(f.0), fl(f.1))).unwrap_or(true)
-                }
-                None => true,
-            })
-            .collect();
-        let gm: &Game = gm;
         let views: Vec<CampView> = self
             .camps
             .iter()
@@ -936,7 +923,6 @@ impl Camps {
             .collect();
         let cost = |i: usize, _limit: u32| -> u32 {
             match self.first_living(gm, i) {
-                Some(_) if !reach[i] => 999_999,
                 Some(m) => (dist(from, pos(gm, m)) / CELL * COST_PER_CELL) as u32,
                 None => 999_999,
             }
