@@ -62,6 +62,9 @@ endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
 endfunction
+function dispel_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852057, foe)
+endfunction
 function foe_attacks takes nothing returns nothing
     call IssueTargetOrder(foe, "attack", grunt)
 endfunction
@@ -268,4 +271,70 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     call(&mut h2, "foe_attacks");
     run(&mut h2, 80);
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
+}
+
+// ---- Dispel Magic through the worker `0x6F0EEF00` ----
+
+fn with_dispel(h: &ScriptHost, mana_loss: f32) {
+    let k = {
+        let id = h.vm().global("shaman").and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    g.ability_types_mut().insert(DISPEL_MAGIC, AbilityType { max_level: Some(1) });
+    g.set_spell_levels(
+        DISPEL_MAGIC,
+        vec![SpellLevel {
+            cost: 75,
+            rng: f(500.0),
+            area: f(200.0),
+            data: data(&[(0, mana_loss), (1, 200.0)]),
+            ..Default::default()
+        }],
+    );
+    g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(DISPEL_MAGIC, None));
+}
+
+fn dispel_at_foe(h: &mut ScriptHost) {
+    call(h, "dispel_foe");
+    run(h, 1);
+}
+
+#[test]
+fn dispel_damages_an_enemy_summoned_unit_unless_it_carries_anti_magic_shell() {
+    let mut h = started();
+    with_dispel(&h, 0.0);
+    let (foe, foe2) = (unit(&h, "foe"), unit(&h, "foe2"));
+    {
+        let mut g = h.game_mut();
+        g.unit_mut(foe).summoned = true;
+        g.unit_mut(foe2).summoned = true;
+        let preds = sim::abilities::BuffPredicates { positive: true, magic: true, dispellable: true, ..Default::default() };
+        g.apply_mods_buff(foe2, BUFF_ANTI_MAGIC_SHELL, preds, UnitMods::default(), f(30.0));
+    }
+    dispel_at_foe(&mut h);
+    assert!(accepted(&h));
+    assert_eq!(life(&h, foe), 300.0, "DataB = 200 magic damage to an unprotected summoned enemy");
+    assert_eq!(life(&h, foe2), 500.0, "Bams: the worker takes the plain dispel record instead");
+}
+
+#[test]
+fn dispel_spares_a_magic_immune_summoned_unit_and_skips_mana_loss_for_invulnerable_ones() {
+    let mut h = started();
+    with_dispel(&h, 50.0);
+    let (foe, foe2, grunt) = (unit(&h, "foe"), unit(&h, "foe2"), unit(&h, "grunt"));
+    {
+        let mut g = h.game_mut();
+        g.unit_mut(foe).summoned = true;
+        g.unit_mut(foe).magic_immune = 1;
+        g.write_mana(foe, f(100.0));
+        g.write_mana(foe2, f(100.0));
+        g.write_mana(grunt, f(100.0));
+        g.set_unit_invulnerable(grunt, true);
+    }
+    dispel_at_foe(&mut h);
+    assert_eq!(life(&h, foe), 500.0, "slot 0x11C protects the unit from the summoned damage");
+    assert_eq!(h.game().unit(foe).mana.to_f32(), 100.0, "a protected unit returns before the mana loss");
+    assert_eq!(h.game().unit(foe2).mana.to_f32(), 50.0, "DataA mana loss");
+    assert_eq!(h.game().unit(grunt).mana.to_f32(), 100.0, "invulnerable (+0x20 & 8): no mana loss");
 }

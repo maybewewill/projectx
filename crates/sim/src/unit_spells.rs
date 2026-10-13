@@ -82,6 +82,8 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+/// Anti-magic Shell's buff code, the one the dispel worker looks for (`0x6F110530` returns `0x42616D73`).
+pub const BUFF_ANTI_MAGIC_SHELL: u32 = code(b"Bams");
 
 pub const ORDER_HEAL: u32 = 852_063;
 pub const ORDER_HEAL_ON: u32 = 852_064;
@@ -295,6 +297,8 @@ pub struct State {
     ticks: BTreeMap<u32, TickRec>,
     /// The second unit type of Raise Dead (0 = the skeletal mage).
     pub raise_dead_second: u32,
+    /// Misc `InvulnSummonDispelDamage` (read by the dispel worker; a missing key reads 0).
+    pub invuln_summon_dispel_damage: bool,
     /// Misc `EtherealHealBonus` (a missing key reads 0.0).
     pub ethereal_heal_bonus: F32,
     /// Misc `IllusionsCanRestoreLife` / `IllusionsGetAutocast` (missing = off).
@@ -792,6 +796,127 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
     }
 }
 
+/// The inputs of the per-unit dispel worker `0x6F0EEF00` (shared by Dispel Magic, Purge and Abolish Magic). Every field
+/// is a value the original reads from the target, the caster or a callee; the control flow is CONFIRMED by Unicorn
+/// (`tools/emu/dispel_worker_emu.py`, 1,600 random cases over four seeds, calls recorded and compared with
+/// `crates/sim/tests/dispel_worker_vectors.rs`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkerIn {
+    /// The player argument handed to the relation test.
+    pub player: u32,
+    /// `0x6F285B20(target, player)`: the passive alliance row has NO bit for the target's owner (an enemy).
+    pub rel: u32,
+    /// `0x6F0787D0(target, 'Bams')`: the target carries Anti-magic Shell.
+    pub bams: u32,
+    /// Target `+0x248 & 4` (summoned) and `+0x5C & 0x40000000` (illusion).
+    pub summoned: bool,
+    pub illusion: bool,
+    /// The target's virtual slot `0x11C` (nonzero: protected, taken as magic immune).
+    pub v11c: u32,
+    /// `0x6F28D750(target, a2, ability)`: nonzero when the target is blocked from the ability.
+    pub blocked: u32,
+    /// Misc `InvulnSummonDispelDamage` (read with the default `ebx`, 0).
+    pub misc: u32,
+    pub a2: u32,
+    pub ability: u32,
+    /// Arguments 4..7: remove positive buffs, remove negative buffs, two pass-through words of the buff remover.
+    pub positive: u32,
+    pub negative: u32,
+    pub a6: u32,
+    pub a7: u32,
+    /// The summoned-unit damage (bits of the float the pointer argument 8 points at) and the mana loss (argument 9).
+    pub damage_bits: u32,
+    pub mana_bits: u32,
+    /// Argument 10 (the damage record flags) and the target's `+0x20 & 8`.
+    pub flags: u32,
+    pub target_flag8: bool,
+    /// The source handed to the damage record and the buff remover (the ability's owner).
+    pub source: u32,
+}
+
+/// One call the worker makes, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerStep {
+    Rel(u32),
+    FindBams,
+    Slot11c,
+    Blocked(u32, u32),
+    Misc(u32),
+    /// A damage record `(amount bits, class, source, flags)` and its application through the target slot `0x120`.
+    Damage(u32, u32, u32, u32),
+    /// The buff remover `0x6F079FE0` with its nine arguments.
+    Buffs([u32; 9]),
+    Mana(u32),
+    Notify(u32),
+}
+
+/// The control flow of the worker `0x6F0EEF00` (CONFIRMED by Unicorn): the ordered calls and the return value.
+///
+/// 1. `rel = relation(target, player)`; `bams = find buff 'Bams'`.
+/// 2. `protected = !illusion && (slot0x11C != 0 || blocked(a2, ability) != 0)` (the two calls are made in that order and
+///    only for a non-illusion; the first nonzero one ends the chain).
+/// 3. With `rel != 0`: a summoned or illusion target that has no `Bams` and is not protected takes the SUMMONED damage
+///    record (class `0x4000`, amount argument 8, flags argument 10 with `0x20` added when the Misc flag
+///    `InvulnSummonDispelDamage` is set), any other target takes the DISPEL record (amount 0.0, class 0, flags argument 10
+///    with `0x10` added). The record is applied by the target's slot `0x120`.
+/// 4. A protected target returns 1 after the record (or at once without a record when `rel == 0`).
+/// 5. Otherwise the buff remover runs: both flags set: one call (positive, negative); exactly one set: one call with
+///    that one (positive first); neither: none. Arguments `(0, 1, 0, 0, a6, positive, negative, source, a7)`.
+/// 6. Unless the target's `+0x20 & 8`: without `Bams` a nonzero (or NaN) mana loss is applied, and a non-null ability
+///    is notified of the target. Returns 0.
+pub fn dispel_worker(i: &WorkerIn) -> (Vec<WorkerStep>, u32) {
+    let mut out = vec![WorkerStep::Rel(i.player), WorkerStep::FindBams];
+    let find = i.bams != 0;
+    let var40 = i.summoned || i.illusion;
+    let protected = if i.illusion {
+        false
+    } else {
+        out.push(WorkerStep::Slot11c);
+        if i.v11c != 0 {
+            true
+        } else {
+            out.push(WorkerStep::Blocked(i.a2, i.ability));
+            i.blocked != 0
+        }
+    };
+    if i.rel != 0 {
+        if !find && var40 && !protected {
+            out.push(WorkerStep::Misc(0));
+            let flags = if i.misc != 0 { i.flags | 0x20 } else { i.flags };
+            out.push(WorkerStep::Damage(i.damage_bits, 0x4000, i.source, flags));
+        } else {
+            out.push(WorkerStep::Damage(0, 0, i.source, i.flags | 0x10));
+        }
+    }
+    if protected {
+        return (out, 1);
+    }
+    let buffs = |p: u32, n: u32| WorkerStep::Buffs([0, 1, 0, 0, i.a6, u32::from(p != 0), u32::from(n != 0), i.source, i.a7]);
+    if i.positive != 0 && i.negative != 0 {
+        out.push(buffs(1, 1));
+    } else if i.positive != i.negative {
+        if i.positive != 0 {
+            out.push(buffs(1, 0));
+        }
+        if i.negative != 0 {
+            out.push(buffs(0, 1));
+        }
+    }
+    if !i.target_flag8 {
+        if !find {
+            let m = f32::from_bits(i.mana_bits);
+            // x87 compare against 0.0: unequal or unordered runs the mana loss.
+            if m != 0.0 {
+                out.push(WorkerStep::Mana(i.mana_bits));
+            }
+        }
+        if i.ability != 0 {
+            out.push(WorkerStep::Notify(i.ability));
+        }
+    }
+    (out, 0)
+}
+
 /// Damage type of Dispel Magic's summoned-unit damage: the class word `0x4000` of the worker `0x6F0EEF00` is bit 14,
 /// `DAMAGE_TYPE_MAGIC`.
 const DAMAGE_TYPE_MAGIC: u32 = 14;
@@ -811,37 +936,97 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
             CastTarget::Point(x, y) => (x, y),
             CastTarget::None => (gm.unit(rec.caster).x, gm.unit(rec.caster).y),
         };
-        let owner = gm.unit(rec.caster).owner;
         for k in crate::natives::group::circle_candidates(&gm, x, y, rec.level.area) {
             if !gm.alive(k) || gm.unit(k).hidden {
                 continue;
             }
-            let (enemy, summoned) = {
-                let u = gm.unit(k);
-                (gm.is_enemy(owner, u.owner), u.summoned || u.illusion)
-            };
-            if enemy && summoned {
-                if let Some(t) =
-                    gm.unit_damage_target(rec.caster, k, rec.level.data[1], false, false, 0, DAMAGE_TYPE_MAGIC)
-                {
-                    killed.push(t);
-                    continue;
-                }
+            if let Some(t) = dispel_one(&mut gm, rec.caster, k, rec.level.data[1], rec.level.data[0]) {
+                killed.push(t);
             }
-            gm.remove_buffs(
-                k,
-                crate::abilities::BuffSelect {
-                    remove_positive: enemy,
-                    remove_negative: !enemy,
-                    dispellable: true,
-                    ..Default::default()
-                },
-            );
         }
     }
     for t in killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
     }
+}
+
+/// One unit of a dispel: builds the worker inputs from the model and carries out the calls of
+/// [`dispel_worker`] (CONFIRMED control flow). Returns the unit if the summoned-unit damage killed it.
+///
+/// Input mapping (LIKELY): `rel` = the target's owner is an enemy of the caster's player, `bams` = the target carries
+/// `Bams`, `v11c` = the target is magic immune, the buff remover flags = positive buffs for an enemy and negative ones
+/// for anyone else (the callbacks' flag source `0x6F0EF210` slot `0x348` is not decoded), `target_flag8` = the target
+/// is invulnerable (the worker skips the mana loss and the ability notification for it). The dispel record (amount 0,
+/// record flag `0x10`) is applied by the target's damage handler, which is not decoded: it is modelled as the removal
+/// of the positive dispellable buffs (the same removal the explicit buff remover step makes). The mana loss takes
+/// `min(mana, amount)` (UNSURE).
+fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32) -> Option<ObjKey> {
+    let owner = gm.unit(caster).owner;
+    let (enemy, summoned, illusion, immune) = {
+        let u = gm.unit(k);
+        (gm.is_enemy(owner, u.owner), u.summoned, u.illusion, u.magic_immune > 0)
+    };
+    let bams = gm.buff_position(k, BUFF_ANTI_MAGIC_SHELL).is_some();
+    let input = WorkerIn {
+        player: owner,
+        rel: u32::from(enemy),
+        bams: u32::from(bams),
+        summoned,
+        illusion,
+        v11c: u32::from(immune),
+        blocked: 0,
+        misc: u32::from(gm.spells.unit.invuln_summon_dispel_damage),
+        a2: 0,
+        ability: 1,
+        positive: u32::from(enemy),
+        negative: u32::from(!enemy),
+        a6: 0,
+        a7: 0,
+        damage_bits: damage.to_bits(),
+        mana_bits: mana.to_bits(),
+        flags: 0,
+        target_flag8: gm.unit_is_invulnerable(k),
+        source: 0,
+    };
+    let (steps, _) = dispel_worker(&input);
+    for step in steps {
+        match step {
+            WorkerStep::Damage(_, 0x4000, _, _) => {
+                if let Some(t) = gm.unit_damage_target(caster, k, damage, false, false, 0, DAMAGE_TYPE_MAGIC) {
+                    return Some(t);
+                }
+            }
+            WorkerStep::Damage(..) => {
+                gm.remove_buffs(
+                    k,
+                    crate::abilities::BuffSelect {
+                        remove_positive: true,
+                        dispellable: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            WorkerStep::Buffs(a) => {
+                gm.remove_buffs(
+                    k,
+                    crate::abilities::BuffSelect {
+                        remove_positive: a[5] != 0,
+                        remove_negative: a[6] != 0,
+                        dispellable: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            WorkerStep::Mana(bits) => {
+                let loss = F32::from_bits(bits);
+                let cur = gm.unit(k).mana;
+                let next = if arith::lt(cur, loss) { F32::ZERO } else { arith::sub(cur, loss) };
+                gm.write_mana(k, next);
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Rejuvenation (`0x6F108530` -> buff apply `0x6F0F0650`, CONFIRMED): the hero rule duration `T` (`HeroDur` / `Dur`);
