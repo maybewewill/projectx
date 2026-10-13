@@ -63,6 +63,18 @@ endfunction
 function curse_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(shaman, 852191)
 endfunction
+function polymorph_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852074, foe)
+endfunction
+function polymorph_foe2 takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852074, foe2)
+endfunction
+function polymorph_hero takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852074, hero_foe)
+endfunction
+function polymorph_ally takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852074, grunt)
+endfunction
 function abolish_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852132, grunt)
 endfunction
@@ -302,6 +314,93 @@ fn a_cursed_attacker_misses_by_the_original_rule_with_one_stream_two_draw_per_sw
     call(&mut h2, "foe_attacks");
     run(&mut h2, 80);
     assert!(life(&h2, grunt2) < 500.0, "an uncursed attacker deals damage");
+}
+
+// ---- Polymorph ----
+
+const SHEEP_LAND: u32 = 0x6E73_6865; // 'nshe'
+
+fn with_polymorph(h: &ScriptHost, dur: f32) {
+    let k = {
+        let id = h.vm().global("shaman").and_then(|v| v.as_handle()).unwrap();
+        h.game().unit_of_handle(id).unwrap()
+    };
+    let mut g = h.game_mut();
+    g.unit_types_mut().insert(
+        SHEEP_LAND,
+        UnitType {
+            name: "Sheep".to_string(),
+            max_life: f(50.0),
+            move_speed: f(100.0),
+            ..Default::default()
+        },
+    );
+    g.ability_types_mut().insert(POLYMORPH, AbilityType { max_level: Some(1) });
+    // Polymorph: cost 220, cooldown 3, range 500, DataA 5 (max creep level), Dur 60 (shortened).
+    g.set_spell_levels(
+        POLYMORPH,
+        vec![SpellLevel {
+            cost: 220,
+            cool: f(3.0),
+            dur: f(dur),
+            hero_dur: f(dur),
+            rng: f(500.0),
+            data: data(&[(0, 5.0)]),
+            ..Default::default()
+        }],
+    );
+    g.unit_mut(k).abilities.attach(sim::abilities::Ability::new(POLYMORPH, None));
+}
+
+#[test]
+fn polymorph_turns_an_enemy_into_a_sheep_that_cannot_fight_and_restores_it_afterwards() {
+    let mut h = started();
+    with_polymorph(&h, 6.0);
+    let (foe, grunt) = (unit(&h, "foe"), unit(&h, "grunt"));
+    h.game_mut().write_life(foe, f(250.0));
+    call(&mut h, "foe_attacks");
+    run(&mut h, 3);
+    call(&mut h, "polymorph_foe");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(has_buff(&h, foe, BUFF_POLYMORPH));
+    assert_eq!(h.game().unit(foe).type_id, SHEEP_LAND);
+    assert_eq!(h.game().unit(foe).max_life.to_f32(), 50.0);
+    assert_eq!(life(&h, foe), 25.0, "the life fraction (0.5) is kept");
+    assert!(h.game().is_polymorphed(foe));
+    let hp = life(&h, grunt);
+    run(&mut h, 30);
+    assert_eq!(life(&h, grunt), hp, "a sheep does not attack");
+    run(&mut h, 40);
+    assert!(!has_buff(&h, foe, BUFF_POLYMORPH));
+    assert_eq!(h.game().unit(foe).type_id, FOOT);
+    assert_eq!(h.game().unit(foe).max_life.to_f32(), 500.0);
+    assert_eq!(life(&h, foe), 250.0, "back to the original form with the same life fraction");
+    assert!(!h.game().is_polymorphed(foe));
+}
+
+#[test]
+fn polymorph_refuses_heroes_summons_and_allies_and_kills_illusions() {
+    let mut h = started();
+    with_polymorph(&h, 6.0);
+    let (foe, foe2, hero) = (unit(&h, "foe"), unit(&h, "foe2"), unit(&h, "hero_foe"));
+    h.game_mut().unit_mut(foe).summoned = true;
+    call(&mut h, "polymorph_foe");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "summoned units are refused");
+    call(&mut h, "polymorph_hero");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "nonhero targs");
+    call(&mut h, "polymorph_ally");
+    run(&mut h, 1);
+    assert!(!accepted(&h), "enemies only");
+    h.game_mut().unit_mut(foe2).illusion = true;
+    call(&mut h, "polymorph_foe2");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert!(h.game().unit(foe2).dead, "an illusion dies");
+    assert!(!h.game().is_polymorphed(foe2));
+    assert!(!h.game().is_polymorphed(hero));
 }
 
 // ---- Abolish Magic ----

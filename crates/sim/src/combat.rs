@@ -1625,6 +1625,7 @@ impl Game {
     /// Whether unit `unit` may still act: alive and not removed.
     fn attacker_live(&self, unit: ObjKey) -> bool {
         matches!(self.object(unit), Object::Unit(u) if !u.dead && !u.removed && u.bonuses.stun == 0)
+            && !self.is_polymorphed(unit)
     }
 
     /// Whether `unit` may attack `target`: a live unit other than itself that is not invulnerable. The original's

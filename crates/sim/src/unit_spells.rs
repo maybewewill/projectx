@@ -82,6 +82,12 @@ pub const FAERIE_FIRE: u32 = code(b"Afae");
 pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 pub const CURSE: u32 = code(b"Acrs");
 pub const BUFF_CURSE: u32 = code(b"Bcrs");
+pub const POLYMORPH: u32 = code(b"Aply");
+pub const BUFF_POLYMORPH: u32 = code(b"Bply");
+/// The default sheep types of Polymorph's data fields `DataB..DataE` (land, flying, amphibious, water).
+pub const SHEEP: [u32; 4] = [code(b"nshe"), code(b"nshf"), code(b"nsha"), code(b"nshw")];
+/// The RNG stream of the Polymorph type pick (`0x6F12DAA0` calls the roll wrapper with stream `0x18`).
+pub const POLYMORPH_STREAM: usize = 24;
 pub const ABOLISH_MAGIC: u32 = code(b"Aadm");
 pub const ENSNARE: u32 = code(b"Aens");
 pub const BUFF_ENSNARE_AIR: u32 = code(b"Bena");
@@ -131,7 +137,8 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 16] = [
+pub const SPELL_ORDERS: [(u32, u32); 17] = [
+    (852_074, POLYMORPH),
     (852_132, ABOLISH_MAGIC),
     (852_106, ENSNARE),
     (852_211, WEB),
@@ -199,6 +206,8 @@ pub struct UnitMods {
     pub miss_chance: F32,
     /// One root count while the buff exists (Ensnare, Web).
     pub root: bool,
+    /// The buff holds a morph (Polymorph): its removal restores the unit's own form.
+    pub morph: bool,
 }
 
 impl Default for UnitMods {
@@ -212,6 +221,7 @@ impl Default for UnitMods {
             mana_regen: F32::ZERO,
             miss_chance: F32::ZERO,
             root: false,
+            morph: false,
         }
     }
 }
@@ -262,8 +272,12 @@ impl Game {
             mana_regen: arith::neg(m.mana_regen),
             miss_chance: F32::ZERO,
             root: false,
+            morph: false,
         };
         self.apply_mods(unit, &neg);
+        if m.morph {
+            self.restore_morph(unit);
+        }
         if m.root {
             if let Some(n) = self.spells.unit.rooted.get_mut(&unit) {
                 *n = n.saturating_sub(1);
@@ -322,6 +336,15 @@ struct TickRec {
     timer: Option<TimerId>,
 }
 
+/// What a polymorphed unit was: its type, its classification word and the abilities taken off (the sheep has none of
+/// them: the original replaces the ability set with the new type's).
+#[derive(Debug, Clone)]
+struct MorphRec {
+    orig_type: u32,
+    orig_class: u32,
+    abilities: Vec<crate::abilities::Ability>,
+}
+
 /// One Lightning Shield: the caster (damage source), the per-tick damage (`DataA / 2`), the tick period (0.5 s), the
 /// damage radius (`Area`) and the pending tick timer.
 #[derive(Debug, Clone, Copy)]
@@ -369,6 +392,10 @@ pub struct State {
     purge: BTreeMap<u32, PurgeRec>,
     /// Lightning Shield buffs by serial.
     shield: BTreeMap<u32, ShieldRec>,
+    /// Polymorphed units: what they were.
+    morphs: BTreeMap<ObjKey, MorphRec>,
+    /// The sheep types by movement class (0 = [`SHEEP`]).
+    pub sheep: [u32; 4],
     /// Root counts (Ensnare, Web) by unit: a rooted unit's mover is halted.
     rooted: BTreeMap<ObjKey, u32>,
     /// Nets in flight by id (the timer's `aux`): (caster, target, base, the level record at the cast).
@@ -627,7 +654,23 @@ pub(crate) fn untargeted_error(gm: &Game, caster: ObjKey, base: u32, level: &cra
 
 /// Target validity beyond the range test (`0x6F04F7A0` + class slot `0x3F0`).
 pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
+    if gm.is_polymorphed(caster) {
+        // A sheep has none of the unit's abilities.
+        return Some(CastError::Stunned);
+    }
     match base {
+        POLYMORPH => {
+            // targs: air,ground,nonhero,enemy,organic,neutral; slot 0x3F0 (`0x6F11C230`): a summoned unit is refused
+            // (error 0x9F); the creep level rule (error 0x33) is not modelled.
+            let w = targs_word("air,ground,nonhero,enemy,organic,neutral");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            if gm.unit(target).summoned {
+                return Some(CastError::BadTarget);
+            }
+            None
+        }
         HEAL => {
             let t = gm.unit(target);
             if !is_ally(gm, caster, target) || t.removed {
@@ -807,6 +850,12 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         ENSNARE | WEB => {
             if let CastTarget::Unit(t) = rec.target {
                 net_spell(game, rec, t);
+            }
+            true
+        }
+        POLYMORPH => {
+            if let CastTarget::Unit(t) = rec.target {
+                polymorph(game, rt, rec, t);
             }
             true
         }
@@ -1200,6 +1249,138 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     };
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+/// Polymorph (`Aply`, `CAbilityPolymorph` vtable `0x6F8A922C`, effect slot `0x424` = `0x6F12F560`). CONFIRMED structure:
+/// 1. an illusion target is killed (the target's slot `0x124` with a zero amount) and nothing else happens;
+/// 2. otherwise the hero rule gives the duration (`HeroDur` / `Dur`), the type pick `0x6F12DAA0` reads the target's
+///    movement class (`+0x1FC`: 2 = fly takes the list of `DataC`, `0x10` the list of `DataE`, `0x20` the list of
+///    `DataD`, anything else `DataB`; the data rows are the sheep `nshe`, `nshf`, `nsha`, `nshw`), splits the list at
+///    commas and draws ONE die on combat... stream `0x18` (24) through the roll wrapper `0x6F285350` (`count 1`, `sides`
+///    = the number of valid types, `bonus -1`, so the index is `floor(r * n / 2^32)`; the draw is made even for a
+///    one-entry list), and the ability's slot `0x43C` (`0x6F13F790`) creates the buff `Bply` (`CBuffPolymorph`, a
+///    progress-bar buff) with the new type and the duration;
+/// 3. the target rule (slot `0x3F0` = `0x6F11C230`): `DataA` (max creep level, 5) as an integer, and a target that
+///    is a creep above that level gets error `0x33`; a summoned unit (`+0x248 & 4`) gets error `0x9F`.
+/// The morph itself runs inside the buff's apply (`0x6F12A0B0` -> `0x6F0D28F0`), not decoded. Model (UNSURE): the unit
+/// takes the sheep type (its life fraction kept, the sheep's maximum life when the host registered the type), loses all
+/// abilities but its move (so it cannot attack or cast), and gets everything back when the buff ends (expiry or dispel).
+/// The creep level rule is not modelled (the model has no creep levels).
+fn polymorph(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target: ObjKey) {
+    let mut killed = None;
+    {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(target) {
+            return;
+        }
+        if gm.unit(target).illusion {
+            if crate::natives::set_life(&mut gm, target, F32::ZERO) {
+                killed = Some(target);
+            }
+        } else if gm.buff_position(target, BUFF_POLYMORPH).is_some() {
+            // A second Polymorph refreshes the buff by the set-duration rule (the form stays).
+            let hero = gm.target_hero(target);
+            let dur = effect_duration(&rec.level, hero, F32::ZERO);
+            if let Some(i) = gm.buff_position(target, BUFF_POLYMORPH) {
+                let serial = gm.unit(target).buffs[i].serial;
+                gm.set_buff_duration(target, serial, dur);
+            }
+        } else {
+            let hero = gm.target_hero(target);
+            let dur = effect_duration(&rec.level, hero, F32::ZERO);
+            if !arith::lt(F32::ZERO, dur) {
+                return;
+            }
+            let movement = gm
+                .unit_types()
+                .get(gm.unit(target).type_id)
+                .map_or(0, |t| t.movement);
+            let class = match movement {
+                2 => 1,
+                0x10 => 3,
+                0x20 => 2,
+                _ => 0,
+            };
+            let sheep = if gm.spells.unit.sheep[class] != 0 { gm.spells.unit.sheep[class] } else { SHEEP[class] };
+            // The type pick draws one die of one side (index 0) on stream 24 whatever the list length.
+            if let Some((table, streams)) = gm.rng_parts() {
+                let _ = crate::damage::roll_total(streams.stream_mut(POLYMORPH_STREAM), table, 1, 1, -1);
+            }
+            gm.morph_unit(target, sheep);
+            let preds = crate::abilities::BuffPredicates {
+                negative: true,
+                magic: true,
+                dispellable: true,
+                ..buff_predicates(BUFF_POLYMORPH)
+            };
+            let mods = UnitMods {
+                morph: true,
+                ..UnitMods::default()
+            };
+            gm.apply_mods_buff(target, BUFF_POLYMORPH, preds, mods, dur);
+        }
+    }
+    if let Some(t) = killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+impl Game {
+    /// Whether `unit` is polymorphed (the combat tick treats it as disarmed).
+    pub fn is_polymorphed(&self, unit: ObjKey) -> bool {
+        self.spells.unit.morphs.contains_key(&unit)
+    }
+
+    fn morph_unit(&mut self, unit: ObjKey, to: u32) {
+        let (orig_type, orig_class) = {
+            let u = self.unit(unit);
+            (u.type_id, u.class_flags)
+        };
+        let frac = life_fraction(self, unit);
+        let removed: Vec<crate::abilities::Ability> = {
+            let codes: Vec<u32> = self
+                .unit(unit)
+                .abilities
+                .iter()
+                .map(|a| a.base)
+                .filter(|&b| b != crate::abilities::MOVE)
+                .collect();
+            let u = self.unit_mut(unit);
+            codes.into_iter().filter_map(|b| u.abilities.remove(b)).collect()
+        };
+        self.unit_mut(unit).type_id = to;
+        if let Some(ty) = self.unit_types().get(to).cloned() {
+            self.unit_mut(unit).class_flags = ty.classification;
+            self.write_max_life(unit, ty.max_life);
+            self.write_life(unit, arith::mul(ty.max_life, frac));
+        }
+        self.sync_unit_spells(unit);
+        self.spells.unit.morphs.insert(
+            unit,
+            MorphRec {
+                orig_type,
+                orig_class,
+                abilities: removed,
+            },
+        );
+    }
+
+    fn restore_morph(&mut self, unit: ObjKey) {
+        let Some(rec) = self.spells.unit.morphs.remove(&unit) else {
+            return;
+        };
+        let frac = life_fraction(self, unit);
+        self.unit_mut(unit).type_id = rec.orig_type;
+        self.unit_mut(unit).class_flags = rec.orig_class;
+        if let Some(ty) = self.unit_types().get(rec.orig_type).cloned() {
+            self.write_max_life(unit, ty.max_life);
+            self.write_life(unit, arith::mul(ty.max_life, frac));
+        }
+        for a in rec.abilities {
+            self.unit_mut(unit).abilities.attach(a);
+        }
+        self.sync_unit_spells(unit);
     }
 }
 
