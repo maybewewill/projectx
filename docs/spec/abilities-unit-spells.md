@@ -114,3 +114,12 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   apply slots) and one to the attack-record damage modifiers (slot `0x2D4`, negated list at `+0xF8`).
 * Model: `UnitMods { move_delta = -A, attack_delta = -B, damage_pct = -C }` as a negative, magic, dispellable buff
   `Bcri`; refresh replaces the values. UNSURE: the order of the percentage damage modifier against other modifiers.
+
+## 5. Faerie Fire (`Afae`, `CAbilityFaerieFire` vtable `0x6F8AA36C`, an AutoTargetSpell)
+
+* Data: cost 45, range 700, Dur 90 / HeroDur 60, `DataA` 4 (defense reduction), `DataB` always autocast (0), buff `Bfae`,
+  targets air, ground, enemy, neutral.
+* Effect slot `0x424` = `0x6F0B8750` (CONFIRMED structure): hero test, duration, `DataA` into the buff apply
+  `0x6F0B8640`; `CBuffFaerieFire` has the armor sink only (scan of its apply slots). Model: armor `-DataA` for the
+  duration (negative, magic, dispellable); refresh replaces the value. Revealing invisible units (detection) is not
+  modelled. Autocast (filter slot `0x450` = `0x6F09C240`) is NOT DONE; the order ids 852150/852151 toggle nothing.

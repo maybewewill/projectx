@@ -67,6 +67,8 @@ pub const BLOODLUST: u32 = code(b"Ablo");
 pub const BUFF_BLOODLUST: u32 = code(b"Bblo");
 pub const CRIPPLE: u32 = code(b"Acri");
 pub const BUFF_CRIPPLE: u32 = code(b"Bcri");
+pub const FAERIE_FIRE: u32 = code(b"Afae");
+pub const BUFF_FAERIE_FIRE: u32 = code(b"Bfae");
 
 pub const ORDER_HEAL: u32 = 852_063;
 pub const ORDER_HEAL_ON: u32 = 852_064;
@@ -85,8 +87,13 @@ const ORDER_ATTACK: u32 = 0xD000F;
 const ORDER_AI_MOVE: u32 = 0xD0014;
 
 /// `(order id, ability)` pairs registered with the cast core.
-pub const SPELL_ORDERS: [(u32, u32); 4] =
-    [(ORDER_HEAL, HEAL), (852_066, INNER_FIRE), (852_101, BLOODLUST), (852_189, CRIPPLE)];
+pub const SPELL_ORDERS: [(u32, u32); 5] = [
+    (ORDER_HEAL, HEAL),
+    (852_066, INNER_FIRE),
+    (852_101, BLOODLUST),
+    (852_189, CRIPPLE),
+    (852_149, FAERIE_FIRE),
+];
 
 /// `(autocast on order, autocast off order, ability)`.
 const TOGGLES: [(u32, u32, u32); 3] = [
@@ -417,14 +424,14 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
-        CRIPPLE => {
+        CRIPPLE | FAERIE_FIRE => {
             let t = gm.unit(target);
-            // targs: air,ground,enemy,organic,neutral
+            // Cripple targs: air,ground,enemy,organic,neutral; Faerie Fire: air,ground,enemy,neutral.
             let hostile = gm.is_enemy(gm.unit(caster).owner, t.owner) || t.owner >= 12;
             if !hostile
                 || t.removed
                 || is_unit_type(gm, t, ty::STRUCTURE)
-                || is_unit_type(gm, t, ty::MECHANICAL)
+                || (base == CRIPPLE && is_unit_type(gm, t, ty::MECHANICAL))
                 || gm.unit_is_invulnerable(target)
             {
                 return Some(CastError::BadTarget);
@@ -444,7 +451,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             }
             true
         }
-        INNER_FIRE | BLOODLUST | CRIPPLE => {
+        INNER_FIRE | BLOODLUST | CRIPPLE | FAERIE_FIRE => {
             if let CastTarget::Unit(t) = rec.target {
                 buff_spell(game, rec, t);
             }
@@ -469,7 +476,17 @@ fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let hero = gm.target_hero(target);
     let dur = effect_duration(&rec.level, hero, F32::ZERO);
     let d = &rec.level.data;
-    let (code, mods) = if rec.base == CRIPPLE {
+    let (code, mods) = if rec.base == FAERIE_FIRE {
+        // Faerie Fire (`0x6F0B8750`): `DataA` is the defense reduction, a negative armor (the buff has the armor
+        // sink only, CONFIRMED); the reveal of invisible units is presentation/detection and not modelled.
+        (
+            BUFF_FAERIE_FIRE,
+            UnitMods {
+                armor: arith::neg(d[0]),
+                ..UnitMods::default()
+            },
+        )
+    } else if rec.base == CRIPPLE {
         // Cripple (`0x6F1CC450`): `DataA` movement, `DataB` attack speed, `DataC` damage reduction, all subtracted
         // (the buff negates them, `0x6F1B7FD0`; the editor labels name them in this order).
         (
@@ -502,7 +519,7 @@ fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
             },
         )
     };
-    let bad = rec.base == CRIPPLE;
+    let bad = rec.base == CRIPPLE || rec.base == FAERIE_FIRE;
     let preds = crate::abilities::BuffPredicates {
         positive: !bad,
         negative: bad,

@@ -57,6 +57,7 @@ function setup takes nothing returns nothing
     call UnitAddAbility(shaman, 'Ablo')
     call UnitAddAbility(shaman, 'Ainf')
     call UnitAddAbility(shaman, 'Acri')
+    call UnitAddAbility(shaman, 'Afae')
     call SetUnitState(shaman, 2, 300.0)
     set grunt = CreateUnit(Player(0), 'hfoo', 5100.0, 0.0, 0.0)
     set grunt2 = CreateUnit(Player(0), 'hfoo', 5100.0, 100.0, 0.0)
@@ -71,6 +72,9 @@ function cripple_foe takes nothing returns nothing
 endfunction
 function cripple_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852189, grunt)
+endfunction
+function fae_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(shaman, 852149, foe2)
 endfunction
 function lust_grunt takes nothing returns nothing
     set accepted = IssueTargetOrderById(shaman, 852101, grunt)
@@ -152,6 +156,23 @@ fn host() -> ScriptHost {
                     d[0] = f(0.75);
                     d[1] = f(0.5);
                     d[2] = f(0.5);
+                    d
+                },
+                ..Default::default()
+            }],
+        );
+        g.ability_types_mut().insert(FAERIE_FIRE, AbilityType { max_level: Some(1) });
+        g.set_spell_levels(
+            FAERIE_FIRE,
+            vec![SpellLevel {
+                cost: 45,
+                cool: f(1.0),
+                dur: f(6.0),
+                hero_dur: f(3.0),
+                rng: f(700.0),
+                data: {
+                    let mut d = [F32::ZERO; 9];
+                    d[0] = f(4.0);
                     d
                 },
                 ..Default::default()
@@ -526,4 +547,18 @@ fn cripple_slows_movement_and_attacks_and_cuts_damage_then_wears_off() {
     assert_eq!(g.effective_move_speed(foe2).to_f32(), 270.0);
     assert_eq!(g.unit(foe2).bonuses.attack_mult.to_f32(), 1.0);
     assert_eq!(g.unit(foe2).bonuses.damage_pct.to_f32(), 0.0);
+}
+
+#[test]
+fn faerie_fire_lowers_the_armor_of_an_enemy_for_dur() {
+    let mut h = started_manual();
+    let (shaman, foe2) = (unit(&h, "shaman"), unit(&h, "foe2"));
+    call(&mut h, "fae_foe");
+    run(&mut h, 1);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(foe2).bonuses.armor.to_f32(), -4.0);
+    assert_eq!(h.game().unit(shaman).mana.to_f32(), 255.0);
+    run(&mut h, 62);
+    assert!(!has_buff(&h, foe2, BUFF_FAERIE_FIRE));
+    assert_eq!(h.game().unit(foe2).bonuses.armor.to_f32(), 0.0);
 }
