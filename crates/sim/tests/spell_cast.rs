@@ -2,7 +2,7 @@
 //! Light and Slow with the check, the event sequence, the mana payment, the cooldown, Dur versus HeroDur.
 //!
 //! The level data are pinned values of the tests (usual first-level numbers), not game data. The spells are cast
-//! through `IssueTargetOrderById` with the order ids of the model (UNSURE source, see `cast.rs`).
+//! through `IssueTargetOrderById` with the original's Unicorn-checked cast order ids (see `cast.rs`).
 
 use jass::compile::compile;
 use jass::vm::NativeRegistry;
@@ -107,10 +107,13 @@ function bolt_ally takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852095, ally)
 endfunction
 function holy_ally takes nothing returns nothing
-    set accepted = IssueTargetOrderById(caster, 852089, ally)
+    set accepted = IssueTargetOrderById(caster, 852092, ally)
 endfunction
 function holy_tgt takes nothing returns nothing
-    set accepted = IssueTargetOrderById(caster, 852089, tgt)
+    set accepted = IssueTargetOrderById(caster, 852092, tgt)
+endfunction
+function blizzard_order_without_blizzard takes nothing returns nothing
+    set accepted = IssueTargetOrderById(caster, 852089, ally)
 endfunction
 function slow_tgt takes nothing returns nothing
     set accepted = IssueTargetOrderById(caster, 852075, tgt)
@@ -213,6 +216,20 @@ fn life(h: &ScriptHost, k: ObjKey) -> f32 {
 
 fn has_buff(h: &ScriptHost, k: ObjKey, code: u32) -> bool {
     h.game().buffs(k).iter().any(|b| b.base == code)
+}
+
+#[test]
+fn blizzard_order_does_not_cast_holy_light() {
+    let mut h = host();
+    let c = unit(&h, "caster");
+    let a = unit(&h, "ally");
+    h.game_mut().unit_mut(a).life = f(100.0);
+    let before_mana = mana(&h, c);
+    call(&mut h, "blizzard_order_without_blizzard");
+    run(&mut h, 1);
+    assert!(h.game().spell_log().is_empty());
+    assert_eq!(mana(&h, c), before_mana);
+    assert_eq!(life(&h, a), 100.0);
 }
 
 #[test]

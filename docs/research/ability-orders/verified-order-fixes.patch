@@ -1,0 +1,180 @@
+diff --git a/crates/sim/src/cast.rs b/crates/sim/src/cast.rs
+index 8100695..805b907 100644
+--- a/crates/sim/src/cast.rs
++++ b/crates/sim/src/cast.rs
+@@ -273,9 +273,9 @@ pub fn cost_value(cost: i32) -> F32 {
+ impl SpellSystem {
+     pub fn new() -> Self {
+         let mut s = Self::default();
+-        // Order ids of the three spells: UNSURE (taken from the public order-id lists, not read from the DLL).
++        // Original cast-order getters (slot 0x348), Unicorn-checked in tools/analysis/ability_orders.py.
+         s.order_ids.insert(852_095, STORM_BOLT);
+-        s.order_ids.insert(852_089, HOLY_LIGHT);
++        s.order_ids.insert(852_092, HOLY_LIGHT);
+         s.order_ids.insert(852_075, SLOW);
+         crate::orc::register_orders(&mut s.order_ids);
+         for (id, base) in crate::human_heroes::SPELL_ORDERS {
+diff --git a/crates/sim/src/human_heroes.rs b/crates/sim/src/human_heroes.rs
+index 1bb61d8..626da93 100644
+--- a/crates/sim/src/human_heroes.rs
++++ b/crates/sim/src/human_heroes.rs
+@@ -56,12 +56,13 @@ pub const BUFF_WATER_ELEMENTAL: u32 = code(b"BHwe");
+ /// Wind Walk's buff: Bash does not roll while its owner has it (`0x6F15A110` returns `BOwk`).
+ pub const BUFF_WIND_WALK: u32 = code(b"BOwk");
+ 
+-/// Order ids of the immediate spells (UNSURE: from the public order-id lists, not read from the DLL).
+-pub const ORDER_THUNDER_CLAP: u32 = 852_594;
++/// Cast order ids from the original slot 0x348 (Unicorn-checked by tools/analysis/ability_orders.py).
++pub const ORDER_THUNDER_CLAP: u32 = 852_096;
+ pub const ORDER_AVATAR: u32 = 852_086;
+ pub const ORDER_DIVINE_SHIELD: u32 = 852_090;
++/// UNSURE: the state-dependent cancel getter has not been verified.
+ pub const ORDER_UNDIVINE_SHIELD: u32 = 852_056;
+-pub const ORDER_RESURRECTION: u32 = 852_044;
++pub const ORDER_RESURRECTION: u32 = 852_094;
+ pub const ORDER_WATER_ELEMENTAL: u32 = 852_097;
+ 
+ /// The `(order id, ability)` pairs the cast core registers.
+diff --git a/crates/sim/src/orc.rs b/crates/sim/src/orc.rs
+index be8df88..3fedc47 100644
+--- a/crates/sim/src/orc.rs
++++ b/crates/sim/src/orc.rs
+@@ -152,15 +152,15 @@ pub const TICK_MIRROR: u8 = 0x81;
+ /// The next-hop timer of Chain Lightning.
+ pub const TICK_CHAIN: u8 = 0x82;
+ 
+-/// Order ids (UNSURE: the public order-id list, like the three spells of `cast.rs`).
++/// Original cast-order getters (slot 0x348), Unicorn-checked by tools/analysis/ability_orders.py.
+ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
+     ids.insert(852_127, WAR_STOMP);
+     ids.insert(852_125, SHOCKWAVE);
+     ids.insert(852_119, CHAIN_LIGHTNING);
+     ids.insert(852_129, WIND_WALK);
+-    ids.insert(852_093, MIRROR_IMAGE);
++    ids.insert(852_123, MIRROR_IMAGE);
+     ids.insert(852_122, FAR_SIGHT);
+-    ids.insert(852_120, FERAL_SPIRIT);
++    ids.insert(852_126, FERAL_SPIRIT);
+ }
+ 
+ /// Abilities cast without a target (`targs` empty or area around the caster).
+diff --git a/crates/sim/tests/human_heroes.rs b/crates/sim/tests/human_heroes.rs
+index 842cf93..0957734 100644
+--- a/crates/sim/tests/human_heroes.rs
++++ b/crates/sim/tests/human_heroes.rs
+@@ -3,7 +3,7 @@
+ //! the RNG table (`GAME_DLL`; those tests return early without it).
+ //!
+ //! The level data are pinned values of the tests (usual first-level numbers), not game data. The spells are cast
+-//! through `IssueImmediateOrderById` with the order ids of the model (UNSURE source, see `human_heroes.rs`).
++//! through `IssueImmediateOrderById` with the original's Unicorn-checked cast order ids (see `human_heroes.rs`).
+ 
+ use jass::compile::compile;
+ use jass::vm::NativeRegistry;
+@@ -75,7 +75,7 @@ function kill_corpses takes nothing returns nothing
+     call SetWidgetLife(corpseFoe, 0.0)
+ endfunction
+ function clap takes nothing returns nothing
+-    set accepted = IssueImmediateOrderById(king, 852594)
++    set accepted = IssueImmediateOrderById(king, 852096)
+ endfunction
+ function avatar takes nothing returns nothing
+     set accepted = IssueImmediateOrderById(king, 852086)
+@@ -87,7 +87,7 @@ function unshield takes nothing returns nothing
+     set accepted = IssueImmediateOrderById(pal, 852056)
+ endfunction
+ function resurrect takes nothing returns nothing
+-    set accepted = IssueImmediateOrderById(pal, 852044)
++    set accepted = IssueImmediateOrderById(pal, 852094)
+ endfunction
+ function elementals takes nothing returns nothing
+     set accepted = IssueImmediateOrderById(mage, 852097)
+diff --git a/crates/sim/tests/orc_mirror_cast.rs b/crates/sim/tests/orc_mirror_cast.rs
+index 8ef5b09..6205510 100644
+--- a/crates/sim/tests/orc_mirror_cast.rs
++++ b/crates/sim/tests/orc_mirror_cast.rs
+@@ -35,7 +35,7 @@ function setup takes nothing returns nothing
+     call SetUnitState(caster, 2, 1000.0)
+ endfunction
+ function mirror takes nothing returns nothing
+-    set accepted = IssueImmediateOrderById(caster, 852093)
++    set accepted = IssueImmediateOrderById(caster, 852123)
+ endfunction
+ "#;
+ 
+diff --git a/crates/sim/tests/orc_spells.rs b/crates/sim/tests/orc_spells.rs
+index bbe7c29..6566137 100644
+--- a/crates/sim/tests/orc_spells.rs
++++ b/crates/sim/tests/orc_spells.rs
+@@ -2,7 +2,7 @@
+ //! War Stomp, Chain Lightning, Shockwave, Wind Walk, Mirror Image, Feral Spirit and Far Sight.
+ //!
+ //! The level data are pinned values of the tests (the 1.26a first-level numbers), not game data. The spells are cast
+-//! through the by-id order natives with the order ids of the model (UNSURE source, see `orc::register_orders`).
++//! through the by-id order natives with the original's Unicorn-checked cast order ids (see `orc::register_orders`).
+ 
+ use jass::compile::compile;
+ use jass::vm::NativeRegistry;
+@@ -68,10 +68,10 @@ function walk takes nothing returns nothing
+     set accepted = IssueImmediateOrderById(caster, 852129)
+ endfunction
+ function mirror takes nothing returns nothing
+-    set accepted = IssueImmediateOrderById(caster, 852093)
++    set accepted = IssueImmediateOrderById(caster, 852123)
+ endfunction
+ function wolves takes nothing returns nothing
+-    set accepted = IssueImmediateOrderById(caster, 852120)
++    set accepted = IssueImmediateOrderById(caster, 852126)
+ endfunction
+ function sight takes nothing returns nothing
+     set accepted = IssuePointOrderById(caster, 852122, 2000.0, 0.0)
+diff --git a/crates/sim/tests/spell_cast.rs b/crates/sim/tests/spell_cast.rs
+index c73bf72..0986316 100644
+--- a/crates/sim/tests/spell_cast.rs
++++ b/crates/sim/tests/spell_cast.rs
+@@ -2,7 +2,7 @@
+ //! Light and Slow with the check, the event sequence, the mana payment, the cooldown, Dur versus HeroDur.
+ //!
+ //! The level data are pinned values of the tests (usual first-level numbers), not game data. The spells are cast
+-//! through `IssueTargetOrderById` with the order ids of the model (UNSURE source, see `cast.rs`).
++//! through `IssueTargetOrderById` with the original's Unicorn-checked cast order ids (see `cast.rs`).
+ 
+ use jass::compile::compile;
+ use jass::vm::NativeRegistry;
+@@ -107,10 +107,13 @@ function bolt_ally takes nothing returns nothing
+     set accepted = IssueTargetOrderById(caster, 852095, ally)
+ endfunction
+ function holy_ally takes nothing returns nothing
+-    set accepted = IssueTargetOrderById(caster, 852089, ally)
++    set accepted = IssueTargetOrderById(caster, 852092, ally)
+ endfunction
+ function holy_tgt takes nothing returns nothing
+-    set accepted = IssueTargetOrderById(caster, 852089, tgt)
++    set accepted = IssueTargetOrderById(caster, 852092, tgt)
++endfunction
++function blizzard_order_without_blizzard takes nothing returns nothing
++    set accepted = IssueTargetOrderById(caster, 852089, ally)
+ endfunction
+ function slow_tgt takes nothing returns nothing
+     set accepted = IssueTargetOrderById(caster, 852075, tgt)
+@@ -215,6 +218,20 @@ fn has_buff(h: &ScriptHost, k: ObjKey, code: u32) -> bool {
+     h.game().buffs(k).iter().any(|b| b.base == code)
+ }
+ 
++#[test]
++fn blizzard_order_does_not_cast_holy_light() {
++    let mut h = host();
++    let c = unit(&h, "caster");
++    let a = unit(&h, "ally");
++    h.game_mut().unit_mut(a).life = f(100.0);
++    let before_mana = mana(&h, c);
++    call(&mut h, "blizzard_order_without_blizzard");
++    run(&mut h, 1);
++    assert!(h.game().spell_log().is_empty());
++    assert_eq!(mana(&h, c), before_mana);
++    assert_eq!(life(&h, a), 100.0);
++}
++
+ #[test]
+ fn storm_bolt_runs_the_whole_sequence() {
+     let mut h = host();

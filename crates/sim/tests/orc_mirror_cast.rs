@@ -35,7 +35,7 @@ function setup takes nothing returns nothing
     call SetUnitState(caster, 2, 1000.0)
 endfunction
 function mirror takes nothing returns nothing
-    set accepted = IssueImmediateOrderById(caster, 852093)
+    set accepted = IssueImmediateOrderById(caster, 852123)
 endfunction
 "#;
 

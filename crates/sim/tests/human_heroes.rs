@@ -3,7 +3,7 @@
 //! the RNG table (`GAME_DLL`; those tests return early without it).
 //!
 //! The level data are pinned values of the tests (usual first-level numbers), not game data. The spells are cast
-//! through `IssueImmediateOrderById` with the order ids of the model (UNSURE source, see `human_heroes.rs`).
+//! through `IssueImmediateOrderById` with the original's Unicorn-checked cast order ids (see `human_heroes.rs`).
 
 use jass::compile::compile;
 use jass::vm::NativeRegistry;
@@ -75,7 +75,7 @@ function kill_corpses takes nothing returns nothing
     call SetWidgetLife(corpseFoe, 0.0)
 endfunction
 function clap takes nothing returns nothing
-    set accepted = IssueImmediateOrderById(king, 852594)
+    set accepted = IssueImmediateOrderById(king, 852096)
 endfunction
 function avatar takes nothing returns nothing
     set accepted = IssueImmediateOrderById(king, 852086)
@@ -87,7 +87,7 @@ function unshield takes nothing returns nothing
     set accepted = IssueImmediateOrderById(pal, 852056)
 endfunction
 function resurrect takes nothing returns nothing
-    set accepted = IssueImmediateOrderById(pal, 852044)
+    set accepted = IssueImmediateOrderById(pal, 852094)
 endfunction
 function elementals takes nothing returns nothing
     set accepted = IssueImmediateOrderById(mage, 852097)

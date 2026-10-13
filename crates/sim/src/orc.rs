@@ -153,9 +153,8 @@ pub const TICK_MIRROR: u8 = 0x81;
 /// The next-hop timer of Chain Lightning.
 pub const TICK_CHAIN: u8 = 0x82;
 
-/// Order ids. CONFIRMED (S34, slot `0x308` of each class = `mov eax, 0xD0000 + n; ret`, public id = 851968 + n):
-/// stomp `0xD009F`, shockwave `0xD009D`, chain lightning `0xD0097`, wind walk `0xD00A1`, mirror image `0xD009B`
-/// (852123, NOT 852093), far sight `0xD009A`, feral spirit `0xD009E` (852126, NOT 852120), healing wave `0xD0215`.
+/// Original cast-order getters (slot 0x348, Unicorn-checked by tools/analysis/ability_orders.py; healing wave 852501 agrees
+/// with slot 0x308 = 0xD0215).
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(852_127, WAR_STOMP);
     ids.insert(852_125, SHOCKWAVE);
