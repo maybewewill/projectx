@@ -118,6 +118,9 @@ pub struct MiscData {
     /// `BuildingAngle`: the orientation of the AI's building footprints in degrees (`0x6F020D30`; the engine passes
     /// it through `i2r(f2i(..))`). `0.0` when absent.
     pub building_angle: F32,
+    /// `MagicImmunesResistDamage` (element 0, an integer flag): Magic attacks cannot target magic immune units and
+    /// physical attacks cannot target ethereal units (`docs/spec/weapon-target.md`). `false` when absent.
+    pub magic_immunes_resist_damage: bool,
 }
 
 impl MiscData {
@@ -173,6 +176,7 @@ impl MiscData {
         let dawn = reader.real("Dawn").unwrap_or(F32::ZERO);
         let dusk = reader.real("Dusk").unwrap_or(F32::ZERO);
         let building_angle = reader.real("BuildingAngle").unwrap_or(F32::ZERO);
+        let magic_immunes_resist_damage = reader.int_element("MagicImmunesResistDamage") != 0;
         let hero = HeroMisc::read(&mut reader);
         let Reader {
             defaulted, notes, ..
@@ -200,6 +204,7 @@ impl MiscData {
             dawn,
             dusk,
             building_angle,
+            magic_immunes_resist_damage,
         }
     }
 
@@ -238,6 +243,7 @@ impl MiscData {
             dawn: F32::ZERO,
             dusk: F32::ZERO,
             building_angle: F32::ZERO,
+            magic_immunes_resist_damage: false,
         }
     }
 }

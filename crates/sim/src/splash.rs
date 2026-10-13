@@ -43,6 +43,7 @@ pub fn query_radius(farea: F32, harea: F32, qarea: F32) -> F32 {
 
 /// `0x6F022270` against 0.0: the property value is greater than zero **by at least 0.001** (an x87 compare of the raw
 /// values, then the soft-float difference must not be below the epsilon `0x6FAAE47C`). CONFIRMED (Unicorn).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn positive(v: F32) -> bool {
     let fv = f32::from_bits(v.to_bits());
     if !(0.0f32 < fv) {

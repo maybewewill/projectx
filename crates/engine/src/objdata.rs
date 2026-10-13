@@ -563,22 +563,31 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     for (&code, &u) in &text.upgrades {
         game.production_mut().upgrades.insert(code, u);
     }
-    // The first weapon's projectile. Only the plain missile type (`weapTp` 2, CONFIRMED launch path) gets a timed flight;
-    // the other flying kinds keep the instant hit (their launch routines are not decoded).
+    // The weapons' projectiles. The flying kinds (`weapTp` 2 missile, 3 artillery, 5 msplash, 6 mbounce) get a timed
+    // flight over the distance (`docs/spec/missiles.md`; the arrival of 3, 5 and 6 applies the splash or bounce of
+    // `docs/spec/weapon-splash.md`); the line kinds keep the instant hit (their launch classes are not decoded).
     for (&code, spec) in &text.missiles {
-        let plain_missile = game
-            .unit_types()
-            .get(code)
-            .is_some_and(|t| sim::missiles::MissileType::from_weap_tp(t.weapon_kind[0])
-                == Some(sim::missiles::MissileType::Missile));
+        let kinds = game.unit_types().get(code).map_or([0, 0], |t| t.weapon_kind);
         let mut md = game.missile_data(code);
         md.arc = spec.arc.first().map_or(F32::ZERO, |&a| F32::from_bits(a.to_bits()));
         md.homing = spec.homing.first().copied().unwrap_or(false);
         game.set_missile_data(code, md);
-        if plain_missile {
-            let mut at = game.attack_type(code);
-            at.missile_speed = Some(F32::from_bits(spec.speed[0].to_bits()));
-            game.set_attack_type(code, at);
+        for (w, &kind) in kinds.iter().enumerate() {
+            if !matches!(kind, 2 | 3 | 5 | 6) {
+                continue;
+            }
+            let Some(&speed) = spec.speed.get(w) else {
+                continue;
+            };
+            let speed = F32::from_bits(speed.to_bits());
+            if w == 0 {
+                let mut at = game.attack_type(code);
+                at.missile_speed = Some(speed);
+                game.set_attack_type(code, at);
+            } else if let Some(mut at) = game.attack_type2(code) {
+                at.missile_speed = Some(speed);
+                game.set_attack_type2(code, at);
+            }
         }
     }
     install_harvest(game, text);

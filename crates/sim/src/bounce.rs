@@ -42,6 +42,7 @@ pub fn pick_nearest(candidates: &[(bool, F32)]) -> (Option<usize>, F32) {
 /// Unicorn): the hit counter drops by one and the missile ends when it reaches zero; then, when the loss differs from
 /// zero by at least 0.001, the amount is multiplied by `1 - loss` and the missile ends when the new amount is within
 /// 0.001 of zero. Returns the new amount, or `None` when the missile ends.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn after_hit(counter: &mut i32, amount: F32, loss: F32) -> Option<F32> {
     *counter = counter.wrapping_sub(1);
     if *counter == 0 {

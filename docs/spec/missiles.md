@@ -67,10 +67,10 @@ after all. UNSURE which numbering the attack-cycle note used.
 |---|---|---|---|
 | 1 | normal | direct: target routine at once (CONFIRMED, Unicorn) | implemented (`MissileType::Normal`, no flight) |
 | 2 | missile | attack-cycle 4.4 phase 2 helpers (`0x6F0408B0`, `0x6F040830`), launch check, cleanup | implemented: flight, arrival gate |
-| 3 | artillery | attack-cycle 4.4 phase 3 helpers (`0x6F08D280`, `0x6F0C71C0`, `0x6F476670`, `0x6F022190`) | flown to the target, damages only that target (UNSURE for the ground point and splash) |
+| 3 | artillery | attack-cycle 4.4 phase 3 helpers (`0x6F08D280`, `0x6F0C71C0`, `0x6F476670`, `0x6F022190`) | flown to the target, then the same ring splash (class UNSURE, `weapon-splash.md` section 2) |
 | 4 | instant | direct: target routine at once (CONFIRMED, Unicorn) | implemented (no flight) |
-| 5 | msplash | attack-cycle 4.4 phase 5 helpers (`0x6F0408B0` through a thunk, `0x6F09A730`) | flown to the target only (UNSURE splash) |
-| 6 | mbounce | attack-cycle 4.4 phase 6 helpers (`0x6F040900`, per-weapon fields) | flown to the target only (UNSURE bounce) |
+| 5 | msplash | attack-cycle 4.4 phase 5 helpers (`0x6F0408B0` through a thunk, `0x6F09A730`) | flown to the target, then the ring splash of `weapon-splash.md` section 2 |
+| 6 | mbounce | attack-cycle 4.4 phase 6 helpers (`0x6F040900`, per-weapon fields) | flown to the target, then the bounce chain of `weapon-splash.md` section 3 |
 | 7 | mline | attack-cycle 4.4 phase 7 helper (`0x6F040950`) | flown to the target only (UNSURE line) |
 | 8 | aline | attack-cycle 4.4 phase 8 (`0x6F040A60` / `0x6F040AA0`) | flown to the target only (UNSURE) |
 
