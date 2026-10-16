@@ -53,7 +53,8 @@ are in `neutral_spells::toggle_order`.
 * **Envenomed Spears** (`Aven`, `CAbilityVenomSpear < CAbilityPoisonAttack`, no override but codes). On a surviving hit the
   attacker poisons an organic air/ground target: `Bpoi` for `Dur` (`HeroDur` for heroes), `DataA` damage per second
   (damage type 23, first tick 0.01 s, then 1.0 s), no slow (the slow part is the `0x34C..0x354` overrides of `Aspo`).
-  LIKELY; `DataD` stacking (`Bpsd`) is not modelled.
+  **V6: the apply `0x6F13F2F0` is CONFIRMED (row `PA`, section 9)**: hero-rule duration, zeroed numbers for an illusion attacker, the `DataD`
+  mode split; the stacking buff (`Bpsd`) and the tick bodies are not modelled / not run.
 * **Magic Immunity** (`Amim`, `CAbilityMagicImmunity < CAbilityPassive`). Init slot `0x80` = `0x6F110730` calls
   `0x6F07A3A0` (CONFIRMED: increments the unit counters at `+0x15C` / `+0x160`, the first count dispels), the removal slot
   `0x6F110700` calls `0x6F077320` (decrements). Wired to `UnitObj::magic_immune` through `sync_neutral_spells` (called from
@@ -302,6 +303,11 @@ Every row is the ORIGINAL code on fake objects (callees that need the object mod
 | `TM` | Transmute buff body `0x6F1B58B0` (via `0x6F1B59B0`) | `neutral_heroes2::transmute_amounts` | **CONFIRMED**: gold = `f2i(round(A * goldcost))`, lumber = `f2i(round(B * woodcost))` with the factor of the gold the float behind `eax` (the buff's `+0xE0`) and the lumber one behind the third argument (`+0xE8`); the target's own bounty (`0x6F29DD30`, `0x6F29DDD0`) is added when the buff flag bit 10 (`DataD`) is set and `0x6F473170` answers yes; an illusion target gives nothing; the life setter (`0x6F2829D0`) and the flag set run in every case. Saturating `f2i` covered. The map of `DataA/DataB` into `+0xE0/+0xE8` (effect `0x6F1C18B0`, buff apply) and the creep-level test are not part of the rows |
 | `CL` | creep level rule `0x6F1D2630` over the unit level `0x6F29DCA0` | `neutral_heroes2::{creep_level_refuses, unit_level_value}` | **CONFIRMED**; **bug fixed**: the Transmute, Doom and Charm target slots refuse a unit only when its type's **race is creeps (8)** and its unit level is above the limit; the unit level is the type `level` (0 when not positive), replaced by the level field of a level-changing buff when one answers yes to its slot `0x36C`, at most Misc `MaxHeroLevel` for an uppercase-first type code that is not an illusion, else at most `MaxUnitLevel`. The old model refused any unit of any race whose raw `level` was above the limit (Charm) or used the owner slot as the race (Transmute, Doom); it now reads the race from the type's pick record and falls back to the owner stand-in only without one |
 | `CE` | Charm effect `0x6F1B13E0` | `neutral_spells::charm_kills` | **CONFIRMED**; **bug fixed**: an **illusion** target is killed (its life setter, vtable `0x124`, gets the constant 0.0; no owner change), every other target changes owner (`0x6F1B0C80`). The old model changed the owner of an illusion. The Charm limit is `f2i(DataA)` (the old model compared with the real) |
+| `PA` / `PS` | poison attack apply `0x6F13F2F0` (`CAbilityPoisonAttack`, run through the `Aven` vtable) and `0x6F13F500` (`Aspo`'s own) | `neutral_spells::poison_plan` | **CONFIRMED** (350 rows each): the victim's hero test picks `HeroDur` or `Dur` (**no** `+0x9C` term); `DataA`, `DataB`, `DataC` are all **0.0 when the attacker is an illusion**; `DataD` (truncated) low three bits select the mode: 0 = the plain buff (a new one, or the slot `0x380` refresh of the one the victim has), anything else = the stacking buff (creator `0x6F13AE90` / `0x6F13B030`, slot `0x35C`, gets the whole `DataD`), skipped when the ability flag `0x200` is set; bit 3 of `DataD` goes to the plain paths. **Bug fixed**: Envenomed Spears and Slow Poison now use the plan (an illusion attacker no longer poisons for `DataA`; the previous model ignored this). Not run: the buff bodies (the `LifeDoT` tick, the stacking `Bpsd` / `Bssd` buffs, the slows) |
+| `CY` | Cyclone effect `0x6F1CCC70` -> `0x6F1CCB50` | `neutral_spells::cyclone_plan` | **CONFIRMED** (350 rows): hero-rule duration (`HeroDur`, else `Dur + [ability+0x9C]`); a target whose type kind `0x6F29C240` is 2 is skipped entirely; otherwise **two removal passes** run first (`0x6F079FE0`: physical buffs of both polarities, then magic buffs of both polarities; timed life, aura and the dispellable test are off), then, unless the target carries unit flag `0x100`, the buff creator `0x6F1C9160` (when `DataA` is nonzero or NaN **and** Misc `CycloneStasis` is 0) or `0x6F1C9230` is chosen. **Bug fixed**: the model now removes the target's physical and magic buffs before the Cyclone goes on. Not run: the buff bodies, so the stun / invulnerability split between `Bcyc` and `Bcy2` is still the old guess |
+
+**Rain of Fire `ANrf`** (not a row, no new Unicorn run): `CEffectRainOfFire < CEffectBlizzard` overrides only slots `0x78 0x7C 0x80 0x84 0x88`, and the ability's `0x418` (`0x6F1C2760`) differs from Blizzard's (`0x6F1C2650`) only in the effect type code it looks up
+(`0x6F197C00` vs `0x6F197A00`); the overridden effect slots are instruction-for-instruction the Blizzard ones with the type getters swapped (diff of `0x6F1CAD10` / `0x6F1CAE40` and `0x6F1CADD0` / `0x6F1CAF00`: 73 and 40 instructions, one call target each). Both call the same parameter hand-over `0x6F1B9E90`, so the Blizzard numbers (rows `AHbz`) apply unchanged; only presentation differs. The model's "alias of `AHbz`" is correct.
 
 ### Decoded in V6 but NOT verified (leads for later waves)
 
@@ -310,11 +316,10 @@ Every row is the ORIGINAL code on fake objects (callees that need the object mod
   object (`vtable 0xB8`, then its `vtable 0x1C` with the `Area` and `0x6F10E370` / two soft adds), i.e. the area is built from the attacker's
   position and the swing direction (a cone or a shifted circle), not a circle around the target as `neutral_cleave` models. UNSURE until the
   geometry is decoded.
-* **Cyclone `Acyc` / `ACcy`** (effect `0x6F1CCC70` -> `0x6F1CCB50`): duration = `HeroDur` for a hero target, else `Dur + [ability+0x9C]`
-  (soft add); the buff class is **chosen by `DataA == 0 and Misc CycloneStasis == 0`** (`CBuffCycloneTwo` vs `CBuffCyclone`, creators `0x6F1C9160`
-  / `0x6F1C9230`), not a stun plus invulnerability pair; before the buff is applied the target's buffs are **removed** (two calls of the removal
-  walker `0x6F079FE0`: positive with the filters `(0,0,0,0,1,1,0,1)` and negative with `(0,0,0,1,...)`, timed-life buffs kept), and a target with
-  unit flag `0x100` or whose `0x6F29C240` answers 2 is skipped. The model does none of that (UNSURE, flagged).
+* **Cyclone `Acyc` / `ACcy`**: the effect is verified (row `CY`, above). Still open: which of the two creators makes which class
+  (`CBuffCyclone` vs `CBuffCycloneTwo`: the first overrides the apply `0x354` = `0x6F1B81E0`, which moves the unit through its position
+  property; the second overrides slots `0x30C 0x310 0x340 0x344 0x35C`), so the split of stun and invulnerability between the buffs, and the
+  toss, are UNSURE.
 * **Soul Burn `ANso`**: the buff `CBuffSoulBurn` derives from `CBuffCripple < CBuffSpeed`, not from a damage-over-time class; the effect
   hands `(duration, target, DataA, DataB, DataD)` to the buff apply (slot `0x368`). The model's "`DataA` damage per second" reading is therefore
   UNSURE.
