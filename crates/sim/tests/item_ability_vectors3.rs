@@ -241,3 +241,53 @@ fn passive_defense_factor_matches_the_original() {
     }
     assert!(scaled > 100, "the rows reach the multiply");
 }
+
+#[test]
+fn spell_effect_bonus_roll_matches_the_original() {
+    let Some(t) = tables() else {
+        eprintln!("GAME_DLL not set: spell effect bonus vectors skipped");
+        return;
+    };
+    let rs = rows("SB");
+    assert!(rs.len() >= 300);
+    let (mut procs, mut misses) = (0, 0);
+    for r in &rs {
+        let (tc, flags, b, c, d) = (h(r[1]) as u8, h(r[2]), h(r[3]), h(r[4]), h(r[5]));
+        let counts = [h(r[6]) as i32, h(r[7]) as i32, h(r[8]) as i32];
+        let draw = h(r[9]);
+        assert_eq!(r[10], "|");
+        let lv = level(0, 0, &[(1, b), (2, c), (3, d)]);
+        let kind = spell_bonus_kind(tc, flags);
+        let (hit, new) = spell_bonus_roll(&lv, kind, counts[kind], f(draw), &t);
+        let mut want = counts;
+        want[kind] = new;
+        assert_eq!(u32::from(hit), h(r[11]), "armed flag, row {r:?}");
+        let got = [h(r[12]) as i32, h(r[13]) as i32, h(r[14]) as i32];
+        assert_eq!(got, want, "counters, row {r:?}");
+        procs += usize::from(hit);
+        misses += usize::from(!hit);
+    }
+    assert!(procs > 30 && misses > 30, "the rows reach both outcomes");
+}
+
+#[test]
+fn wand_of_illusion_apply_arguments_match_the_original() {
+    let rs = rows("IL");
+    assert!(rs.len() >= 300);
+    let mut applied = 0;
+    for r in &rs {
+        let (hero, dur, herodur, extra, a, b, made) = (h(r[1]) != 0, h(r[2]), h(r[3]), h(r[4]), h(r[5]), h(r[6]), h(r[7]) != 0);
+        assert_eq!(r[8], "|");
+        if !made {
+            assert_eq!(r[9], "0");
+            continue;
+        }
+        let lv = level(dur, herodur, &[(0, a), (1, b)]);
+        let (d, p2, p3) = illusion_args(&lv, hero, f(extra));
+        assert_eq!(r[9], "1", "row {r:?}");
+        assert_eq!((d.to_bits(), p2.to_bits(), p3.to_bits()), (h(r[10]), h(r[11]), h(r[12])), "row {r:?}");
+        assert_eq!(r[13], "1", "the caster is the last argument, row {r:?}");
+        applied += 1;
+    }
+    assert!(applied > 150, "the rows reach the apply");
+}

@@ -428,8 +428,99 @@ def case_dd(r):
                                                          r32(RECORD + 0x18), got.get('fx', 0), r32(T.ABIL + 0x20) & 0x200)
 
 
+# ---------------------------------------------------------------- SB: Spell Effect Bonus (AIsb) proc roll
+VT_AISB = 0x6F8C0DF4
+T.ALLOW.append((0x6F0E5080, 0x6F0E5200))
+T.ALLOW.append((0x6F1D21F0, 0x6F1D25E6))  # ends before the hero test 0x6F1D2660
+T.ALLOW.append((0x6F01FD00, 0x6F01FDA0))
+
+
+def case_sb(r):
+    typechar = r.choice([0x48, 0x41, 0x5A, 0x40, 0x5B, 0x6E, 0x6F, 0x4F, r.getrandbits(8)])
+    flags248 = r.choice([0, 4, 0x8004, r.getrandbits(32)])
+    pct = lambda: r.choice([0, 5, 10, 15, 20, 25, 35, 50, 75, 100, r.randint(0, 100), r.random() * 130 - 10])
+    chances = []
+    for _ in range(3):
+        v = pct()
+        chances.append(fbits(float(v)))
+    counts = [r.choice([1, 1, 1, 2, 3, 5, 10, 21, r.randint(1, 40), 0, -1]) for _ in range(3)]
+    draw = r.choice([fbits(r.random() * 0.5), fbits(r.random() * 0.1), fbits(r.random()), 0, 0x3F800000, 0x7FC00000])
+    T.setup(VT_AISB, flags=0)
+    setrec(b=chances[0], c=chances[1], d=chances[2])
+    for i, cnt in enumerate(counts):
+        w32(T.ABIL + 0xD0 + 4 * i, cnt)
+    # the ability's own vtable: slot 0x268 (enabled) answers yes
+    for i in range(0x200):
+        pass
+    mu.mem_write(VICTIM, bytes(0x300))
+    w32(VICTIM, T.UVT)
+    mu.mem_write(VICTIM + 0x33, bytes([typechar & 0xff]))
+    w32(VICTIM + 0x248, flags248)
+    got = {}
+
+    def roll(uc, c, d, st):
+        w32(c, draw)
+        return c
+
+    vt = r32(T.ABIL)
+    # slot 0x268 of the ability is reached through the vtable of the class: stub by address
+    slot268 = r32(vt + 0x268)
+    T.trace_call(0x6F0F3DD0, T.ABIL, (VICTIM, 0, 0),
+                 stub_fn={slot268: lambda *x: 1, 0x6F26D590: lambda *x: 0, 0x6F282F60: lambda *x: VICTIM,
+                          0x6F28D750: lambda *x: 0, 0x6F2853D0: roll},
+                 span=0x200, cleanup={slot268: 4, 0x6F26D590: 8, 0x6F28D750: 8, 0x6F2853D0: 0})
+    armed = (r32(T.ABIL + 0x20) >> 10) & 1
+    return 'SB %x %x %x %x %x %x %x %x %x | %d %x %x %x' % (
+        typechar & 0xff, flags248, chances[0], chances[1], chances[2], counts[0] & 0xffffffff, counts[1] & 0xffffffff,
+        counts[2] & 0xffffffff, draw, armed, r32(T.ABIL + 0xD0), r32(T.ABIL + 0xD4), r32(T.ABIL + 0xD8))
+
+
+# ---------------------------------------------------------------- IL: Wand of Illusion (AIil) apply arguments
+VT_AIIL = 0x6F8E0D5C
+ILLU = D + 0xB800
+S_APPLY = D + 0xA480
+S_SLOT324 = D + 0xA4A0
+S_EC = D + 0xA4C0
+S_D4 = D + 0xA4E0
+
+
+def case_il(r):
+    hero = r.choice([0, 1])
+    dur, herodur, extra, a, b = (rand_real(r) for _ in range(5))
+    made = r.choice([0, 1, 1, 1])
+    T.setup(VT_AIIL)
+    setrec(dur=dur, herodur=herodur, a=a, b=b)
+    w32(T.ABIL + 0x9C, extra)
+    mu.mem_write(VICTIM, bytes(0x300))
+    w32(VICTIM, T.UVT)
+    mu.mem_write(C.BUFF, bytes(0x200))
+    mu.mem_write(C.BVT, bytes(0x800))
+    w32(C.BUFF, C.BVT)
+    w32(C.BVT + 0x364, S_APPLY)
+    w32(C.BVT + 0x324, S_SLOT324)
+    w32(T.UVT + 0xEC, S_EC)
+    w32(T.UVT + 0xD4, S_D4)
+    got = {}
+
+    def apply(uc, c, d, st):
+        got['apply'] = (r32(st[1]), r32(st[2]), r32(st[3]), st[4] == T.UNIT)
+        return 0
+
+    T.trace_call(0x6F13DFD0, T.ABIL, (VICTIM,),
+                 stub_fn={HERO_TEST: lambda *x: hero, 0x6F127E00: lambda *x: ILLU if made else 0, 0x6F13A670: lambda *x: C.BUFF,
+                          S_APPLY: apply, S_SLOT324: lambda *x: 0, S_EC: lambda *x: 0, S_D4: lambda *x: 0},
+                 span=0x200, cleanup={S_APPLY: 20, S_SLOT324: 4, S_EC: 8, S_D4: 4, 0x6F1D26B0: 4, 0x6F127E00: 4, 0x6F13A670: 0, 0x6F079CA0: 4,
+                                      0x6F052BC0: 8, 0x6F299390: 4})
+    out = 'IL %x %x %x %x %x %x %d |' % (hero, dur, herodur, extra, a, b, made)
+    if 'apply' in got:
+        out += ' 1 %x %x %x %d' % got['apply']
+    else:
+        out += ' 0 0 0 0 0'
+    return out
+
+
 GENS = [('CT', case_ct), ('PV', case_pv), ('VP', case_vp), ('FB', case_fb), ('ZB', case_zb), ('CR', case_cr), ('LB', case_lb),
-        ('MS', case_ms), ('DD', case_dd)]
+        ('MS', case_ms), ('DD', case_dd), ('SB', case_sb), ('IL', case_il)]
 
 
 def main():

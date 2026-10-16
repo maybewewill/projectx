@@ -117,10 +117,14 @@ struct Row {
 }
 
 fn host(rows: &[Row], tweak: &dyn Fn(&mut ItemAbilityData)) -> ScriptHost {
+    host_with(rows, tweak, None)
+}
+
+fn host_with(rows: &[Row], tweak: &dyn Fn(&mut ItemAbilityData), tables: Option<softfloat::Tables>) -> ScriptHost {
     let full = format!("{PRELUDE}\n{SRC}");
     let prog = jass::parse(&full).expect("parse");
     let module = compile(&[prog]).expect("compile");
-    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), None).expect("vm");
+    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), tables).expect("vm");
     {
         let mut g = h.game_mut();
         g.unit_types_mut().insert(
@@ -370,4 +374,81 @@ fn lightning_purge_item_casts_the_purge_on_a_target() {
     call(&mut h, "use_foe");
     assert!(accepted(&h), "the lightning purge is castable on a unit");
     assert!(h.game().unit(foe).buffs.iter().any(|b| b.base == sim::unit_spells::BUFF_PURGE));
+}
+
+fn game_dll() -> Option<Vec<u8>> {
+    let path = std::env::var("GAME_DLL").ok()?;
+    Some(std::fs::read(&path).unwrap_or_else(|e| panic!("reading GAME_DLL={path}: {e}")))
+}
+
+/// The Orb of Slow (`oslo`: `AIsb` with `UnitID` `AIos`, a Slow row): a pseudo-random proc on stream 36 casts the slow.
+fn orb_of_slow_scene(chance: f32) -> Option<ScriptHost> {
+    let dll = game_dll()?;
+    let table = sim::rng::RngTable::from_game_dll(&dll).expect("RNG table");
+    let tables = softfloat::Tables::from_game_dll(&dll).expect("tables");
+    let mut orb = data_level(0.0, 0.0, 0.0, &[(0, 6.0), (1, chance), (2, chance), (3, chance)]);
+    orb.unit_id = c(b"AIos");
+    let slow = data_level(60.0, 20.0, 0.0, &[(0, 0.6), (1, 0.25)]);
+    let rows = [row(b"oslo", b"AIsb", b"AIsb", orb), row(b"xslo", b"AIos", b"Aslo", slow)];
+    let mut h = host_with(&rows, &|_| {}, Some(tables));
+    h.set_rng_table(table);
+    h.start_game_rng(0x0BAD_5EED);
+    h.start("setup", &[jass::vm::Value::Integer(c(b"oslo") as i32)]).expect("setup");
+    h.step();
+    Some(h)
+}
+
+#[test]
+fn orb_of_slow_slows_the_victim_when_the_roll_procs() {
+    // 100 percent is table index 20: the constant is 1.0, so the first roll always procs.
+    let Some(mut h) = orb_of_slow_scene(100.0) else {
+        return;
+    };
+    let (u, foe) = (gu(&h, "u"), gu(&h, "foe"));
+    let before = h.rng().clone();
+    on_hit(&mut h.game_mut(), u, foe, f(30.0), true);
+    assert_ne!(*h.rng(), before, "the roll draws from the stream");
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(h.game().unit(foe).buffs.iter().any(|b| b.base == sim::cast::BUFF_SLOW), "the child cast landed");
+    assert!(h.misfires().is_empty());
+}
+
+#[test]
+fn orb_of_slow_with_no_chance_never_procs_but_keeps_rolling() {
+    let Some(mut h) = orb_of_slow_scene(0.0) else {
+        return;
+    };
+    let (u, foe) = (gu(&h, "u"), gu(&h, "foe"));
+    let before = h.rng().clone();
+    for _ in 0..5 {
+        on_hit(&mut h.game_mut(), u, foe, f(30.0), true);
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_ne!(*h.rng(), before, "every armed hit rolls");
+    assert!(h.game().unit(foe).buffs.iter().all(|b| b.base != sim::cast::BUFF_SLOW));
+}
+
+#[test]
+fn orbs_add_their_data_a_to_the_attack_damage_while_carried() {
+    // Orb of Frost (`AIob`): DataA 6 is the attack bonus of the persistent base class, on top of the on-hit frost.
+    let rows = [row(b"ofro", b"AIob", b"AIob", data_level(3.0, 1.0, 0.0, &[(0, 6.0)]))];
+    let mut h = started(&rows, c(b"ofro"), &|_| {});
+    let u = gu(&h, "u");
+    assert_eq!(h.game().buff_damage_bonus(u), 6);
+    call(&mut h, "drop");
+    assert_eq!(h.game().buff_damage_bonus(u), 0, "the bonus comes off with the orb");
+}
+
+#[test]
+fn venom_orb_has_no_poison_of_its_own() {
+    let rows = [row(b"oven", b"AIpb", b"AIpb", data_level(0.0, 0.0, 0.0, &[(0, 5.0)]))];
+    let h = started(&rows, c(b"oven"), &|_| {});
+    let (u, foe) = (gu(&h, "u"), gu(&h, "foe"));
+    assert_eq!(h.game().buff_damage_bonus(u), 5, "the attack bonus");
+    on_hit(&mut h.game_mut(), u, foe, f(30.0), true);
+    assert!(h.game().unit(foe).buffs.is_empty(), "the poison belongs to Apo2");
 }

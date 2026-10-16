@@ -253,20 +253,8 @@ fn corruption_orb_lowers_the_victim_armor_for_its_duration() {
 
 // S53: the Orb of Lightning (old) fires the carrier's AIlp ability instead of adding damage (see item_abilities4.rs).
 
-#[test]
-fn venom_orb_poisons_the_victim_over_time() {
-    let rows = [row(b"tpb1", b"AIpb", b"AIpb", lvl(0.0, 0.0, 5.0))];
-    let mut h = started(&rows, c(b"tpb1"), &|_| {});
-    let (u, foe) = (gu(&h, "u"), gu(&h, "foe"));
-    let before = h.game().unit(foe).life.to_f32();
-    on_hit(&mut h.game_mut(), u, foe, f(30.0), true);
-    assert!(h.game().unit(foe).buffs.iter().any(|b| b.base == sim::neutral_spells::BUFF_POISON));
-    for _ in 0..25 {
-        h.step();
-    }
-    let lost = before - h.game().unit(foe).life.to_f32();
-    assert!(lost >= 5.0, "at least the first tick, lost {lost}");
-}
+// S53: the Orb of Venom's poison is its second ability `Apo2` (the poison attack module); `AIpb` itself only adds the attack bonus
+// (see item_abilities4.rs).
 
 #[test]
 fn cloak_of_flames_burns_nearby_enemies_while_carried() {
