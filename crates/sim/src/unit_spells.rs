@@ -799,7 +799,8 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
-        _ => crate::neutral_spells::target_error(gm, caster, base, target),
+        _ => crate::neutral_spells::target_error(gm, caster, base, target)
+            .or_else(|| crate::invisibility::target_error(gm, caster, base, target)),
     }
 }
 

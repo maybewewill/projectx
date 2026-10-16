@@ -1012,6 +1012,7 @@ impl Game {
                     && !u.hidden
                     && self.is_enemy(owner, u.owner)
                     && !self.unit_is_invulnerable(c)
+                    && self.invisibility_gate(c, owner)
                     && self.choose_weapon(unit, c).is_some()
             })
     }

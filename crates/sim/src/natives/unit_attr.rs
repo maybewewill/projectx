@@ -219,9 +219,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitDetected",
-        support: Support::NotImplemented(
-            "N:detection is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "IsUnitEnemy",
@@ -263,9 +261,7 @@ pub const NATIVES: &[NativeEntry] = &[
     },
     NativeEntry {
         name: "IsUnitInvisible",
-        support: Support::NotImplemented(
-            "N:invisibility is not modelled",
-        ),
+        support: Support::Likely,
     },
     NativeEntry {
         name: "IsUnitLoaded",
@@ -871,17 +867,42 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
 
     // The three fog tests of a unit for a player (vision.md section 7): the state 4 (visible), 2 (fogged) or 1
     // (masked) of the unit's cell, or the reveal bit (`Game::unit_fog_test`, LIKELY).
+    // `IsUnitVisible` also passes the invisibility gate `0x6F3A15F0` first (S44, `invisibility.rs`).
     for (name, state) in [("IsUnitVisible", 4), ("IsUnitFogged", 2), ("IsUnitMasked", 1)] {
         let g = Rc::clone(game);
         reg.register(name, move |_, a| {
             let gm = g.borrow();
             let v = match (unit_at(&gm, a, 0), gm.player_index_of_handle(handle_arg(a, 1))) {
-                (Some(k), Some(p)) => gm.unit_fog_test(k, p, state),
+                (Some(k), Some(p)) => {
+                    (state != 4 || gm.invisibility_gate(k, p)) && gm.unit_fog_test(k, p, state)
+                }
                 _ => false,
             };
             NativeResult::Return(Value::Boolean(v))
         });
     }
+
+    // `IsUnitInvisible(unit, player)`: slot `0xFC` mode 4 is false (invisible flag set and the gate refuses the player).
+    let g = Rc::clone(game);
+    reg.register("IsUnitInvisible", move |_, a| {
+        let gm = g.borrow();
+        let v = match (unit_at(&gm, a, 0), gm.player_index_of_handle(handle_arg(a, 1))) {
+            (Some(k), Some(p)) => gm.is_unit_invisible_for(k, p),
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(v))
+    });
+
+    // `IsUnitDetected(unit, player)` (`0x6F3C7C80`): the player is in the unit's detection mask (LIKELY).
+    let g = Rc::clone(game);
+    reg.register("IsUnitDetected", move |_, a| {
+        let gm = g.borrow();
+        let v = match (unit_at(&gm, a, 0), gm.player_index_of_handle(handle_arg(a, 1))) {
+            (Some(k), Some(p)) => gm.detecting_players(k) & (1 << p) != 0,
+            _ => false,
+        };
+        NativeResult::Return(Value::Boolean(v))
+    });
 
     let g = Rc::clone(game);
     reg.register("IsUnitOwnedByPlayer", move |_, a| {

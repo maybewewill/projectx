@@ -35,6 +35,7 @@ pub mod heroes;
 pub mod human_heroes;
 pub mod kill_xp;
 pub mod hashmap;
+pub mod invisibility;
 pub mod item_abilities;
 pub mod lockstep;
 pub mod missiles;
