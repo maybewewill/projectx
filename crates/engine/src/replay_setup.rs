@@ -36,6 +36,13 @@ pub const SLOT_USED: u8 = 2;
 /// The settings flag that selects the fixed seed `0x77617233` (CONFIRMED rule, see `sim::rng`).
 pub const FIXED_SEED_FLAG: u32 = 0x8000;
 
+/// The replay-header settings bit that also selects the fixed seed. EVIDENCE (docs/spec/lockstep.md section 19): the
+/// EchoIsles replay (flags `0x00800002`, record seed `0x030b2473`) shows generator draws that follow the
+/// sequence of seed `0x77617233` (hundreds of matches of the recorded generator-hash changes, against about ten for
+/// any other seed). Which bit of the replay's flag word becomes the engine's `0x8000` is UNSURE; this one is the
+/// only candidate in that file.
+pub const REPLAY_FIXED_SEED_BIT: u32 = 0x0080_0000;
+
 /// Maps a replay race byte to the JASS race value (LIKELY bit layout: 0x01 human, 0x02 orc, 0x04 night
 /// elf, 0x08 undead). A random race (0x20) or any other value gives `None`: the original's random
 /// draw is not modelled.
@@ -97,9 +104,10 @@ pub fn setup_of(replay: &w3g::Replay) -> Result<ReplaySetup, SetupError> {
         });
     }
     let flags = game.settings.flags;
-    let seed = sim::rng::game_start_seed(flags, game.random_seed);
+    let fixed = if flags & REPLAY_FIXED_SEED_BIT != 0 { flags | FIXED_SEED_FLAG } else { flags };
+    let seed = sim::rng::game_start_seed(fixed, game.random_seed);
     let mut notes = Vec::new();
-    if flags & FIXED_SEED_FLAG != 0 {
+    if fixed & FIXED_SEED_FLAG != 0 {
         notes.push(format!(
             "settings flags {flags:#010x} have the fixed-seed bit: seed {seed:#010x} replaces the record seed (LIKELY link)"
         ));
