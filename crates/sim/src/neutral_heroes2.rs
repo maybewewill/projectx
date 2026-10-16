@@ -54,6 +54,7 @@ pub struct State {
     next: u32,
     pub(crate) waves: crate::neutral_waves::State,
     pub(crate) rain: crate::neutral_rain::State,
+    pub(crate) forms: crate::neutral_forms::State,
 }
 
 pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -61,11 +62,12 @@ pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(ORDER_DOOM, DOOM);
     crate::neutral_waves::register_orders(ids);
     crate::neutral_rain::register_orders(ids);
+    crate::neutral_forms::register_orders(ids);
 }
 
 /// Abilities of this batch that are cast without a target.
-pub(crate) fn takes_no_target(_base: u32) -> bool {
-    false
+pub(crate) fn takes_no_target(base: u32) -> bool {
+    crate::neutral_forms::takes_no_target(base)
 }
 
 /// `0x6F1D2630(unit, level)`: the creep level rule of the Transmute and Doom target slots (CONFIRMED): true when the
@@ -128,6 +130,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             crate::neutral_rain::start(game, rec);
             true
         }
+        b if crate::neutral_forms::is_forms_spell(b) => crate::neutral_forms::run_effect(game, rec),
         _ => false,
     }
 }
@@ -137,6 +140,9 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     match kind {
         crate::neutral_waves::KIND_WAVE => crate::neutral_waves::on_timer(game, rt, kind, aux),
         crate::neutral_rain::KIND_STAMPEDE..=crate::neutral_rain::KIND_VOLCANO => crate::neutral_rain::on_timer(game, rt, kind, aux),
+        crate::neutral_forms::KIND_SPLIT_END..=crate::neutral_forms::KIND_PASSIVE => {
+            crate::neutral_forms::on_timer(game, rt, kind, _unit, _base, aux)
+        }
         _ => {}
     }
 }
@@ -154,8 +160,9 @@ pub(crate) fn on_cast_end(game: &RefCell<Game>, rec: &CastRec, completed: bool) 
 
 /// A unit died (called by the death dispatch, after the unit is marked dead): the removal notifications of the buffs the
 /// batch owns.
-pub(crate) fn on_unit_died(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, unit: ObjKey, _killer: Option<ObjKey>) {
+pub(crate) fn on_unit_died(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, _killer: Option<ObjKey>) {
     doom_death(game, unit);
+    crate::neutral_forms::on_unit_died(game, rt, unit);
 }
 
 /// Transmute (`ANtm`; the effect `0x6F1C18B0` puts `BNtm` on the target and the buff's action slot `0x33C` =

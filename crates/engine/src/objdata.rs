@@ -155,6 +155,9 @@ pub struct ObjectText {
     pub item_abilities: sim::item_abilities::ItemAbilityData,
     /// Creep / neutral alias rows of `AbilityData.slk`: `alias row -> modelled code` (`sim::neutral_spells`).
     pub spell_aliases: BTreeMap<u32, u32>,
+    /// The unit and ability code lists of the level data of the S50 neutral spells (`sim::neutral_forms`): `(row, level
+    /// index, data index) -> codes`.
+    pub neutral_lists: BTreeMap<(u32, usize, usize), Vec<u32>>,
     /// Missing or malformed files, one line each.
     pub notes: Vec<String>,
 }
@@ -188,7 +191,47 @@ pub fn load(archives: &[&[u8]]) -> Result<ObjectText, Error> {
     load_upgrades(archives, &mut out)?;
     load_item_abilities(archives, &mut out)?;
     load_neutral_aliases(archives, &mut out)?;
+    load_neutral_lists(archives, &mut out)?;
     Ok(out)
+}
+
+/// The rows whose data cells name units or abilities (their numeric reading is zero): Storm, Earth and Fire `DataA` (the
+/// three elementals), Pocket Factory `DataB` (the goblin) and Engineering Upgrade `DataC..F` (`from,to` ability pairs).
+/// Every row of those groups is read (the upgrade rows `ANs1` .. carry their own goblin).
+fn load_neutral_lists(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
+    let Some(bytes) = read_last(archives, ABILITY_DATA_FILE)? else {
+        return Ok(());
+    };
+    let Ok(slk) = Slk::parse_bytes(&bytes) else {
+        return Ok(());
+    };
+    const FIELDS: [(&str, &[(&str, usize)]); 3] = [
+        ("ANef", &[("DataA", 0)]),
+        ("ANsy", &[("DataB", 1)]),
+        ("ANeg", &[("DataC", 2), ("DataD", 3), ("DataE", 4), ("DataF", 5)]),
+    ];
+    for row in slk.rows() {
+        let Some(id) = raw_code(row.key()) else { continue };
+        let code_col = slk.raw(row.key(), "code").map(|t| t.trim().trim_matches('"')).and_then(raw_code).unwrap_or(id);
+        for (group, fields) in FIELDS {
+            if raw_code(group) != Some(code_col) {
+                continue;
+            }
+            for level in 1..=4usize {
+                for &(name, index) in fields {
+                    let col = format!("{name}{level}");
+                    let Some(text) = slk.raw(row.key(), &col) else { continue };
+                    let text = gamedata::unittype::unquote(text);
+                    if text.is_empty() || text.as_bytes()[0].is_ascii_digit() || text.starts_with('-') {
+                        continue;
+                    }
+                    let codes = gamedata::abilitytype::list_slots(Some(text));
+                    out.neutral_lists.insert((id, level - 1, index), codes.into_iter().filter(|&c| c != 0).collect());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Reads the creep / neutral alias rows: every `AbilityData.slk` row whose `code` column names a modelled ability (or a
@@ -812,6 +855,9 @@ pub fn install(game: &mut Game, text: &ObjectText, unit_stock: &[(u32, i32, f32)
     }
     for (&alias, &base) in &text.spell_aliases {
         game.set_spell_alias(alias, base);
+    }
+    for (&(row, level, data), codes) in &text.neutral_lists {
+        game.set_neutral_unit_list(row, level, data, codes.clone());
     }
     for (&base, words) in &text.orc_targs {
         if matches!(base, sim::orc::WAR_STOMP | sim::orc::VOODOO | sim::orc::EARTHQUAKE | sim::orc::BLADESTORM) {
