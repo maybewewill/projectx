@@ -47,9 +47,9 @@ pub fn inputs(args: &BootArgs) -> Result<Inputs, String> {
     let archives = args
         .mpqs
         .iter()
-        .map(|p| read(p))
+        .map(|p| mpq::FileBytes::open(p).map_err(|e| format!("{p}: {e}")))
         .collect::<Result<Vec<_>, _>>()?;
-    let refs: Vec<&[u8]> = archives.iter().map(Vec::as_slice).collect();
+    let refs: Vec<&[u8]> = archives.iter().map(|a| &a[..]).collect();
     let (common_j, blizzard_j) = match (&args.common, &args.blizzard) {
         (Some(c), Some(b)) => (
             String::from_utf8_lossy(&read(c)?).into_owned(),

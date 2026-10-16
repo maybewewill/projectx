@@ -93,7 +93,7 @@ fn boot() -> Engine {
         rng_seed: 0,
         ai_common: None,
         ai_scripts: Vec::new(),
-        game_archives: vec![game_archive()],
+        game_archives: vec![game_archive().into()],
         check_natives: false,
     })
     .expect("boot")

@@ -131,7 +131,7 @@ fn boot_with(movetp: &str, with_abilities: bool) -> Engine {
         rng_seed: 0,
         ai_common: None,
         ai_scripts: Vec::new(),
-        game_archives: vec![game_archive(movetp, with_abilities)],
+        game_archives: vec![game_archive(movetp, with_abilities).into()],
         check_natives: false,
     })
     .expect("boot")

@@ -5,6 +5,8 @@
 //! ADPCM codecs used by WAV files. Mask bits can be combined; see `decode_sector`.
 
 mod adpcm;
+mod bytes;
+pub use bytes::FileBytes;
 pub mod crypto;
 mod huffman;
 

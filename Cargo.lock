@@ -966,6 +966,7 @@ dependencies = [
  "bzip2",
  "explode",
  "flate2",
+ "memmap2",
  "thiserror 2.0.21",
 ]
 
