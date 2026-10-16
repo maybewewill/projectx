@@ -1,8 +1,8 @@
 //! Unit abilities, batch A (S46). Spec: `docs/spec/abilities-unit-a.md`.
 //!
-//! 81 ability codes of units and buildings (auras, passives, cargo, detection, transforms and a few spells). Each code
-//! has an entry in [`ABILITIES`] (RTTI class and parent from the ability atlas `docs/research/ability-atlas/factory.tsv`,
-//! what the model does with it, and the confidence); the entries marked [`Sim::Data`] are recorded but not simulated.
+//! Only codes with modelled behaviour are listed in [`ABILITIES`] (RTTI class and parent from the ability atlas
+//! `docs/research/ability-atlas/factory.tsv`, what the model does, and the confidence). The codes of the batch that
+//! have no model yet are in the not-done list of the spec.
 //!
 //! Hooks (called from `cast.rs`, `auras.rs` and `unit_spells.rs`): [`register_orders`], [`takes_no_target`],
 //! [`target_error`], [`run_effect`], [`immediate_order`], [`on_timer`] and [`Game::sync_unit_abilities_a`].
@@ -38,12 +38,6 @@ pub enum Sim {
     Detector,
     /// A hook for the invisibility module (S44).
     Hook,
-    /// Handled by another module (economy, production).
-    Elsewhere,
-    /// A marker without behaviour.
-    Marker,
-    /// Recorded only.
-    Data,
 }
 
 /// Confidence of the model of one code.
@@ -52,7 +46,6 @@ pub enum Conf {
     Confirmed,
     Likely,
     Unsure,
-    NotDone,
 }
 
 /// One registry entry.
@@ -71,84 +64,35 @@ pub struct Info {
 pub const ABILITIES: &[Info] = &[
     Info { code: code(b"Aabr"), class: "CAbilityAuraBlightRegen", parent: "CAbilityAura", sim: Sim::Aura, conf: Conf::Likely, note: "CAbilityAura; buff Babr (getter 0x6F022E40); life regen DataA, a fraction of max life when DataB != 0" },
     Info { code: code(b"Aabs"), class: "CAbilityAbsorb", parent: "CAbilitySimpleSpell", sim: Sim::Spell, conf: Conf::Likely, note: "CAbilityAbsorb order 852529: moves up to DataB mana from the target to the caster" },
-    Info { code: code(b"Aaha"), class: "CAbilityAcolyteHarvest", parent: "CPower", sim: Sim::Elsewhere, conf: Conf::Likely, note: "harvest: crates/sim/src/production.rs (gold/lumber carry per trip)" },
     Info { code: code(b"Aakb"), class: "CAbilityAuraKotoBeast", parent: "CAbilityAura", sim: Sim::Aura, conf: Conf::Likely, note: "CBuffAuraKotoBeast < CBuffAuraCommand; buff Bakb; damage bonus DataA (fraction of the base damage)" },
-    Info { code: code(b"Aall"), class: "CAbilityAllied", parent: "CAbilityNeutral", sim: Sim::Marker, conf: Conf::Likely, note: "CAbilityNeutral marker of shop buildings (DataA 600 range, flags B-D); no simulation effect" },
-    Info { code: code(b"Aami"), class: "CAbilityAntiMagicShellInstant", parent: "CAbilityAntiMagicShell", sim: Sim::Spell, conf: Conf::Unsure, note: "CAbilityAntiMagicShellInstant < CAbilityAntiMagicShell: self cast form" },
-    Info { code: code(b"Aamk"), class: "CAbilityAttributeModSkill", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "hero attribute bonus DataA/B/C: needs the hero attribute setter path" },
     Info { code: code(b"Aams"), class: "CAbilityAntiMagicShell", parent: "CAbilitySimpleSpell", sim: Sim::Spell, conf: Conf::Unsure, note: "CAbilityAntiMagicShell: spell immunity counter for Dur, buff Bams" },
-    Info { code: code(b"Aapl"), class: "CAbilityAuraPlague", parent: "CAbilityAura", sim: Sim::Data, conf: Conf::NotDone, note: "Disease Cloud: CBuffAuraPlague < CBuffLifeDoT; DataA 120 / DataB 1 / DataC 10 and UnitID uplg not decoded (tick amount, ward spawn on death)" },
     Info { code: code(b"Aarm"), class: "CAbilityAuraRegenMana", parent: "CAbilityAura", sim: Sim::Aura, conf: Conf::Likely, note: "CAbilityAura; buff Barm (getter 0x6F022DC0); mana regen DataA, a fraction of max mana when DataB != 0" },
     Info { code: code(b"Aasl"), class: "CAbilityAuraSlow", parent: "CAbilityAura", sim: Sim::Aura, conf: Conf::Likely, note: "CAbilityAura, CBuffAuraSlow < CBuffAuraEndurance; buff Basl; movement DataA, attack speed DataB" },
-    Info { code: code(b"Aast"), class: "CAbilityAncestralSpirit", parent: "CAbilityClosestTargetSpell", sim: Sim::Data, conf: Conf::NotDone, note: "revives a dead unit: needs the corpse revive path of revive.rs" },
     Info { code: code(b"Aave"), class: "CAbilityAvengerForm", parent: "CAbilityMorph", sim: Sim::Morph, conf: Conf::Likely, note: "CAbilityAvengerForm < CAbilityMorph: UnitID target form, DataA alternate form" },
-    Info { code: code(b"Aawa"), class: "CAbilityAwaken", parent: "CAbilityInterfaced", sim: Sim::Data, conf: Conf::NotDone, note: "Awaken: neutral buyable hero awaken, no data" },
-    Info { code: code(b"Abar"), class: "CAbilityBarkskin", parent: "CAbilityModalSpell", sim: Sim::Data, conf: Conf::NotDone, note: "modal spell (Barkskin) with on/off orders 852135..7: effect not decoded" },
     Info { code: code(b"Abdt"), class: "CAbilityBurrowDetector", parent: "CAbilityDetector", sim: Sim::Detector, conf: Conf::Likely, note: "CAbilityBurrowDetector < CAbilityDetector (burrowed units)" },
-    Info { code: code(b"Abgm"), class: "CAbilityBlightedGoldMine", parent: "CAbilityPossessedGoldMine", sim: Sim::Elsewhere, conf: Conf::Unsure, note: "possessed gold mine derived classes; harvest rows loaded by engine objdata, haunting/entangling not modelled" },
-    Info { code: code(b"Abli"), class: "CAbilityBlightGrowth", parent: "CAbility", sim: Sim::Data, conf: Conf::NotDone, note: "blight dispel: needs a blight grid writer" },
-    Info { code: code(b"Ablp"), class: "CAbilityBlightPlacement", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "blight placement: needs a blight grid writer" },
-    Info { code: code(b"Abof"), class: "CAbilityBallsOfFire", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Balls of Fire passive attack effect, not decoded" },
     Info { code: code(b"Abrf"), class: "CAbilityBearForm", parent: "CAbilityMorph", sim: Sim::Morph, conf: Conf::Likely, note: "CAbilityBearForm < CAbilityMorph" },
     Info { code: code(b"Absk"), class: "CAbilityBerserkerRage", parent: "CAbilitySpell", sim: Sim::Spell, conf: Conf::Unsure, note: "CAbilityBerserkerRage: attack speed +DataA, movement +DataB for Dur (damage-taken part DataC not modelled)" },
-    Info { code: code(b"Abtl"), class: "CAbilityBattlestations", parent: "CAbilitySpell", sim: Sim::Data, conf: Conf::NotDone, note: "Battlestations: converts peons to militia (UnitID opeo), needs unit morph by list" },
     Info { code: code(b"Abun"), class: "CAbilityBunker", parent: "CAbilityCargoHold", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityBunker < CAbilityCargoHold: burrow, capacity DataA 4" },
     Info { code: code(b"Abur"), class: "CAbilityBurrow", parent: "CAbilityMorph", sim: Sim::Morph, conf: Conf::Likely, note: "CAbilityBurrow < CAbilityMorph" },
-    Info { code: code(b"Acan"), class: "CAbilityCannibalize", parent: "CAbilityClosestTargetSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Cannibalize: corpse channel with DataA life per second (DataB range 800)" },
     Info { code: code(b"Acar"), class: "CAbilityCargoHold", parent: "CPower", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityCargoHold: capacity DataA; holds loaded units" },
-    Info { code: code(b"Acha"), class: "CAbilityChaos", parent: "CAbilityChaosBase", sim: Sim::Data, conf: Conf::NotDone, note: "Chaos: unit type change by upgrade (UnitID in the row)" },
     Info { code: code(b"Achd"), class: "CAbilityCargoHoldDeath", parent: "CAbilityPurge", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityCargoHoldDeath: holder whose cargo is released when it dies; capacity DataA 10" },
-    Info { code: code(b"Achl"), class: "CAbilityChaosCargoLoad", parent: "CAbilityChaosBase", sim: Sim::Data, conf: Conf::NotDone, note: "Chaos cargo load: unit type change when loaded" },
-    Info { code: code(b"Aclf"), class: "CAbilityCloudOfFog", parent: "CAbilitySilence", sim: Sim::Data, conf: Conf::NotDone, note: "Cloud of Fog (Silence parent): area effect with DataA ranged damage factor" },
     Info { code: code(b"Acmg"), class: "CAbilityControlMagic", parent: "CAbilitySimpleSpell", sim: Sim::Spell, conf: Conf::Unsure, note: "CAbilityControlMagic order 852474: owner change of a summoned or low level target" },
-    Info { code: code(b"Acoa"), class: "CAbilityCoupleArcher", parent: "CAbilityCouple", sim: Sim::Data, conf: Conf::NotDone, note: "Couple (Archer): archer mounts a hippogryph, needs unit merge" },
-    Info { code: code(b"Acoh"), class: "CAbilityCoupleHippogryph", parent: "CAbilityCouple", sim: Sim::Data, conf: Conf::NotDone, note: "Couple (Hippogryph): needs unit merge" },
-    Info { code: code(b"Acoi"), class: "CAbilityCoupleInstant", parent: "CAbilityClosestTargetSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Couple instant: needs unit merge" },
-    Info { code: code(b"Acor"), class: "CAbilityCorrosiveBreath", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Corrosive Breath: structure armor reduction DataA 50, passive attack effect" },
     Info { code: code(b"Acpf"), class: "CAbilityCorporealForm", parent: "CAbilityMorph", sim: Sim::Morph, conf: Conf::Likely, note: "CAbilityCorporealForm < CAbilityMorph" },
     Info { code: code(b"Adch"), class: "CAbilityDisenchant", parent: "CAbilityDispelMagic", sim: Sim::Spell, conf: Conf::Likely, note: "CAbilityDisenchant < CAbilityDispelMagic: runs the Dispel Magic effect (DataB 300 summon damage)" },
-    Info { code: code(b"Adda"), class: "CAbilityDeathDamageAoe", parent: "CAbility", sim: Sim::Data, conf: Conf::NotDone, note: "Death Damage (sapper/mine): area damage on death DataA/B/C/D rings, needs a death hook" },
-    Info { code: code(b"Adec"), class: "CAbilityDecouple", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Decouple: splits hippogryph rider, needs unit split" },
-    Info { code: code(b"Adef"), class: "CAbilityDefend", parent: "CAbilityButton", sim: Sim::Data, conf: Conf::NotDone, note: "Defend: toggle, DataA damage reduction 0.5 vs pierce, DataC move penalty" },
     Info { code: code(b"Adet"), class: "CAbilityDetector", parent: "CAbilityPassive", sim: Sim::Detector, conf: Conf::Likely, note: "CAbilityDetector: Rng detection radius; marks invisible enemies as detected for the owner" },
     Info { code: code(b"Adev"), class: "CAbilityDevour", parent: "CAbilityCargoLoad", sim: Sim::Cargo, conf: Conf::Unsure, note: "CAbilityDevour < CAbilityCargoLoad: order 852104; swallows the target into the devour hold (DataA 5 = digestion damage per second UNSURE)" },
     Info { code: code(b"Adri"), class: "CAbilityCargoDropInstant", parent: "CAbilitySpell", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityCargoDropInstant: unload all, order 852049" },
     Info { code: code(b"Adro"), class: "CAbilityCargoDrop", parent: "CAbilitySimpleSpell", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityCargoDrop: unload at point, order 852048" },
-    Info { code: code(b"Adta"), class: "CAbilityDetectAoe", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Detect area spell (SimpleSpell, order 852015)" },
     Info { code: code(b"Adtn"), class: "CAbilityDetonate", parent: "CAbilityDispelMagic", sim: Sim::Spell, conf: Conf::Likely, note: "CAbilityDetonate < CAbilityDispelMagic: dispel effect, then the caster dies" },
     Info { code: code(b"Adts"), class: "CAbilityMagicSentry", parent: "CAbilityDetector", sim: Sim::Detector, conf: Conf::Likely, note: "CAbilityMagicSentry < CAbilityDetector" },
     Info { code: code(b"Advc"), class: "CAbilityDevourCargo", parent: "CAbilityCargoHold", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityDevourCargo < CAbilityCargoHold: devour stomach, capacity DataA 2" },
-    Info { code: code(b"Advm"), class: "CAbilityDevourMagic", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Devour Magic: area dispel plus DataA life / DataB mana per buff" },
-    Info { code: code(b"Aeat"), class: "CAbilityEatTree", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Eat Tree: tree target (destructable cast target not supported)" },
-    Info { code: code(b"Aegm"), class: "CAbilityEntangledGoldMine", parent: "CAbilityPossessedGoldMine", sim: Sim::Elsewhere, conf: Conf::Unsure, note: "possessed gold mine derived classes; harvest rows loaded by engine objdata, haunting/entangling not modelled" },
     Info { code: code(b"Aenc"), class: "CAbilityEntangleCargo", parent: "CAbilityCargoHold", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityEntangleCargo < CAbilityCargoHold: entangled gold mine, capacity DataA 5" },
-    Info { code: code(b"Aent"), class: "CAbilityEntangle", parent: "CPower", sim: Sim::Data, conf: Conf::NotDone, note: "Entangle: gold mine target, needs mine ownership change" },
-    Info { code: code(b"Aesn"), class: "CAbilitySentinel", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Sentinel: tree target, creates an owl" },
     Info { code: code(b"Aetf"), class: "CAbilityEtherealForm", parent: "CAbilityMorph", sim: Sim::Morph, conf: Conf::Likely, note: "CAbilityEtherealForm < CAbilityMorph" },
     Info { code: code(b"Aeth"), class: "CAbilityGhostVisible", parent: "CAbility", sim: Sim::Hook, conf: Conf::Unsure, note: "CAbilityGhostVisible: lets the unit see ghosts (DataA/DataB flags); hook only" },
     Info { code: code(b"Aetl"), class: "CAbilityEthereal", parent: "CAbilityPassive", sim: Sim::Passive, conf: Conf::Confirmed, note: "init slot 0x80 -> 0x6F07A340 adds one to the ethereal counter (+0x158), removal 0x6F0796A0 subtracts" },
-    Info { code: code(b"Aexh"), class: "CAbilityExhume", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Exhume: meat wagon corpse storage" },
-    Info { code: code(b"Afak"), class: "CAbilityFlamingAttack", parent: "CAbilityFlamingArrows", sim: Sim::Data, conf: Conf::NotDone, note: "Orb of Annihilation / flaming attack: on-hit splash" },
-    Info { code: code(b"Afla"), class: "CAbilityFlare", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Flare: reveal area at point for Dur 15 (needs a fog reveal modifier)" },
-    Info { code: code(b"Aflk"), class: "CAbilityFlakCannon", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Flak Cannon: on-hit air splash" },
-    Info { code: code(b"Afrb"), class: "CAbilityFrostBreath", parent: "CAbility", sim: Sim::Data, conf: Conf::NotDone, note: "Frost Breath: attack applying Bfro" },
-    Info { code: code(b"Afrz"), class: "CAbilityFreezingBreath", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Freezing Breath: structure attack slow" },
-    Info { code: code(b"Afsh"), class: "CAbilityFragShards", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Frag Shards: on-hit splash" },
     Info { code: code(b"Afzy"), class: "CAbilityFrenzy", parent: "CAbilityBloodlust", sim: Sim::Spell, conf: Conf::Likely, note: "CAbilityFrenzy < CAbilityBloodlust: self Bloodlust numbers, buff Bfzy" },
     Info { code: code(b"Agho"), class: "CAbilityGhost", parent: "CAbilityPermInvis", sim: Sim::Hook, conf: Conf::Unsure, note: "CAbilityGhost < CAbilityPermInvis: permanent invisibility; hook only (S44 invisibility.rs owns the rules)" },
-    Info { code: code(b"Agld"), class: "CAbilityGoldMine", parent: "CAbilityGoldMineBase", sim: Sim::Elsewhere, conf: Conf::Confirmed, note: "gold mine amount: crates/sim/src/economy.rs Mine (+0x6C), natives/economy.rs" },
-    Info { code: code(b"Agra"), class: "CAbilityGrabTree", parent: "CAbilityEatTree", sim: Sim::Data, conf: Conf::NotDone, note: "Grab Tree: tree target" },
-    Info { code: code(b"Agyb"), class: "CAbilityGyroBombs", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Gyrocopter Bombs: attack mode, no data" },
-    Info { code: code(b"Agyd"), class: "CAbilityGraveyard", parent: "CAbility", sim: Sim::Data, conf: Conf::NotDone, note: "Graveyard: corpse generation marker" },
     Info { code: code(b"Agyv"), class: "CAbilityGyroVision", parent: "CAbilityDetector", sim: Sim::Detector, conf: Conf::Likely, note: "CAbilityGyroVision < CAbilityDetector" },
-    Info { code: code(b"Ahar"), class: "CAbilityHarvest", parent: "CAbilityHarvestLumber", sim: Sim::Elsewhere, conf: Conf::Likely, note: "harvest: crates/sim/src/production.rs (gold/lumber carry per trip)" },
-    Info { code: code(b"Ahid"), class: "CAbilityHide", parent: "CAbilityButton", sim: Sim::Data, conf: Conf::NotDone, note: "Shadow Meld (creep): invisibility at night, S44 hook" },
-    Info { code: code(b"Ahrl"), class: "CAbilityHarvestLumber", parent: "CAbilityHarvestReturn", sim: Sim::Elsewhere, conf: Conf::Likely, note: "harvest: crates/sim/src/production.rs (gold/lumber carry per trip)" },
-    Info { code: code(b"Aimp"), class: "CAbilityImpalingBolt", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Impaling Bolt: attack mode, no data" },
-    Info { code: code(b"Alam"), class: "CAbilitySacrificialLamb", parent: "CAbilitySimpleSpell", sim: Sim::Data, conf: Conf::NotDone, note: "Sacrifice: acolyte into a haunted gold mine" },
-    Info { code: code(b"Alea"), class: "CAbilityLeash", parent: "CAbility", sim: Sim::Data, conf: Conf::NotDone, note: "Leash: neutral leash, no data" },
-    Info { code: code(b"Aliq"), class: "CAbilityLiquidFire", parent: "CAbilityPassive", sim: Sim::Data, conf: Conf::NotDone, note: "Liquid Fire: structure attack debuff (DataA 8, DataC 0.8)" },
-    Info { code: code(b"Alit"), class: "CAbilityLightningAttack", parent: "CAbility", sim: Sim::Data, conf: Conf::NotDone, note: "Lightning Attack: attack mode, DataA/B" },
     Info { code: code(b"Aloa"), class: "CAbilityCargoLoad", parent: "CAbilitySimpleSpell", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityCargoLoad (SimpleSpell): load order 852046, target unit with a cargo hold" },
 ];
 
@@ -205,6 +149,12 @@ pub struct State {
     cargo_timers: BTreeMap<ObjKey, TimerId>,
     /// Running digestion timers, by devourer.
     digesters: BTreeMap<ObjKey, TimerId>,
+    /// Anti-magic shell expiry timers by unit (one magic immunity count each).
+    shells: BTreeMap<ObjKey, TimerId>,
+    /// The form a transformed unit came from (the alternate order returns to it).
+    morph_back: BTreeMap<ObjKey, u32>,
+    /// Alternate forms by type, for units placed already transformed.
+    morph_alt: BTreeMap<u32, u32>,
 }
 
 fn aura_def(base: u32) -> Option<(u32, &'static str)> {
@@ -354,11 +304,12 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ] {
         ids.insert(id, base);
     }
+    register_spell_orders(ids);
 }
 
 /// Abilities of this batch cast without a target.
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    matches!(base, DROP | DROP_INSTANT)
+    matches!(base, DROP | DROP_INSTANT | BERSERK | FRENZY)
 }
 
 /// Extra target rules (called after the earlier modules' rules).
@@ -379,7 +330,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             (!gm.can_load(caster, target)).then_some(CastError::BadTarget)
         }
-        _ => None,
+        _ => spell_target_error(gm, caster, base, target),
     }
 }
 
@@ -405,25 +356,22 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             }
             true
         }
-        _ => {
-            let _ = rt;
-            false
-        }
+        _ => spell_effect(game, rt, rec),
     }
 }
 
 /// Immediate orders of this batch (toggles, unloading). `None` when `id` is not one of them.
 pub(crate) fn immediate_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Option<bool> {
-    let _ = (game, unit, id);
-    None
+    morph_order(game, unit, id)
 }
 
 /// Timer dispatch for `kind >= 0x40`.
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, aux: u32) {
-    let _ = aux;
     match kind {
         KIND_AURA_SCAN => game.borrow_mut().a_aura_scan(unit, base),
         KIND_DETECT => game.borrow_mut().recompute_detection(),
+        KIND_SHELL => game.borrow_mut().shell_expired(unit),
+        KIND_MORPH => game.borrow_mut().morph_finished(unit, aux),
         KIND_CARGO => {
             let dead = game.borrow_mut().cargo_upkeep(unit);
             for (victim, killer) in dead {
@@ -770,5 +718,321 @@ impl Game {
         } else {
             self.spells.unit_a.ghost_seers.remove(&unit);
         }
+    }
+}
+
+// ---- spells: Absorb, Disenchant, Detonate, Frenzy, Berserk, Anti-magic Shell, Control Magic ----
+
+pub const ABSORB: u32 = code(b"Aabs");
+pub const DISENCHANT: u32 = code(b"Adch");
+pub const DETONATE: u32 = code(b"Adtn");
+pub const FRENZY: u32 = code(b"Afzy");
+pub const BERSERK: u32 = code(b"Absk");
+pub const ANTI_MAGIC: u32 = code(b"Aams");
+pub const ANTI_MAGIC_INSTANT: u32 = code(b"Aami");
+pub const CONTROL_MAGIC: u32 = code(b"Acmg");
+pub const BUFF_FRENZY: u32 = code(b"Bfzy");
+pub const BUFF_BERSERK: u32 = code(b"Bbsk");
+pub const BUFF_CONTROL_MAGIC: u32 = code(b"Bcmg");
+pub const KIND_SHELL: u8 = 0x45;
+pub const ORDER_FRENZY: u32 = 852_561;
+
+/// Registers the spell order ids (called by [`register_orders`]).
+fn register_spell_orders(ids: &mut BTreeMap<u32, u32>) {
+    for (id, base) in [
+        (ORDER_ABSORB, ABSORB),
+        (ORDER_DISENCHANT, DISENCHANT),
+        (ORDER_DETONATE, DETONATE),
+        (ORDER_FRENZY, FRENZY),
+        (ORDER_BERSERK, BERSERK),
+        (ORDER_ANTI_MAGIC, ANTI_MAGIC),
+        (ORDER_CONTROL_MAGIC, CONTROL_MAGIC),
+    ] {
+        ids.insert(id, base);
+    }
+}
+
+fn spell_target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
+    let bad = |w: &str| gm.unit(target).removed || !targs_ok(gm, caster, target, targs_word(w));
+    match base {
+        ABSORB if bad("player,vuln,invu") || target == caster => Some(CastError::BadTarget),
+        FRENZY if target != caster => Some(CastError::BadTarget),
+        ANTI_MAGIC if bad("air,ground,vuln,invu") => Some(CastError::BadTarget),
+        CONTROL_MAGIC => {
+            // targs air,ground,enemy,neutral,ward,organic; the editor label of `DataB` is "Mana per Summoned
+            // Hitpoint" (WorldEditStrings CMG2), so only a summoned non-hero unit qualifies and the caster needs
+            // `DataB * life` mana on top of the cost (LIKELY reading; the exact formula is not decoded).
+            if bad("air,ground,enemy,neutral,ward,organic") || gm.target_hero(target) || !gm.unit(target).summoned {
+                return Some(CastError::BadTarget);
+            }
+            let need = arith::mul(gm.spell_level(caster, CONTROL_MAGIC).data[1], gm.unit(target).life);
+            arith::lt(gm.unit(caster).mana, need).then_some(CastError::NoMana)
+        }
+        _ => None,
+    }
+}
+
+fn spell_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
+    let target = match rec.target {
+        CastTarget::Unit(t) => t,
+        _ => rec.caster,
+    };
+    match rec.base {
+        ABSORB => {
+            game.borrow_mut().absorb(rec.caster, target, &rec.level);
+        }
+        DISENCHANT | DETONATE => {
+            // Both classes derive from `CAbilityDispelMagic` and override nothing but the codes (atlas): the Dispel
+            // Magic effect runs on the row's numbers. Detonate (the wisp) dies afterwards (LIKELY).
+            let parent = CastRec { base: crate::unit_spells::DISPEL_MAGIC, ..*rec };
+            crate::unit_spells::run_effect(game, rt, &parent);
+            if rec.base == DETONATE {
+                let dead = {
+                    let mut gm = game.borrow_mut();
+                    gm.alive(rec.caster) && crate::natives::set_life(&mut gm, rec.caster, F32::ZERO)
+                };
+                if dead {
+                    crate::natives::dispatch_unit_death_by(game, rt, rec.caster, None);
+                }
+            }
+        }
+        FRENZY => {
+            // `CAbilityFrenzy < CAbilityBloodlust`: attack speed `DataA`, movement `DataB` (Bloodlust's fields),
+            // buff Bfzy, self only (targs air,ground,self).
+            let mut gm = game.borrow_mut();
+            let hero = gm.target_hero(target);
+            let dur = crate::cast::effect_duration(&rec.level, hero, F32::ZERO);
+            if gm.alive(target) && arith::lt(F32::ZERO, dur) {
+                let preds = BuffPredicates { positive: true, magic: true, dispellable: true, ..buff_predicates(BUFF_FRENZY) };
+                let mods = UnitMods { attack_delta: rec.level.data[0], move_delta: rec.level.data[1], ..UnitMods::default() };
+                gm.apply_mods_buff(target, BUFF_FRENZY, preds, mods, dur);
+            }
+        }
+        BERSERK => {
+            // WorldEditStrings BSK1..3: movement speed increase `DataA`, attack speed increase `DataB`, damage taken
+            // increase `DataC` (the last one has no sink in the model and is not applied).
+            let mut gm = game.borrow_mut();
+            let hero = gm.target_hero(rec.caster);
+            let dur = crate::cast::effect_duration(&rec.level, hero, F32::ZERO);
+            if gm.alive(rec.caster) && arith::lt(F32::ZERO, dur) {
+                let preds = BuffPredicates { positive: true, ..buff_predicates(BUFF_BERSERK) };
+                let mods = UnitMods { move_delta: rec.level.data[0], attack_delta: rec.level.data[1], ..UnitMods::default() };
+                gm.apply_mods_buff(rec.caster, BUFF_BERSERK, preds, mods, dur);
+            }
+        }
+        ANTI_MAGIC | ANTI_MAGIC_INSTANT => {
+            game.borrow_mut().anti_magic_shell(target, &rec.level);
+        }
+        CONTROL_MAGIC => {
+            let changed = {
+                let mut gm = game.borrow_mut();
+                if !gm.alive(target) {
+                    return true;
+                }
+                let need = arith::mul(rec.level.data[1], gm.unit(target).life);
+                let mana = gm.unit(rec.caster).mana;
+                gm.write_mana(rec.caster, arith::sub(mana, need));
+                let to = gm.unit(rec.caster).owner;
+                let from = crate::natives::unit::change_owner(&mut gm, target, to);
+                if from.is_some() {
+                    let stop = crate::orders::Order {
+                        id: crate::orders::ORDER_STOP,
+                        class: crate::orders::OrderClass::Immediate,
+                        point: None,
+                        target: 0,
+                    };
+                    let _ = gm.issue_order(target, stop, true);
+                }
+                from.map(|f| (f, to))
+            };
+            if let Some((from, to)) = changed {
+                crate::natives::event::fire_owner_change(game, rt, target, from, to);
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+impl Game {
+    /// Absorb (`Aabs`, `CAbilityAbsorb`): moves mana from the target to the caster, at most `DataB` ("Maximum Mana
+    /// Absorbed", WorldEditStrings ABS2) and at most what the caster can hold. `DataA` ("Maximum Life Absorbed", 0 in
+    /// the stock row) is not modelled. LIKELY.
+    fn absorb(&mut self, caster: ObjKey, target: ObjKey, level: &crate::cast::SpellLevel) {
+        if !self.alive(target) || target == caster {
+            return;
+        }
+        let free = arith::sub(self.unit(caster).max_mana, self.unit(caster).mana);
+        let mut take = self.unit(target).mana;
+        for cap in [level.data[1], free] {
+            if arith::lt(cap, take) {
+                take = cap;
+            }
+        }
+        if !arith::lt(F32::ZERO, take) {
+            return;
+        }
+        let (tm, cm) = (self.unit(target).mana, self.unit(caster).mana);
+        self.write_mana(target, arith::sub(tm, take));
+        self.write_mana(caster, arith::add(cm, take));
+    }
+
+    /// Anti-Magic Shell (`Aams`, `CAbilityAntiMagicShell`, buff `Bams`): the target has one magic immunity count for the
+    /// duration; casting again restarts the timer without a second count. UNSURE: the data fields (summoned unit
+    /// damage, magic damage reduction) are zero in the stock rows and are not used.
+    fn anti_magic_shell(&mut self, target: ObjKey, level: &crate::cast::SpellLevel) {
+        if !self.alive(target) {
+            return;
+        }
+        let hero = self.target_hero(target);
+        let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
+        if !arith::lt(F32::ZERO, dur) {
+            return;
+        }
+        let preds = BuffPredicates { positive: true, magic: true, dispellable: true, ..buff_predicates(crate::unit_spells::BUFF_ANTI_MAGIC_SHELL) };
+        self.apply_mods_buff(target, crate::unit_spells::BUFF_ANTI_MAGIC_SHELL, preds, UnitMods::default(), dur);
+        if let Some(old) = self.spells.unit_a.shells.remove(&target) {
+            self.timers.cancel(old);
+        } else {
+            self.unit_mut(target).magic_immune += 1;
+        }
+        let id = self.timers.start(
+            dur.to_f32(),
+            false,
+            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_SHELL, unit: target, base: ANTI_MAGIC, aux: 0 }),
+        );
+        self.spells.unit_a.shells.insert(target, id);
+    }
+
+    fn shell_expired(&mut self, unit: ObjKey) {
+        if self.spells.unit_a.shells.remove(&unit).is_some() {
+            self.unit_mut(unit).magic_immune -= 1;
+        }
+    }
+}
+
+// ---- transforms: Aave, Abrf, Acpf, Aetf, Abur (CAbilityMorph) ----
+
+pub const AVENGER_FORM: u32 = code(b"Aave");
+pub const BEAR_FORM: u32 = code(b"Abrf");
+pub const CORPOREAL_FORM: u32 = code(b"Acpf");
+pub const ETHEREAL_FORM: u32 = code(b"Aetf");
+pub const BURROW: u32 = code(b"Abur");
+/// `(ability, primary order, alternate order)`: the order getters of the classes (slots `0x308` and `0x318`, Unicorn
+/// verified by `tools/analysis/ability_orders.py`). The primary order transforms into the level's `UnitID`, the
+/// alternate order back into the earlier form.
+pub const MORPH_ORDERS: [(u32, u32, u32); 5] = [
+    (AVENGER_FORM, 852_531, 852_532),
+    (BEAR_FORM, 852_138, 852_139),
+    (CORPOREAL_FORM, 852_493, 852_494),
+    (ETHEREAL_FORM, 852_496, 852_497),
+    (BURROW, 852_533, 852_534),
+];
+
+fn morph_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Option<bool> {
+    let &(base, primary, _) = MORPH_ORDERS.iter().find(|m| m.1 == id || m.2 == id)?;
+    let mut gm = game.borrow_mut();
+    if !gm.alive(unit) || gm.unit(unit).abilities.get(base).is_none_or(|a| a.is_removed()) {
+        return Some(false);
+    }
+    if gm.spells.unit_a.morphing.contains_key(&unit) {
+        return Some(false);
+    }
+    let level = gm.spell_level(unit, base);
+    let to = if id == primary {
+        if gm.spells.unit_a.morph_back.contains_key(&unit) {
+            return Some(false);
+        }
+        level.unit_id
+    } else {
+        let ty = gm.unit(unit).type_id;
+        match gm.spells.unit_a.morph_back.get(&unit).or_else(|| gm.spells.unit_a.morph_alt.get(&ty)) {
+            Some(&t) => t,
+            None => return Some(false),
+        }
+    };
+    if to == 0 || gm.unit_types().get(to).is_none() {
+        return Some(false);
+    }
+    // `Dur` is the transformation time (1.45 s for the burrow row); the unit changes type when it runs out.
+    gm.spells.unit_a.morphing.insert(unit, (to, id));
+    gm.timers.start(
+        level.dur.to_f32().max(0.0),
+        false,
+        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_MORPH, unit, base, aux: id }),
+    );
+    Some(true)
+}
+
+impl Game {
+    /// Registers the other form of a unit type for a unit that was placed already transformed (the alternate order
+    /// of a burrowed unit that never burrowed itself): `form -> original`.
+    pub fn set_morph_alt(&mut self, form: u32, original: u32) {
+        self.spells.unit_a.morph_alt.insert(form, original);
+    }
+
+    fn morph_finished(&mut self, unit: ObjKey, order: u32) {
+        let Some((to, started)) = self.spells.unit_a.morphing.remove(&unit) else {
+            return;
+        };
+        let _ = order;
+        if !self.alive(unit) {
+            return;
+        }
+        let primary = MORPH_ORDERS.iter().any(|m| m.1 == started);
+        let from = self.unit(unit).type_id;
+        if primary {
+            self.spells.unit_a.morph_back.insert(unit, from);
+            self.spells.unit_a.morph_alt.insert(to, from);
+        } else {
+            self.spells.unit_a.morph_back.remove(&unit);
+        }
+        self.morph_to(unit, to);
+    }
+
+    /// Changes the type of `unit` (a real transform, unlike Polymorph): life and mana keep their fractions, the
+    /// type's data and ability list replace the old ones (the setup of `natives::unit::build`: order-data abilities,
+    /// then the list; LIKELY, the original rebuilds the unit's type record the same way).
+    pub fn morph_to(&mut self, unit: ObjKey, to: u32) {
+        let Some(ty) = self.unit_types().get(to).cloned() else {
+            return;
+        };
+        let (lf, mf) = {
+            let u = self.unit(unit);
+            let lf = if nonzero(u.max_life) { self.soft_div(u.life, u.max_life) } else { F32::ZERO };
+            let mf = if nonzero(u.max_mana) { self.soft_div(u.mana, u.max_mana) } else { F32::ZERO };
+            (lf, mf)
+        };
+        let old: Vec<u32> = self.unit(unit).abilities.iter().map(|a| a.base).collect();
+        for b in old {
+            self.unit_mut(unit).abilities.remove(b);
+        }
+        let mut list = Vec::new();
+        if let Some(data) = self.orders().type_data(to) {
+            for kind in &data.abilities {
+                list.push((kind.base_code(), kind.base_code()));
+            }
+        }
+        for &id in &ty.abilities {
+            let base = self.spell_alias_base(id);
+            if !list.iter().any(|&(b, _)| b == base) {
+                list.push((base, id));
+            }
+        }
+        for (base, id) in list {
+            let ab = crate::abilities::Ability::aliased(base, id, self.ability_types().get(id).copied());
+            self.unit_mut(unit).abilities.attach(ab);
+        }
+        {
+            let u = self.unit_mut(unit);
+            u.type_id = to;
+            u.class_flags = ty.classification;
+            u.move_speed = ty.move_speed;
+        }
+        self.write_max_life(unit, ty.max_life);
+        self.write_life(unit, arith::mul(ty.max_life, lf));
+        self.unit_mut(unit).max_mana = ty.max_mana;
+        self.write_mana(unit, arith::mul(ty.max_mana, mf));
+        self.sync_auras(unit);
     }
 }

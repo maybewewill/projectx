@@ -142,10 +142,10 @@ fn has_buff(h: &ScriptHost, k: ObjKey, c: u32) -> bool {
 }
 
 #[test]
-fn registry_covers_every_code_once() {
-    let wanted = "Aabr Aabs Aaha Aakb Aall Aami Aamk Aams Aapl Aarm Aasl Aast Aave Aawa Abar Abdt Abgm Abli Ablp Abof Abrf Absk Abtl Abun Abur Acan Acar Acha Achd Achl Aclf Acmg Acoa Acoh Acoi Acor Acpf Adch Adda Adec Adef Adet Adev Adri Adro Adta Adtn Adts Advc Advm Aeat Aegm Aenc Aent Aesn Aetf Aeth Aetl Aexh Afak Afla Aflk Afrb Afrz Afsh Afzy Agho Agld Agra Agyb Agyd Agyv Ahar Ahid Ahrl Aimp Alam Alea Aliq Alit Aloa";
+fn registry_lists_only_modelled_codes_once() {
+    let modelled = "Aetl Aabr Aarm Aasl Aakb Acar Abun Aenc Advc Achd Aloa Adro Adri Adev Adet Adts Agyv Abdt Agho Aeth Aabs Adch Adtn Afzy Absk Aams Acmg Aave Abrf Acpf Aetf Abur";
     let mut seen = std::collections::BTreeSet::new();
-    for w in wanted.split_whitespace() {
+    for w in modelled.split_whitespace() {
         let c = code(w.as_bytes().try_into().unwrap());
         assert!(info(c).is_some(), "{w} registered");
         assert!(seen.insert(c));
@@ -450,4 +450,205 @@ fn ghost_and_ghost_seer_are_tracked_for_the_invisibility_module() {
     call(&mut h, "give_detector");
     run(&mut h, 2);
     assert!(h.game().ghost_visible_to(foe, 0), "a detector of player 0 reveals it");
+}
+
+// ---- spells and transforms ----
+
+const SPELL_SRC: &str = r#"
+function give_spells takes nothing returns nothing
+    call UnitAddAbility(src, 'Aabs')
+    call UnitAddAbility(src, 'Absk')
+    call UnitAddAbility(src, 'Afzy')
+    call UnitAddAbility(src, 'Aams')
+    call UnitAddAbility(src, 'Acmg')
+    call UnitAddAbility(src, 'Adtn')
+    call UnitAddAbility(src, 'Abur')
+    call SetUnitState(src, 2, 50.0)
+    call SetUnitState(mate, 2, 100.0)
+endfunction
+function absorb_mate takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852529, mate)
+endfunction
+function berserk takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(src, 852100)
+endfunction
+function frenzy_self takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852561, src)
+endfunction
+function frenzy_mate takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852561, mate)
+endfunction
+function shell_mate takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852186, mate)
+endfunction
+function control_foe takes nothing returns nothing
+    call SetUnitState(src, 2, 200.0)
+    set accepted = IssueTargetOrderById(src, 852474, foe)
+endfunction
+function detonate_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852145, foe)
+endfunction
+function burrow takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(src, 852533)
+endfunction
+function unburrow takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(src, 852534)
+endfunction
+function half_life takes nothing returns nothing
+    call SetWidgetLife(src, 500.0)
+endfunction
+"#;
+
+const BURROWED: u32 = 0x6862_7272; // 'hbrr'
+
+fn spell_host() -> ScriptHost {
+    let full = format!("{PRELUDE}\n{SRC}\n{SPELL_SRC}");
+    let prog = jass::parse(&full).expect("parse");
+    let module = compile(&[prog]).expect("compile");
+    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), None).expect("vm");
+    {
+        let mut g = h.game_mut();
+        g.unit_types_mut().insert(
+            FOOT,
+            UnitType {
+                name: "Footman".to_string(),
+                max_life: f(1000.0),
+                max_mana: f(200.0),
+                move_speed: f(270.0),
+                ..Default::default()
+            },
+        );
+        g.unit_types_mut().insert(
+            BURROWED,
+            UnitType {
+                name: "Burrowed".to_string(),
+                max_life: f(600.0),
+                max_mana: f(100.0),
+                move_speed: f(0.0),
+                abilities: vec![code(b"Abur")],
+                ..Default::default()
+            },
+        );
+        let burrow_level = SpellLevel { dur: f(1.5), unit_id: BURROWED, ..level(0.0, &[]) };
+        for (c, l) in [
+            (code(b"Aabs"), SpellLevel { rng: f(900.0), ..level(0.0, &[0.0, 99999.0]) }),
+            (code(b"Absk"), SpellLevel { dur: f(12.0), hero_dur: f(12.0), ..level(0.0, &[0.2, 0.5, 0.5]) }),
+            (code(b"Afzy"), SpellLevel { dur: f(20.0), hero_dur: f(20.0), rng: f(800.0), ..level(0.0, &[0.4, 0.25, 0.3]) }),
+            (code(b"Aams"), SpellLevel { dur: f(5.0), hero_dur: f(5.0), rng: f(500.0), ..level(0.0, &[]) }),
+            (code(b"Acmg"), SpellLevel { dur: f(60.0), hero_dur: f(60.0), rng: f(700.0), ..level(0.0, &[5.0, 0.45, 1.0]) }),
+            (code(b"Adtn"), SpellLevel { rng: f(500.0), ..level(300.0, &[50.0, 225.0]) }),
+            (code(b"Abur"), burrow_level),
+        ] {
+            g.ability_types_mut().insert(c, AbilityType { max_level: Some(1) });
+            g.set_spell_levels(c, vec![l]);
+        }
+    }
+    h
+}
+
+fn spell_started() -> ScriptHost {
+    let mut h = spell_host();
+    call(&mut h, "setup");
+    run(&mut h, 1);
+    call(&mut h, "give_spells");
+    run(&mut h, 1);
+    h
+}
+
+#[test]
+fn absorb_moves_the_targets_mana_to_the_caster() {
+    let mut h = spell_started();
+    let (src, mate) = (unit(&h, "src"), unit(&h, "mate"));
+    call(&mut h, "absorb_mate");
+    run(&mut h, 5);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(mate).mana.to_f32(), 0.0);
+    assert_eq!(h.game().unit(src).mana.to_f32(), 150.0);
+}
+
+#[test]
+fn berserk_and_frenzy_raise_speeds_for_their_duration_and_frenzy_is_self_only() {
+    let mut h = spell_started();
+    let (src, mate) = (unit(&h, "src"), unit(&h, "mate"));
+    call(&mut h, "berserk");
+    run(&mut h, 3);
+    assert!(has_buff(&h, src, BUFF_BERSERK));
+    assert!((h.game().unit(src).bonuses.move_mult.to_f32() - 1.2).abs() < 1e-6);
+    call(&mut h, "frenzy_mate");
+    run(&mut h, 2);
+    assert!(!accepted(&h));
+    call(&mut h, "frenzy_self");
+    run(&mut h, 3);
+    assert!(accepted(&h) && has_buff(&h, src, BUFF_FRENZY));
+    assert!((h.game().unit(src).bonuses.move_mult.to_f32() - 1.45).abs() < 1e-5);
+    let _ = mate;
+    run(&mut h, 150);
+    assert!(!has_buff(&h, src, BUFF_BERSERK));
+    assert!((h.game().unit(src).bonuses.move_mult.to_f32() - 1.25).abs() < 1e-5, "frenzy still runs");
+    run(&mut h, 80);
+    assert!((h.game().unit(src).bonuses.move_mult.to_f32() - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn anti_magic_shell_gives_one_immunity_count_until_it_runs_out() {
+    let mut h = spell_started();
+    let mate = unit(&h, "mate");
+    call(&mut h, "shell_mate");
+    run(&mut h, 3);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(mate).magic_immune, 1);
+    run(&mut h, 40);
+    assert_eq!(h.game().unit(mate).magic_immune, 1);
+    run(&mut h, 20);
+    assert_eq!(h.game().unit(mate).magic_immune, 0);
+}
+
+#[test]
+fn control_magic_takes_a_summoned_unit_and_pays_mana_per_hitpoint() {
+    let mut h = spell_started();
+    let (src, foe) = (unit(&h, "src"), unit(&h, "foe"));
+    h.game_mut().write_life(foe, f(100.0));
+    call(&mut h, "control_foe");
+    run(&mut h, 3);
+    assert!(!accepted(&h), "only summoned units can be controlled");
+    h.game_mut().unit_mut(foe).summoned = true;
+    call(&mut h, "control_foe");
+    run(&mut h, 3);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(foe).owner, 0);
+    assert!((h.game().unit(src).mana.to_f32() - (200.0 - 45.0)).abs() < 1e-3);
+}
+
+#[test]
+fn detonate_runs_the_dispel_effect_and_the_caster_dies() {
+    let mut h = spell_started();
+    let src = unit(&h, "src");
+    call(&mut h, "detonate_foe");
+    run(&mut h, 5);
+    assert!(accepted(&h));
+    assert!(h.game().unit(src).dead);
+}
+
+#[test]
+fn burrow_transforms_after_its_duration_keeps_the_life_fraction_and_returns() {
+    let mut h = spell_started();
+    let src = unit(&h, "src");
+    call(&mut h, "half_life");
+    run(&mut h, 1);
+    call(&mut h, "burrow");
+    run(&mut h, 3);
+    assert!(accepted(&h));
+    assert_eq!(h.game().unit(src).type_id, FOOT, "still the old form during the 1.5 s");
+    run(&mut h, 20);
+    assert_eq!(h.game().unit(src).type_id, BURROWED);
+    assert!((h.game().unit(src).life.to_f32() - 300.0).abs() < 0.5, "half of 600");
+    assert!(h.game().unit(src).abilities.contains(code(b"Abur")));
+    // the primary order is refused while transformed; the alternate one returns
+    call(&mut h, "burrow");
+    run(&mut h, 1);
+    assert!(!accepted(&h));
+    call(&mut h, "unburrow");
+    run(&mut h, 20);
+    assert_eq!(h.game().unit(src).type_id, FOOT);
+    assert!((h.game().unit(src).life.to_f32() - 500.0).abs() < 0.5);
 }
