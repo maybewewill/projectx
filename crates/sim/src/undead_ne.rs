@@ -1577,19 +1577,75 @@ fn sleep(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, target: ObjKe
         return;
     }
     let hero = gm.unit(target).hero.is_some() || is_hero_id(gm.unit(target).type_id);
-    let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
-    gm.add_spell_buff(target, BUFF_SLEEP, BuffEffect::Sleep, dur);
-    // The second buff (S33, CONFIRMED: `0x6F1FBA80` looks up `'BUst'` and `'BUsp'` after the main buff): DataA is the
-    // duration handed to it. A target that already has `'BUst'` gets that buff refreshed (BuffID list index 2),
-    // otherwise `'BUsp'` (index 1; `CBuffSleepPause`, ctor `0x6F1F9DA0`) is created or refreshed. While either exists
-    // damage does not wake the sleeper. A zero DataA gives a buff without a timer in the original (UNSURE what ends
-    // it); the model applies none.
-    let keeper = if gm.unit(target).buffs.iter().any(|b| b.base == BUFF_SLEEP_STATIONARY) {
-        BUFF_SLEEP_STATIONARY
+    let has = |gm: &Game, code: u32| gm.unit(target).buffs.iter().any(|b| b.base == code);
+    let plan = sleep_plan(
+        level,
+        hero,
+        F32::ZERO,
+        false,
+        has(&gm, BUFF_SLEEP),
+        has(&gm, BUFF_SLEEP_STATIONARY),
+        has(&gm, BUFF_SLEEP_PAUSE),
+    );
+    for ev in plan {
+        match ev {
+            SleepEvent::MainRefresh(d) | SleepEvent::MainNew(d) => {
+                gm.add_spell_buff(target, BUFF_SLEEP, BuffEffect::Sleep, d);
+            }
+            SleepEvent::KeeperStunRefresh(d) => {
+                gm.add_spell_buff(target, BUFF_SLEEP_STATIONARY, BuffEffect::Marker, d);
+            }
+            SleepEvent::KeeperPauseRefresh(d) | SleepEvent::KeeperPauseNew(d) => {
+                gm.add_spell_buff(target, BUFF_SLEEP_PAUSE, BuffEffect::Marker, d);
+            }
+        }
+    }
+}
+
+/// What the Sleep effect `0x6F1FBA80` does to its target, in order (CONFIRMED, V5: the real effect ran in Unicorn, 400
+/// cases, 0 mismatches, `tools/emu/v5_sleep_emu.py`, `tests/data/v5/sleep_effect.txt`). A target with the dead flag
+/// (`+0x5C & 0x100`) is left alone. The main buff `BUsl` lasts `HeroDur` for a hero else `Dur + ability+0x9C`
+/// (`0x6F02F880`): a live one is refreshed (slot `0x358`), otherwise `CBuffSleep` is created and applied (slot `0x354`). Then
+/// the keeper: `BUst` present: refreshed (slot `0x360`) with `DataA` as its duration; else `BUsp` present: refreshed with
+/// `DataA`; else a new `CBuffSleepPause` is created and applied (slot `0x358`) with `DataA`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SleepEvent {
+    MainRefresh(F32),
+    MainNew(F32),
+    KeeperStunRefresh(F32),
+    KeeperPauseRefresh(F32),
+    KeeperPauseNew(F32),
+}
+
+pub fn sleep_plan(
+    level: &SpellLevel,
+    hero: bool,
+    extra: F32,
+    dead: bool,
+    has_sleep: bool,
+    has_stun_keeper: bool,
+    has_pause_keeper: bool,
+) -> Vec<SleepEvent> {
+    if dead {
+        return Vec::new();
+    }
+    let dur = crate::cast::effect_duration(level, hero, extra);
+    let mut out = vec![if has_sleep { SleepEvent::MainRefresh(dur) } else { SleepEvent::MainNew(dur) }];
+    let a = level.data[0];
+    out.push(if has_stun_keeper {
+        SleepEvent::KeeperStunRefresh(a)
+    } else if has_pause_keeper {
+        SleepEvent::KeeperPauseRefresh(a)
     } else {
-        BUFF_SLEEP_PAUSE
-    };
-    gm.add_spell_buff(target, keeper, BuffEffect::Marker, level.data[0]);
+        SleepEvent::KeeperPauseNew(a)
+    });
+    out
+}
+
+/// The wake rule of `CBuffSleep`'s damage handler `0x6F1F6870` (CONFIRMED, V5, Unicorn 400 cases): an amount that is not 0.0
+/// (x87 compare, NaN counts as non-zero) ends the sleep unless the sleeper has `BUst` or `BUsp`.
+pub fn sleep_wakes(amount: F32, has_stun_keeper: bool, has_pause_keeper: bool) -> bool {
+    amount.to_f32() != 0.0 && !has_stun_keeper && !has_pause_keeper
 }
 
 // ---------------------------------------------------------------------------------------------------------------

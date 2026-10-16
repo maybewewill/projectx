@@ -324,3 +324,7 @@ and target, 400 cases (`tests/data/v5/frost_armor_cast.txt`); `tools/emu/v5_fros
   Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (**bug fixed**: the chill ignored the flag; Frost Nova's own
   slot has the same rule and is unchanged here).
 * Not run: the autocast form `AUfu`, the handler's registration, the Misc strengths (Frost Nova's run covers them).
+
+### Sleep (`AUsl`) CONFIRMED (V5)
+
+`tools/emu/v5_sleep_emu.py`: the real effect `0x6F1FBA80` (400 cases, `tests/data/v5/sleep_effect.txt`) and the real wake handler `0x6F1F6870` (400 cases, `sleep_wake.txt`), test `tests/v5_sleep_vectors.rs` (`undead_ne::sleep_plan`, `sleep_wakes`). Confirmed: a dead target (`+0x5C & 0x100`) is untouched; main buff duration HeroDur (hero) else Dur+`+0x9C`, refreshed if live (slot 0x358) else created (0x354); keeper: BUst present -> refreshed with DataA (slot 0x360, 4 args), else BUsp present -> refreshed with DataA, else a new BUsp created with DataA; wake: amount != 0.0 (NaN counts) and no BUst/BUsp. No model bug found; `sleep()` now follows `sleep_plan`.
