@@ -64,3 +64,41 @@ AUdr	tools/emu/undead_ne2_emu.py	500	V5: Dark Ritual vtable slot 0x424 = 0x6F09F
 AEev	tools/emu/evasion_emu.py	300	V5 from spec attack-damage.md s12.2: EvadeAttack 0x6F08BD20 decision (strict chance > stream-2 draw, NaN evades, gates draw nothing); whose entries the gate walks is UNSURE
 AUfa	tools/emu/v5_frostarmor_emu.py + v5_frostarmor_h_emu.py	800	V5: cast effect 0x6F0BA520 + creator (400: DataA = buff duration, DataB = armor, chill duration by the ARMORED unit hero test) and retaliation handler 0x6F0BA3F0 gates + chill args (400); bugs fixed: hero test on the wrong unit, illusion flag ignored
 AUsl	tools/emu/v5_sleep_emu.py	800	V5: effect 0x6F1FBA80 (400: dead gate, hero duration, refresh/new main buff, keeper choice with DataA) + wake handler 0x6F1F6870 (400)
+AIhe	tools/emu/item_cores_emu.py FX	113	V6 from spec abilities-items.md s2: heal body 0x6F0E3990 hands DataA to the life adder, no ethereal factor (FX code 0 rows)
+AIma	tools/emu/item_cores_emu.py FX	130	V6 from spec s2: mana restore body 0x6F119F10 (FX code 1 rows)
+AIre	tools/emu/item_cores_emu.py FX	107	V6 from spec s2: restore body 0x6F1DBB10, life DataA then mana DataB (FX code 2 rows)
+AIha	tools/emu/item_cores_emu.py CB	350	V6 from spec s2: area heal callback 0x6F0F0470 (immune skip, illusion Misc gate); area membership not run
+AImi	tools/emu/item_cores_emu.py TM	96	V6 from spec s3: max life mod 0x6F0DE2F0 (life sink mode 2)
+AImn	tools/emu/item_cores_emu.py TM	82	V6 from spec s3: max mana mod 0x6F0DE320
+AIem	tools/emu/item_cores_emu.py TM	84	V6 from spec s3: experience mod 0x6F0DE390 (range flag 1)
+AIaa	tools/emu/item_cores_emu.py TM	88	V6 from spec s3: attack mod 0x6F0DE190 (base damage bonus both weapons)
+AIlm	tools/emu/item_cores_emu.py LM	350	V6 from spec s3: level mod effect 0x6F0DE200 (need table, clamp rule)
+AIxm	tools/emu/item_cores_emu.py AT	350	V6 from spec s3: attribute tome init 0x6F0E5D50 + effect 0x6F0DDDF0 (shared by AIam AIim AIsm)
+AIam	tools/emu/item_cores_emu.py AT	350	V6: same class and body as AIxm (CAbilityAttributeMod child)
+AIim	tools/emu/item_cores_emu.py AT	350	V6: same class and body as AIxm
+AIsm	tools/emu/item_cores_emu.py AT	350	V6: same class and body as AIxm
+AIab	tools/emu/item_cores_emu.py AB	350	V6 from spec s3: attribute bonus init 0x6F0E57E0
+AIat	tools/emu/item_cores_emu.py PB	112	V6 from spec s3: attack bonus apply 0x6F0F4100 / remove 0x6F0F4170 (PB dmg rows)
+AIde	tools/emu/item_cores_emu.py PB	104	V6 from spec s3: defense bonus apply 0x6F0F4340 / remove 0x6F0F4390 (PB arm rows)
+AIas	tools/emu/item_cores_emu.py PB	134	V6 from spec s3: attack speed bonus apply 0x6F0F4230 / remove 0x6F0F4290 (PB asp rows)
+AIml	tools/emu/item_cores_emu.py PL	186	V6 from spec s3: max life bonus init 0x6F0DDF70 / remove (PL life rows)
+AImm	tools/emu/item_cores_emu.py PL	164	V6 from spec s3: max mana bonus init 0x6F0DDFF0 / remove (PL mana rows)
+AIsp	tools/emu/item_cores_emu.py SP	350	V6 from spec s4: item speed effect 0x6F1FC4C0 buff apply arguments (duration by hero rule, DataA, DataB)
+AIvi	tools/emu/item_cores2_emu.py VI	173	V6 from spec s8: potion of invisibility duration 0x6F13C180 (buff class not decoded)
+AIvu	tools/emu/item_cores2_emu.py VI	177	V6 from spec s8: potion of invulnerability duration 0x6F13C270
+Arel	tools/emu/item_cores2_emu.py RL	350	V6 from spec s9: life regeneration apply 0x6F0FB0C0 rate and illusion gate
+AIrm	tools/emu/item_cores2_emu.py RM+RH	700	V6 from spec s9: mana regen rate 0x6F0E64E0 (350) + hero int term 0x6F2082C0 (350)
+AIva	tools/emu/item_cores2_emu.py VA	350	V6 from spec s10: vampire post-damage slot 0x6F0F53A0 (victim immunity query not run)
+AIsr	tools/emu/item_cores2_emu.py SR+RS	700	V6 from spec s10: spell reduction handler 0x6F0F5730 (350) + record scale 0x6F255800 (350)
+AIob	tools/emu/item_cores2_emu.py FR	350	V6 from spec s11: Orb of Frost post-hit 0x6F108FC0 buff duration and illusion bit
+AIfs	tools/emu/item_cores2_emu.py FG	350	V6 from spec s12: figurine summon body 0x6F0B8A00 batches (spawn spots not run)
+AIct	tools/emu/item_cores3_emu.py CT	350	V6 from spec s17: Moonstone 0x6F109EB0 time of day and duration arguments
+AIpv	tools/emu/item_cores3_emu.py PV+VP	700	V6 from spec s17: vampire potion apply arguments 0x6F109F70 (350) + hit handler gates 0x6F0FB7D0 (350)
+AIdd	tools/emu/item_cores3_emu.py DD	350	V6 from spec s17: passive defense handler 0x6F098F90 (arming slot 0x160 not run)
+AIlb	tools/emu/item_cores3_emu.py LB	350	V6 from spec s17: Orb of Lightning post-hit 0x6F0F2F70 firing path (the AIlp effect itself not run)
+AIfb	tools/emu/item_cores3_emu.py FB	350	V6 from spec s17: Orb of Fire area body arguments 0x6F0F2CD0
+AIzb	tools/emu/item_cores3_emu.py ZB	350	V6 from spec s17: Orb of Freezing stun duration 0x6F108E20
+AIcb	tools/emu/item_cores3_emu.py CR	350	V6 from spec s17: Orb of Corruption duration and amount 0x6F109B40
+AIms	tools/emu/item_cores3_emu.py MS	350	V6 from spec s17: move speed bonus is the maximum over abilities 0x6F077590 (boots do not stack)
+AIsb	tools/emu/item_cores3_emu.py SB	350	V6 from spec s17: spell effect bonus proc 0x6F0F3DD0 (PRD on stream 36, kind chances)
+AIil	tools/emu/item_cores3_emu.py IL	350	V6 from spec s17: Wand of Illusion apply arguments 0x6F13DFD0 (spawn spot 0x6F1D26B0 not run)
