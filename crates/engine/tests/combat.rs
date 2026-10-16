@@ -69,7 +69,7 @@ fn inputs(map: Vec<u8>, game_archives: Vec<Vec<u8>>, game_dll: Option<Vec<u8>>) 
         rng_seed: 0,
         ai_common: None,
         ai_scripts: Vec::new(),
-        game_archives,
+        game_archives: game_archives.into_iter().map(Into::into).collect(),
         check_natives: false,
     }
 }

@@ -65,6 +65,7 @@ pub mod scripts;
 pub mod sync_check;
 pub mod terrain;
 
+pub use mpq::FileBytes;
 pub use map::{apply_players, controller_of, playable_area};
 pub use pathing::PathingSummary;
 pub use scripts::{
@@ -129,7 +130,7 @@ pub struct Inputs {
     /// The user's game archives in load order (`War3.mpq`, then `War3x.mpq`). They give the `[Misc]` layers
     /// (`Units\MiscData.txt`, `Units\MiscGame.txt`) and the unit rows (`Units\UnitBalance.slk`,
     /// `Units\UnitWeapons.slk`). Empty: the Misc values and unit rows are defaults and the damage stays the placeholder.
-    pub game_archives: Vec<Vec<u8>>,
+    pub game_archives: Vec<mpq::FileBytes>,
     /// Check the `native` lines of the scripts against the 1.26a native table (`docs/spec/natives-1.26a.tsv`) like
     /// the game does (jass-frontend.md 8.2): an unregistered name or a different signature rejects the whole script
     /// set. Off by default because synthetic test scripts declare natives of their own; `w3boot` turns it on. The AI
@@ -342,7 +343,7 @@ impl Engine {
         host.game_mut().set_map_tileset(tileset);
         if let Some(t) = &w3e_terrain {
             // Cliff levels (missile uphill miss) and ground height (GetLocationZ): docs/spec/terrain.md.
-            let archives: Vec<&[u8]> = inputs.game_archives.iter().map(Vec::as_slice).collect();
+            let archives: Vec<&[u8]> = inputs.game_archives.iter().map(|a| &a[..]).collect();
             notes.push(terrain::install(&mut host.game_mut(), t, &archives));
         }
         apply_players(&mut host.game_mut(), &info, &mut notes);
@@ -377,7 +378,7 @@ impl Engine {
 
         let (natives_referenced, natives_missing) = native_usage(host.vm().module(), &host);
 
-        let game_refs: Vec<&[u8]> = inputs.game_archives.iter().map(Vec::as_slice).collect();
+        let game_refs: Vec<&[u8]> = inputs.game_archives.iter().map(|a| &a[..]).collect();
         let game_data = data::load(&game_refs, &archive, tables.as_ref())?;
         notes.extend(game_data.notes.iter().cloned());
         match archive.read("war3map.wts") {
@@ -401,6 +402,21 @@ impl Engine {
             })
             .collect();
         objdata::install(&mut host.game_mut(), &object_text, &unit_stock);
+        {
+            // The morph forms (Burrow, Bear Form, ...): a unit placed already in the other form takes the alternate order.
+            let unit_abilities: Vec<(u32, Vec<u32>)> = game_data
+                .unit_types
+                .iter()
+                .filter_map(|(code, ty)| {
+                    let id = gamedata::combat::rawcode(code)?;
+                    Some((id, ty.abil_list.iter().filter_map(|c| gamedata::combat::rawcode(c)).collect()))
+                })
+                .collect();
+            let mut g = host.game_mut();
+            for (form, original) in objdata::morph_alternates(&object_text, &unit_abilities) {
+                g.set_morph_alt(form, original);
+            }
+        }
         // The skill data and the ability types of the hero skills (`docs/spec/heroes.md` section 12): a hero fills its
         // five slots from `heroAbilList` and the definitions' `levels`, `reqLevel`, `levelSkip`.
         {

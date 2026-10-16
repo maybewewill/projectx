@@ -147,7 +147,7 @@ fn a_reign_of_chaos_map_boots_and_gets_the_object_text() {
         rng_seed: 0,
         ai_common: None,
         ai_scripts: Vec::new(),
-        game_archives: vec![game_archive()],
+        game_archives: vec![game_archive().into()],
         check_natives: false,
     })
     .expect("a format-18 map boots");

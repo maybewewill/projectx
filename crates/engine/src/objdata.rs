@@ -155,6 +155,8 @@ pub struct ObjectText {
     pub item_abilities: sim::item_abilities::ItemAbilityData,
     /// Creep / neutral alias rows of `AbilityData.slk`: `alias row -> modelled code` (`sim::neutral_spells`).
     pub spell_aliases: BTreeMap<u32, u32>,
+    /// Registered ability codes with no `AbilityData.slk` row (no level data possible).
+    pub missing_ability_rows: Vec<u32>,
     /// Missing or malformed files, one line each.
     pub notes: Vec<String>,
 }
@@ -188,7 +190,97 @@ pub fn load(archives: &[&[u8]]) -> Result<ObjectText, Error> {
     load_upgrades(archives, &mut out)?;
     load_item_abilities(archives, &mut out)?;
     load_neutral_aliases(archives, &mut out)?;
+    load_registered(archives, &mut out)?;
     Ok(out)
+}
+
+/// The level records of one `AbilityData.slk` row (`None` when the row is missing or has no level).
+fn spell_levels_of_row(slk: &Slk, id: u32) -> Option<Vec<sim::cast::SpellLevel>> {
+    let name = String::from_utf8_lossy(&id.to_be_bytes()).into_owned();
+    let def = gamedata::abilitytype::read_ability(slk, &name)?;
+    let f = |v: f32| F32::from_bits(v.to_bits());
+    Some(
+        def.levels
+            .iter()
+            .map(|l| {
+                let mut data = [F32::ZERO; 9];
+                for (d, v) in data.iter_mut().zip(l.data.iter()) {
+                    *d = f(*v);
+                }
+                sim::cast::SpellLevel {
+                    cast: f(l.cast),
+                    dur: f(l.dur),
+                    hero_dur: f(l.hero_dur),
+                    cost: l.cost,
+                    cool: f(l.cool),
+                    area: f(l.area),
+                    rng: f(l.rng),
+                    data,
+                    unit_id: l.unit_id,
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Loads the level records of every ability code the simulation registers (`sim::ability_registry`, derived from the
+/// module registries, no hand list) that no earlier pass loaded, and the morph forms (`set_morph_alt` inputs, filled
+/// at install). A code without an `AbilityData.slk` row is noted.
+fn load_registered(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Error> {
+    let Some(bytes) = read_last(archives, ABILITY_DATA_FILE)? else {
+        return Ok(());
+    };
+    let Ok(slk) = Slk::parse_bytes(&bytes) else {
+        return Ok(());
+    };
+    // A class code that has no row of its own in 1.26a (`AOac`, `Aarm`, `Acar`, ...) is the `code` column of other rows
+    // (`ACac` -> `AOac`): the first such row (key order) stands in for its level data (LIKELY: same data layout).
+    let mut by_class: BTreeMap<u32, u32> = BTreeMap::new();
+    for row in slk.rows() {
+        let Some(id) = raw_code(row.key()) else { continue };
+        let class = slk
+            .raw(row.key(), "code")
+            .map(|t| t.trim().trim_matches('"'))
+            .and_then(raw_code)
+            .unwrap_or(id);
+        if class != id {
+            by_class.entry(class).or_insert(id);
+        }
+    }
+    for code in sim::ability_registry::registered_codes() {
+        if out.spell_levels.contains_key(&code) {
+            continue;
+        }
+        let own = spell_levels_of_row(&slk, code).filter(|l| !l.is_empty());
+        let levels = own.or_else(|| by_class.get(&code).and_then(|&row| spell_levels_of_row(&slk, row)).filter(|l| !l.is_empty()));
+        match levels {
+            Some(levels) => {
+                out.spell_levels.insert(code, levels);
+            }
+            None => out.missing_ability_rows.push(code),
+        }
+    }
+    Ok(())
+}
+
+/// The morph alternate forms: for every unit type that lists a morph ability, `form -> original` where the form is the
+/// ability's level-1 `UnitID` (`sim::Game::set_morph_alt`: the unit placed already in the other form takes the alternate
+/// order back to its original type). `unit_abilities` is `(unit code, abilList codes)`.
+pub fn morph_alternates(text: &ObjectText, unit_abilities: &[(u32, Vec<u32>)]) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    for &(ability, _, _) in sim::ability_registry::morph_abilities() {
+        let Some(form) = text.spell_levels.get(&ability).and_then(|l| l.first()).map(|l| l.unit_id).filter(|&u| u != 0) else {
+            continue;
+        };
+        for (unit, list) in unit_abilities {
+            if *unit != form && list.contains(&ability) {
+                out.push((form, *unit));
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Reads the creep / neutral alias rows: every `AbilityData.slk` row whose `code` column names a modelled ability (or a

@@ -656,5 +656,14 @@ pub fn install_sites(game: &mut Game, archives: &[&[u8]], data: &GameData, notes
         );
     }
     game.set_frost_misc(data.misc.frost_move_speed_decrease, data.misc.frost_attack_speed_decrease);
+    {
+        // The Misc keys of the unit spells (`unit_spells.rs`): the Frost slow, the ethereal heal factor, illusions.
+        let st = game.unit_spell_state_mut();
+        st.frost_move_decrease = Some(data.misc.frost_move_speed_decrease);
+        st.frost_attack_decrease = Some(data.misc.frost_attack_speed_decrease);
+        st.ethereal_heal_bonus = data.misc.ethereal_heal_bonus;
+        st.illusions_can_restore_life = data.misc.hero.attr_bonus.illusions_can_restore_life;
+        st.illusions_get_autocast = data.misc.illusions_get_autocast;
+    }
     game.production_mut().building_angle = sim::ai_site::building_angle(data.misc.building_angle);
 }

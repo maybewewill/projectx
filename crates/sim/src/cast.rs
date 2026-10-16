@@ -343,6 +343,11 @@ pub fn prop_differs(p: F32, c: F32) -> bool {
 // ---- registry API ----
 
 impl SpellSystem {
+    /// The ability codes that have an order id registered (the values of the order table).
+    pub fn order_bases(&self) -> impl Iterator<Item = u32> + '_ {
+        self.order_ids.values().copied()
+    }
+
     pub fn new() -> Self {
         let mut s = Self::default();
         // Original cast-order getters (slot 0x348), Unicorn-checked in tools/analysis/ability_orders.py.

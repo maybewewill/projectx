@@ -122,6 +122,10 @@ pub struct MiscData {
     pub frost_move_speed_decrease: F32,
     /// `FrostAttackSpeedDecrease`: the attack-rate slow of the Frost buff, stock 0.25. `0.0` when absent.
     pub frost_attack_speed_decrease: F32,
+    /// `EtherealHealBonus`: the factor on healing an ethereal target takes (stock 0.0 on absent key reads 0.0).
+    pub ethereal_heal_bonus: F32,
+    /// `IllusionsGetAutocast` (integer flag): an illusion is a valid autocast candidate.
+    pub illusions_get_autocast: bool,
     /// `MagicImmunesResistDamage` (element 0, an integer flag): Magic attacks cannot target magic immune units and
     /// physical attacks cannot target ethereal units (`docs/spec/weapon-target.md`). `false` when absent.
     pub magic_immunes_resist_damage: bool,
@@ -182,6 +186,8 @@ impl MiscData {
         let building_angle = reader.real("BuildingAngle").unwrap_or(F32::ZERO);
         let frost_move_speed_decrease = reader.real("FrostMoveSpeedDecrease").unwrap_or(F32::ZERO);
         let frost_attack_speed_decrease = reader.real("FrostAttackSpeedDecrease").unwrap_or(F32::ZERO);
+        let ethereal_heal_bonus = reader.real("EtherealHealBonus").unwrap_or(F32::ZERO);
+        let illusions_get_autocast = reader.int_element("IllusionsGetAutocast") != 0;
         let magic_immunes_resist_damage = reader.int_element("MagicImmunesResistDamage") != 0;
         let hero = HeroMisc::read(&mut reader);
         let Reader {
@@ -212,6 +218,8 @@ impl MiscData {
             building_angle,
             frost_move_speed_decrease,
             frost_attack_speed_decrease,
+            ethereal_heal_bonus,
+            illusions_get_autocast,
             magic_immunes_resist_damage,
         }
     }
@@ -253,6 +261,8 @@ impl MiscData {
             building_angle: F32::ZERO,
             frost_move_speed_decrease: F32::ZERO,
             frost_attack_speed_decrease: F32::ZERO,
+            ethereal_heal_bonus: F32::ZERO,
+            illusions_get_autocast: false,
             magic_immunes_resist_damage: false,
         }
     }

@@ -33,11 +33,11 @@ fn js_err(message: impl std::fmt::Display) -> JsValue {
 /// engine.
 #[wasm_bindgen]
 pub fn boot(map: &[u8], mpqs: js_sys::Array, game_dll: Option<Vec<u8>>) -> Result<String, JsValue> {
-    let archives: Vec<Vec<u8>> = mpqs
+    let archives: Vec<engine::FileBytes> = mpqs
         .iter()
-        .map(|v| js_sys::Uint8Array::new(&v).to_vec())
+        .map(|v| js_sys::Uint8Array::new(&v).to_vec().into())
         .collect();
-    let refs: Vec<&[u8]> = archives.iter().map(Vec::as_slice).collect();
+    let refs: Vec<&[u8]> = archives.iter().map(|a| &a[..]).collect();
     let (common_j, blizzard_j) = engine::scripts_from_archives(&refs).map_err(js_err)?;
     let mut ai = engine::ai_scripts_from_archives(&refs).map_err(js_err)?;
     let inputs = Inputs {
