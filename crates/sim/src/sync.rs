@@ -939,4 +939,54 @@ mod tests {
         changed.value ^= 0x40;
         assert_eq!(residual(&p, &changed, rot), 0x40);
     }
+
+    fn slot_payload(inc: u16) -> Vec<u8> {
+        inc.to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn the_clock_follows_25ms_units_with_a_carried_remainder() {
+        let mut s = SyncState::new();
+        s.time_slot(0x1F, &slot_payload(94));
+        assert_eq!((s.clock(), s.last_units()), (75, 3));
+        s.time_slot(0x1F, &slot_payload(94));
+        // 19 carried + 94 = 113 ms: four units, 13 left
+        assert_eq!((s.clock(), s.last_units()), (175, 4));
+    }
+
+    #[test]
+    fn a_pause_takes_one_more_unit_then_freezes_and_resume_drops_whole_units() {
+        // The rule fitted on the EchoIsles replay (docs/spec/lockstep.md section 18).
+        let mut s = SyncState::new();
+        s.time_slot(0x1F, &slot_payload(100));
+        assert_eq!(s.clock(), 100);
+        s.pause();
+        assert!(s.paused());
+        // The pause command's own slot has no time: nothing is consumed and the pause stays armed.
+        s.time_slot(0x1F, &slot_payload(0));
+        assert_eq!((s.clock(), s.last_units()), (100, 0));
+        // The next slot with time releases exactly one unit, then the clock freezes.
+        s.time_slot(0x1F, &slot_payload(100));
+        assert_eq!((s.clock(), s.last_units()), (125, 1));
+        for _ in 0..3 {
+            s.time_slot(0x1F, &slot_payload(100));
+            assert_eq!((s.clock(), s.last_units()), (125, 0));
+        }
+        // 75 left over from the armed slot plus 300 piled up: resume keeps only the remainder (0).
+        s.resume();
+        assert!(!s.paused());
+        s.time_slot(0x1F, &slot_payload(100));
+        assert_eq!((s.clock(), s.last_units()), (225, 4));
+    }
+
+    #[test]
+    fn resume_without_a_pause_changes_nothing() {
+        let mut s = SyncState::new();
+        s.time_slot(0x1F, &slot_payload(60));
+        let before = (s.clock(), s.last_units());
+        s.resume();
+        s.time_slot(0x1F, &slot_payload(40));
+        assert_eq!(before, (50, 2));
+        assert_eq!((s.clock(), s.last_units()), (100, 2));
+    }
 }

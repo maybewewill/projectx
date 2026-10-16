@@ -207,6 +207,11 @@ fn run(argv: &[String]) -> Result<(), String> {
         print!("{}", report.render());
         {
             let game = engine.host().game();
+            let st = game.pr_stats();
+            println!(
+                "pr hooks: unit created {}  mover start {}  leg restart {}  idle {}  walk release {}  missile launch {}  unit removed {}",
+                st[0], st[1], st[2], st[3], st[4], st[5], st[6]
+            );
             for p in 0..2u32 {
                 println!("player {p}: {}", game.player_report(p));
             }

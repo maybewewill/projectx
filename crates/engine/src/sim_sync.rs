@@ -64,6 +64,9 @@ pub struct SimSyncReport {
     pub real_active_sim_quiet: usize,
     pub both_active_different: usize,
     pub both_active_equal: usize,
+    /// Event timelines by class (see [`EventClass`]): real events found in the file against the simulated inputs
+    /// that changed, matched within one slot. One row per class.
+    pub timeline: Vec<TimelineRow>,
     /// Slots where the replay stream could not be turned into commands.
     pub command_errors: Vec<String>,
     /// Per-slot trace lines (when requested).
@@ -125,6 +128,14 @@ impl SimSyncReport {
             self.both_active_equal,
             self.both_active_different
         );
+        let _ = writeln!(s, "  event timelines (real class vs the simulated input, match = same or adjacent slot):");
+        for t in &self.timeline {
+            let _ = writeln!(
+                s,
+                "    {:<15} real {:5}  sim {:5}  real matched {:5}  sim matched {:5}",
+                t.class, t.real, t.sim, t.real_matched, t.sim_matched
+            );
+        }
         let _ = writeln!(
             s,
             "  final simulated words: X {:#x}  Y {:#x}  R {:#010x}",
@@ -141,6 +152,70 @@ impl SimSyncReport {
         }
         s
     }
+}
+
+/// The kind of hidden-word change between two consecutive records, read off the rotation signatures of the inputs
+/// (docs/spec/lockstep.md section 18). The classes are exclusive and tried in this order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventClass {
+    /// `rol3` of a generator-hash difference: the low three bits are zero and the value is below `2^29` with at
+    /// least 24 bits (hash differences are below `2^26`). Generator draws, alone or with a small tag change.
+    Generator,
+    /// Presence and birth tags: `rol6(dY) ^ rol9(dX)` with 12-bit differences needs at most 21 bits.
+    Tags,
+    /// The rand slot: the top byte is the low byte of the hash-sum difference and bits 20 to 23 are zero.
+    RandSlot,
+    /// Anything else: the game-hash slot, a participant that appears, several inputs at once.
+    Other,
+}
+
+impl EventClass {
+    pub const ALL: [EventClass; 4] = [
+        EventClass::Generator,
+        EventClass::Tags,
+        EventClass::RandSlot,
+        EventClass::Other,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            EventClass::Generator => "generator R",
+            EventClass::Tags => "tags X/Y",
+            EventClass::RandSlot => "rand slot",
+            EventClass::Other => "other",
+        }
+    }
+}
+
+/// Classifies a nonzero hidden-word change (`None` for zero).
+pub fn classify(r: u32) -> Option<EventClass> {
+    if r == 0 {
+        return None;
+    }
+    let bits = 32 - r.leading_zeros();
+    Some(if r & 7 == 0 && r < (1 << 29) && bits >= 24 {
+        EventClass::Generator
+    } else if bits <= 22 {
+        EventClass::Tags
+    } else if bits >= 30 && (r >> 20) & 0xF == 0 {
+        EventClass::RandSlot
+    } else {
+        EventClass::Other
+    })
+}
+
+/// One row of the event timeline comparison.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineRow {
+    pub class: &'static str,
+    /// Events of this class in the file.
+    pub real: usize,
+    /// Simulated events of the matching input (the generator for R, `Y`, `X`, the rand sum; none for "other").
+    pub sim: usize,
+    /// Real events with a simulated event of the matching input in the same slot or the neighbouring ones.
+    pub real_matched: usize,
+    /// Simulated events with a real event of this class nearby.
+    pub sim_matched: usize,
 }
 
 /// Which input a difference `d` looks like (see the module docs). `rand_rot` and `game_rot` are the rotations of
@@ -391,6 +466,39 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
             }
         }
     }
+    // Event timelines: the real change class of each pair against the simulated input that changed.
+    {
+        let hidden = |value: u32, i: &Inputs| value ^ i.t.rotate_left(12) ^ i.net.rotate_left(21);
+        let n = recs.len();
+        let mut real_at: Vec<Option<EventClass>> = vec![None; n];
+        let mut sim_at: Vec<[bool; 3]> = vec![[false; 3]; n];
+        for i in 1..n {
+            let (p, q) = (&recs[i - 1], &recs[i]);
+            real_at[i] = classify(hidden(p.file, &p.inputs) ^ hidden(q.file, &q.inputs));
+            sim_at[i] = [
+                p.inputs.r != q.inputs.r,
+                p.inputs.y != q.inputs.y || p.inputs.x != q.inputs.x,
+                p.inputs.rand != q.inputs.rand,
+            ];
+        }
+        let near = |f: &dyn Fn(usize) -> bool, i: usize| (i.saturating_sub(1)..=(i + 1).min(n - 1)).any(f);
+        for (ci, class) in EventClass::ALL.iter().enumerate() {
+            let real = real_at.iter().filter(|c| **c == Some(*class)).count();
+            let (sim, real_matched, sim_matched) = if ci < 3 {
+                let sim = sim_at.iter().filter(|s| s[ci]).count();
+                let rm = (1..n)
+                    .filter(|&i| real_at[i] == Some(*class) && near(&|j| sim_at[j][ci], i))
+                    .count();
+                let sm = (1..n)
+                    .filter(|&i| sim_at[i][ci] && near(&|j| real_at[j] == Some(*class), i))
+                    .count();
+                (sim, rm, sm)
+            } else {
+                (0, 0, 0)
+            };
+            report.timeline.push(TimelineRow { class: class.name(), real, sim, real_matched, sim_matched });
+        }
+    }
     if trace {
         let hidden = |value: u32, i: &Inputs| value ^ i.t.rotate_left(12) ^ i.net.rotate_left(21);
         for (i, r) in recs.iter().enumerate() {
@@ -423,5 +531,58 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
                 (0..46).filter(|k| r.inputs.changed >> k & 1 != 0).map(|k| if k == 45 { "G".to_string() } else { k.to_string() }).collect::<Vec<_>>().join(","),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_reads_the_rotation_signatures() {
+        // rol3 of a 26-bit hash difference: low three bits zero, between 2^23 and 2^29
+        assert_eq!(classify(0x07de_1e40), Some(EventClass::Generator));
+        // rol6 of a birth-tag difference and rol9 of a presence-tag difference are small
+        assert_eq!(classify(9 << 6), Some(EventClass::Tags));
+        assert_eq!(classify(1470 << 9), Some(EventClass::Tags));
+        // bits 20..23 clear and a full-width top byte: the rand sum
+        assert_eq!(classify(0xAB0F_FFFF), Some(EventClass::RandSlot));
+        // random-looking words with the middle nibble set are something else
+        assert_eq!(classify(0xA84F_91F9), Some(EventClass::Other));
+        assert_eq!(classify(0), None);
+    }
+
+    #[test]
+    fn explain_names_small_fields() {
+        assert!(explain(5 << 6, 24, 27).contains("Y (dY 5)"));
+        assert!(explain(0xA84F_91F9, 24, 27).contains("several inputs"));
+        assert_eq!(explain(0, 24, 27), "none");
+    }
+
+    fn rec(slot: usize, file: u32, sim: u32) -> Rec {
+        Rec { slot, file, sim, inputs: Inputs::default() }
+    }
+
+    #[test]
+    fn analyse_counts_absolute_modal_and_pair_matches() {
+        // sim = file ^ 0x11 everywhere except one record: a constant offset, one different slot.
+        let recs = vec![
+            rec(0, 0x100, 0x100 ^ 0x11),
+            rec(1, 0x200, 0x200 ^ 0x11),
+            rec(2, 0x300, 0x300 ^ 0x11 ^ 0x4),
+            rec(3, 0x400, 0x400 ^ 0x11),
+        ];
+        let mut r = SimSyncReport::default();
+        analyse(&mut r, &recs, 24, 27, false);
+        assert_eq!(r.computed, 4);
+        assert_eq!(r.exact, 0);
+        assert_eq!(r.first_mismatch, Some(0));
+        assert_eq!(r.constant, 0x11);
+        assert_eq!(r.calibrated_exact, 3);
+        assert_eq!(r.calibrated_prefix, 2);
+        assert_eq!(r.calibrated_first_mismatch, Some(2));
+        // pairs (0,1) agree; (1,2) and (2,3) each carry the one wrong record
+        assert_eq!((r.pairs, r.pair_exact, r.pair_prefix), (3, 1, 1));
+        assert_eq!(r.pair_first_mismatch, Some(2));
     }
 }

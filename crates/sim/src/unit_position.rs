@@ -100,6 +100,9 @@ pub struct PrObjects {
     /// Debug switches of the model (`w3boot --pr-off MASK`): bit 0 unit creation, 1 mover start, 2 leg restarts,
     /// 3 idle release, 4 walk release, 5 missiles, 6 unit removal.
     pub disabled: u32,
+    /// How often each hook ran (unit created, mover start, leg restart, idle, walk release, missile launch, unit
+    /// removed), for the replay oracle's report.
+    pub stats: [u64; 7],
 }
 
 /// Bits of [`PrObjects::disabled`].
@@ -125,6 +128,7 @@ impl Game {
             return;
         }
         let h = self.pr.register();
+        self.pr_objs.stats[0] += 1;
         self.pr_objs.unit_path.insert(k, h);
     }
 
@@ -136,6 +140,7 @@ impl Game {
     /// UNSURE (`pr_walk_release`).
     pub(crate) fn pr_mover_leg(&mut self, k: ObjKey) {
         if self.pr_objs.disabled & pr_off::LEG == 0 {
+            self.pr_objs.stats[2] += 1;
             self.pr_mover_start(k);
         }
     }
@@ -144,6 +149,7 @@ impl Game {
         if self.pr_objs.disabled & pr_off::MOVER_START != 0 {
             return;
         }
+        self.pr_objs.stats[1] += 1;
         let generator = self.pr.register();
         let cluster = self.pr.register();
         let path = self.pr.register();
@@ -161,6 +167,7 @@ impl Game {
             return;
         }
         if let Some(old) = self.pr_objs.cluster.remove(&k) {
+            self.pr_objs.stats[3] += 1;
             self.pr_objs.release.push(old);
         }
     }
@@ -171,6 +178,7 @@ impl Game {
         if self.pr_objs.disabled & pr_off::MISSILES != 0 {
             return;
         }
+        self.pr_objs.stats[5] += 1;
         let generator = self.pr.register();
         let cluster = self.pr.register();
         let path = self.pr.register();
@@ -193,6 +201,7 @@ impl Game {
         if self.pr_objs.disabled & pr_off::UNIT_REMOVED != 0 {
             return;
         }
+        self.pr_objs.stats[6] += 1;
         self.pr_mover_idle(k);
         if let Some(h) = self.pr_objs.unit_path.remove(&k) {
             self.pr.unregister(h);
@@ -205,9 +214,15 @@ impl Game {
             return;
         }
         for (cluster, path) in std::mem::take(&mut self.pr_objs.release) {
+            self.pr_objs.stats[4] += 1;
             self.pr.unregister(path);
             self.pr.unregister(cluster);
         }
+    }
+
+    /// How often each pathing-object hook ran (see [`PrObjects::stats`]).
+    pub fn pr_stats(&self) -> [u64; 7] {
+        self.pr_objs.stats
     }
 
     /// Sets the debug switches of the pathing-object model ([`pr_off`] bits).
