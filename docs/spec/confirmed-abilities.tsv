@@ -1,0 +1,16 @@
+# Abilities whose behaviour core was run against the original Game.dll in Unicorn with 0 mismatches.
+# One row per base code. Only add a row after such a run; the progress page counts these rows.
+# code	harness	cases	note
+Ablo	tools/emu/spell_buff_emu.py	400	V1: duration, move/attack sinks
+Ainf	tools/emu/spell_buff_emu.py	400	V1: integer damage bonus per weapon slot, armor, regen gate
+Acri	tools/emu/spell_buff_emu.py	400	V1: integer damage cut, move/attack sinks
+Aslo	tools/emu/spell_buff_emu.py	400	V1: duration, move/attack sinks
+AOac	tools/emu/spell_buff_emu.py	400	V1: Command aura weapon-slot bonus
+AEar	tools/emu/spell_buff_emu.py	400	V1: Trueshot aura weapon-slot bonus
+AHav	tools/emu/spell_buff_emu.py	400	V1: Avatar cast values and apply sinks
+AHds	tools/emu/spell_buff_emu.py	400	V1: Divine Shield duration and apply (second dispel idempotent)
+AEfk	tools/emu/v2_fan_emu.py	400	V2: damage pool, nearest first, count cap
+AEmb	tools/emu/v2_manaburn_emu.py	400	V2: damage = mana burned
+Aspl	tools/emu/v2_spiritlink_emu.py	400	V2: share routine
+AEah	tools/emu/v2_thorns_emu.py	400	V2: reflect, percent and flat modes
+AUts	tools/emu/v2_thorns_emu.py	400	V2: reflect (shared handler)

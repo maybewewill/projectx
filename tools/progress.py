@@ -175,12 +175,18 @@ def behaviour():
     spec = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "docs" / "spec").glob("*.md"))
     marks = {k: len(re.findall(r"\b" + k + r"\b", spec)) for k in ("CONFIRMED", "LIKELY", "UNSURE")}
     confirmed_abilities = 0
+    confirmed_codes = []
     spec_lines = spec.splitlines()
     for c in codes:
         pat = re.compile(r"\b" + re.escape(c) + r"\b")
         if any(pat.search(l) and "CONFIRMED" in l and not re.search("UNSURE|LIKELY|NOT CONFIRMED|not CONFIRMED", l)
                for l in spec_lines):
             confirmed_abilities += 1
+            confirmed_codes.append(c)
+    listed = ROOT / "docs" / "spec" / "confirmed-abilities.tsv"
+    if listed.exists():
+        extra = {l.split(chr(9))[0] for l in listed.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")}
+        confirmed_abilities = len({c for c in codes if c in extra} | set(confirmed_codes))
     replay = json.loads((ROOT / "tools" / "metrics.json").read_text(encoding="utf-8"))["replay"]
     rows = [
         {"name": "Способности: есть модель", "hint": "базовые способности, у которых в симуляции есть поведение (не обязательно точное)",
