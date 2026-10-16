@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use softfloat::F32;
 
+use crate::abilities::code;
 use crate::agile::{Agile, Countdown, LisId};
 use crate::economy::{
     credit, Flags, Res, TrainError, TrainItem, TrainOutcome, TrainQueue,
@@ -47,6 +48,24 @@ use crate::unit_counts::{class_of, REGISTERED_COMPLETED, REGISTERED_IN_PROGRESS}
 
 /// Class bit of a town hall in the unit classification word (`UNIT_TYPE_TOWNHALL`).
 pub const CLASS_TOWNHALL: u32 = 0x40;
+
+/// The economy abilities (S51, `docs/spec/abilities-unit-a2.md`): a unit that carries one of them gets the behaviour
+/// from the ability's level record even when its type has no [`TypeTech`] row.
+/// `Ahar` `CAbilityHarvest` (gold and lumber), `Ahrl` `CAbilityHarvestLumber`, `Aaha` `CAbilityAcolyteHarvest`.
+pub const HARVEST_ABILITY: u32 = code(b"Ahar");
+pub const LUMBER_HARVEST_ABILITY: u32 = code(b"Ahrl");
+pub const ACOLYTE_HARVEST_ABILITY: u32 = code(b"Aaha");
+/// `Agld` `CAbilityGoldMine`: the unit is a gold mine, `DataA` is its gold.
+pub const GOLD_MINE_ABILITY: u32 = code(b"Agld");
+/// `Abgm` `CAbilityBlightedGoldMine` / `Aegm` `CAbilityEntangledGoldMine` (both `CAbilityPossessedGoldMine`).
+pub const HAUNTED_MINE_ABILITY: u32 = code(b"Abgm");
+pub const ENTANGLED_MINE_ABILITY: u32 = code(b"Aegm");
+/// `Aent` `CAbilityEntangle`: the Tree of Life entangles a neutral gold mine into its `UnitID`.
+pub const ENTANGLE_ABILITY: u32 = code(b"Aent");
+/// Order ids of the harvest abilities (names table of `orders/names.rs`): `harvest` for `Ahar` and `Ahrl`,
+/// `acolyteharvest` for `Aaha`.
+pub const ORDER_HARVEST: u32 = 852_018;
+pub const ORDER_ACOLYTE_HARVEST: u32 = 852_185;
 
 /// The food ceiling (`FoodCeiling`, Misc default 100; UNSURE for a map that changes it).
 pub const FOOD_CEILING: i32 = 100;
@@ -1379,7 +1398,56 @@ impl Game {
         self.production.tech.get(&self.unit(unit).type_id).is_some_and(|t| match resource {
             Res::Gold => t.harvest_gold,
             Res::Lumber => t.harvest_wood,
-        })
+        }) || self.ability_harvests(unit, resource)
+    }
+
+    fn holds_ability(&self, unit: ObjKey, base: u32) -> bool {
+        self.unit(unit).abilities.get(base).is_some_and(|a| !a.is_removed())
+    }
+
+    /// Whether the unit's own abilities let it harvest `resource`: `Ahar` both, `Ahrl` lumber, `Aaha` gold (S51).
+    fn ability_harvests(&self, unit: ObjKey, resource: Res) -> bool {
+        match resource {
+            Res::Gold => self.holds_ability(unit, HARVEST_ABILITY) || self.holds_ability(unit, ACOLYTE_HARVEST_ABILITY),
+            Res::Lumber => self.holds_ability(unit, HARVEST_ABILITY) || self.holds_ability(unit, LUMBER_HARVEST_ABILITY),
+        }
+    }
+
+    /// The harvest data of `unit`: its type's row, or (when the type has none from the ability tables) the numbers of
+    /// its own harvest ability. `Ahar`: `DataA` damage to a tree (lumber per hit, `+0x1D8`), `DataB` lumber capacity,
+    /// `DataC` gold capacity; `Ahrl`: `DataA`, `DataB`; `Aaha` works a haunted mine (editor labels of
+    /// `AbilityMetaData.slk`, the carry offsets are `economy-5.md`).
+    fn harvest_spec_of(&self, unit: ObjKey) -> HarvestSpec {
+        let mut spec = self.production.tech.get(&self.unit(unit).type_id).map(|t| t.harvest).unwrap_or_default();
+        if spec.gold_abil != 0 || spec.wood_abil != 0 {
+            return spec;
+        }
+        let positive = |v: F32| (v.to_f32() >= 1.0).then(|| softfloat::conv::f2i(v));
+        for base in [HARVEST_ABILITY, LUMBER_HARVEST_ABILITY] {
+            if !self.holds_ability(unit, base) {
+                continue;
+            }
+            let Some(l) = self.ability_level_record(unit, base) else { continue };
+            if let Some(n) = positive(l.data[0]) {
+                spec.per_hit = n;
+            }
+            if let Some(n) = positive(l.data[1]) {
+                spec.wood_cap = n;
+            }
+            if base == HARVEST_ABILITY {
+                if let Some(n) = positive(l.data[2]) {
+                    spec.gold_cap = n;
+                }
+                spec.gold_abil = base;
+            }
+            spec.wood_abil = base;
+            break;
+        }
+        if self.holds_ability(unit, ACOLYTE_HARVEST_ABILITY) {
+            spec.gold_mode = GoldMode::Haunt;
+            spec.gold_abil = ACOLYTE_HARVEST_ABILITY;
+        }
+        spec
     }
 
     /// Starts (or keeps) a harvest cycle of `resource` for `unit`, anchored at `anchor` (the town hall), with `mine` the
@@ -1401,7 +1469,7 @@ impl Game {
         }
         self.production.jobs.remove(&unit);
         let owner = self.unit(unit).owner;
-        let spec = self.production.tech.get(&self.unit(unit).type_id).map(|t| t.harvest).unwrap_or_default();
+        let spec = self.harvest_spec_of(unit);
         let mut mine = mine;
         if resource == Res::Gold && spec.gold_mode != GoldMode::Walk {
             mine = self.pick_mine(owner, spec.gold_mode, anchor, unit);
@@ -1433,23 +1501,145 @@ impl Game {
         self.production.harvesters.contains_key(&unit)
     }
 
-    /// Whether a mine of type `type_id` is one that a worker of `mode` can use.
-    fn mine_kind_ok(mode: GoldMode, type_id: u32) -> bool {
-        let special = type_id == crate::ai_towns::HAUNTED_MINE || type_id == crate::ai_towns::ENTANGLED_MINE;
-        match mode {
-            GoldMode::Walk => !special,
-            GoldMode::Haunt => type_id == crate::ai_towns::HAUNTED_MINE,
-            GoldMode::Entangle => type_id == crate::ai_towns::ENTANGLED_MINE,
+    /// The nearest standing tree within `radius` of `(x, y)` (index into [`Production::trees`]).
+    pub fn tree_near(&self, x: f32, y: f32, radius: f32) -> Option<usize> {
+        self.production
+            .trees
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.wood > 0)
+            .map(|(i, t)| (i, ((t.x - x).powi(2) + (t.y - y).powi(2)).sqrt()))
+            .filter(|&(_, d)| d <= radius)
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+            .map(|(i, _)| i)
+    }
+
+    /// Fells tree `i` (its wood is gone, it no longer blocks or feeds anyone).
+    pub fn fell_tree(&mut self, i: usize) {
+        if let Some(t) = self.production.trees.get_mut(i) {
+            t.wood = 0;
         }
     }
 
-    fn mine_spec(&self, type_id: u32) -> MineSpec {
-        self.production.mine_specs.get(&type_id).copied().unwrap_or_default()
+    /// The `harvest` / `acolyteharvest` orders (S51): a target unit that is a usable gold mine starts a gold cycle from
+    /// the nearest hall, a tree at a point starts a lumber cycle on that tree. Returns whether a cycle started.
+    pub fn order_harvest(&mut self, unit: ObjKey, mine: Option<ObjKey>, tree: Option<usize>) -> bool {
+        let owner = self.unit(unit).owner;
+        let me = self.unit_xy(unit);
+        if let Some(m) = mine {
+            if !self.can_harvest(unit, Res::Gold) || !self.mines.contains_key(&m) {
+                return false;
+            }
+            let spec = self.harvest_spec_of(unit);
+            if !self.mine_usable(m, owner, spec.gold_mode, unit) {
+                return false;
+            }
+            let at = self.unit_xy(m);
+            let anchor = self.nearest_hall(owner, at, false).map_or(me, |(_, x, y)| (x, y));
+            self.assign_harvest(unit, Res::Gold, anchor, Some(m));
+            return self.is_harvesting(unit);
+        }
+        if let Some(i) = tree {
+            if !self.can_harvest(unit, Res::Lumber) || self.production.trees.get(i).is_none_or(|t| t.wood <= 0) {
+                return false;
+            }
+            let tr = self.production.trees[i];
+            let anchor = self.nearest_hall(owner, (tr.x, tr.y), true).map_or(me, |(_, x, y)| (x, y));
+            self.assign_harvest(unit, Res::Lumber, anchor, None);
+            if let Some(h) = self.production.harvesters.get_mut(&unit) {
+                h.tree = Some(i);
+                let target = (tr.x, tr.y);
+                self.order_move(unit, target.0, target.1);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The `returnresources` order (S51): a worker that carries a load walks it to the hall now. False when it carries
+    /// nothing or has no cycle.
+    pub fn order_return_resources(&mut self, unit: ObjKey) -> bool {
+        match self.production.harvesters.get_mut(&unit) {
+            Some(h) if h.worker.carry > 0 && matches!(h.phase, Phase::ToSource | Phase::Working { .. }) => {
+                h.phase = Phase::ToHall;
+                self.unit_mut(unit).hidden = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The `entangle` order (S51, `Aent`): `source` starts the cast on the neutral gold mine `mine`; at the end of the
+    /// cast time the mine becomes the ability's `UnitID`. False when the target is not a neutral mine with gold or one
+    /// is already being entangled.
+    pub fn order_entangle(&mut self, source: ObjKey, mine: ObjKey) -> bool {
+        let Some(e) = self.entangle_spec_of(source) else { return false };
+        let ok = self.mines.get(&mine).is_some_and(|m| m.remaining > 0)
+            && self.unit_live(mine)
+            && self.unit(mine).type_id == crate::ai_towns::GOLD_MINE
+            && !self.production.entangles.iter().any(|p| p.mine == mine || p.source == source);
+        if ok {
+            let now = self.production.now;
+            self.production.entangles.push(PendingEntangle { source, mine, at: now + e.cast });
+        }
+        ok
+    }
+
+    /// Whether the mine `mine` is one that a worker of `mode` can use: a haunted or entangled mine is a unit of the
+    /// melee types or one that carries `Abgm` / `Aegm`; every other mine is neutral (S51).
+    fn mine_kind_fits(&self, mode: GoldMode, mine: ObjKey) -> bool {
+        let type_id = self.unit(mine).type_id;
+        let haunted = type_id == crate::ai_towns::HAUNTED_MINE || self.holds_ability(mine, HAUNTED_MINE_ABILITY);
+        let entangled = type_id == crate::ai_towns::ENTANGLED_MINE || self.holds_ability(mine, ENTANGLED_MINE_ABILITY);
+        match mode {
+            GoldMode::Walk => !haunted && !entangled,
+            GoldMode::Haunt => haunted,
+            GoldMode::Entangle => entangled,
+        }
+    }
+
+    /// The pay data of the haunted / entangled mine `mine`: the type's row, else its own ability's level record
+    /// (`Abgm` / `Aegm`: `DataA` gold per interval, `DataB` interval seconds, `Abgm` `DataC` miners, at most 8; S51).
+    fn mine_spec_of(&self, mine: ObjKey) -> MineSpec {
+        let type_id = self.unit(mine).type_id;
+        if let Some(s) = self.production.mine_specs.get(&type_id) {
+            return *s;
+        }
+        let mut spec = MineSpec::default();
+        for base in [HAUNTED_MINE_ABILITY, ENTANGLED_MINE_ABILITY] {
+            if !self.holds_ability(mine, base) {
+                continue;
+            }
+            let Some(l) = self.ability_level_record(mine, base) else { continue };
+            if l.data[0].to_f32() >= 1.0 {
+                spec.amount = softfloat::conv::f2i(l.data[0]);
+            }
+            if l.data[1].to_f32() > 0.0 {
+                spec.interval = l.data[1].to_f32();
+            }
+            if l.data[2].to_f32() >= 1.0 {
+                spec.slots = softfloat::conv::f2i(l.data[2]).min(8);
+            }
+            break;
+        }
+        spec
+    }
+
+    /// The entangle data of `unit`: its type's row, else its `Aent` level record (`Rng`, `Cast`, `UnitID`; S51).
+    fn entangle_spec_of(&self, unit: ObjKey) -> Option<EntangleSpec> {
+        if let Some(e) = self.production.tech.get(&self.unit(unit).type_id).and_then(|t| t.entangle) {
+            return Some(e);
+        }
+        if !self.holds_ability(unit, ENTANGLE_ABILITY) {
+            return None;
+        }
+        let l = self.ability_level_record(unit, ENTANGLE_ABILITY)?;
+        (l.unit_id != 0).then(|| EntangleSpec { rng: l.rng.to_f32(), cast: l.cast.to_f32(), unit: l.unit_id })
     }
 
     /// Whether the haunted / entangled mine `mine` has a free slot for `worker` (or already holds it).
     fn mine_has_room(&self, mine: ObjKey, worker: ObjKey) -> bool {
-        let slots = self.mine_spec(self.unit(mine).type_id).slots;
+        let slots = self.mine_spec_of(mine).slots;
         self.production
             .mine_work
             .get(&mine)
@@ -1458,7 +1648,7 @@ impl Game {
 
     fn mine_usable(&self, mine: ObjKey, owner: u32, mode: GoldMode, worker: ObjKey) -> bool {
         let Some(m) = self.mines.get(&mine) else { return false };
-        if m.remaining <= 0 || !self.unit_live(mine) || !Self::mine_kind_ok(mode, self.unit(mine).type_id) {
+        if m.remaining <= 0 || !self.unit_live(mine) || !self.mine_kind_fits(mode, mine) {
             return false;
         }
         mode == GoldMode::Walk
@@ -1754,11 +1944,8 @@ impl Game {
         }
         let mines: Vec<ObjKey> = self.production.mine_work.keys().copied().collect();
         for m in mines {
-            let (type_id, owner) = {
-                let u = self.unit(m);
-                (u.type_id, u.owner)
-            };
-            let spec = self.mine_spec(type_id);
+            let owner = self.unit(m).owner;
+            let spec = self.mine_spec_of(m);
             let live = self.unit_live(m) && self.unit_completed(m);
             let workers: Vec<ObjKey> = self
                 .production
@@ -1855,7 +2042,7 @@ impl Game {
                     if u.dead || u.removed || u.count_state & REGISTERED_IN_PROGRESS != 0 {
                         return None;
                     }
-                    self.production.tech.get(&u.type_id).and_then(|t| t.entangle).map(|e| (k, e))
+                    self.entangle_spec_of(k).map(|e| (k, e))
                 })
                 .collect();
             for (k, e) in casters {
@@ -1893,7 +2080,7 @@ impl Game {
             if !self.unit_live(p.source) || !self.unit_live(p.mine) {
                 continue;
             }
-            let Some(e) = self.production.tech.get(&self.unit(p.source).type_id).and_then(|t| t.entangle) else {
+            let Some(e) = self.entangle_spec_of(p.source) else {
                 continue;
             };
             let owner = self.unit(p.source).owner;
@@ -2112,6 +2299,7 @@ impl Game {
             && p.queues.is_empty()
             && p.entangles.is_empty()
             && !p.tech.values().any(|t| t.entangle.is_some())
+            && !self.spells.unit_a.has_entanglers()
         {
             return;
         }
