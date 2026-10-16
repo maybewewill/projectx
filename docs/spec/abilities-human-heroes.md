@@ -69,9 +69,17 @@ The extra duration term at ability `+0x9C` is read like in `abilities-5.md` sect
   ability sets flag `0x10000` and bumps its `+0x44` counter (UI).
 * Buff removal effect (slot 207 = `0x6F07D1F0`, CONFIRMED): decrements the unit's invulnerability counter (`+0xE8`; when it
   reaches zero the invulnerable bit `0x8` of the flag word is cleared) and then the magic immunity counters
-  (`0x6F077320` subtracts one from `+0x15C`, and from `+0x160` for the flag argument). The matching **apply** side was
-  read for Avatar (section 4: `0x6F07A3A0` adds one to the same counters) and is taken as symmetric here
-  (LIKELY; the apply function of the buff was not read).
+  (`0x6F077320` subtracts one from `+0x15C`, and from `+0x160` for the flag argument).
+  The **apply** side (slot `0x31C` = `0x6F07D180`) is now read and **CONFIRMED by Unicorn, 400 cases, 0 mismatches** (V1,
+  `tools/emu/spell_buff_emu.py --only divine_shield`, `crates/sim/tests/data/unit_spells/divine_shield.txt`,
+  `spell_buff_vectors.rs`; the real cast slot `0x6F0B64C0`, the real apply and the real counters `0x6F0796F0` / `0x6F07A3A0`
+  on a fake caster; stubbed: buff lookup / allocator, base apply, purge removal, dispel walker, cancel test): the set-duration
+  rule (hero test on the CASTER: `HeroDur`, else `Dur` + `+0x9C` by soft add), then the purge-debuff lookup and removal,
+  then the dispel walker with `(0,1,0,0,0,1,1,0,1)`, then the invulnerability count (`+0xE8` plus one, unit flag `0x8` set
+  when it becomes 1), then the magic immunity counters (`+0x15C` plus one, `+0x160` plus one); when either immunity counter
+  becomes exactly 1 the purge removal and the same dispel walker run a second time (idempotent, so the model's single dispel
+  has the same net effect). The ability gets flag `0x10000` exactly when the cancel test fails
+  (`human_heroes::divine_shield_apply_counters`).
 * Cancel: `0x6F089A50` is true when `DataA` is not zero **and** a Misc test passes (`0x6F009F90` with the string at
   `0x6F88E388`, not decoded). The model uses `DataA != 0` only (UNSURE for the Misc part). The order `undivineshield`
   removes the buff; the id 852056 is from the public order lists (UNSURE).

@@ -516,6 +516,27 @@ fn avatar(game: &RefCell<Game>, rec: &CastRec) {
     game.borrow_mut().apply_avatar(rec.caster, v.dur, v.armor, v.life, v.damage);
 }
 
+/// The counters one application of the Divine Shield buff changes on the unit (`CBuffDivineShield` slot `0x31C` =
+/// `0x6F07D180`, CONFIRMED, **Unicorn 400/400**, `tools/emu/spell_buff_emu.py` check `divine_shield`: the real cast slot
+/// `0x6F0B64C0`, the real apply, the real counters `0x6F0796F0` and `0x6F07A3A0` on a fake caster; stubbed: the buff
+/// lookup / allocator, the base apply, the purge removal, the dispel walker and the cancel test, which record their
+/// arguments). Order: the set-duration rule, the purge-debuff lookup and removal, the dispel walker with
+/// `(0,1,0,0,0,1,1,0,1)`, the invulnerability count (`+0xE8` plus one; the unit flag `0x8` is set when it becomes 1), then the
+/// magic immunity counters (`+0x15C` plus one and, for the flag argument 1, `+0x160` plus one); when either of those becomes
+/// exactly 1 the purge removal and the same dispel walker run once more. Returns the counters after and the number of dispel
+/// walker calls (each one preceded by a purge lookup).
+pub fn divine_shield_apply_counters(inv: i32, flags: u32, imm: i32, imm_flagged: i32) -> (i32, u32, i32, i32, u32) {
+    let mut dispels = 1;
+    let inv = inv.wrapping_add(1);
+    let flags = if inv == 1 { flags | 8 } else { flags };
+    let imm = imm.wrapping_add(1);
+    let imm_flagged = imm_flagged.wrapping_add(1);
+    if imm == 1 || imm_flagged == 1 {
+        dispels += 1;
+    }
+    (inv, flags, imm, imm_flagged, dispels)
+}
+
 fn divine_shield(game: &RefCell<Game>, rec: &CastRec) {
     let mut gm = game.borrow_mut();
     // The hero test is on the caster (`0x6F0B64C0`: `0x6F1D2660(owner)`).

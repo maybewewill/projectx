@@ -11,7 +11,8 @@ Checks (rows are printed as hex words, see each function):
   innerfire : effect 0x6F13BFA0 -> 0x6F13BE70 -> CBuffInnerFire slot 0x354 (0x6F12CA40) -> the four helpers 0x6F1236F0
               (attack bonus), 0x6F1238B0 (armor sink 0x6F2769C0), 0x6F123920 / 0x6F123A00 (regeneration modifiers).
 
-Usage: GAME_DLL=/path/Game.dll py tools/emu/spell_buff_emu.py [--dump OUT_DIR] [CASES] [SEED]
+Usage: GAME_DLL=/path/Game.dll py tools/emu/spell_buff_emu.py [--dump OUT_DIR] [--only NAME[,NAME]] [CASES] [SEED]
+(`--only divine_shield` must be run on its own, see SEPARATE.)
 """
 import os
 import random
@@ -368,26 +369,99 @@ def check_avatar(cases, r, rows):
                      rd(BUFF + 0xD8), rd(BUFF + 0xE0), rd(BUFF + 0xE4), rd(BUFF + 0xEC), rd(CAP + 0x70), rd(CAP + 0x74)])
 
 
+VT_DIVINE_ABIL = 0x6F894AEC
+VT_DIVINE_BUFF = 0x6F894794
+
+
+def check_divine_shield(cases, r, rows):
+    """Divine Shield's cast slot `0x3C0` (`0x6F0B64C0`, real) -> `CBuffDivineShield` slot `0x31C` (`0x6F07D180`, real) -> the
+    invulnerability counter `0x6F0796F0` and the magic immunity counter `0x6F07A3A0` (both real) on a fake caster unit.
+    Stubs: the buff lookup / allocator, the base apply, the purge-buff removal, the dispel walker `0x6F079FE0` (records
+    its nine arguments), the cancel test `0x6F089A50`. Rows: dur herodur extra hero purge cancel | unit before: invuln
+    count, flags, immunity +0x15C, +0x160 | unit after: the same four | set-duration args (unit, duration) | walker calls |
+    last walker args (9) | purge removals | ability flags after (+0x20)."""
+    from unicorn.x86_const import UC_X86_REG_EAX  # noqa: F401
+    buffcode = 0x42486473
+    lookup = new_code(b"\x8B\x44\x24\x04\x3D" + a32(buffcode) + b"\x75\x05\x31\xC0\xC2\x14\x00"
+                      + b"\xA1" + a32(CAP + 0x100) + b"\xC2\x14\x00")
+    A.patch_jump(0x6F0787D0, lookup)
+    A.patch_jump(0x6F0B4030, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F0419C0, A.stub_ret(4, 0))
+    A.patch_jump(0x6F040000, A.stub_ret(0, 0))
+    A.patch_jump(0x6F089A50, new_code(b"\xA1" + a32(CAP + 0x104) + b"\xC3"))
+    A.patch_jump(0x6F0D9B60, A.stub_ret(0, 0x42707267))
+    A.patch_jump(0x6F079CC0, new_code(b"\xFF\x05" + a32(CAP + 0x108) + b"\xC2\x04\x00"))
+    A.patch_jump(0x6F2AB310, A.stub_ret(8, 0))
+    A.patch_jump(0x6F26FE10, A.stub_ret(4, 0))
+    code = b"\xFF\x05" + a32(CAP + 0x10C)
+    for k in range(9):
+        code += b"\x8B\x44\x24" + bytes([4 + 4 * k]) + b"\xA3" + a32(CAP + 0x120 + 4 * k)
+    code += b"\xC2\x24\x00"
+    A.patch_jump(0x6F079FE0, new_code(code))
+    s320 = slot_capture2()
+    s324 = A.stub_ret(4, 0)
+    for _ in range(cases):
+        dur, hdur = rbits(r), rbits(r)
+        extra = rbits(r) if r.random() < 0.3 else 0
+        hero = r.random() < 0.5
+        purge = r.random() < 0.5
+        cancel = r.random() < 0.5
+        inv0 = r.choice([0, 0, 1, 2, 5])
+        imm0, imm1 = r.choice([0, 0, 1, 2, 3]), r.choice([0, 0, 1, 2])
+        flags0 = r.choice([0, 8, 0x100, 0x108])
+        A.make_ability(VT_DIVINE_ABIL, 0x41486473, 75)
+        level(A.LVL, dur, hdur, [])
+        wr(A.OBJ + 0x9C, extra)
+        wr(A.UNIT + 0x33, ord("A") if hero else ord("h"))
+        mu.mem_write(A.UNIT + 0x33, b"A" if hero else b"h")
+        wr(A.UNIT + 4, 100)
+        wr(A.UNIT + 0xE8, inv0)
+        wr(A.UNIT + 0x15C, imm0)
+        wr(A.UNIT + 0x160, imm1)
+        wr(A.UNIT + 0x20, flags0)
+        make_buff(VT_DIVINE_BUFF, (), (), {0x320: s320, 0x324: s324})
+        clear_cap()
+        wr(CAP + 0x100, 0x7777 if purge else 0)
+        wr(CAP + 0x104, 1 if cancel else 0)
+        call(0x6F0B64C0, ecx=A.OBJ)
+        rows.append([dur, hdur, extra, int(hero), int(purge), int(cancel), inv0, flags0, imm0, imm1,
+                     rd(A.UNIT + 0xE8), rd(A.UNIT + 0x20), rd(A.UNIT + 0x15C), rd(A.UNIT + 0x160),
+                     rd(CAP + 0x80), rd(CAP + 0x84), rd(CAP + 0x10C)]
+                    + [rd(CAP + 0x120 + 4 * k) for k in range(9)] + [rd(CAP + 0x108), rd(A.OBJ + 0x20)])
+
+
+CHECKS = {
+    "bloodlust": check_bloodlust,
+    "innerfire": check_innerfire,
+    "cripple": check_cripple,
+    "command_aura": check_command_aura,
+    "avatar": check_avatar,
+    "divine_shield": check_divine_shield,
+}
+# Checks that patch a function another check needs unpatched run in their own process (`--only NAME`): Unicorn keeps
+# translated blocks of rewritten code, so a patch cannot be undone inside one run.
+SEPARATE = ("divine_shield",)
+
+
 def main():
     args = sys.argv[1:]
     dump = None
-    if args and args[0] == "--dump":
-        dump, args = args[1], args[2:]
+    only = None
+    while args and args[0] in ("--dump", "--only"):
+        if args[0] == "--dump":
+            dump, args = args[1], args[2:]
+        else:
+            only, args = args[1].split(","), args[2:]
     cases = int(args[0]) if args else 400
     seed = int(args[1]) if len(args) > 1 else 51
-    r = random.Random(seed)
     install()
     out = {}
-    out["bloodlust"] = []
-    check_bloodlust(cases, r, out["bloodlust"])
-    out["innerfire"] = []
-    check_innerfire(cases, r, out["innerfire"])
-    out["cripple"] = []
-    check_cripple(cases, r, out["cripple"])
-    out["command_aura"] = []
-    check_command_aura(cases, r, out["command_aura"])
-    out["avatar"] = []
-    check_avatar(cases, r, out["avatar"])
+    for name, fn in CHECKS.items():
+        if (only is None and name in SEPARATE) or (only is not None and name not in only):
+            continue
+        r = random.Random(seed)
+        out[name] = []
+        fn(cases, r, out[name])
     for name, rows in out.items():
         print("%s rows %d" % (name, len(rows)))
         for row in rows[:4]:

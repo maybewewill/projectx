@@ -191,3 +191,31 @@ fn avatar_values_match_the_original() {
     }
 }
 
+#[test]
+fn divine_shield_apply_matches_the_original() {
+    // 0 dur, 1 herodur, 2 extra, 3 hero caster, 4 purge present, 5 cancel allowed | 6..10 unit before (invuln, flags,
+    // immunity, flagged immunity) | 10..14 after | 14, 15 set-duration args | 16 dispel walker calls | 17..26 last walker
+    // arguments | 26 purge removals | 27 ability flags
+    let rows = hex_rows(include_str!("data/unit_spells/divine_shield.txt"));
+    assert!(rows.len() >= 300);
+    let (mut twice, mut once) = (0, 0);
+    for r in &rows {
+        let l = level(r[0], r[1], &[]);
+        let want_dur = sim::cast::effect_duration(&l, r[3] != 0, f(r[2]));
+        assert_eq!(r[15], want_dur.to_bits(), "duration, row {:08x?}", r);
+        let (inv, flags, imm, flagged, dispels) = sim::human_heroes::divine_shield_apply_counters(r[6] as i32, r[7], r[8] as i32, r[9] as i32);
+        assert_eq!([r[10], r[11], r[12], r[13]], [inv as u32, flags, imm as u32, flagged as u32], "counters, row {:08x?}", r);
+        assert_eq!(r[16], dispels, "dispel walker calls, row {:08x?}", r);
+        assert_eq!(&r[17..26], &[0, 1, 0, 0, 0, 1, 1, 0, 1], "walker arguments, row {:08x?}", r);
+        assert_eq!(r[26], if r[4] != 0 { dispels } else { 0 }, "purge removals, row {:08x?}", r);
+        // The ability gets flag 0x10000 exactly when the cancel test fails.
+        assert_eq!(r[27] & 0x10000 != 0, r[5] == 0, "cancel flag, row {:08x?}", r);
+        if dispels == 2 {
+            twice += 1;
+        } else {
+            once += 1;
+        }
+    }
+    assert!(twice > 50 && once > 50, "{twice} {once}");
+}
+
