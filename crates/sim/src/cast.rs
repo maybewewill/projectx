@@ -371,7 +371,7 @@ impl SpellSystem {
         ] {
             s.order_ids.insert(id, base);
         }
-        for &(id, base) in crate::undead_ne::S37_ORDERS {
+        for &(id, base) in crate::undead_ne::S37_ORDERS.iter().chain(crate::hero_extra::ORDERS) {
             s.order_ids.insert(id, base);
         }
         // Storm Bolt missile speed (UNSURE: AbilityFunc `Missilespeed`).
@@ -639,6 +639,7 @@ impl Game {
         }
         self.unit_mut(b.unit).buffs.retain(|x| x.serial != serial);
         crate::orc::on_buff_dropped(self, serial);
+        crate::hero_extra::on_buff_dropped(self, serial);
         self.refresh_slow(b.unit);
     }
 
@@ -738,7 +739,7 @@ pub fn begin_cast(
         let class = crate::item_abilities::effect_base(&gm, base);
         match target {
             CastTarget::Unit(t) => {
-                if !gm.alive(t) {
+                if !crate::hero_extra::target_ok(&gm, class, t) {
                     return Err(CastError::BadTarget);
                 }
                 if let Some(e) = crate::unit_spells::target_error(&gm, caster, class, t) {
@@ -770,6 +771,7 @@ pub fn begin_cast(
                     && !crate::unit_spells::takes_no_target(class)
                     && !crate::human_heroes::is_immediate_spell(class)
                     && !crate::undead_ne::is_immediate(class)
+                    && !crate::hero_extra::takes_no_target(class)
                     && !crate::item_abilities::takes_no_target(&gm, base)
                     && !crate::neutral_spells::takes_no_target(class)
                     && !crate::unit_abilities_m::takes_no_target(class)
@@ -818,7 +820,7 @@ fn recheck(game: &RefCell<Game>, id: u32) -> Option<CastRec> {
         return None;
     }
     if let CastTarget::Unit(t) = rec.target {
-        if !gm.alive(t) {
+        if !crate::hero_extra::target_ok(&gm, rec.base, t) {
             return None;
         }
     }
@@ -917,6 +919,9 @@ fn stage3(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
 /// The channel time of a cast (the property at ability `+0x90`): the class value when it sets one, else the
 /// backswing of the caster's unit type (`castbsw`, installed with `set_cast_timing`; 0.0 when none).
 fn channel_time(gm: &Game, rec: &CastRec) -> F32 {
+    if let Some(t) = crate::hero_extra::channel_time_override(rec.base, &rec.level) {
+        return t;
+    }
     if let Some(t) = crate::human_heroes::channel_time_override(rec.base, &rec.level) {
         return t;
     }
@@ -955,6 +960,7 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
         fire_spell_event(game, rt, SPELL_FINISH, &rec);
     }
     crate::human_heroes::on_cast_end(game, &rec);
+    crate::hero_extra::on_cast_end(game, &rec);
     fire_spell_event(game, rt, SPELL_ENDCAST, &rec);
     crate::item_abilities::on_cast_end(game, rt, &rec, completed);
 }
@@ -1031,6 +1037,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastR
         return;
     }
     if crate::orc::run_effect(game, rt, rec) {
+        return;
+    }
+    if crate::hero_extra::run_effect(game, rt, rec) {
         return;
     }
     if crate::undead_ne::run_effect(game, rt, rec.caster, rec.base, &rec.level, rec.target) {

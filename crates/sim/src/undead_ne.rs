@@ -150,6 +150,8 @@ pub struct State {
     next_impale: u32,
     /// Running Frost Armors: buff serial -> record (S37).
     frost_armors: BTreeMap<u32, FrostArmor>,
+    /// The S48 abilities (`hero_extra.rs`).
+    pub(crate) extra: crate::hero_extra::State,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1841,6 +1843,9 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         TICK_IMPALE => impale_spike(game, rt, aux),
         TICK_FROST_ARMOR_END => frost_armor_end(game, aux),
         TICK_SWARM_ARRIVE => swarm_arrive(game, rt, aux),
+        crate::hero_extra::TICK_META_START..=crate::hero_extra::TICK_DEVOUR_END => {
+            crate::hero_extra::on_timer(game, rt, kind, unit, aux)
+        }
         _ => {}
     }
 }

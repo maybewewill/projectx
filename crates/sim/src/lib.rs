@@ -33,6 +33,7 @@ pub mod economy;
 pub mod handles;
 pub mod heroes;
 pub mod human_heroes;
+pub mod hero_extra;
 pub mod kill_xp;
 pub mod hashmap;
 pub mod invisibility;
