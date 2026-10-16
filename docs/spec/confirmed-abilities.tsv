@@ -68,3 +68,4 @@ Aabr	tools/emu/v7_aura_emu.py	300	V7: Babr apply 0x6F043FA0 (200 cases: fraction
 Aoar	tools/emu/v7_aura_emu.py	300	V7: Boar apply 0x6F043A20 (200) + ability apply 0x6F06F310 flag (100); same rule as Aabr
 Aarm	tools/emu/v7_aura_emu.py	300	V7: Barm apply 0x6F043CE0 mana variant (200, max mana 0x6F4773E0) + ability apply 0x6F06F3A0 flag (100)
 Aasl	tools/emu/v7_slow_emu.py	600	V7: Basl update slot 0x370 0x6F1AD2F0: skip when both new strengths are weaker, per-component undo/replace/apply with the tolerance compares, sink values and applied flags (model bug fixed: refresh used to replace both strengths unconditionally)
+Aetl	tools/emu/v7_ethereal_emu.py	400	V7: ability init 0x6F07A340 / removal 0x6F0796A0 on a fake unit: counter unit+0x158, enter/leave transitions (count becomes 1 / 0), attack-block counter +0x1C0 via 0x6F0767F0 (real), refresh and side-effect call counts; the cancel walk 0x6F079FE0 ran on an empty ability list only

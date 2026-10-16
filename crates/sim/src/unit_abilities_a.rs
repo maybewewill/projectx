@@ -211,6 +211,20 @@ pub fn regen_aura_amount(data_a: F32, data_b: F32, max: F32) -> F32 {
     crate::auras::aura_stat_amount(!regen_aura_absolute_flag(data_b), data_a, max)
 }
 
+/// One step of the ethereal counter (unit `+0x158`): the ability init `0x6F07A340` (`add`) increments and runs the enter side
+/// effects when the count becomes 1; the removal `0x6F0796A0` decrements and runs the leave effects when it reaches 0 (an
+/// unbalanced removal goes negative and runs nothing). Returns `(count, entered, left)`. CONFIRMED (V7, Unicorn
+/// `tools/emu/v7_ethereal_emu.py`, 400 sequences, counter, the attack-block counter `+0x1C0` and the side-effect calls).
+pub fn ethereal_step(count: i32, add: bool) -> (i32, bool, bool) {
+    if add {
+        let c = count.wrapping_add(1);
+        (c, c == 1, false)
+    } else {
+        let c = count.wrapping_sub(1);
+        (c, false, c == 0)
+    }
+}
+
 /// The result of one `CBuffAuraSlow` update (slot `0x370`, `0x6F1AD2F0`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlowUpdate {
@@ -275,10 +289,10 @@ impl Game {
         let counted = self.spells.unit_a.eth.contains(&unit);
         if has && !counted {
             self.spells.unit_a.eth.insert(unit);
-            self.unit_mut(unit).ethereal += 1;
+            self.unit_mut(unit).ethereal = ethereal_step(self.unit(unit).ethereal, true).0;
         } else if !has && counted {
             self.spells.unit_a.eth.remove(&unit);
-            self.unit_mut(unit).ethereal -= 1;
+            self.unit_mut(unit).ethereal = ethereal_step(self.unit(unit).ethereal, false).0;
         }
         for base in [AURA_BLIGHT_REGEN, AURA_REGEN_MANA, AURA_SLOW, AURA_WAR_DRUMS, crate::unit_abilities_m::AURA_REGEN_LIFE] {
             let has = self.unit(unit).abilities.get(base).is_some_and(|a| !a.is_removed());
