@@ -290,7 +290,10 @@ impl Game {
             return;
         }
         let hero = self.target_hero(target);
-        let dur = if hero { level.hero_dur } else { level.dur };
+        let existing = self.unit(target).buffs.iter().any(|b| b.base == BUFF_POISON);
+        // `0x6F13F2F0` (CONFIRMED, V6 `PA` rows): the numbers come from the plan; an illusion attacker poisons for 0.
+        let plan = poison_plan(self.unit(attacker).illusion, hero, existing, false, &level);
+        let dur = plan.dur;
         if !arith::lt(F32::ZERO, dur) {
             return;
         }
@@ -300,7 +303,7 @@ impl Game {
             ..buff_predicates(BUFF_POISON)
         };
         let serial = self.apply_mods_buff(target, BUFF_POISON, preds, crate::unit_spells::UnitMods::default(), dur);
-        self.register_tick(target, serial, attacker, level.data[0], false, POISON_DAMAGE_TYPE, true);
+        self.register_tick(target, serial, attacker, plan.a, false, POISON_DAMAGE_TYPE, true);
     }
 
     /// Pulverize swing start (`CAbilityWarStomp`, `Awar`, slot `0x124` = `0x6F170F90`, CONFIRMED structure): the
@@ -905,6 +908,59 @@ fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     if let Some((from, to)) = changed {
         crate::natives::event::fire_owner_change(game, rt, target, from, to);
     }
+}
+
+/// Which buff path the poison attack apply takes (`0x6F13F2F0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoisonPath {
+    /// The stacking variant is wanted but the ability flag `0x200` is set: nothing is applied.
+    Skip,
+    /// A new poison buff (`Bpoi`, creator `0x6F13ADC0`, apply slot `0x378`).
+    New,
+    /// The victim already carries one: its slot `0x380` refreshes it.
+    Refresh,
+    /// The stacking buff (creator `0x6F13AE90`, apply slot `0x35C`).
+    Stacking,
+}
+
+/// The arguments the poison attack apply hands to the buff (Unicorn `PA` rows of `tools/emu/v6_emu.py`, 350 rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PoisonPlan {
+    pub path: PoisonPath,
+    /// `HeroDur` for a hero victim, else `Dur` (no extra term).
+    pub dur: F32,
+    /// `DataA`, `DataB`, `DataC` of the level, all three 0.0 when the **attacker** is an illusion.
+    pub a: F32,
+    pub b: F32,
+    pub c: F32,
+    /// `f2i(DataD) & 8`, handed to the plain paths.
+    pub flag8: i32,
+    /// `f2i(DataD)`, handed to the stacking path; its low three bits select the stacking mode (0 = plain).
+    pub d: i32,
+}
+
+/// See [`PoisonPlan`]. `existing` is whether the victim already has the plain poison buff (found through `0x6F0787D0`),
+/// `flag200` the ability's flag `0x200` (set while a stacking buff is being applied; cleared at the end of the apply).
+pub fn poison_plan(attacker_illusion: bool, victim_hero: bool, existing: bool, flag200: bool, level: &SpellLevel) -> PoisonPlan {
+    let (a, b, c) = if attacker_illusion {
+        (F32::ZERO, F32::ZERO, F32::ZERO)
+    } else {
+        (level.data[0], level.data[1], level.data[2])
+    };
+    let dur = if victim_hero { level.hero_dur } else { level.dur };
+    let d = softfloat::conv::f2i(level.data[3]);
+    let path = if d & 7 == 0 {
+        if existing {
+            PoisonPath::Refresh
+        } else {
+            PoisonPath::New
+        }
+    } else if flag200 {
+        PoisonPath::Skip
+    } else {
+        PoisonPath::Stacking
+    };
+    PoisonPlan { path, dur, a, b, c, flag8: d & 8, d }
 }
 
 impl Game {

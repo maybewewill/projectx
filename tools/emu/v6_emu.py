@@ -9,6 +9,7 @@ Row kinds (hex unless noted, `|` separates input from output):
   TN  cx cy ux uy best haveBest first excl | replaced best ret   Town Portal destination callback 0x6F0264B0
   CL  race tlevel buff blevel upper ill mhero munit max | refuses   creep level rule 0x6F1D2630 over the unit level 0x6F29DCA0
   CE  ill hasowner | kind    Charm effect 0x6F1B13E0: 1 = vtable 0x124(0.0) on an illusion target, 2 = owner change 0x6F1B0C80
+  PA  srcill hero existing flag200 dur herodur a b c d | path dur a b c d8 dfull   poison attack apply 0x6F13F2F0 (Envenomed Spears); path 1 new buff, 2 refresh of the existing one, 3 stacking buff, 0 stacking skipped
   TM  e0 e8 flagD illusion goldcost woodcost bounty_g bounty_w bounty_flag | called gold wood ...  Transmute buff action 0x6F1B59B0 -> 0x6F1B58B0
 
 Usage: GAME_DLL=/path/Game.dll py tools/emu/v6_emu.py OUT.txt [CASES] [SEED] [KIND,KIND]
@@ -172,6 +173,82 @@ def case_ce(r):
     return 'CE %d %d | %d %x' % (ill, hasown, kind, arg)
 
 
+# ---------------------------------------------------------------- PA: poison attack apply (Envenomed Spears)
+PA_VT = 0x6F8DA24C
+PA_BUFFA = D + 0xB000
+PA_BUFFAVT = D + 0xB200
+PA_BUFFB = D + 0xB600
+PA_BUFFBVT = D + 0xB800
+PA_VICT = D + 0xBC00
+PA_SRC = D + 0xBE00
+PA_S380 = D + 0xA000
+PA_S378 = D + 0xA020
+PA_S324 = D + 0xA040
+PA_S35C = D + 0xA060
+
+
+def case_pa(r):
+    srcill = r.choice([0, 0, 1])
+    hero = r.choice([0, 1])
+    existing = r.choice([0, 0, 1])
+    flag200 = r.choice([0, 0, 1])
+    dur, herodur = rand_real(r), rand_real(r)
+    a, b, c = rand_real(r), rand_real(r), rand_real(r)
+    d = r.choice([0, fbits(1.0), fbits(2.0), fbits(8.0), fbits(9.0), fbits(3.0), fbits(7.0), fbits(15.0), fbits(0.5), fbits(-1.0),
+                  rand_real(r, small=True)])
+    T.setup(PA_VT, flags=0x200 if flag200 else 0)
+    setrec(dur=dur, herodur=herodur, a=a, b=b, c=c, d=d)
+    for obj in (PA_VICT, PA_SRC):
+        mu.mem_write(obj, bytes(0x300))
+        w32(obj, T.UVT)
+    w32(PA_SRC + 0x5C, 0x40000000 if srcill else 0)
+    for buf, vt in ((PA_BUFFA, PA_BUFFAVT), (PA_BUFFB, PA_BUFFBVT)):
+        mu.mem_write(buf, bytes(0x200))
+        mu.mem_write(vt, bytes(0x400))
+        w32(buf, vt)
+    w32(PA_BUFFAVT + 0x380, PA_S380)
+    w32(PA_BUFFAVT + 0x324, PA_S324)
+    w32(PA_BUFFBVT + 0x378, PA_S378)
+    w32(PA_BUFFBVT + 0x324, PA_S324)
+    w32(PA_BUFFBVT + 0x35C, PA_S35C)
+    got = {}
+
+    def cap(name, n):
+        def f(uc, c_, d_, st):
+            from unicorn.x86_const import UC_X86_REG_ESP
+            esp = uc.reg_read(UC_X86_REG_ESP)
+            words = struct.unpack('<10I', bytes(uc.mem_read(esp, 40)))
+            vals = []
+            for w in words[:n]:
+                vals.append(r32(w) if 0x100000 <= w < 0x110000 else w)
+            got[name] = (words, vals)
+            return 0
+        return f
+
+    sf = {
+        0x6F1D2660: lambda *x: hero,
+        0x6F0787D0: lambda *x: PA_BUFFA if existing else 0,
+        0x6F13ADC0: lambda *x: PA_BUFFB,
+        0x6F13AE90: lambda *x: PA_BUFFB,
+        PA_S380: cap('r', 7), PA_S378: cap('n', 7), PA_S324: lambda *x: 0, PA_S35C: cap('s', 8),
+    }
+    T.trace_call(0x6F13F2F0, T.ABIL, (PA_VICT, PA_SRC), stub_fn=sf, span=0x300,
+                 cleanup={PA_S380: 28, PA_S378: 28, PA_S324: 4, PA_S35C: 32, 0x6F042B20: 8, 0x6F076700: 8, 0x6F079CA0: 4})
+    out = 'PA %d %d %d %d %x %x %x %x %x %x |' % (srcill, hero, existing, flag200, dur, herodur, a, b, c, d)
+    if 'r' in got:
+        path, v = 2, got['r'][1]
+        out += ' 2 %x %x %x %x %x -' % (v[2], v[3], v[4], v[5], v[6])
+    elif 'n' in got:
+        v = got['n'][1]
+        out += ' 1 %x %x %x %x %x -' % (v[2], v[3], v[4], v[5], v[6])
+    elif 's' in got:
+        v = got['s'][1]
+        out += ' 3 %x %x %x %x - %x' % (v[2], v[3], v[4], v[5], v[6])
+    else:
+        out += ' 0 0 0 0 0 0 0'
+    return out
+
+
 # ---------------------------------------------------------------- TM: Transmute buff action (inner body)
 TM_INNER = 0x6F1B58B0
 TM_TRAMP = D + 0xF000
@@ -242,7 +319,7 @@ def case_tm(r):
     return out
 
 
-GENS = [('TN', case_tn), ('TM', case_tm), ('CL', case_cl), ('CE', case_ce)]
+GENS = [('TN', case_tn), ('TM', case_tm), ('CL', case_cl), ('CE', case_ce), ('PA', case_pa)]
 
 
 def main():

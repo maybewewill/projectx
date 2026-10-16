@@ -116,3 +116,43 @@ fn charm_effect_matches_the_original() {
         }
     }
 }
+
+#[test]
+fn poison_attack_apply_matches_the_original() {
+    use sim::neutral_spells::{poison_plan, PoisonPath};
+    let rs = rows("PA");
+    assert!(rs.len() >= 300);
+    let mut seen = [0usize; 4];
+    for r in &rs {
+        // PA srcill hero existing flag200 dur herodur a b c d | path dur a b c d8 dfull
+        let n = |i: usize| r[i].parse::<i32>().unwrap();
+        let (srcill, hero, existing, flag200) = (n(1) == 1, n(2) == 1, n(3) == 1, n(4) == 1);
+        let (dur, herodur, a, b, c, d) = (h(r[5]), h(r[6]), h(r[7]), h(r[8]), h(r[9]), h(r[10]));
+        assert_eq!(r[11], "|");
+        let lv = sim::cast::SpellLevel {
+            dur: f(dur),
+            hero_dur: f(herodur),
+            data: [f(a), f(b), f(c), f(d), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
+            ..Default::default()
+        };
+        let plan = poison_plan(srcill, hero, existing, flag200, &lv);
+        let want_path = match r[12] {
+            "0" => PoisonPath::Skip,
+            "1" => PoisonPath::New,
+            "2" => PoisonPath::Refresh,
+            _ => PoisonPath::Stacking,
+        };
+        assert_eq!(plan.path, want_path, "row {r:?}");
+        seen[n(12) as usize] += 1;
+        if plan.path == PoisonPath::Skip {
+            continue;
+        }
+        assert_eq!((plan.dur.to_bits(), plan.a.to_bits(), plan.b.to_bits(), plan.c.to_bits()), (h(r[13]), h(r[14]), h(r[15]), h(r[16])), "row {r:?}");
+        if plan.path == PoisonPath::Stacking {
+            assert_eq!(plan.d as u32, h(r[18]), "row {r:?}");
+        } else {
+            assert_eq!(plan.flag8 as u32, h(r[17]), "row {r:?}");
+        }
+    }
+    assert!(seen.iter().all(|&c| c > 20), "every path is reached: {seen:?}");
+}
