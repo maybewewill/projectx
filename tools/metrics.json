@@ -1,8 +1,8 @@
 {
  "replay": {
-  "file": "EchoIsles, игрок против компьютера, 1.26a (записан 2026-10-17)",
-  "exact_pairs": 127,
-  "pairs": 5503,
+  "file": "EchoIsles, игрок против компьютера (наша симуляция против оригинала, совпавшие записи целиком)",
+  "exact_pairs": 0,
+  "pairs": 5504,
   "measured": "2026-10-17"
  },
  "replay_dota": {
@@ -10,5 +10,10 @@
   "exact_pairs": 516,
   "pairs": 71307,
   "measured": "2026-10-12"
+ },
+ "replay_stream_pairs": {
+  "exact_pairs": 2776,
+  "pairs": 5503,
+  "note": "stream-only model (clock, pauses, net checksum); not a simulation measure"
  }
 }
