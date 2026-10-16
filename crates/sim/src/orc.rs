@@ -965,7 +965,7 @@ fn wind_walk(game: &RefCell<Game>, rec: &CastRec) {
     gm.invisibility_note(rec.caster);
 }
 
-fn rad_to_deg(r: F32) -> F32 {
+pub(crate) fn rad_to_deg(r: F32) -> F32 {
     arith::mul(r, F32::from_bits(0x4265_2EE1))
 }
 

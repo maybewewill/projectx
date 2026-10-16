@@ -324,3 +324,8 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   soft divisions and reciprocal). The per-victim tick slot `0x364` = `0x6F13C410` skips a victim that carries the shield's marker buff (`0x6F10FFB0`
   code), whose unit word `+0xEC` is above zero (signed), or that is the shielded unit; blocked victims (`0x6F28D750`) get only the marker; the model lacks
   the first two skips (meaning of `+0xEC` unknown) and this tick filter was not run.
+* **Healing Ward (`Ahwd`) and Sentry Ward (`Aeye`) CONFIRMED** (point effects `0x6F0BABB0` / `0x6F0B8510`, 400 cases each): the unit creator
+  `0x6F29F990` gets `ecx` = the caster's owner (slot `0xEC`), `edx` = the level's `UnitID`, stack `(&x, &y, &facing, flags, 1, -1)` with the cast
+  point, **facing = Misc `BuildingAngle`** (`orc::building_angle_radians`, a multiple of 90 degrees) and flags `2` for a nonzero `Dur + ability
+  +0x9C` else `0x502` (food bits). **Bug fixed**: the model created wards with the caster's facing. Stasis Trap (`0x6F1FD180`) shares the model and
+  the fix; its own effect was not run. The ward's timed life buff and the aura/ability of the ward unit type are outside this check.

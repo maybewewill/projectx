@@ -332,6 +332,35 @@ fn lightning_shield_effect_matches_the_original() {
     }
 }
 
+fn check_ward(text: &str, label: &str) {
+    // dur extra unitid angle x y | ecx edx x y facing flags one minus1
+    let rows = hex_rows(text);
+    assert!(rows.len() >= 300);
+    let (mut zero, mut nonzero) = (0, 0);
+    for r in &rows {
+        let (_, facing, flags) = ward_create_values(f(r[0]), f(r[1]), f(r[3]));
+        let w = &r[6..];
+        assert_eq!((w[1], w[2], w[3], w[4], w[5]), (r[2], r[4], r[5], facing.to_bits(), flags), "{label} row {:08x?}", r);
+        assert_eq!((w[6], w[7]), (1, 0xFFFF_FFFF), "{label} row {:08x?}", r);
+        if flags == 2 {
+            nonzero += 1;
+        } else {
+            zero += 1;
+        }
+    }
+    assert!(zero > 20 && nonzero > 100, "{label} {zero} {nonzero}");
+}
+
+#[test]
+fn healing_ward_creation_matches_the_original() {
+    check_ward(include_str!("data/unit_spells/hwd_effect.txt"), "healing ward");
+}
+
+#[test]
+fn sentry_ward_creation_matches_the_original() {
+    check_ward(include_str!("data/unit_spells/eye_effect.txt"), "sentry ward");
+}
+
 #[test]
 fn unholy_frenzy_effect_matches_the_original() {
     // dur herodur DataA DataB extra hero existing | calls e n | existing: dur owner B A / new: target dur owner B A

@@ -735,6 +735,57 @@ def check_shield_effect(cases, r, rows):
         rows.append([dur, hdur, da, area, extra, int(hero)] + [rd(CAP + 0x100 + 4 * i) for i in range(9)])
 
 
+VT_HWD_ABIL, ABIL_HWD = 0x6F8B0A44, 0x41687764
+VT_EYE_ABIL, ABIL_EYE = 0x6F8A9B0C, 0x41657965
+
+
+def _ward_effect(cases, r, rows, vt, abil, effect):
+    S.install()
+    unit_vtables()
+    wr(VTU + 0xEC, A.stub_ret(0, 0x77))
+    misc_real_stub(0x6F009EE0, 0)
+    A.patch_jump(0x6F29F990, recorder(0x100, [(0, True), (1, True), (2, True), (3, False), (4, False), (5, False)], 0x18,
+                                       eax=0, regs=True))
+    A.patch_jump(0x6F299390, A.stub_ret(4, 0))
+    A.patch_jump(0x6F07AF00, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F0B53B0, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+    mu.mem_write(S.FVT, b"\0" * 0x400)
+    wr(BUFF, S.FVT)
+    wr(S.FVT + 0x324, A.stub_ret(4, 0))
+    wr(S.FVT + 0x31C, A.stub_ret(8, 0))
+    for _ in range(cases):
+        dur = rbits(r) if r.random() < 0.5 else f2u(float(r.choice([0, 0, 60, 30])))
+        extra = rbits(r) if r.random() < 0.3 else 0
+        uid = r.choice([0x6F687764, 0x6F657965, r.getrandbits(32)])
+        angle = f2u(float(r.choice([0, 90, 180, 270, 450, -90, -100, 45, 359, 270.7]))) if r.random() < 0.85 else rbits(r)
+        x, y = rbits(r), rbits(r)
+        A.make_ability(vt, abil, 75)
+        level(A.LVL, dur, 0, [])
+        wr(A.LVL + 0x44, uid)
+        wr(A.OBJ + 0x9C, extra)
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT, VTU)
+        buf = M + 0xD000
+        wr(buf, x)
+        wr(buf + 4, y)
+        wr(VARS + 0, angle)
+        S.clear_cap()
+        S.call(effect, ecx=A.OBJ, stack_args=(buf, buf + 4))
+        rows.append([dur, extra, uid, angle, x, y] + [rd(CAP + 0x100 + 4 * i) for i in range(8)])
+
+
+def check_hwd_effect(cases, r, rows):
+    """Healing Ward point effect 0x6F0BABB0; the unit creator 0x6F29F990 is recorded. Rows: dur extra unitid angle x y | ecx edx x y
+    facing flags one minus1."""
+    _ward_effect(cases, r, rows, VT_HWD_ABIL, ABIL_HWD, 0x6F0BABB0)
+
+
+def check_eye_effect(cases, r, rows):
+    """Sentry Ward (CAbilityEvilEye) point effect 0x6F0B8510, same rows."""
+    _ward_effect(cases, r, rows, VT_EYE_ABIL, ABIL_EYE, 0x6F0B8510)
+
+
 VT_ROAR_ABIL, ABIL_ROAR = 0x6F8A21BC, 0x41726F61
 
 
@@ -795,6 +846,8 @@ CHECKS = {
     "taunt_effect": check_taunt_effect,
     "roar_effect": check_roar_effect,
     "shield_effect": check_shield_effect,
+    "hwd_effect": check_hwd_effect,
+    "eye_effect": check_eye_effect,
     "roar_ready": check_roar_ready,
     "unholy_apply": check_unholy_apply,
     "rejuv_effect": check_rejuv_effect,

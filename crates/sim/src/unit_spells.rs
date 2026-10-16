@@ -1593,14 +1593,14 @@ fn ward(game: &RefCell<Game>, rec: &CastRec, buff: u32) {
     if ty == 0 {
         return;
     }
-    let (owner, facing) = {
-        let c = gm.unit(rec.caster);
-        (c.owner, c.facing)
-    };
+    let owner = gm.unit(rec.caster).owner;
+    // The ward faces the Misc `BuildingAngle` (snapped to a multiple of 90 degrees), not the caster (CONFIRMED by Unicorn, V4).
+    let (total, facing_rad, _flags) = ward_create_values(rec.level.dur, F32::ZERO, gm.production().building_angle);
+    let facing = crate::orc::rad_to_deg(facing_rad);
     if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty, x, y, facing, true) {
         gm.unit_mut(k).summoned = true;
-        if arith::lt(F32::ZERO, rec.level.dur) {
-            gm.apply_timed_life(k, buff, rec.level.dur);
+        if arith::lt(F32::ZERO, total) {
+            gm.apply_timed_life(k, buff, total);
         }
     }
 }
@@ -2117,6 +2117,16 @@ pub fn rejuv_buff_values(t: F32, data_a: F32, data_b: F32, div: &dyn Fn(F32, F32
 pub fn shield_values(l: &SpellLevel, hero: bool, extra: F32, div: &dyn Fn(F32, F32) -> F32) -> (F32, F32, F32) {
     let c = F32::from_bits(0x4000_0000);
     (effect_duration(l, hero, extra), div(F32::ONE, c), div(l.data[0], c))
+}
+
+/// What the ward point effects (`0x6F0BABB0` Healing Ward, `0x6F0B8510` Sentry Ward) hand the unit creator `0x6F29F990` (CONFIRMED by
+/// Unicorn, V4): the total duration `Dur + ability +0x9C` (soft add), the facing from Misc `BuildingAngle` (`orc::building_angle_radians`:
+/// truncated, `% 360`, snapped to a multiple of 90, times pi / 180) and the creation flags: `2` when the total duration is nonzero (an x87
+/// compare, NaN counts as nonzero), `0x502` (which adds the food bits) when it is zero. The type is the level's `UnitID`.
+pub fn ward_create_values(dur: F32, extra: F32, building_angle: F32) -> (F32, F32, u32) {
+    let total = arith::add(dur, extra);
+    let flags = if total.to_f32() != 0.0 || total.to_f32().is_nan() { 2 } else { 0x502 };
+    (total, crate::orc::building_angle_radians(building_angle), flags)
 }
 
 /// Whether Purge slows the target: not when the target is dead (`+0x5C & 0x100`) or the caster's player is passively
