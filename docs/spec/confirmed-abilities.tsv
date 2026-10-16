@@ -60,3 +60,6 @@ AHad	tools/emu/v5_aura_emu.py	100	V5: Devotion armor apply 0x6F1ACFD0 (flat/perc
 AOae	tools/emu/v5_aura_emu.py	200	V5: Endurance attack speed 0x6F1AD150 (100) + movement 0x6F1AD240 (100) applies; illusion gates are in callers
 AUau	tools/emu/v5_aura_emu.py	200	V5: Unholy movement 0x6F1AD700 (100) + life regeneration 0x6F1AD810 (100, percent = max life via unit slot 0x130)
 AHab	tools/emu/v5_aura_emu.py	100	V5: Brilliance mana regeneration apply 0x6F1AC990 (flat/percent of max mana); target filter not run
+AUdr	tools/emu/undead_ne2_emu.py	500	V5: Dark Ritual vtable slot 0x424 = 0x6F09FD50 = the Death Pact effect that ran (atlas row AUdr checked against the AUdp vtable); the model dispatches both to one body
+AEev	tools/emu/evasion_emu.py	300	V5 from spec attack-damage.md s12.2: EvadeAttack 0x6F08BD20 decision (strict chance > stream-2 draw, NaN evades, gates draw nothing); whose entries the gate walks is UNSURE
+AUfa	tools/emu/v5_frostarmor_emu.py + v5_frostarmor_h_emu.py	800	V5: cast effect 0x6F0BA520 + creator (400: DataA = buff duration, DataB = armor, chill duration by the ARMORED unit hero test) and retaliation handler 0x6F0BA3F0 gates + chill args (400); bugs fixed: hero test on the wrong unit, illusion flag ignored

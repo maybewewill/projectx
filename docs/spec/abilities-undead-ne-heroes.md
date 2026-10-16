@@ -302,3 +302,25 @@ Harnesses `tools/emu/v2_*_emu.py` (`GAME_DLL=... py tools/emu/v2_NAME_emu.py --d
   ignore flag, class `0x10`, allied, invulnerable, blocked) and "an illusion owner delivers nothing but plays the effect" match. The model
   had the right percent arithmetic; the flat mode was added. Open: what sets the percent flag (stock `DataB = 1`).
 * Fan of Knives (`AEfk`), Mana Burn (`AEmb`) and Spirit Link (`Aspl`): see `abilities-hero-extra.md` and `abilities-unit-m.md` (three bugs fixed).
+
+## V5 verification (Unicorn, 0 mismatches required)
+
+### Frost Armor (`AUfa`) CONFIRMED (cast values and retaliation gates)
+
+`tools/emu/v5_frostarmor_emu.py` runs the real effect `0x6F0BA520` (unit target) and the buff creator `0x6F0BA2E0` on a fake ability
+and target, 400 cases (`tests/data/v5/frost_armor_cast.txt`); `tools/emu/v5_frostarmor_h_emu.py` runs the real retaliation handler
+`0x6F0BA3F0` of `CBuffFrostArmor` on a fake buff, record and attacker, 400 cases (`frost_armor_hit.txt`); test
+`tests/v5_frost_armor_vectors.rs` (`undead_ne::frost_armor_cast`, `frost_armor_hit_runs`).
+
+* The buff apply `0x6F0A1280` gets `(target, &DataA, &chill, &DataB, buff id)`: `DataA` is the **buff's own duration** (base apply slot
+  `0x320`), the **chill duration** goes to the first holder (`+0xCC`, value `+0xD0`) and `DataB` to the second (`+0xD4`, value
+  `+0xD8`), which `0x6F09E080` hands to the armor sink `0x6F2769C0` (undone by `0x6F09E0D0`). So armor = `DataB`, as the model had.
+* **Bug fixed:** the chill duration is chosen at cast by the hero test of the unit that **gets the armor** (`HeroDur` for a hero,
+  else `Dur + ability+0x9C`); the model tested the attacker at hit time.
+* Handler gates in the original order: record ignore flag bit 0 (ranged), class `0x10`, attacker slot `0x11C` (invulnerable),
+  spell immunity `0x6F28D750`; then the effect `0x6F053040` and the chill: a live `Bfro` on the attacker is refreshed through slot
+  `0x360`, otherwise created (slot `0x324`) and applied through slot `0x35C`; both take the stored duration and a flag argument =
+  bit 30 of the **armored** unit's `+0x5C` (illusion). With the flag set `0x6F199EA0` / `0x6F199F40` use strengths 0.0 instead of the
+  Misc `FrostMoveSpeedDecrease` / `FrostAttackSpeedDecrease` (**bug fixed**: the chill ignored the flag; Frost Nova's own
+  slot has the same rule and is unchanged here).
+* Not run: the autocast form `AUfu`, the handler's registration, the Misc strengths (Frost Nova's run covers them).
