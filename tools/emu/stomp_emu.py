@@ -30,7 +30,7 @@ mu = emu.mu
 D = emu.DATA
 w32, r32, fbits, stub, ret, patch = C.w32, C.r32, C.fbits, C.stub, C.ret, C.patch
 
-VT_STOMP = 0x6F8F6C04
+VT_STOMP = 0x6F8F67C4 if os.environ.get("THUNDER_VT") else 0x6F8F6C04  # V5: THUNDER_VT=1 runs the Thunder Clap class (same slots, slot 0x430 recorded)
 F_UNIT = 0x6F1607B0
 
 ABIL = D + 0xA000

@@ -233,3 +233,72 @@ fn channel_property_compares_match_the_original() {
     assert!(n >= 300);
     assert!(above > 20 && above < n && differs > 20 && differs < n + 1);
 }
+
+/// V5: Thunder Clap's per-unit body `0x6F1607B0` (shared with War Stomp; only slot `0x430` differs) run for real with the
+/// Thunder Clap vtable (`THUNDER_VT=1 tools/emu/stomp_emu.py`, 400 cases, 0 mismatches).
+#[test]
+fn thunder_clap_per_unit_body_matches_the_original() {
+    use sim::orc::{stomp_record_flags, stomp_unit, stomp_word, THUNDER_CLAP_TARGS_DEFAULT};
+    let h = |s: &str| u32::from_str_radix(s, 16).unwrap();
+    let (mut n, mut zero_rows, mut stuns) = (0, 0, 0);
+    for line in include_str!("data/human_heroes/thunder_unit.txt").lines() {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(w[0], "U");
+        let data_a = h(w[1]);
+        let zero = w[2] != "0" || w[3] != "0";
+        let (targ, resolved, owner): (u32, u32, u32) = (w[4].parse().unwrap(), w[5].parse().unwrap(), w[6].parse().unwrap());
+        let out = stomp_unit(zero, resolved != 0, targ, owner);
+        assert_eq!((w[8], w[12]), ("1", "1"), "{line}");
+        assert_eq!(h(w[9]), if zero { 0 } else { data_a }, "{line}");
+        assert_eq!(h(w[10]), 0x8000, "{line}");
+        assert_eq!(h(w[11]), stomp_record_flags(zero), "{line}");
+        assert_eq!(w[14] == "1", out.hit_slot.is_some(), "{line}");
+        assert_eq!(w[15] == "1", out.stun, "{line}");
+        n += 1;
+        zero_rows += zero as u32;
+        stuns += out.stun as u32;
+    }
+    assert!(n >= 400 && zero_rows > 50 && stuns > 50, "{n} {zero_rows} {stuns}");
+    assert_eq!(stomp_word(THUNDER_CLAP_TARGS_DEFAULT), 0x0401_8002);
+}
+
+/// V5: the Water Elemental family summon loop `0x6F163390` against the model's count / duration / flag arithmetic and the
+/// creator arguments (`tools/emu/v5_summon_emu.py`, 450 cases over `AHwe`, `AEst`, `AEsv`, 0 mismatches).
+#[test]
+fn summon_loop_matches_the_original() {
+    use sim::orc::feral_plan;
+    use softfloat::F32;
+    let h = |s: &str| u32::from_str_radix(s, 16).unwrap();
+    let f = |s: &str| F32::from_bits(h(s));
+    let (mut n, mut flagged, mut timed, mut multi) = (0, 0, 0, 0);
+    for line in include_str!("data/human_heroes/summon_loop.txt").lines() {
+        let (head, rest) = line.split_once('|').unwrap();
+        let hw: Vec<&str> = head.split_whitespace().collect();
+        let parts: Vec<&str> = rest.split('|').collect();
+        let plan = feral_plan(f(hw[2]), f(hw[3]), f(hw[4]));
+        let owner: u32 = hw[7].parse().unwrap();
+        let calls: Vec<&str> = parts[0].split_whitespace().collect();
+        let count: usize = calls[0].parse().unwrap();
+        assert_eq!(count, plan.count.max(0) as usize, "{line}");
+        let creators: Vec<&str> = parts[0].split(';').collect();
+        if count > 0 {
+            for (i, c) in creators.iter().enumerate() {
+                let w: Vec<&str> = c.split_whitespace().skip(if i == 0 { 1 } else { 0 }).collect();
+                assert_eq!((w[0], w[1], w[2], w[3]), (hw[6], "1", "1", "1"), "{line}");
+                assert_eq!((w[4], h(w[5])), ("1", plan.flags), "{line}");
+            }
+        }
+        assert_eq!(parts[1].trim().parse::<usize>().unwrap(), count, "link calls, {line}");
+        let slot: Vec<&str> = parts[2].split_whitespace().collect();
+        assert_eq!(slot[0].parse::<usize>().unwrap(), count, "{line}");
+        for k in 0..count {
+            assert_eq!((slot[1 + 2 * k], h(slot[2 + 2 * k])), ("1", plan.duration.to_bits()), "{line}");
+        }
+        let _ = owner;
+        n += 1;
+        flagged += (plan.flags == 0x502) as u32;
+        timed += (plan.duration.to_f32() != 0.0) as u32;
+        multi += (count > 1) as u32;
+    }
+    assert!(n >= 450 && flagged > 50 && timed > 100 && multi > 100, "{n} {flagged} {timed} {multi}");
+}

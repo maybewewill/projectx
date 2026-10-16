@@ -1,0 +1,400 @@
+E 3ecccccd 7f7fffff 00000000 3de7d887 1 0 0 0 1 | init ; apply354 7f7fffff ; refresh360sp 3de7d887
+E 63b229f1 41190d5e 00000000 3ecccccd 0 0 0 1 0 | init ; apply354 63b229f1 ; refresh360st 3ecccccd
+E 3f800000 3f800000 00000000 40728773 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 40728773
+E 3f7486ab f129c8c6 00000000 426be7c5 1 0 1 0 0 | refresh358 f129c8c6 ; init ; apply358 426be7c5
+E 57079670 3f800000 00000000 3ecccccd 1 0 0 1 0 | init ; apply354 3f800000 ; refresh360st 3ecccccd
+E c0336f60 90656c8f 00000000 a161d909 1 0 0 1 0 | init ; apply354 90656c8f ; refresh360st a161d909
+E 3e800000 3dcccccd 00000000 40000000 0 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 40000000
+E 3f800000 3fa5e070 00000000 3f800000 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 3f800000
+E 42c33975 3f800000 00000000 3ecccccd 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 3ecccccd
+E 7f800000 40efa4c2 7f800000 fad18c6a 1 0 0 0 0 | init ; apply354 40efa4c2 ; init ; apply358 fad18c6a
+E 40fe68c2 4136cdf2 00000000 42685bc6 1 0 0 0 1 | init ; apply354 4136cdf2 ; refresh360sp 42685bc6
+E 40d8859c 3dcccccd 00000000 bfa021d5 1 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 bfa021d5
+E 7de3a31c 24aebf16 00000000 4030f586 1 0 1 0 0 | refresh358 24aebf16 ; init ; apply358 4030f586
+E 3e800000 3f800000 3dcccccd 3fb19eb5 0 0 0 0 0 | init ; apply354 3eb33333 ; init ; apply358 3fb19eb5
+E 41200000 3f800000 00000000 3dcccccd 0 1 1 0 0 | -
+E 3e800000 80000000 3dcccccd 3e800000 0 0 0 1 0 | init ; apply354 3eb33333 ; refresh360st 3e800000
+E 4243d4f8 2363325f 00000000 3ecccccd 1 0 1 0 0 | refresh358 2363325f ; init ; apply358 3ecccccd
+E 403408e9 3e800000 00000000 3ecccccd 1 0 0 0 1 | init ; apply354 3e800000 ; refresh360sp 3ecccccd
+E 3dcccccd 3dcccccd 00000000 42c03fdd 0 0 0 0 1 | init ; apply354 3dcccccd ; refresh360sp 42c03fdd
+E 7fc00000 3f800000 00000000 9e954868 1 0 1 0 1 | refresh358 3f800000 ; refresh360sp 9e954868
+E de714f6d 26f0f010 00000000 3fa952e2 0 0 1 1 0 | refresh358 de714f6d ; refresh360st 3fa952e2
+E 3f817552 00000000 3f469d94 3f800000 0 0 0 0 1 | init ; apply354 3fe4c41c ; refresh360sp 3f800000
+E 00000001 3f708361 3f800000 7dbcace1 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 7dbcace1
+E 4106f9c1 3f855ab1 00000000 408952e1 1 0 0 1 1 | init ; apply354 3f855ab1 ; refresh360st 408952e1
+E 3ecccccd 3f800000 3dcccccd 7fc00000 0 0 0 0 0 | init ; apply354 3f000000 ; init ; apply358 7fc00000
+E 3dcccccd 3ebe4060 7f800000 4101c5ab 0 0 1 0 1 | refresh358 7f800000 ; refresh360sp 4101c5ab
+E bf824636 3dcccccd 00000000 bea66901 0 0 0 0 0 | init ; apply354 bf824636 ; init ; apply358 bea66901
+E 3e5489e7 3f800000 00000000 40891578 1 0 0 0 1 | init ; apply354 3f800000 ; refresh360sp 40891578
+E 429f4b60 40b4893e 00000000 40e87291 0 0 0 0 0 | init ; apply354 429f4b60 ; init ; apply358 40e87291
+E 3dcccccd 40e3ecea 41f0793b 4088a728 0 0 0 0 1 | init ; apply354 41f14607 ; refresh360sp 4088a728
+E 412c0e9f 42b608f4 00000000 3f303675 1 0 1 0 0 | refresh358 42b608f4 ; init ; apply358 3f303675
+E 3ecccccd 3dcccccd 00000000 3ecccccd 1 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 3ecccccd
+E 3f04f305 a52a9a8e 3e800000 412d2a1b 0 0 0 0 0 | init ; apply354 3f44f305 ; init ; apply358 412d2a1b
+E a0068fb1 ded57eef 774bb092 3f800000 1 0 0 0 0 | init ; apply354 ded57eef ; init ; apply358 3f800000
+E 3f800000 7f7fffff 00000000 c03d4b4e 0 0 1 0 0 | refresh358 3f800000 ; init ; apply358 c03d4b4e
+E 3dcccccd 00000001 00000000 4564291b 1 0 1 0 0 | refresh358 00000001 ; init ; apply358 4564291b
+E 40945586 3dcccccd 3e800000 1412aae3 0 1 0 0 0 | -
+E 3dcccccd 401f7f1d 00000000 25f194fb 1 0 1 0 0 | refresh358 401f7f1d ; init ; apply358 25f194fb
+E bfa3f620 3f65bc34 41d55bdf 3f195240 1 0 1 0 0 | refresh358 3f65bc34 ; init ; apply358 3f195240
+E 3e800000 40aa4060 00000000 3d64f710 0 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 3d64f710
+E 00000001 c6ca01b0 00000000 3f800000 1 0 0 0 1 | init ; apply354 c6ca01b0 ; refresh360sp 3f800000
+E 40c00000 3f800000 00000000 3eb3b1c7 1 0 1 0 0 | refresh358 3f800000 ; init ; apply358 3eb3b1c7
+E 411c816a 3e800000 3e800000 d61b263e 0 0 1 0 0 | refresh358 4120816a ; init ; apply358 d61b263e
+E 41100000 3ecccccd 3dcccccd 3f800000 1 0 1 0 1 | refresh358 3ecccccd ; refresh360sp 3f800000
+E 3dcccccd 42bb11ad 00000000 252285a8 0 0 0 1 1 | init ; apply354 3dcccccd ; refresh360st 252285a8
+E 3f800000 41000000 62562c97 c018773a 1 0 0 1 0 | init ; apply354 41000000 ; refresh360st c018773a
+E 4fda9d77 bf800000 00000000 3f800000 0 0 1 0 1 | refresh358 4fda9d77 ; refresh360sp 3f800000
+E 3f800000 40a00000 00000000 3ecccccd 1 0 0 0 1 | init ; apply354 40a00000 ; refresh360sp 3ecccccd
+E fb3bfadd 61bb8155 00000000 bf85dfa6 0 0 0 0 0 | init ; apply354 fb3bfadd ; init ; apply358 bf85dfa6
+E 40000000 3f44dfa1 00000000 3fa8756a 1 0 0 0 0 | init ; apply354 3f44dfa1 ; init ; apply358 3fa8756a
+E 3e800000 8574e7bc 00000000 4835c2eb 1 0 0 1 0 | init ; apply354 8574e7bc ; refresh360st 4835c2eb
+E 3fc56568 3e800000 3eee6fc8 410c8330 0 0 1 1 0 | refresh358 400080ad ; refresh360st 410c8330
+E 3cf929de 3f800000 00000000 347c6667 0 0 0 0 0 | init ; apply354 3cf929de ; init ; apply358 347c6667
+E 408f272f 87d78f26 00000000 be6004c6 1 0 0 0 1 | init ; apply354 87d78f26 ; refresh360sp be6004c6
+E 3f1e5382 7f7fffff 00000000 338a06af 0 0 0 0 1 | init ; apply354 3f1e5382 ; refresh360sp 338a06af
+E bf999838 3e800000 00000000 3f800000 0 0 0 0 0 | init ; apply354 bf999838 ; init ; apply358 3f800000
+E 3f800000 42a80e0a 00000000 41080b49 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 41080b49
+E 412c7b2b b912163c 00000000 42b1383f 0 0 0 0 0 | init ; apply354 412c7b2b ; init ; apply358 42b1383f
+E 41afb317 410c351c 40e00000 3f800000 0 0 0 0 0 | init ; apply354 41e7b317 ; init ; apply358 3f800000
+E 00000001 3ed90eda 00000000 3e800000 0 0 0 0 0 | init ; apply354 00000000 ; init ; apply358 3e800000
+E 86a69a92 3dcccccd 40800000 1fbef09f 1 0 0 1 1 | init ; apply354 3dcccccd ; refresh360st 1fbef09f
+E 3dcccccd 3ecccccd 00000000 3e800000 0 1 0 1 0 | -
+E bf28a6a8 3dcccccd 00000000 00000001 1 0 0 0 1 | init ; apply354 3dcccccd ; refresh360sp 00000001
+E 3ecccccd 80000000 42c6821a 406b55a3 0 0 0 1 1 | init ; apply354 42c74ee6 ; refresh360st 406b55a3
+E 427dbe6f 3e9ccd99 00000000 40bc8ef2 0 0 0 0 0 | init ; apply354 427dbe6f ; init ; apply358 40bc8ef2
+E 3e16e4d5 4294e01a 00000000 3f800000 0 0 1 0 0 | refresh358 3e16e4d5 ; init ; apply358 3f800000
+E 3f7c7f8b 3e800000 00000000 3e800000 0 0 0 0 0 | init ; apply354 3f7c7f8b ; init ; apply358 3e800000
+E 03acb8e7 3e800000 00000000 9b0b9908 1 0 0 1 1 | init ; apply354 3e800000 ; refresh360st 9b0b9908
+E 05535916 2e4048e0 3dcccccd 3f800000 1 0 0 0 1 | init ; apply354 2e4048e0 ; refresh360sp 3f800000
+E 3dcccccd 3fd0a743 00000000 3e268715 0 0 1 0 0 | refresh358 3dcccccd ; init ; apply358 3e268715
+E 3e800000 40400000 40000000 3e74076c 0 0 1 1 1 | refresh358 40100000 ; refresh360st 3e74076c
+E 3f4179c2 7e58a171 00000000 4122c2d0 1 0 0 1 1 | init ; apply354 7e58a171 ; refresh360st 4122c2d0
+E 3efe130f 3ea110b4 00000000 3ecccccd 1 0 1 1 0 | refresh358 3ea110b4 ; refresh360st 3ecccccd
+E 41b11843 0b2ab14d 00000000 3dcccccd 0 1 0 0 0 | -
+E 2642839d 4138fe14 3e800000 3dcccccd 0 0 1 1 1 | refresh358 3e800000 ; refresh360st 3dcccccd
+E 3e800000 3ecccccd 3ecccccd 3f83c18d 1 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 3f83c18d
+E 3e800000 3eb85a2b 00000000 3f800000 1 0 0 0 0 | init ; apply354 3eb85a2b ; init ; apply358 3f800000
+E 3dcccccd 4028f001 00000000 41300000 1 0 1 1 0 | refresh358 4028f001 ; refresh360st 41300000
+E 593d2317 407f5925 3e800000 3f800000 0 0 0 0 1 | init ; apply354 593d2317 ; refresh360sp 3f800000
+E 4006d89a 00000000 00000000 3f800000 1 0 1 0 0 | refresh358 00000000 ; init ; apply358 3f800000
+E 65c00ba5 3dcccccd 00000000 41200000 0 0 0 0 0 | init ; apply354 65c00ba5 ; init ; apply358 41200000
+E 3f800000 41000000 00000000 3e03e4c2 1 0 0 1 0 | init ; apply354 41000000 ; refresh360st 3e03e4c2
+E 3f04ecc8 3ecccccd 00000000 3dcccccd 1 1 0 0 0 | -
+E 42029829 41343e82 00000000 3dcccccd 1 0 1 0 1 | refresh358 41343e82 ; refresh360sp 3dcccccd
+E 422ed1f1 3f800000 00000000 3f0eb341 1 0 0 1 1 | init ; apply354 3f800000 ; refresh360st 3f0eb341
+E 40f9ca42 427f4206 00000000 3ecccccd 0 0 0 0 1 | init ; apply354 40f9ca42 ; refresh360sp 3ecccccd
+E 3e800000 3dcccccd 00000000 3e41a290 1 0 1 0 1 | refresh358 3dcccccd ; refresh360sp 3e41a290
+E 3ecccccd b210084a 00000000 bfffaebf 0 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 bfffaebf
+E f801e2ea 7f800000 00000000 3ee105ba 0 0 1 1 1 | refresh358 f801e2ea ; refresh360st 3ee105ba
+E 40fec2b7 bf800000 00000000 4292b7c4 0 0 0 0 0 | init ; apply354 40fec2b7 ; init ; apply358 4292b7c4
+E 3e800000 40c00000 00000000 3f800000 1 0 1 1 0 | refresh358 40c00000 ; refresh360st 3f800000
+E 3f800000 3e800000 00000000 42c2a4a6 1 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 42c2a4a6
+E 9bab5d8c 3f800000 00000000 3ecccccd 1 1 0 0 1 | -
+E 3ecccccd 7f800000 00000000 bf696847 0 0 1 0 1 | refresh358 3ecccccd ; refresh360sp bf696847
+E 3dcccccd 09e18f44 00000000 2c878242 1 0 0 0 1 | init ; apply354 09e18f44 ; refresh360sp 2c878242
+E 3e800000 3fa6dda4 00000000 7fc00000 0 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 7fc00000
+E 7f800000 3f800000 00000000 3e800000 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 3e800000
+E cd327e7c 40800000 3ea4ff05 3e800000 1 0 0 0 0 | init ; apply354 40800000 ; init ; apply358 3e800000
+E 420ee730 3dcccccd 00000000 415f2d3a 1 0 0 1 0 | init ; apply354 3dcccccd ; refresh360st 415f2d3a
+E 3ecccccd 4297f05f 00000000 428c83b5 0 0 0 1 0 | init ; apply354 3ecccccd ; refresh360st 428c83b5
+E 14db79df 2c003993 00000000 3f800000 1 0 1 0 0 | refresh358 2c003993 ; init ; apply358 3f800000
+E 3eb1eeff 3ecccccd e32190be 4028b869 0 0 0 0 0 | init ; apply354 e32190be ; init ; apply358 4028b869
+E 40034b75 3f800000 00000000 3e67da97 0 0 0 0 0 | init ; apply354 40034b75 ; init ; apply358 3e67da97
+E 3f39b4de 419d7b1a 00000000 4182a3ae 1 0 1 0 0 | refresh358 419d7b1a ; init ; apply358 4182a3ae
+E 40e00000 3dcccccd 3ecccccd 42a3ab57 0 0 0 1 0 | init ; apply354 40eccccc ; refresh360st 42a3ab57
+E 3ecccccd 428a1d66 bf800000 6b752a30 1 0 1 1 0 | refresh358 428a1d66 ; refresh360st 6b752a30
+E 3ecccccd 3edb4042 00000000 3f800000 0 0 1 0 1 | refresh358 3ecccccd ; refresh360sp 3f800000
+E 3ecccccd 3f800000 00000000 3eb23fe9 0 0 1 1 0 | refresh358 3ecccccd ; refresh360st 3eb23fe9
+E 66b6578d 3e1aa9aa 00000000 410bc875 1 0 0 0 0 | init ; apply354 3e1aa9aa ; init ; apply358 410bc875
+E 3e800000 bf800000 00000000 3ecccccd 0 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 3ecccccd
+E 41100000 00000000 00000000 3eaf069d 0 0 0 0 0 | init ; apply354 41100000 ; init ; apply358 3eaf069d
+E 40c00000 41000000 00000000 3e800000 1 0 0 0 1 | init ; apply354 41000000 ; refresh360sp 3e800000
+E 40ee147a 41cbff82 41167648 3f800000 1 0 1 0 0 | refresh358 41cbff82 ; init ; apply358 3f800000
+E 412d075a 4093f98d 3f800000 40a00000 0 0 1 0 1 | refresh358 413d075a ; refresh360sp 40a00000
+E bf800000 3e9a6e88 ba136145 7f7fffff 1 0 0 0 0 | init ; apply354 3e9a6e88 ; init ; apply358 7f7fffff
+E 3f800000 3507dca8 00000000 3dcccccd 0 0 0 1 0 | init ; apply354 3f800000 ; refresh360st 3dcccccd
+E 3e92f219 402f3f40 00000000 3ecccccd 1 0 0 0 0 | init ; apply354 402f3f40 ; init ; apply358 3ecccccd
+E 3ecccccd 42392867 00000000 50df3d72 0 0 0 1 1 | init ; apply354 3ecccccd ; refresh360st 50df3d72
+E 429f62c7 bff20789 00000000 4012ab62 1 0 0 0 0 | init ; apply354 bff20789 ; init ; apply358 4012ab62
+E 3f71e79b c6a74130 c034b269 bfa6c84d 0 0 1 1 0 | refresh358 bff07105 ; refresh360st bfa6c84d
+E 413f935d 56635459 3dcccccd 3e800000 0 0 0 0 0 | init ; apply354 41412cf6 ; init ; apply358 3e800000
+E 3e800000 00000000 00000000 c8887dad 1 1 0 0 0 | -
+E bf800000 3e800000 00000000 41100000 0 0 0 0 0 | init ; apply354 bf800000 ; init ; apply358 41100000
+E 3cd68eef 3f800000 00000000 94217e60 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 94217e60
+E 41100000 3dcccccd 3dcccccd 3ecccccd 0 0 0 1 0 | init ; apply354 41119999 ; refresh360st 3ecccccd
+E 3f92194b 3f800000 3dcccccd 40400000 0 0 1 0 1 | refresh358 3f9ee617 ; refresh360sp 40400000
+E 00000000 3e800000 3e800000 4084730f 0 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 4084730f
+E 75a62a54 02d0dd05 3dcccccd 3f800000 0 0 0 0 0 | init ; apply354 75a62a54 ; init ; apply358 3f800000
+E 059b665a 42a2ffc5 00000000 3eb314f0 1 0 0 1 1 | init ; apply354 42a2ffc5 ; refresh360st 3eb314f0
+E 3e7f7443 bfe54e31 3ecccccd 4108b66d 0 0 0 0 0 | init ; apply354 3f264377 ; init ; apply358 4108b66d
+E 3e800000 3ecccccd 00000000 3f800000 0 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 3f800000
+E e286f095 3dcccccd 00000000 3ecccccd 0 0 1 0 0 | refresh358 e286f095 ; init ; apply358 3ecccccd
+E 3f800000 00000000 40400000 3ecccccd 1 0 0 0 0 | init ; apply354 00000000 ; init ; apply358 3ecccccd
+E 41a92c67 3e800000 00000000 402daf63 0 1 0 1 0 | -
+E 3f16137f 41a3151b 00000000 4229972a 0 0 0 0 0 | init ; apply354 3f16137f ; init ; apply358 4229972a
+E 5507e454 3e89210b 00000000 3e5bb8d1 0 0 1 0 0 | refresh358 5507e454 ; init ; apply358 3e5bb8d1
+E fb88052c 3ecccccd 00000000 3dcccccd 1 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 3dcccccd
+E 3e800000 bf414c8b 4016861e 4099738f 1 0 0 0 0 | init ; apply354 bf414c8b ; init ; apply358 4099738f
+E f23b96bd 3dcccccd 00000000 3ed5364a 0 0 0 1 1 | init ; apply354 f23b96bd ; refresh360st 3ed5364a
+E 40000000 3f800000 00000000 00000000 1 0 0 1 0 | init ; apply354 3f800000 ; refresh360st 00000000
+E 402e71e9 3e800000 00000000 3f7a2bd0 1 0 1 0 0 | refresh358 3e800000 ; init ; apply358 3f7a2bd0
+E 3eaef737 3dd61545 00000000 407e5674 0 0 0 0 0 | init ; apply354 3eaef737 ; init ; apply358 407e5674
+E 3ecccccd 3e800000 3dcccccd 3fb0a27b 1 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 3fb0a27b
+E 3c9e7ea7 3e800000 00000000 40000000 0 1 1 1 0 | -
+E 40800000 429c306b 40e866e9 adb4bc9e 0 0 1 0 1 | refresh358 41343374 ; refresh360sp adb4bc9e
+E 3f800000 bf63c6f3 00000000 7fc00000 1 0 0 0 0 | init ; apply354 bf63c6f3 ; init ; apply358 7fc00000
+E 3dcccccd 3dcccccd 00000000 7fc00000 0 1 1 0 0 | -
+E 41300000 3e800000 00000000 3f800000 1 0 0 1 1 | init ; apply354 3e800000 ; refresh360st 3f800000
+E 3ecccccd 3e800000 00000000 42b31395 1 0 1 0 0 | refresh358 3e800000 ; init ; apply358 42b31395
+E 3dcccccd 4031b905 00000000 3efa1015 0 0 0 1 0 | init ; apply354 3dcccccd ; refresh360st 3efa1015
+E 3dcccccd 3f5bda9c 3f800000 00000001 1 0 0 1 0 | init ; apply354 3f5bda9c ; refresh360st 00000001
+E 7b90b07f 3e800000 00000000 3f800000 1 0 0 0 1 | init ; apply354 3e800000 ; refresh360sp 3f800000
+E 41300000 3dcccccd 00000000 3f800000 0 0 1 0 1 | refresh358 41300000 ; refresh360sp 3f800000
+E 3e800000 8adabd0b 00000000 3e800000 0 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 3e800000
+E 50e3944a 3ecccccd 00000000 3e800000 0 0 0 0 1 | init ; apply354 50e3944a ; refresh360sp 3e800000
+E 9c04029a 3f800000 00000000 3dcccccd 1 1 1 0 1 | -
+E 3e472f97 7f800000 00000000 3ecc5c3f 0 0 0 1 0 | init ; apply354 3e472f97 ; refresh360st 3ecc5c3f
+E 4298f708 3f59f42b 00000000 41200000 0 0 0 1 0 | init ; apply354 4298f708 ; refresh360st 41200000
+E 421bd610 412057d8 00000000 00000000 1 0 0 0 0 | init ; apply354 412057d8 ; init ; apply358 00000000
+E 3f3b08ee 3f800000 00000000 bf800000 1 0 1 0 0 | refresh358 3f800000 ; init ; apply358 bf800000
+E 3ecccccd b6560306 b75528ed 3e800000 1 0 1 1 0 | refresh358 b6560306 ; refresh360st 3e800000
+E 3dcccccd 9c97fdad 3f1421f7 40988338 0 0 0 1 0 | init ; apply354 3f2dbb90 ; refresh360st 40988338
+E 40e00000 3f800000 00000000 3dcccccd 1 0 1 0 0 | refresh358 3f800000 ; init ; apply358 3dcccccd
+E 3dcccccd 3dcccccd 3f31e3b8 4149c214 0 0 0 1 0 | init ; apply354 3f4b7d51 ; refresh360st 4149c214
+E d1c067f8 7fc00000 00000000 3fab9c24 0 0 0 0 0 | init ; apply354 d1c067f8 ; init ; apply358 3fab9c24
+E 409d7dcd 3f800000 402026a3 4112b990 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 4112b990
+E 3f800000 3f800000 00000000 3ecccccd 1 0 1 0 1 | refresh358 3f800000 ; refresh360sp 3ecccccd
+E 00000001 3e28bce6 3e800000 40a168a1 1 0 0 0 0 | init ; apply354 3e28bce6 ; init ; apply358 40a168a1
+E 3f800000 424de313 00000000 d22ab977 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 d22ab977
+E 7f800000 3e800000 00000000 3ecccccd 0 1 0 0 0 | -
+E 409c2e4a 3ecccccd 00000000 3dcccccd 0 0 1 1 0 | refresh358 409c2e4a ; refresh360st 3dcccccd
+E 3e800000 406b3e15 00000000 379dd7e9 1 0 0 0 1 | init ; apply354 406b3e15 ; refresh360sp 379dd7e9
+E 41300000 3f800000 00000000 00000000 0 1 0 0 0 | -
+E 3e800000 00000000 3edd1324 3ecccccd 1 0 1 1 0 | refresh358 00000000 ; refresh360st 3ecccccd
+E 00000000 438743bb 00000000 3ecccccd 1 1 0 0 1 | -
+E 3f8bfba8 3ecccccd 80000000 3ecccccd 1 0 0 0 1 | init ; apply354 3ecccccd ; refresh360sp 3ecccccd
+E 409a8d3d 205b38c5 00000000 40e5822f 1 0 0 1 0 | init ; apply354 205b38c5 ; refresh360st 40e5822f
+E be7575c8 3dcccccd 3f800000 3f39858f 1 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 3f39858f
+E 3e800000 11f19347 3e800000 3f800000 0 0 0 1 0 | init ; apply354 3f000000 ; refresh360st 3f800000
+E 4243012f 3f800000 3e80ecf6 b0900c25 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 b0900c25
+E 3e800000 3e800000 00000000 3dcccccd 0 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 3dcccccd
+E 3ecccccd 7506cb9c 00000000 3ecadd08 0 0 0 1 0 | init ; apply354 3ecccccd ; refresh360st 3ecadd08
+E 00000000 41000000 00000000 3dcccccd 0 0 0 1 1 | init ; apply354 00000000 ; refresh360st 3dcccccd
+E bf90ad80 3f9bc4f9 00000000 3f8db128 0 0 0 1 0 | init ; apply354 bf90ad80 ; refresh360st 3f8db128
+E 4299136d 3f800000 00000000 404b4084 1 0 0 0 1 | init ; apply354 3f800000 ; refresh360sp 404b4084
+E bfd61047 3fc1074f 00000000 3e800000 1 0 0 0 0 | init ; apply354 3fc1074f ; init ; apply358 3e800000
+E 41100000 3dcccccd 42282b6b 42939427 1 0 0 1 0 | init ; apply354 3dcccccd ; refresh360st 42939427
+E 3dcccccd 00000000 00000000 3f800000 0 0 0 1 0 | init ; apply354 3dcccccd ; refresh360st 3f800000
+E 3f800000 80000000 3f800000 402e2853 0 0 0 0 0 | init ; apply354 40000000 ; init ; apply358 402e2853
+E be88c8f9 401d634e 00000000 3e800000 0 0 0 0 0 | init ; apply354 be88c8f9 ; init ; apply358 3e800000
+E 3f34ceaa 088cf850 3f800000 3f800000 1 0 0 1 0 | init ; apply354 088cf850 ; refresh360st 3f800000
+E a86b2520 3f2d2dfe 00000000 3ecccccd 1 0 0 0 0 | init ; apply354 3f2d2dfe ; init ; apply358 3ecccccd
+E 3ecccccd 3f800000 00000000 8ec29d30 0 0 0 0 1 | init ; apply354 3ecccccd ; refresh360sp 8ec29d30
+E 3e800000 428fb664 00000000 40b67756 0 0 1 0 0 | refresh358 3e800000 ; init ; apply358 40b67756
+E 41300000 3d27b958 00000000 403092a5 0 0 0 0 0 | init ; apply354 41300000 ; init ; apply358 403092a5
+E 3ecccccd 3f800000 00000000 bf51dda0 1 0 0 1 1 | init ; apply354 3f800000 ; refresh360st bf51dda0
+E 3e94e169 40800000 00000000 7f7fffff 0 0 0 1 0 | init ; apply354 3e94e169 ; refresh360st 7f7fffff
+E d3770646 5b0a084d 00000000 40cf5ed9 0 0 0 1 0 | init ; apply354 d3770646 ; refresh360st 40cf5ed9
+E 3dcccccd 7fc00000 00000000 3ecccccd 1 0 0 0 0 | init ; apply354 7fc00000 ; init ; apply358 3ecccccd
+E 3f800000 409f6023 00000000 3f06139b 1 1 1 0 1 | -
+E 18a79059 41e3da05 00000000 40e00000 0 0 1 0 1 | refresh358 18a79059 ; refresh360sp 40e00000
+E 3dcccccd 3ecccccd 00000000 7f7fffff 1 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 7f7fffff
+E 3ecccccd 3dcccccd bc152d5f bf5f5ea7 1 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 bf5f5ea7
+E 40c4b5ac 402173b9 00000000 41241513 0 0 0 0 0 | init ; apply354 40c4b5ac ; init ; apply358 41241513
+E 601dd833 bfdbf36c 00000000 9be30d25 1 0 1 1 1 | refresh358 bfdbf36c ; refresh360st 9be30d25
+E 3e800000 3e800000 00000000 42b00c89 1 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 42b00c89
+E 40b49bac 40f7ead0 00000000 3d3a8946 0 0 0 0 0 | init ; apply354 40b49bac ; init ; apply358 3d3a8946
+E b26ecda4 be201a31 00000000 bfca98ed 0 0 1 1 0 | refresh358 b26ecda4 ; refresh360st bfca98ed
+E 00000000 419aeb77 00000000 40c00000 1 0 1 0 1 | refresh358 419aeb77 ; refresh360sp 40c00000
+E 7f7fffff 3f800000 36e7314e 3dcccccd 0 0 0 0 0 | init ; apply354 7f7fffff ; init ; apply358 3dcccccd
+E 3e800000 d8a99938 00000000 3ecccccd 1 0 0 0 0 | init ; apply354 d8a99938 ; init ; apply358 3ecccccd
+E 3f800000 3ecccccd 412027ba 3e90d660 1 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 3e90d660
+E 3dcccccd 9d98c491 00000000 3f800000 1 0 0 0 0 | init ; apply354 9d98c491 ; init ; apply358 3f800000
+E 3ecccccd bf800000 00000000 3dcccccd 0 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 3dcccccd
+E 3ecccccd 3f800000 3f800000 7f7fffff 0 0 0 0 0 | init ; apply354 3fb33333 ; init ; apply358 7f7fffff
+E 9d103738 3f2916ac 00000000 676d155e 1 0 1 0 1 | refresh358 3f2916ac ; refresh360sp 676d155e
+E 3dcccccd 40266682 00000000 cc91ae7e 0 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 cc91ae7e
+E 41100000 42330396 3dcccccd 15ebbef5 1 1 1 0 0 | -
+E 3e800000 00000000 00000000 40891612 1 0 1 1 1 | refresh358 00000000 ; refresh360st 40891612
+E 43af4b5e 406b76a4 90aee5fe 3dcccccd 0 0 0 1 0 | init ; apply354 43af4b5e ; refresh360st 3dcccccd
+E 3fca51ad 3ecccccd 00000000 41300000 1 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 41300000
+E 3dcccccd bf6086ea 00000000 428ab1eb 0 0 0 1 0 | init ; apply354 3dcccccd ; refresh360st 428ab1eb
+E 3f752603 3e800000 00000000 00fb4238 1 0 1 0 0 | refresh358 3e800000 ; init ; apply358 00fb4238
+E 3f14b212 3e800000 00000000 3e5cf518 0 0 0 0 0 | init ; apply354 3f14b212 ; init ; apply358 3e5cf518
+E 3ecccccd f7d7890d 00000000 4a12efdc 1 1 0 0 1 | -
+E 41220a9b bffedfa2 00000000 429aa9a9 0 0 0 0 1 | init ; apply354 41220a9b ; refresh360sp 429aa9a9
+E 3f03d79d 3cb06229 00000000 3f5dda68 0 0 0 0 1 | init ; apply354 3f03d79d ; refresh360sp 3f5dda68
+E bf4a0bf0 3f472e29 00000000 40250c9b 0 0 0 0 0 | init ; apply354 bf4a0bf0 ; init ; apply358 40250c9b
+E 3f800000 07a8eb31 3ecccccd 40a00000 0 0 0 0 0 | init ; apply354 3fb33333 ; init ; apply358 40a00000
+E e4a0c01a 3f72f036 4259b608 3eeb7c18 1 0 1 0 0 | refresh358 3f72f036 ; init ; apply358 3eeb7c18
+E e8bbde53 42940fed d6e90b97 42b26f50 1 0 1 1 1 | refresh358 42940fed ; refresh360st 42b26f50
+E 3e800000 3dcccccd 40398e4d 7f7fffff 1 0 1 0 1 | refresh358 3dcccccd ; refresh360sp 7f7fffff
+E 408210ee 40a1dac9 00000000 3ed254e6 0 1 0 0 0 | -
+E 3e30e08b 3e82dc76 00000000 3f800000 0 0 0 0 1 | init ; apply354 3e30e08b ; refresh360sp 3f800000
+E 415a582e 3ecccccd 00000000 bf32b935 0 0 0 1 0 | init ; apply354 415a582e ; refresh360st bf32b935
+E 40800000 3ecccccd 00000000 40d4d2d6 1 0 1 0 0 | refresh358 3ecccccd ; init ; apply358 40d4d2d6
+E 7f800000 3e800000 00000000 42835778 1 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 42835778
+E 1071a550 42678dbb 00000000 401f610b 1 0 0 0 0 | init ; apply354 42678dbb ; init ; apply358 401f610b
+E 570f98fc 16d6d329 00000000 3f800000 0 0 1 0 0 | refresh358 570f98fc ; init ; apply358 3f800000
+E 3f800000 3f800000 3f0e9e4b bf9f763e 0 0 0 0 0 | init ; apply354 3fc74f25 ; init ; apply358 bf9f763e
+E 3eeb2844 3f800000 00000000 f154aea0 0 1 1 1 0 | -
+E 7f800000 3ecccccd cf59fbd5 3dcccccd 0 1 0 1 0 | -
+E 00000001 3ecccccd 3dcccccd eddcf9a6 1 0 0 1 1 | init ; apply354 3ecccccd ; refresh360st eddcf9a6
+E 3af44f0f 40c00000 00000000 3f18544e 1 0 1 0 0 | refresh358 40c00000 ; init ; apply358 3f18544e
+E 3ecccccd 40fd7527 00000000 3dcccccd 0 0 0 0 1 | init ; apply354 3ecccccd ; refresh360sp 3dcccccd
+E 500a238d 40400000 00000000 40a00000 1 0 1 0 0 | refresh358 40400000 ; init ; apply358 40a00000
+E 3fb077bb 3e800000 3f800000 3f042d13 0 0 0 0 1 | init ; apply354 40183bdd ; refresh360sp 3f042d13
+E 40a00000 3dcccccd 00000000 3e800000 0 0 0 0 1 | init ; apply354 40a00000 ; refresh360sp 3e800000
+E 4251a66c 41100000 00000000 3e800000 0 0 0 1 0 | init ; apply354 4251a66c ; refresh360st 3e800000
+E 00000000 3ecccccd 00000000 3dcccccd 1 0 0 1 0 | init ; apply354 3ecccccd ; refresh360st 3dcccccd
+E 4252ed9b 41400000 428c9f3b 3fcb5415 1 0 0 0 0 | init ; apply354 41400000 ; init ; apply358 3fcb5415
+E 80000000 3e800000 00000000 7f7fffff 0 0 0 0 1 | init ; apply354 00000000 ; refresh360sp 7f7fffff
+E 41084815 3ee10cfd 00000000 3e800000 1 1 0 0 1 | -
+E 3ecccccd d01d4f85 c012ab81 3ecccccd 1 0 0 0 1 | init ; apply354 d01d4f85 ; refresh360sp 3ecccccd
+E 3e0820c4 3e800000 00000000 42b41b39 0 0 0 1 0 | init ; apply354 3e0820c4 ; refresh360st 42b41b39
+E 3f800000 bf9dc7d3 00000000 c02f7109 1 0 0 1 1 | init ; apply354 bf9dc7d3 ; refresh360st c02f7109
+E 42bd5bef af25a1ca 00000000 3ecccccd 1 0 0 0 1 | init ; apply354 af25a1ca ; refresh360sp 3ecccccd
+E 4250bff1 3f800000 ebaac857 409e80c4 1 0 1 1 0 | refresh358 3f800000 ; refresh360st 409e80c4
+E 6024ddc1 3e800000 00000000 3fb2297c 1 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 3fb2297c
+E 3f800000 40800000 00000000 80000000 0 0 0 1 0 | init ; apply354 3f800000 ; refresh360st 80000000
+E 429b4dfa 428eeb1b 3ecccccd 3e800000 0 0 0 0 0 | init ; apply354 429c1ac6 ; init ; apply358 3e800000
+E 3dcccccd 00000001 00000000 410b6728 0 0 0 1 0 | init ; apply354 3dcccccd ; refresh360st 410b6728
+E 3ecccccd 3dcccccd 00000000 4254b987 0 0 0 1 0 | init ; apply354 3ecccccd ; refresh360st 4254b987
+E 700cc6f8 b6467558 08723205 24a71178 1 0 0 0 0 | init ; apply354 b6467558 ; init ; apply358 24a71178
+E 3ecccccd 3f800000 00000000 7fc00000 1 0 0 1 1 | init ; apply354 3f800000 ; refresh360st 7fc00000
+E 3f1e4daf 41cee166 00000000 40375eca 1 0 0 0 0 | init ; apply354 41cee166 ; init ; apply358 40375eca
+E 3e800000 3f800000 3ecccccd 429b4d2f 1 0 1 0 0 | refresh358 3f800000 ; init ; apply358 429b4d2f
+E 3f467722 42bf112f 00000001 3ecccccd 0 0 0 0 0 | init ; apply354 3f467722 ; init ; apply358 3ecccccd
+E 4013891e 40087021 00000000 f96eada4 1 0 0 1 1 | init ; apply354 40087021 ; refresh360st f96eada4
+E 3dcccccd 40b56f4a 00000000 7fc00000 0 0 1 1 0 | refresh358 3dcccccd ; refresh360st 7fc00000
+E 7f800000 3f675695 00000000 3dcccccd 0 1 0 1 1 | -
+E 84360205 7f800000 00000000 3dcccccd 0 0 0 0 0 | init ; apply354 84360205 ; init ; apply358 3dcccccd
+E 41000000 302764e9 00000000 3e800000 0 0 1 0 0 | refresh358 41000000 ; init ; apply358 3e800000
+E 3e800000 3e800000 00000000 3dcccccd 1 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 3dcccccd
+E 40400000 3f800000 00000000 3ff92d06 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 3ff92d06
+E 7fc00000 079e0831 41200000 3f800000 0 0 0 0 0 | init ; apply354 7fc00000 ; init ; apply358 3f800000
+E 3f800000 7f7fffff 00000000 40240a72 1 0 1 1 0 | refresh358 7f7fffff ; refresh360st 40240a72
+E 3f5344d5 3f800000 00000000 3ecccccd 0 0 0 1 1 | init ; apply354 3f5344d5 ; refresh360st 3ecccccd
+E bf800000 3f170fcb 00000000 3e800000 1 0 0 0 1 | init ; apply354 3f170fcb ; refresh360sp 3e800000
+E c009f4bc 3e800000 00000000 41325665 0 0 1 0 1 | refresh358 c009f4bc ; refresh360sp 41325665
+E 3f800000 7f800000 00000000 3f800000 1 0 1 1 0 | refresh358 7f800000 ; refresh360st 3f800000
+E 42951793 fc1b8d38 3e800000 3dcccccd 0 0 1 0 1 | refresh358 42959793 ; refresh360sp 3dcccccd
+E 3e3112ab 3e800000 00000000 3dcccccd 1 0 0 0 1 | init ; apply354 3e800000 ; refresh360sp 3dcccccd
+E 3dcccccd 42bb6ded 00000000 41200000 0 0 0 0 1 | init ; apply354 3dcccccd ; refresh360sp 41200000
+E 3dcccccd 41100000 3f5d2545 bf800000 1 0 0 0 0 | init ; apply354 41100000 ; init ; apply358 bf800000
+E c00d3442 3f800000 41000000 409a3bd1 0 0 0 0 0 | init ; apply354 40b965df ; init ; apply358 409a3bd1
+E 3f800000 413fb7be 00000000 3ecccccd 0 1 0 1 0 | -
+E bfe38ab0 425a9a50 00000000 a70d7eb7 1 0 0 0 0 | init ; apply354 425a9a50 ; init ; apply358 a70d7eb7
+E 00000000 b3f9085a 00000000 41f4efed 0 0 0 0 1 | init ; apply354 00000000 ; refresh360sp 41f4efed
+E 00000000 3ecccccd 00000000 41092ee8 1 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 41092ee8
+E 3f3d2db4 3e520ada 0e712fce 3dcccccd 1 0 1 0 0 | refresh358 3e520ada ; init ; apply358 3dcccccd
+E 3f800000 3f1f328d 00000000 3f9fd217 0 0 1 0 0 | refresh358 3f800000 ; init ; apply358 3f9fd217
+E 3dcccccd 40b61b4b 00000000 3f800000 0 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 3f800000
+E c01c6cbe 4141996c 3dcccccd 80000000 1 0 0 0 1 | init ; apply354 4141996c ; refresh360sp 80000000
+E c01b0660 3f01cf68 3f800000 bfab9629 1 0 0 0 1 | init ; apply354 3f01cf68 ; refresh360sp bfab9629
+E 9e3abd0e 3f96c473 3f800000 3e800000 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 3e800000
+E 3ecccccd 7f800000 00000000 40e00000 1 0 0 0 0 | init ; apply354 7f800000 ; init ; apply358 40e00000
+E 403153e8 3f800000 00000000 3ecccccd 0 0 0 1 0 | init ; apply354 403153e8 ; refresh360st 3ecccccd
+E 3f77e7c0 3dcccccd 00000000 00000000 0 1 0 0 0 | -
+E 41100000 4129af93 3e800000 78c1eb29 0 0 0 0 0 | init ; apply354 41140000 ; init ; apply358 78c1eb29
+E 40b60691 3ecccccd 00000000 428185a3 1 0 0 0 1 | init ; apply354 3ecccccd ; refresh360sp 428185a3
+E 3f800000 3e800000 00000000 411e28c1 0 1 0 0 0 | -
+E e9b61f8c 3f800000 00000000 42323cf7 0 0 0 1 0 | init ; apply354 e9b61f8c ; refresh360st 42323cf7
+E 3e07063c 41abb91d 00000000 3e4ad5bf 0 0 1 0 0 | refresh358 3e07063c ; init ; apply358 3e4ad5bf
+E 3f800000 3f800000 3e800000 87580e6d 1 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 87580e6d
+E 3f10abf8 bfb0f0b6 00000000 3f800000 0 0 0 0 1 | init ; apply354 3f10abf8 ; refresh360sp 3f800000
+E 3f800000 bea35a42 00000000 0a686162 1 0 1 0 1 | refresh358 bea35a42 ; refresh360sp 0a686162
+E 8df43cf4 7f7fffff 00000000 3dcccccd 1 0 0 0 0 | init ; apply354 7f7fffff ; init ; apply358 3dcccccd
+E 3ecccccd 42a9d982 00000000 3ecccccd 1 0 1 0 0 | refresh358 42a9d982 ; init ; apply358 3ecccccd
+E 7e315f4e 407410a5 00000000 42abad60 0 0 1 1 0 | refresh358 7e315f4e ; refresh360st 42abad60
+E 40ae5061 40aaff4f 3f800000 400f65f7 0 0 0 0 0 | init ; apply354 40ce5061 ; init ; apply358 400f65f7
+E 4ee99a23 bf5805a4 562e21f7 426e0c03 1 0 1 1 0 | refresh358 bf5805a4 ; refresh360st 426e0c03
+E 41bd6b30 00000000 00000000 7f7fffff 1 0 0 1 1 | init ; apply354 00000000 ; refresh360st 7f7fffff
+E 40e023a6 3e800000 00000000 c0102df4 1 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 c0102df4
+E 3ecccccd 3ecccccd 00000000 3e800000 1 0 0 1 0 | init ; apply354 3ecccccd ; refresh360st 3e800000
+E 40e00000 7f800000 00000000 7331d670 1 0 0 0 0 | init ; apply354 7f800000 ; init ; apply358 7331d670
+E 40c00000 3ecccccd 00000000 41276c52 1 0 0 0 1 | init ; apply354 3ecccccd ; refresh360sp 41276c52
+E 40a657ad 00000000 3ea3388b 40238a9f 0 0 0 1 0 | init ; apply354 40b08b35 ; refresh360st 40238a9f
+E 3dcccccd 3dcccccd 796b006b 3dcccccd 1 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 3dcccccd
+E 42928cde 00000000 3f800000 3e2ad266 1 0 0 0 0 | init ; apply354 00000000 ; init ; apply358 3e2ad266
+E 1e7b86a8 41100000 3f800000 b8fa442a 1 0 0 0 0 | init ; apply354 41100000 ; init ; apply358 b8fa442a
+E 3ecccccd c005f13d 428e178a 3e800000 0 0 0 0 0 | init ; apply354 428ee456 ; init ; apply358 3e800000
+E 3df88555 3f800000 00000000 3e75b9fa 1 1 0 0 1 | -
+E 3ecccccd 3e800000 3ecccccd 3f9df259 0 1 1 0 0 | -
+E 41aa552c 3f800000 00000000 c01cb800 0 0 0 0 1 | init ; apply354 41aa552c ; refresh360sp c01cb800
+E 3dcccccd 40a00000 00000000 bf8b9d0a 1 0 0 1 0 | init ; apply354 40a00000 ; refresh360st bf8b9d0a
+E b1d2af0a 3f113620 00000000 3ecccccd 1 0 0 0 0 | init ; apply354 3f113620 ; init ; apply358 3ecccccd
+E 3f227144 4130ba2b 00000000 c02221ba 0 0 1 0 0 | refresh358 3f227144 ; init ; apply358 c02221ba
+E 4b6f2baf 3dcccccd 00000000 3e5a975c 1 0 0 0 0 | init ; apply354 3dcccccd ; init ; apply358 3e5a975c
+E 7f800000 3e8ed98b 00000000 3ece1eaf 1 0 0 0 0 | init ; apply354 3e8ed98b ; init ; apply358 3ece1eaf
+E a47572b4 00000001 00000000 422a105c 0 0 0 1 0 | init ; apply354 a47572b4 ; refresh360st 422a105c
+E 3f800000 3ecccccd 3e800000 3f800000 0 0 0 0 0 | init ; apply354 3fa00000 ; init ; apply358 3f800000
+E 41400000 3e800000 793ea7f5 41100000 0 1 0 1 0 | -
+E 3f800000 bf1b4139 00000000 3e800000 1 0 0 1 0 | init ; apply354 bf1b4139 ; refresh360st 3e800000
+E 80000000 8eface0c 00000000 f67707b1 0 1 1 1 0 | -
+E 00000001 3e800000 00000000 41006710 1 0 1 0 0 | refresh358 3e800000 ; init ; apply358 41006710
+E 3ed81cdb 3ecccccd 3f800000 6c14f536 1 0 0 1 0 | init ; apply354 3ecccccd ; refresh360st 6c14f536
+E 3e800000 3fde4983 00000000 40d33c88 0 0 0 0 0 | init ; apply354 3e800000 ; init ; apply358 40d33c88
+E 3461dedc 3dcccccd 00000000 42b7709a 1 0 0 1 0 | init ; apply354 3dcccccd ; refresh360st 42b7709a
+E 41390549 3ebe4120 3f800000 384b17d3 0 0 0 0 0 | init ; apply354 41490549 ; init ; apply358 384b17d3
+E 93a77699 3f700275 3e800000 3e800000 1 0 0 0 0 | init ; apply354 3f700275 ; init ; apply358 3e800000
+E 3e800000 40236341 00000000 3fab72c6 0 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 3fab72c6
+E 40a00000 3f800000 19170623 aad40bf9 1 0 0 0 1 | init ; apply354 3f800000 ; refresh360sp aad40bf9
+E 3f800000 d8d300de 3f800000 c8cc36cf 1 0 1 0 1 | refresh358 d8d300de ; refresh360sp c8cc36cf
+E 3f2c5d1c 3dcccccd 0c0cf07a 3ecccccd 0 0 0 0 1 | init ; apply354 3f2c5d1c ; refresh360sp 3ecccccd
+E 3f800000 3dcccccd 00000000 3ecccccd 0 0 0 0 1 | init ; apply354 3f800000 ; refresh360sp 3ecccccd
+E 3ecccccd 3ebe27d0 00000000 3dcccccd 0 0 0 0 1 | init ; apply354 3ecccccd ; refresh360sp 3dcccccd
+E 410901a5 80000000 3d2f128d 3eaef3ff 1 0 1 0 0 | refresh358 80000000 ; init ; apply358 3eaef3ff
+E f58a85b8 403d4227 00000000 3f800000 1 0 1 1 1 | refresh358 403d4227 ; refresh360st 3f800000
+E 7fc00000 408506ff 00000000 3ecccccd 0 0 0 0 0 | init ; apply354 7fc00000 ; init ; apply358 3ecccccd
+E 3e3b3ea3 3fbd1ced 00000000 bf49ff63 0 0 0 1 0 | init ; apply354 3e3b3ea3 ; refresh360st bf49ff63
+E 66779282 4116d626 00000000 3ecccccd 1 0 1 1 0 | refresh358 4116d626 ; refresh360st 3ecccccd
+E 4011b206 3d10ab8f 00000000 3e800000 1 0 0 1 0 | init ; apply354 3d10ab8f ; refresh360st 3e800000
+E 40400000 7fc00000 00000000 42b2f105 0 0 1 0 0 | refresh358 40400000 ; init ; apply358 42b2f105
+E 3f9de36b 7f7fffff 00000000 41100000 0 0 0 0 0 | init ; apply354 3f9de36b ; init ; apply358 41100000
+E 42613895 3e800000 00000000 3e800000 0 0 1 0 0 | refresh358 42613895 ; init ; apply358 3e800000
+E 3fb4e6ba 3f8b425f bf800000 be63e812 0 0 0 1 0 | init ; apply354 3ed39ae8 ; refresh360st be63e812
+E 3f5d18c5 3ec14a66 00000000 3ecccccd 1 0 1 1 1 | refresh358 3ec14a66 ; refresh360st 3ecccccd
+E 3f800000 3dcccccd 3f800000 4122bd19 1 0 0 1 1 | init ; apply354 3dcccccd ; refresh360st 4122bd19
+E 9678e39e 3f408993 00000000 3dcccccd 0 0 0 1 0 | init ; apply354 9678e39e ; refresh360st 3dcccccd
+E 3e800000 c2df1137 00000000 3f027ec2 0 0 0 1 0 | init ; apply354 3e800000 ; refresh360st 3f027ec2
+E f1108389 bf7ef9aa 00000000 3f800000 0 0 0 0 0 | init ; apply354 f1108389 ; init ; apply358 3f800000
+E a6294496 4204bba6 00000000 fb92113f 0 0 1 0 0 | refresh358 a6294496 ; init ; apply358 fb92113f
+E 9ac272d1 3f569ce1 3ecccccd 3ecccccd 1 0 0 1 0 | init ; apply354 3f569ce1 ; refresh360st 3ecccccd
+E 3f77d717 4024050f 00000000 3d668934 0 0 1 0 0 | refresh358 3f77d717 ; init ; apply358 3d668934
+E 429943b5 3e13ff1b 3dcccccd 3f800000 1 0 0 1 0 | init ; apply354 3e13ff1b ; refresh360st 3f800000
+E 3ecccccd 3d08bd79 00000000 bf800000 1 1 1 0 0 | -
+E 7cee8666 bffec5f1 00000000 3f6f75dd 0 0 0 0 1 | init ; apply354 7cee8666 ; refresh360sp 3f6f75dd
+E 8abc3dbc 3fe7bd84 00000000 d54c5a02 1 0 0 1 0 | init ; apply354 3fe7bd84 ; refresh360st d54c5a02
+E bf800000 3f800000 00000000 3e800000 0 0 0 1 1 | init ; apply354 bf800000 ; refresh360st 3e800000
+E 3e800000 3e800000 00000000 00000000 1 0 0 0 1 | init ; apply354 3e800000 ; refresh360sp 00000000
+E 591bdd58 3f800000 3ecccccd 3dcccccd 0 0 0 1 1 | init ; apply354 591bdd58 ; refresh360st 3dcccccd
+E 35e49c4c 40e514f8 00000000 41100000 1 0 0 0 0 | init ; apply354 40e514f8 ; init ; apply358 41100000
+E 3f800000 365daa81 00000000 3fd8f0eb 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 3fd8f0eb
+E cf9af8ae 3ecccccd 00000000 3e91d4ea 1 0 0 1 0 | init ; apply354 3ecccccd ; refresh360st 3e91d4ea
+E 41c114b0 80000000 00000000 3ecccccd 0 0 0 0 0 | init ; apply354 41c114b0 ; init ; apply358 3ecccccd
+E 42643fcf 3f800000 00000000 3e800000 1 0 1 0 0 | refresh358 3f800000 ; init ; apply358 3e800000
+E 7f7fffff 3f800000 bff8094e be80a183 0 0 0 0 0 | init ; apply354 7f7fffff ; init ; apply358 be80a183
+E 3edcca7f 3f77c92a 00000000 3ecccccd 0 1 1 0 0 | -
+E 3dcccccd 3dcccccd 00000000 3dcccccd 0 0 1 0 0 | refresh358 3dcccccd ; init ; apply358 3dcccccd
+E 3f800000 3f800000 00000000 3dc2cb2a 1 0 0 1 1 | init ; apply354 3f800000 ; refresh360st 3dc2cb2a
+E c33ddfe3 411f6864 3ecccccd 049a5658 1 0 0 0 1 | init ; apply354 411f6864 ; refresh360sp 049a5658
+E 4025a8a9 8bd22d99 00000000 3e800000 1 0 0 0 0 | init ; apply354 8bd22d99 ; init ; apply358 3e800000
+E 3f049f64 3ecccccd 40000000 3b593184 0 1 1 0 0 | -
+E 651aba48 3e800000 00000000 7fc00000 0 1 0 1 0 | -
+E 33002ff1 7f7fffff 00000000 41bd9237 1 0 0 0 0 | init ; apply354 7f7fffff ; init ; apply358 41bd9237
+E 3f800000 3d2bd2a4 00000000 3f800000 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 3f800000
+E 40bbb9c2 4237a25f 00000000 3dcccccd 1 0 0 0 0 | init ; apply354 4237a25f ; init ; apply358 3dcccccd
+E 41000000 3f800000 00000000 7f7fffff 0 0 0 0 1 | init ; apply354 41000000 ; refresh360sp 7f7fffff
+E 40000000 3ecccccd 427ce157 80000000 1 0 0 0 0 | init ; apply354 3ecccccd ; init ; apply358 80000000
+E 3f800000 a2b169da 00000000 bfd5e3f2 1 1 0 0 0 | -
+E 00000000 3f800000 00000001 3f143604 1 0 1 0 0 | refresh358 3f800000 ; init ; apply358 3f143604
+E 4127e1a9 5562277a 00000000 3e800000 1 0 0 0 0 | init ; apply354 5562277a ; init ; apply358 3e800000
+E 00569b15 40af9756 41000000 3ecccccd 1 0 1 0 0 | refresh358 40af9756 ; init ; apply358 3ecccccd
+E 00000001 40ca1a38 00000000 42bb8a87 0 0 0 1 0 | init ; apply354 00000000 ; refresh360st 42bb8a87
+E 3f800000 7f800000 40a00000 3d8987cd 1 0 0 0 0 | init ; apply354 7f800000 ; init ; apply358 3d8987cd
+E 3f800000 3db6ae58 00000000 00000000 0 0 0 0 0 | init ; apply354 3f800000 ; init ; apply358 00000000
+E 40c00000 3f800000 00000000 00000001 0 0 0 1 1 | init ; apply354 40c00000 ; refresh360st 00000001
+E 42920442 2ff57c6d 3f55ff9e 3f800000 0 0 0 1 0 | init ; apply354 4293b041 ; refresh360st 3f800000
+E 42b14b5c 40e00000 41400000 5d2e8230 1 0 1 0 0 | refresh358 40e00000 ; init ; apply358 5d2e8230

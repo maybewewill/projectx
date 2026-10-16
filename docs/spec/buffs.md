@@ -103,3 +103,24 @@ Unicorn (`tools/emu/buffs_emu.py`, three modes because the refresh mode patches 
 compare 3,600 cases (3 routines x 1,200, edge floats and random), refresh 2,400, set-duration 1,200, the scan period
 (`0x3F000000`). Rust: `crates/sim/tests/buff_vectors.rs` (gated; 0 mismatches), `crates/sim/tests/auras.rs` (5 behaviour
 tests), `crates/sim/tests/ability_natives.rs` (timed life removal kills; unlimited does not).
+
+## 8. V5 verification of the aura stat effects (Unicorn, 0 mismatches)
+
+`tools/emu/v5_aura_emu.py` runs the real apply routines on a fake buff and owner, 600 cases (100 per routine), vectors
+`tests/data/v5/aura.txt`, test `tests/v5_aura_vectors.rs` (`auras::aura_stat_amount`, `auras::aura_gate_suspends`):
+Devotion armor `0x6F1ACFD0`, Endurance attack speed `0x6F1AD150` and movement `0x6F1AD240`, Unholy movement `0x6F1AD700` and
+life regeneration `0x6F1AD810`, Brilliance mana regeneration `0x6F1AC990`. CONFIRMED:
+
+* The amount the sink gets is the strength as it is, or with the percent flag `soft_mul(strength, stat)` (strength first): the
+  type record's armor (`0x6F29BF60`, Devotion), **unit slot `0x130` = the max life** (Unholy, resolves the old "max life vs
+  max mana" doubt) and the max of the agile mana property (`0x6F4773E0` on `unit+0xB8`, Brilliance). Percent flag: Devotion and
+  Unholy life regeneration bit `0x100` of the buff flags, Brilliance bit `0x200` (its bit `0x100` is the applied flag).
+* Each component applies once (applied bit: Devotion `0x200`, Endurance attack `0x100` / movement `0x200`, Unholy movement
+  `0x200`, Unholy regeneration `0x400`, Brilliance `0x100`); the bit is set **before** the illusion gate, so a suspended
+  application is not retried until the undo clears it.
+* The illusion gates read Misc keys, default 0 (illusions are suspended): `IllusionsGetDefenseBonus` (Devotion),
+  `IllusionsGetMoveSpeedBonus` (Unholy movement, Endurance movement in its callers `0x6F1AD200`), `IllusionsCanRestoreLife`
+  (Unholy regeneration), `IllusionsCanRestoreMana` (Brilliance), `IllusionsGetAttackSpeedBonus` (Endurance attack speed, caller
+  gate `0x6F1AD110`), `IllusionsGetAttackBonus` (Command, `0x6F1ACC17`). The model's single "illusion = suspended" matches the
+  default data; per-key overrides are not wired. The Endurance applies `0x6F1AD150` / `0x6F1AD240` themselves have no gate.
+* Not run: the aura emitter, the target filter (Brilliance's "has mana" filter), the regeneration modifier objects.

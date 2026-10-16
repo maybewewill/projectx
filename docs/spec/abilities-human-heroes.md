@@ -565,3 +565,27 @@ its stage-1 delay as for ordinary spells, `DataA` damage, `DataB` interval 0.33 
 **Open**: the offset placement of Mass Teleport units and Water Elemental summons, what `neutral` selects in the
 relation masks, the Acar hero-corpse path of Resurrection, the Siphon Mana and Flame Strike arithmetic, the unit-side
 meaning of slot `0x398`.
+
+## 18. V5 verification (Unicorn against the original, 0 mismatches required)
+
+* **Thunder Clap (`AHtc`) CONFIRMED.** The vtables of `CAbilityThunderClap` (`0x6F8F67C4`) and `CAbilityStomp` (`0x6F8F6C04`)
+  were compared slot by slot: `0x428` (`0x6F1608B0`), `0x42C` (`0x6F18F880`), `0x434` (`0x6F176CD0`), `0x418`, `0x424`, `0x330`,
+  `0x338`, `0x348` are the same functions; only `0x430` (the slow `0x6F18A930` here, the stun `0x6F18ABF0` for Stomp) and
+  `0x308` (order id) differ. So the area filter and the per-unit body `0x6F1607B0` are War Stomp's (orc spec section 13).
+  Run: `THUNDER_VT=1 tools/emu/stomp_emu.py` (the real callback on a fake Thunder Clap ability, slot `0x430` recorded) 400
+  cases, 0 mismatches (`tests/data/human_heroes/thunder_unit.txt`, test `thunder_clap_per_unit_body_matches_the_original`),
+  plus the slow's own run (400 cases, section 17). **Bug fixed:** the model filtered "enemy, no building, no flyer" by hand
+  and sent the full `DataA` to spell-immune units; `thunder_clap` now uses `orc::stomp_word` / `area_predicate` (enemy and
+  neutral relations, `targs` ground/organic bits) and the zero-record path (amount 0.0, flags `0x50`, no slow) for an
+  invulnerable or spell-immune unit. Default `targs` `ground,neutral,organic` (`THUNDER_CLAP_TARGS_DEFAULT`).
+* **Summon Water Elemental (`AHwe`) CONFIRMED (loop).** The real summon loop `0x6F163390` (slot `0x3C0` of
+  `CAbilityWaterElemental`, `CAbilityScout`, `CAbilitySpiritOfVengeance`) ran in Unicorn on a fake ability with a real level
+  record: 450 cases (150 per vtable), 0 mismatches (`tools/emu/v5_summon_emu.py`, `tests/data/human_heroes/summon_loop.txt`,
+  test `summon_loop_matches_the_original`). Count `F2I(DataA)`; duration `Dur + ability+0x9C` (soft add, no hero test); creator
+  flag `0x502` for a zero duration else `2`; creator arguments (owner index, the `Area` pointer, constant 1, flag) and the
+  per-unit order link `0x6F052EC0`, class slot `0x3E4` (pointer to the duration), release. The same wrapper `0x6F1D27A0` as
+  Feral Spirit, so the placement is `orc::feral_place` (caster + rotation by the facing times `(Area, 0, 0)`; Feral's `P` run,
+  400 cases). **Bugs fixed:** the model put the units on the caster ("the offset argument was not resolved": it is `Area`) and
+  passed the facing in radians where `build` takes degrees. `summon` (also used by Phoenix, Scout, Spirit of Vengeance and the
+  neutral water elementals) now uses `feral_plan` / `feral_place`. Not run: the class slot `0x3E4` bodies (buff creation, Unicorn
+  22 cases for the timed-life apply in `abilities-2.md`), the unit creator's own placement search.

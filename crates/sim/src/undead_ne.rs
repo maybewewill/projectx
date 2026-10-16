@@ -1420,22 +1420,60 @@ pub fn thorns_reflect(strength: F32, amount: F32, reduced: F32, percent: bool) -
 struct FrostArmor {
     unit: ObjKey,
     armor: F32,
-    /// The ability level the chill takes its durations from (Dur / HeroDur, the Misc strengths are the Frost Nova's).
-    chill: SpellLevel,
+    /// The chill duration the buff stored at cast (holder `+0xD0`): `HeroDur` when the ARMORED unit is a hero, else
+    /// `Dur + ability+0x9C` (V5, CONFIRMED).
+    chill_duration: F32,
 }
 
-/// `CAbilityFrostArmor` effect (unit target, `0x6F0BA520`): the buff creator receives `(info, DataA, DataB, Dur or HeroDur)`
-/// (CONFIRMED by a Unicorn run of the effect): the buff `'BUfa'` lasts DataA (45 s: the buff creator's duration argument),
-/// adds DataB armor (the strength cell, LIKELY) and chills melee attackers for Dur / HeroDur (`CBuffFrostArmor`'s event
-/// handler `0x6F0BA3F0` applies the Frost Nova buff `'Bfro'`, id getter `0x6F1998D0`, to a non-invulnerable attacker of a
-/// basic attack). UNSURE: the sign and role of the armor cell, the autocast variant `AUfu`.
+/// The numbers `CAbilityFrostArmor`'s effect `0x6F0BA520` hands to the buff (CONFIRMED, V5: the real effect and creator ran
+/// in Unicorn, 400 cases, 0 mismatches, `tools/emu/v5_frostarmor_emu.py`; the apply `0x6F0A1280` takes `DataA` as the buff's
+/// own duration, stores the chill duration in the first holder (`+0xCC`, value `+0xD0`) and `DataB` in the second (`+0xD4`,
+/// value `+0xD8`, the armor sink `0x6F2769C0` in `0x6F09E080`)): the hero test is made on the unit that GETS the armor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrostArmorCast {
+    pub duration: F32,
+    pub armor: F32,
+    pub chill_duration: F32,
+}
+
+pub fn frost_armor_cast(level: &SpellLevel, hero_target: bool, extra: F32) -> FrostArmorCast {
+    FrostArmorCast {
+        duration: level.data[0],
+        armor: level.data[1],
+        chill_duration: crate::cast::effect_duration(level, hero_target, extra),
+    }
+}
+
+/// The retaliation handler's gates (`0x6F0BA3F0`, CONFIRMED, V5, Unicorn 400 cases, `tools/emu/v5_frostarmor_h_emu.py`), in
+/// the original order: the record's ignore flag (bit 0, ranged), a class other than `0x10` (a basic attack), an invulnerable
+/// attacker (slot `0x11C`), a spell-immune attacker (`0x6F28D750`). Passing all runs the effect and the chill.
+pub fn frost_armor_hit_runs(ranged_flag: bool, class: u32, attacker_invulnerable: bool, attacker_immune: bool) -> bool {
+    !ranged_flag && class == 0x10 && !attacker_invulnerable && !attacker_immune
+}
+
+/// The chill the handler puts on the attacker (`CBuffFrost` slots `0x35C` new / `0x360` refresh, same Misc strengths as Frost
+/// Nova): the stored duration, strengths zero when the ARMORED unit is an illusion (`unit+0x5C` bit 30 is the flag argument).
+fn frost_armor_chill(gm: &mut Game, attacker: ObjKey, duration: F32, armored_illusion: bool) {
+    if !gm.object_is_live_unit(attacker) {
+        return;
+    }
+    let (mv, at) = if armored_illusion { (F32::ZERO, F32::ZERO) } else { gm.spells_hero_state_mut().frost_misc };
+    let effect = BuffEffect::Slow { move_delta: frost_strength(mv), attack_delta: frost_strength(at) };
+    gm.add_spell_buff(attacker, BUFF_FROST_NOVA, effect, duration);
+}
+
+/// `CAbilityFrostArmor` effect (unit target, `0x6F0BA520`): see [`frost_armor_cast`]. The buff `'BUfa'` lasts `DataA`, adds
+/// `DataB` armor and chills melee attackers (`CBuffFrostArmor`'s event handler `0x6F0BA3F0`, [`frost_armor_hit_runs`]).
+/// UNSURE: the autocast variant `AUfu`, the registration point of the handler.
 fn frost_armor(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, target: ObjKey) {
     let _ = caster;
     let mut gm = game.borrow_mut();
     if !gm.object_is_live_unit(target) {
         return;
     }
-    let serial = gm.add_spell_buff(target, BUFF_FROST_ARMOR, BuffEffect::Marker, level.data[0]);
+    let hero = gm.unit(target).hero.is_some() || is_hero_id(gm.unit(target).type_id);
+    let cast = frost_armor_cast(level, hero, F32::ZERO);
+    let serial = gm.add_spell_buff(target, BUFF_FROST_ARMOR, BuffEffect::Marker, cast.duration);
     if serial == 0 {
         return;
     }
@@ -1446,9 +1484,12 @@ fn frost_armor(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, target:
             gm.add_armor(f.unit, arith::neg(f.armor));
         }
     }
-    gm.add_armor(target, level.data[1]);
-    gm.spells_hero_state_mut().frost_armors.insert(serial, FrostArmor { unit: target, armor: level.data[1], chill: *level });
-    gm.timers_start_hero(level.data[0].to_f32().max(MIN_PERIOD_SECONDS), TICK_FROST_ARMOR_END, target, serial);
+    gm.add_armor(target, cast.armor);
+    gm.spells_hero_state_mut().frost_armors.insert(
+        serial,
+        FrostArmor { unit: target, armor: cast.armor, chill_duration: cast.chill_duration },
+    );
+    gm.timers_start_hero(cast.duration.to_f32().max(MIN_PERIOD_SECONDS), TICK_FROST_ARMOR_END, target, serial);
 }
 
 fn frost_armor_end(game: &RefCell<Game>, aux: u32) {
@@ -1477,15 +1518,16 @@ impl Game {
             return died;
         }
         // Frost Armor: the chill (a live buff is a record).
-        let chills: Vec<SpellLevel> = self
+        let chills: Vec<F32> = self
             .spells_hero_state_mut()
             .frost_armors
             .values()
             .filter(|f| f.unit == victim)
-            .map(|f| f.chill)
+            .map(|f| f.chill_duration)
             .collect();
-        for level in chills {
-            apply_frost_slow(self, attacker, &level);
+        let armored_illusion = self.unit(victim).illusion;
+        for duration in chills {
+            frost_armor_chill(self, attacker, duration, armored_illusion);
         }
         // Thorns: the strongest of the victim's own Spiked Carapace and the Thorns Auras of friends within Area.
         let mut strength: Option<F32> = None;
@@ -1535,19 +1577,75 @@ fn sleep(game: &RefCell<Game>, caster: ObjKey, level: &SpellLevel, target: ObjKe
         return;
     }
     let hero = gm.unit(target).hero.is_some() || is_hero_id(gm.unit(target).type_id);
-    let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
-    gm.add_spell_buff(target, BUFF_SLEEP, BuffEffect::Sleep, dur);
-    // The second buff (S33, CONFIRMED: `0x6F1FBA80` looks up `'BUst'` and `'BUsp'` after the main buff): DataA is the
-    // duration handed to it. A target that already has `'BUst'` gets that buff refreshed (BuffID list index 2),
-    // otherwise `'BUsp'` (index 1; `CBuffSleepPause`, ctor `0x6F1F9DA0`) is created or refreshed. While either exists
-    // damage does not wake the sleeper. A zero DataA gives a buff without a timer in the original (UNSURE what ends
-    // it); the model applies none.
-    let keeper = if gm.unit(target).buffs.iter().any(|b| b.base == BUFF_SLEEP_STATIONARY) {
-        BUFF_SLEEP_STATIONARY
+    let has = |gm: &Game, code: u32| gm.unit(target).buffs.iter().any(|b| b.base == code);
+    let plan = sleep_plan(
+        level,
+        hero,
+        F32::ZERO,
+        false,
+        has(&gm, BUFF_SLEEP),
+        has(&gm, BUFF_SLEEP_STATIONARY),
+        has(&gm, BUFF_SLEEP_PAUSE),
+    );
+    for ev in plan {
+        match ev {
+            SleepEvent::MainRefresh(d) | SleepEvent::MainNew(d) => {
+                gm.add_spell_buff(target, BUFF_SLEEP, BuffEffect::Sleep, d);
+            }
+            SleepEvent::KeeperStunRefresh(d) => {
+                gm.add_spell_buff(target, BUFF_SLEEP_STATIONARY, BuffEffect::Marker, d);
+            }
+            SleepEvent::KeeperPauseRefresh(d) | SleepEvent::KeeperPauseNew(d) => {
+                gm.add_spell_buff(target, BUFF_SLEEP_PAUSE, BuffEffect::Marker, d);
+            }
+        }
+    }
+}
+
+/// What the Sleep effect `0x6F1FBA80` does to its target, in order (CONFIRMED, V5: the real effect ran in Unicorn, 400
+/// cases, 0 mismatches, `tools/emu/v5_sleep_emu.py`, `tests/data/v5/sleep_effect.txt`). A target with the dead flag
+/// (`+0x5C & 0x100`) is left alone. The main buff `BUsl` lasts `HeroDur` for a hero else `Dur + ability+0x9C`
+/// (`0x6F02F880`): a live one is refreshed (slot `0x358`), otherwise `CBuffSleep` is created and applied (slot `0x354`). Then
+/// the keeper: `BUst` present: refreshed (slot `0x360`) with `DataA` as its duration; else `BUsp` present: refreshed with
+/// `DataA`; else a new `CBuffSleepPause` is created and applied (slot `0x358`) with `DataA`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SleepEvent {
+    MainRefresh(F32),
+    MainNew(F32),
+    KeeperStunRefresh(F32),
+    KeeperPauseRefresh(F32),
+    KeeperPauseNew(F32),
+}
+
+pub fn sleep_plan(
+    level: &SpellLevel,
+    hero: bool,
+    extra: F32,
+    dead: bool,
+    has_sleep: bool,
+    has_stun_keeper: bool,
+    has_pause_keeper: bool,
+) -> Vec<SleepEvent> {
+    if dead {
+        return Vec::new();
+    }
+    let dur = crate::cast::effect_duration(level, hero, extra);
+    let mut out = vec![if has_sleep { SleepEvent::MainRefresh(dur) } else { SleepEvent::MainNew(dur) }];
+    let a = level.data[0];
+    out.push(if has_stun_keeper {
+        SleepEvent::KeeperStunRefresh(a)
+    } else if has_pause_keeper {
+        SleepEvent::KeeperPauseRefresh(a)
     } else {
-        BUFF_SLEEP_PAUSE
-    };
-    gm.add_spell_buff(target, keeper, BuffEffect::Marker, level.data[0]);
+        SleepEvent::KeeperPauseNew(a)
+    });
+    out
+}
+
+/// The wake rule of `CBuffSleep`'s damage handler `0x6F1F6870` (CONFIRMED, V5, Unicorn 400 cases): an amount that is not 0.0
+/// (x87 compare, NaN counts as non-zero) ends the sleep unless the sleeper has `BUst` or `BUsp`.
+pub fn sleep_wakes(amount: F32, has_stun_keeper: bool, has_pause_keeper: bool) -> bool {
+    amount.to_f32() != 0.0 && !has_stun_keeper && !has_pause_keeper
 }
 
 // ---------------------------------------------------------------------------------------------------------------
