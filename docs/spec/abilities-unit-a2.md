@@ -85,3 +85,48 @@ into `spell_levels` with that convention.
 
 Not modelled: `Acha` (Chaos, no data row) and `Achl` (Chaos cargo load: only `UnitID` ncpn; the chaos transformation table
 is not in the level rows).
+
+## Corpses and dispel (Acan, Aast, Advm, Agyd)
+
+Corpses are dead, not removed, non-structure, non-mechanical units (`Game::corpse_ok`). A corpse target is a unit target
+(`hero_extra::target_ok` accepts a dead target for `wants_corpse` classes, one line). Tests:
+`crates/sim/tests/unit_abilities_a2_corpse.rs`.
+
+| Code | Class (parent) | Model | Label |
+|---|---|---|---|
+| Acan | CAbilityCannibalize (ClosestTargetSpell), orders `cannibalize` 852188 (primary getter) and 852535 (cast getter) | the unit stands still and once a second, up to `Dur` (33 s), heals `DataA` ("Hit Points per Second", 10) while its life is below the smaller of its max and `DataB` ("Max Hit Points", 800); the corpse is eaten (removed) when it ends. Moving, dying or being stunned ends it and leaves the corpse. The instant order picks the closest corpse within 500 (search radius not decoded) | UNSURE (stop rules; the original is a channel) |
+| Aast | CAbilityAncestralSpirit (ClosestTargetSpell), orders `ancestralspirit` 852490 / 852491 (getters) | an own non-hero corpse (targs ground, player, dead; closest within `Rng` 350 for the instant order) comes back (`resurrect_unit`) with `DataA` ("Life Restored Factor") of its max life and `DataB` ("Mana Restored Factor") of its max mana | UNSURE (that it resurrects is read from the labels) |
+| Advm | CAbilityDevourMagic (SimpleSpell), order `devourmagic` 852536 (getter) | the Dispel Magic worker (`dispel_one`, smart mode: positive buffs of enemies, negative of the others) on every unit within `Area` of the point; friends are skipped when `DataF` ("Ignore Friendly Buffs") is set; `DataE` ("Summoned Unit Damage", 180) goes to the worker's damage input; each unit that lost a buff or was hurt gives the caster `DataA` life and `DataB` mana, each buff removed `DataC` / `DataD` more | UNSURE |
+| Agyd | CAbilityGraveyard (CAbility) | every `Cool` seconds (15) a dead `UnitID` corpse (ghoul) is made on a ring of radius `DataB` (200) around the unit when fewer than `DataA` (5) lie within `DataC` (250), built and made dead as `CreateCorpse` does | UNSURE |
+
+## Area effects and hero passives (Afla, Ablp, Abli, Aamk)
+
+Tests: `crates/sim/tests/unit_abilities_a2_area.rs`.
+
+| Code | Class (parent) | Model | Label |
+|---|---|---|---|
+| Afla | CAbilityFlare (SimpleSpell), order `flare` 852060 (getter) | point cast (`Rng` 99999 not gated); after `DataB` ("Effect Delay", 0.8 s) a visible fog modifier of radius `Area` opens for the caster's player and closes after `Dur` (15 s), the reveal of `item_abilities` (`pub(crate) reveal`). `DataA` ("Detection Type", 3) is not modelled | LIKELY (reveal), UNSURE (detection) |
+| Ablp / Abli | CAbilityBlightPlacement / CAbilityBlightGrowth | once the unit is complete, blight grows around it by `DataA` ("Expansion Amount", 64) every `Dur` (0.08 s) up to `Area` (350 for Ablp, 768 for the Necropolis/Graveyard alias Abgs whose code is `Abli`); `DataB` ("Creates Blight") blights or clears the 32-unit cells (`Game::blight_circle`). Blight is not removed when the building dies | UNSURE (the cadence is the row read as a step interval) |
+| Aamk | CAbilityAttributeModSkill (Passive) | a hero with it carries `F2I(DataA)` agility, `F2I(DataB)` intelligence and `F2I(DataC)` strength more in its base counters (the same adders and derived-bonus refresh as the attribute bonus items, `change_hero_attributes`); a level change or losing the ability adjusts the difference | LIKELY |
+
+## Still not modelled (reason)
+
+| Code | Reason |
+|---|---|
+| Aall | CAbilityAllied (campaign "Allied" marker: activation radius, interaction type, show buttons): no simulation effect |
+| Aawa, Alea, Aapl, Adta, Acha, Abar | no AbilityData row (Alea, Aapl, Adta, Acha, Abar) or a bare marker (Aawa); the numbers are not in the data |
+| Aimp, Agyb | no data fields in the rows (Impaling Bolt, Gyro Bombs): nothing to compute |
+| Alit | Lightning Attack: graphic delay and duration only (presentation) |
+| Aesn | Sentinel: the owl is an effect (`XEsn`) with no `UnitID`; its lifetime and sight rules are not in the row |
+| Aexh | Exhume Corpses needs the Meat Wagon's corpse cargo (`Amtc`, `Amel`), which `unit_abilities_m.rs` only lists |
+| Aclf | Cloud of Fog: "Attacks Prevented" / chance to miss / speed modifiers on units in an area; the silence class does not state which attacks are stopped |
+| Adef | Defend: needs a damage-taken-by-attack-type sink (piercing 50 %, spells, 30 % deflect) that the damage path does not have |
+| Abof | Balls of Fire (Demolisher): the trigger and shape of the periodic area damage are not in the row |
+| Achl | Chaos Cargo Load: only a `UnitID` (the chaos peon), the conversion table is not in the row |
+| Ahid | Hide: owned by the invisibility module (S44) |
+
+## Unicorn
+
+None run in this batch: every number is a level-record field used as the editor labels name it, and the cores reused
+(`unit_damage_target`, the buff framework, the income changer, `dispel_one`, the Rejuvenation tick) are the ones already
+checked. All labels are therefore LIKELY or UNSURE, none CONFIRMED.

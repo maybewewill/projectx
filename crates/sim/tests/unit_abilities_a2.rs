@@ -204,14 +204,17 @@ fn started() -> ScriptHost {
 
 #[test]
 fn registry_lists_each_modelled_code_once() {
+    let modelled = "Agld Ahar Ahrl Aaha Abgm Aegm Aent Acor Afak Aflk Afsh Afrb Afrz Aliq Adda Aeat Agra Acoa Acoh Acoi Adec Abtl Alam                     Acan Aast Advm Agyd Afla Ablp Abli Aamk";
     let mut seen = std::collections::BTreeSet::new();
-    for i in sim::unit_abilities_a2::ABILITIES {
-        assert!(seen.insert(i.code), "{} listed twice", i.class);
-        assert!(!i.class.is_empty() && !i.note.is_empty());
+    for w in modelled.split_whitespace() {
+        let c = code(w.as_bytes().try_into().unwrap());
+        assert!(sim::unit_abilities_a2::info(c).is_some(), "{w} registered");
+        assert!(seen.insert(c));
+        // a code lives in one batch only
+        assert!(sim::unit_abilities_a::info(c).is_none(), "{w} is also in batch A");
     }
-    for w in ["Agld", "Ahar", "Ahrl", "Aaha", "Abgm", "Aegm", "Aent"] {
-        assert!(sim::unit_abilities_a2::info(code(w.as_bytes().try_into().unwrap())).is_some(), "{w}");
-    }
+    assert_eq!(sim::unit_abilities_a2::ABILITIES.len(), seen.len());
+    assert!(sim::unit_abilities_a2::ABILITIES.iter().all(|i| !i.class.is_empty() && !i.parent.is_empty() && !i.note.is_empty()));
 }
 
 #[test]

@@ -270,6 +270,14 @@ impl Game {
         &self.misc.players[index as usize]
     }
 
+    /// Blights (`add`) or clears the 32-unit cells of the circle of radius `radius` around `(x, y)` (the body of `SetBlight`;
+    /// used by the blight abilities).
+    pub(crate) fn blight_circle(&mut self, x: F32, y: F32, radius: F32, add: bool) {
+        let (x, y) = clamp_point(self.playable(), x, y);
+        let cells = circle_cells(x, y, radius, PATH_CELL);
+        blight_cells(self, &cells, add);
+    }
+
     /// Whether the cell of point `(x, y)` is blighted (`IsPointBlighted`).
     pub fn is_blighted(&self, x: F32, y: F32) -> bool {
         self.misc.blight.contains(&(cell32(x), cell32(y)))

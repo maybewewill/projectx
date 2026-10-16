@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use softfloat::{arith, conv, F32};
 
 use crate::abilities::{buff_predicates, code, BuffPredicates};
+use crate::timer::TimerId;
 use crate::cast::{CastError, CastRec, CastTarget};
 use crate::natives::game::{Game, ObjKey, Payload};
 use crate::natives::ScriptRuntime;
@@ -51,6 +52,14 @@ pub const ABILITIES: &[Info] = &[
     Info { code: code(b"Adec"), class: "CAbilityDecouple", parent: "CAbilitySimpleSpell", sim: Sim::Convert, conf: Conf::Likely, note: "order decouple 852509: the rider splits into the units DataA and DataB (life fraction kept)" },
     Info { code: code(b"Abtl"), class: "CAbilityBattlestations", parent: "CAbilitySpell", sim: Sim::Convert, conf: Conf::Unsure, note: "order battlestations 852099: own UnitID units within Area (busy ones when DataB != 0) go into the burrow's cargo" },
     Info { code: code(b"Alam"), class: "CAbilitySacrificialLamb", parent: "CAbilitySimpleSpell", sim: Sim::Convert, conf: Conf::Unsure, note: "order requestsacrifice 852201 on an own structure: the acolyte is consumed and a Shade appears (the pit's Asac train is not modelled)" },
+    Info { code: code(b"Acan"), class: "CAbilityCannibalize", parent: "CAbilityClosestTargetSpell", sim: Sim::Terrain, conf: Conf::Unsure, note: "orders cannibalize 852188 (closest corpse within 500) and 852535 (target): the unit stands still and heals DataA per second for up to Dur, while below min(max life, DataB); the corpse is eaten when it ends" },
+    Info { code: code(b"Aast"), class: "CAbilityAncestralSpirit", parent: "CAbilityClosestTargetSpell", sim: Sim::Terrain, conf: Conf::Unsure, note: "orders ancestralspirit 852490 (closest own corpse within Rng) and 852491 (target): the non-hero corpse comes back with DataA of its max life and DataB of its max mana" },
+    Info { code: code(b"Advm"), class: "CAbilityDevourMagic", parent: "CAbilitySimpleSpell", sim: Sim::Terrain, conf: Conf::Unsure, note: "order devourmagic 852536 at a point: the Dispel Magic worker on every unit within Area (friends only when DataF is 0); each affected unit gives the caster DataA life and DataB mana, each buff removed DataC and DataD; summoned units take DataE" },
+    Info { code: code(b"Agyd"), class: "CAbilityGraveyard", parent: "CAbility", sim: Sim::Terrain, conf: Conf::Unsure, note: "every Cool seconds a dead UnitID corpse is made on a ring of radius DataB when fewer than DataA lie within DataC" },
+    Info { code: code(b"Afla"), class: "CAbilityFlare", parent: "CAbilitySimpleSpell", sim: Sim::Terrain, conf: Conf::Likely, note: "order flare 852060 at a point (Rng 99999): after DataB seconds a visible fog modifier of radius Area opens for the caster's player for Dur; DataA detection type is not modelled" },
+    Info { code: code(b"Ablp"), class: "CAbilityBlightPlacement", parent: "CAbilitySimpleSpell", sim: Sim::Terrain, conf: Conf::Unsure, note: "once the unit is complete, blight grows around it by DataA every Dur up to Area (DataB != 0 creates, 0 removes)" },
+    Info { code: code(b"Abli"), class: "CAbilityBlightGrowth", parent: "CAbility", sim: Sim::Terrain, conf: Conf::Unsure, note: "the same growth for the Necropolis and Graveyard (the stock row is the alias Abgs: Area 768)" },
+    Info { code: code(b"Aamk"), class: "CAbilityAttributeModSkill", parent: "CAbilityPassive", sim: Sim::Passive, conf: Conf::Likely, note: "hero passive: DataA agility, DataB intelligence, DataC strength (the attribute bonus of `item_abilities`: F2I of the fields into the base counters)" },
     Info { code: code(b"Aent"), class: "CAbilityEntangle", parent: "CPower", sim: Sim::Economy, conf: Conf::Likely, note: "the Tree of Life turns a neutral gold mine into UnitID after Cast seconds; order entangle 852147, autocast scan 1 s within Rng" },
 ];
 
@@ -63,6 +72,19 @@ pub struct State {
     mine_nodes: BTreeSet<ObjKey>,
     /// Units holding a grabbed tree: attacks left before it is dropped.
     grabbed: BTreeMap<ObjKey, i32>,
+    /// Cannibalizing units: corpse, seconds left, the place they stand at.
+    cannibals: BTreeMap<ObjKey, (ObjKey, f32, (F32, F32))>,
+    /// Running graveyard timers.
+    graveyards: BTreeMap<ObjKey, TimerId>,
+    /// Flares waiting for their effect delay: id -> (x, y, area, duration).
+    flares: BTreeMap<u32, (F32, F32, F32, F32)>,
+    next_flare: u32,
+    /// Blight growths in progress: (unit, ability) -> radius reached.
+    blight: BTreeMap<(ObjKey, u32), F32>,
+    /// Blight growths that reached their radius.
+    blight_done: BTreeSet<(ObjKey, u32)>,
+    /// The attribute totals `Aamk` has added to a hero: (agility, intelligence, strength).
+    attrs: BTreeMap<ObjKey, (i32, i32, i32)>,
 }
 
 impl State {
@@ -91,6 +113,12 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
         (ORDER_DECOUPLE, DECOUPLE),
         (ORDER_BATTLESTATIONS, BATTLESTATIONS),
         (ORDER_SACRIFICE, SACRIFICIAL_LAMB),
+        (852_188, CANNIBALIZE),
+        (852_535, CANNIBALIZE),
+        (852_490, ANCESTRAL_SPIRIT),
+        (852_491, ANCESTRAL_SPIRIT),
+        (ORDER_DEVOUR_MAGIC, DEVOUR_MAGIC),
+        (ORDER_FLARE, FLARE),
     ] {
         ids.insert(id, base);
     }
@@ -119,12 +147,17 @@ fn is_harvest(base: u32) -> bool {
 
 /// Abilities of this part cast without a target (`returnresources`).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    is_harvest(base) || is_couple(base) || matches!(base, DECOUPLE | BATTLESTATIONS)
+    is_harvest(base) || is_couple(base) || matches!(base, DECOUPLE | BATTLESTATIONS | CANNIBALIZE | ANCESTRAL_SPIRIT)
+}
+
+/// Abilities whose unit target is a corpse (the cast core would refuse a dead target otherwise).
+pub(crate) fn wants_corpse(base: u32) -> bool {
+    matches!(base, CANNIBALIZE | ANCESTRAL_SPIRIT)
 }
 
 /// Abilities whose order the unit walks to (the worker approaches the mine or tree itself): no range gate at the cast.
 pub(crate) fn ignores_range(base: u32) -> bool {
-    is_harvest(base) || is_couple(base) || base == ENTANGLE_ABILITY || matches!(base, EAT_TREE | GRAB_TREE | SACRIFICIAL_LAMB)
+    is_harvest(base) || is_couple(base) || base == ENTANGLE_ABILITY || matches!(base, EAT_TREE | GRAB_TREE | SACRIFICIAL_LAMB | FLARE)
 }
 
 /// Extra target rules of this part.
@@ -138,6 +171,8 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             (!mine && !hall).then_some(CastError::BadTarget)
         }
         COUPLE_ARCHER | COUPLE_HIPPO | COUPLE_INSTANT => (!gm.couple_partner_ok(caster, target)).then_some(CastError::BadTarget),
+        CANNIBALIZE => (!gm.corpse_ok(target, false)).then_some(CastError::BadTarget),
+        ANCESTRAL_SPIRIT => (!(gm.corpse_ok(target, true) && gm.unit(target).owner == gm.unit(caster).owner)).then_some(CastError::BadTarget),
         SACRIFICIAL_LAMB => {
             let pit = targs_ok(gm, caster, target, targs_word("structure,player")) && gm.alive(target);
             (!pit).then_some(CastError::BadTarget)
@@ -153,7 +188,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
 }
 
 /// The class effects of this part. Returns false for any other ability.
-pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
+pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
     match rec.base {
         HARVEST_ABILITY | LUMBER_HARVEST_ABILITY | ACOLYTE_HARVEST_ABILITY => {
             let mut gm = game.borrow_mut();
@@ -210,6 +245,53 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             }
             true
         }
+        CANNIBALIZE => {
+            let mut gm = game.borrow_mut();
+            let corpse = match rec.target {
+                CastTarget::Unit(t) => Some(t),
+                _ => gm.closest_corpse(rec.caster, F32::from_bits(CANNIBALIZE_SEARCH.to_bits()), false),
+            };
+            if let Some(c) = corpse {
+                gm.start_cannibalize(rec.caster, c, &rec.level);
+            }
+            true
+        }
+        ANCESTRAL_SPIRIT => {
+            let mut gm = game.borrow_mut();
+            let corpse = match rec.target {
+                CastTarget::Unit(t) => Some(t),
+                _ => gm.closest_corpse(rec.caster, rec.level.rng, true),
+            };
+            if let Some(c) = corpse {
+                gm.ancestral_spirit(rec.caster, c, &rec.level);
+            }
+            true
+        }
+        FLARE => {
+            let mut gm = game.borrow_mut();
+            let at = match rec.target {
+                CastTarget::Point(x, y) => (x, y),
+                CastTarget::Unit(t) => (gm.unit(t).x, gm.unit(t).y),
+                CastTarget::None => (gm.unit(rec.caster).x, gm.unit(rec.caster).y),
+            };
+            gm.start_flare(rec, at);
+            true
+        }
+        DEVOUR_MAGIC => {
+            let at = {
+                let gm = game.borrow();
+                match rec.target {
+                    CastTarget::Point(x, y) => (x, y),
+                    CastTarget::Unit(t) => (gm.unit(t).x, gm.unit(t).y),
+                    CastTarget::None => (gm.unit(rec.caster).x, gm.unit(rec.caster).y),
+                }
+            };
+            let died = game.borrow_mut().devour_magic(rec.caster, &rec.level, at);
+            for t in died {
+                crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -218,6 +300,18 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, aux: u32) {
     if kind == KIND_TREE {
         game.borrow_mut().tree_stage(unit, base, aux);
+    }
+    if kind == KIND_CANNIBAL {
+        game.borrow_mut().cannibalize_tick(unit);
+    }
+    if kind == KIND_GRAVEYARD {
+        game.borrow_mut().graveyard_tick(unit);
+    }
+    if kind == KIND_FLARE {
+        game.borrow_mut().flare_opens(unit, aux);
+    }
+    if kind == KIND_BLIGHT {
+        game.borrow_mut().blight_step(unit, base);
     }
     if kind == KIND_DEATH_AOE {
         let died = game.borrow_mut().death_explosion(unit);
@@ -243,6 +337,30 @@ impl Game {
         } else {
             self.spells.unit_a.b.entanglers.remove(&unit);
         }
+        // Graveyard: a periodic corpse maker while the unit has `Agyd`.
+        let running = self.spells.unit_a.b.graveyards.contains_key(&unit);
+        if has(self, unit, GRAVEYARD) && !running {
+            let period = self.ability_level_record(unit, GRAVEYARD).map_or(15.0, |l| l.cool.to_f32()).max(0.1);
+            let id = self.timers.start(
+                period,
+                true,
+                Payload::Spell(SpellMsg::UnitSpell { kind: KIND_GRAVEYARD, unit, base: GRAVEYARD, aux: 0 }),
+            );
+            self.spells.unit_a.b.graveyards.insert(unit, id);
+        } else if !has(self, unit, GRAVEYARD) && running {
+            if let Some(id) = self.spells.unit_a.b.graveyards.remove(&unit) {
+                self.timers.cancel(id);
+            }
+        }
+        // Blight growth: starts once for a unit that has `Ablp` / `Abli`.
+        for base in [BLIGHT_PLACEMENT, BLIGHT_GROWTH] {
+            if has(self, unit, base) && !self.spells.unit_a.b.blight.contains_key(&(unit, base)) && !self.spells.unit_a.b.blight_done.contains(&(unit, base)) {
+                self.spells.unit_a.b.blight.insert((unit, base), F32::ZERO);
+                let step = self.ability_level_record(unit, base).map_or(0.08, |l| l.dur.to_f32()).max(0.01);
+                self.timers.start(step, false, Payload::Spell(SpellMsg::UnitSpell { kind: KIND_BLIGHT, unit, base, aux: 0 }));
+            }
+        }
+        self.sync_attribute_skill(unit);
         // Gold mine: a unit with `Agld` owns a resource node of `DataA` gold (the ability class reads its level-1
         // `DataA` when it is created); a mine the type table already made a node is left alone.
         if has(self, unit, GOLD_MINE_ABILITY) {
@@ -736,5 +854,270 @@ impl Game {
         };
         crate::natives::unit::remove_unit(self, acolyte);
         crate::natives::unit::build(self, owner, SHADE, x, y, face, true);
+    }
+}
+
+
+// ---- corpses: Cannibalize, Ancestral Spirit, Devour Magic, Graveyard (Acan, Aast, Advm, Agyd) ----
+
+pub const CANNIBALIZE: u32 = code(b"Acan");
+pub const ANCESTRAL_SPIRIT: u32 = code(b"Aast");
+pub const DEVOUR_MAGIC: u32 = code(b"Advm");
+pub const GRAVEYARD: u32 = code(b"Agyd");
+/// `devourmagic` (cast getter of `Advm`, CONFIRMED in `getters.tsv`); the corpse orders are `cannibalize` 852188 /
+/// 852535 and `ancestralspirit` 852490 / 852491.
+pub const ORDER_DEVOUR_MAGIC: u32 = 852_536;
+pub const KIND_CANNIBAL: u8 = 0x52;
+pub const KIND_GRAVEYARD: u8 = 0x53;
+/// How far the instant `cannibalize` order looks for a corpse (the closest-target search radius is not decoded: a
+/// stand-in).
+const CANNIBALIZE_SEARCH: f32 = 500.0;
+/// The ring of the graveyard's corpses: eight directions.
+const R: f32 = std::f32::consts::FRAC_1_SQRT_2;
+const DIRS: [(f32, f32); 8] = [
+    (1.0, 0.0),
+    (0.0, 1.0),
+    (-1.0, 0.0),
+    (0.0, -1.0),
+    (R, R),
+    (-R, R),
+    (-R, -R),
+    (R, -R),
+];
+
+impl Game {
+    /// Whether `k` is a corpse the corpse abilities can use: dead, not removed, not an illusion, not a structure or a
+    /// mechanical unit; `non_hero` also excludes heroes (they come back through the altar).
+    pub(crate) fn corpse_ok(&self, k: ObjKey, non_hero: bool) -> bool {
+        let u = self.unit(k);
+        u.dead
+            && !u.removed
+            && !u.illusion
+            && !crate::natives::unit_attr::is_unit_type(self, u, crate::unitclass::ty::STRUCTURE)
+            && !crate::natives::unit_attr::is_unit_type(self, u, crate::unitclass::ty::MECHANICAL)
+            && (!non_hero || !self.target_hero(k))
+    }
+
+    /// The closest corpse within `radius` of `unit` (`own` restricts it to the unit's player's).
+    fn closest_corpse(&self, unit: ObjKey, radius: F32, own: bool) -> Option<ObjKey> {
+        let at = (self.unit(unit).x, self.unit(unit).y);
+        let owner = self.unit(unit).owner;
+        crate::natives::group::circle_candidates(self, at.0, at.1, radius)
+            .into_iter()
+            .filter(|&k| k != unit && self.corpse_ok(k, own) && (!own || self.unit(k).owner == owner))
+            .map(|k| (k, dist2(self, at, k)))
+            .min_by(|a, b| a.1.to_f32().total_cmp(&b.1.to_f32()).then(a.0.cmp(&b.0)))
+            .map(|(k, _)| k)
+    }
+
+    /// Cannibalize: the unit stands at its place and, once a second for up to `Dur`, heals `DataA` while its life is below
+    /// the smaller of its maximum and `DataB` ("Max Hit Points"). Moving away or dying ends it; at the end the corpse is
+    /// eaten. UNSURE: the stop rules (the original is a channel; the cast core's channel lifecycle is not used).
+    fn start_cannibalize(&mut self, unit: ObjKey, corpse: ObjKey, level: &SpellLevel) {
+        if !self.corpse_ok(corpse, false) {
+            return;
+        }
+        let dur = hero_dur(self, unit, level).to_f32();
+        let at = (self.unit(unit).x, self.unit(unit).y);
+        self.spells.unit_a.b.cannibals.insert(unit, (corpse, dur, at));
+        self.timers.start(1.0, false, Payload::Spell(SpellMsg::UnitSpell { kind: KIND_CANNIBAL, unit, base: CANNIBALIZE, aux: 0 }));
+    }
+
+    fn cannibalize_tick(&mut self, unit: ObjKey) {
+        let Some(&(corpse, left, at)) = self.spells.unit_a.b.cannibals.get(&unit) else { return };
+        let moved = self.alive(unit) && (self.unit(unit).x != at.0 || self.unit(unit).y != at.1);
+        let level = self.ability_level_record(unit, CANNIBALIZE);
+        if !self.alive(unit) || moved || level.is_none() || self.is_stunned(unit) || !self.corpse_ok(corpse, false) {
+            self.spells.unit_a.b.cannibals.remove(&unit);
+            return;
+        }
+        let level = level.unwrap_or_default();
+        let (life, max) = (self.unit(unit).life, self.unit(unit).max_life);
+        let cap = if arith::lt(F32::ZERO, level.data[1]) && arith::lt(level.data[1], max) { level.data[1] } else { max };
+        let done = left <= 1.0 || !arith::lt(life, cap);
+        if arith::lt(life, cap) {
+            let next = arith::add(life, level.data[0]);
+            self.write_life(unit, if arith::lt(cap, next) { cap } else { next });
+        }
+        if done {
+            self.spells.unit_a.b.cannibals.remove(&unit);
+            crate::natives::unit::remove_unit(self, corpse);
+            return;
+        }
+        self.spells.unit_a.b.cannibals.insert(unit, (corpse, left - 1.0, at));
+        self.timers.start(1.0, false, Payload::Spell(SpellMsg::UnitSpell { kind: KIND_CANNIBAL, unit, base: CANNIBALIZE, aux: 0 }));
+    }
+
+    /// Ancestral Spirit: the own corpse comes back with `DataA` ("Life Restored Factor") of its maximum life and `DataB`
+    /// ("Mana Restored Factor") of its maximum mana.
+    fn ancestral_spirit(&mut self, _caster: ObjKey, corpse: ObjKey, level: &SpellLevel) {
+        if !self.corpse_ok(corpse, true) {
+            return;
+        }
+        self.resurrect_unit(corpse);
+        let (max_life, max_mana) = (self.unit(corpse).max_life, self.unit(corpse).max_mana);
+        self.write_life(corpse, arith::mul(max_life, level.data[0]));
+        self.write_mana(corpse, arith::mul(max_mana, level.data[1]));
+    }
+
+    /// Devour Magic: on every unit within `Area` of `at` the Dispel Magic worker runs in its smart mode (positive buffs of
+    /// enemies, negative ones of the others; `DataE` damages summoned enemies); friends are left alone when `DataF` is set
+    /// ("Ignore Friendly Buffs"). Every unit that lost a buff or took the summoned damage gives the caster `DataA` life and
+    /// `DataB` mana, each buff removed `DataC` and `DataD` more. Returns the units killed.
+    fn devour_magic(&mut self, caster: ObjKey, level: &SpellLevel, at: (F32, F32)) -> Vec<ObjKey> {
+        let owner = self.unit(caster).owner;
+        let skip_friends = level.data[5].to_bits() & 0x7FFF_FFFF != 0;
+        let (mut life, mut mana) = (F32::ZERO, F32::ZERO);
+        let mut died = Vec::new();
+        for k in crate::natives::group::circle_candidates(self, at.0, at.1, level.area) {
+            if !self.alive(k) || self.unit(k).hidden {
+                continue;
+            }
+            let enemy = self.is_enemy(owner, self.unit(k).owner);
+            if !enemy && skip_friends && k != caster {
+                continue;
+            }
+            let (before, hp) = (self.unit(k).buffs.len(), self.unit(k).life);
+            let killed = crate::unit_spells::dispel_one(self, caster, k, level.data[4], F32::ZERO, true, 1);
+            let removed = before.saturating_sub(self.unit(k).buffs.len());
+            let hurt = killed.is_some() || self.unit(k).life.to_bits() != hp.to_bits();
+            died.extend(killed);
+            if removed == 0 && !hurt {
+                continue;
+            }
+            let n = conv::i2r(removed as i32);
+            life = arith::add(life, arith::add(level.data[0], arith::mul(level.data[2], n)));
+            mana = arith::add(mana, arith::add(level.data[1], arith::mul(level.data[3], n)));
+        }
+        if self.alive(caster) {
+            let (l, m) = (self.unit(caster).life, self.unit(caster).mana);
+            let (ml, mm) = (self.unit(caster).max_life, self.unit(caster).max_mana);
+            let nl = arith::add(l, life);
+            let nm = arith::add(m, mana);
+            self.write_life(caster, if arith::lt(ml, nl) { ml } else { nl });
+            self.write_mana(caster, if arith::lt(mm, nm) { mm } else { nm });
+        }
+        died
+    }
+
+    /// The graveyard tick: while fewer than `DataA` corpses of the level's `UnitID` lie within `DataC` of the unit, a new one
+    /// is made on the ring of radius `DataB` (the next free of eight directions). The corpse is a built unit made dead the
+    /// way `CreateCorpse` does (life 0, no death event).
+    fn graveyard_tick(&mut self, unit: ObjKey) {
+        if !self.alive(unit) || !has(self, unit, GRAVEYARD) {
+            if let Some(id) = self.spells.unit_a.b.graveyards.remove(&unit) {
+                self.timers.cancel(id);
+            }
+            return;
+        }
+        let Some(level) = self.ability_level_record(unit, GRAVEYARD) else { return };
+        if level.unit_id == 0 || self.unit_types().get(level.unit_id).is_none() {
+            return;
+        }
+        let at = (self.unit(unit).x, self.unit(unit).y);
+        let near = crate::natives::group::circle_candidates(self, at.0, at.1, level.data[2])
+            .into_iter()
+            .filter(|&k| self.unit(k).dead && !self.unit(k).removed && self.unit(k).type_id == level.unit_id)
+            .count();
+        if (near as i32) >= conv::f2i(level.data[0]) {
+            return;
+        }
+        let (dx, dy) = DIRS[near % 8];
+        let r = level.data[1];
+        let x = arith::add(at.0, arith::mul(F32::from_bits(dx.to_bits()), r));
+        let y = arith::add(at.1, arith::mul(F32::from_bits(dy.to_bits()), r));
+        let owner = self.unit(unit).owner;
+        let Some((k, _)) = crate::natives::unit::build(self, owner, level.unit_id, x, y, F32::ZERO, false) else { return };
+        self.stop_all_orders(k);
+        self.write_life(k, F32::ZERO);
+        self.unit_mut(k).dead = true;
+        self.stats_set_dead(k, true);
+    }
+}
+
+
+// ---- area effects: Flare, Blight growth, Attribute Bonus (Afla, Ablp, Abli, Aamk) ----
+
+pub const FLARE: u32 = code(b"Afla");
+pub const BLIGHT_PLACEMENT: u32 = code(b"Ablp");
+pub const BLIGHT_GROWTH: u32 = code(b"Abli");
+pub const ATTRIBUTE_SKILL: u32 = code(b"Aamk");
+/// `flare` (cast getter of `Afla`, CONFIRMED in `getters.tsv`).
+pub const ORDER_FLARE: u32 = 852_060;
+pub const KIND_FLARE: u8 = 0x54;
+pub const KIND_BLIGHT: u8 = 0x55;
+
+impl Game {
+    /// Flare: after `DataB` seconds ("Effect Delay") the circle of radius `Area` around `at` is visible to the caster's
+    /// player for `Dur` (a fog modifier, as the reveal of the item scrolls).
+    fn start_flare(&mut self, rec: &CastRec, at: (F32, F32)) {
+        self.spells.unit_a.b.next_flare += 1;
+        let id = self.spells.unit_a.b.next_flare;
+        let dur = rec.level.dur;
+        self.spells.unit_a.b.flares.insert(id, (at.0, at.1, rec.level.area, dur));
+        let delay = rec.level.data[1].to_f32().max(0.0);
+        self.timers.start(delay, false, Payload::Spell(SpellMsg::UnitSpell { kind: KIND_FLARE, unit: rec.caster, base: FLARE, aux: id }));
+    }
+
+    fn flare_opens(&mut self, caster: ObjKey, id: u32) {
+        if let Some((x, y, area, dur)) = self.spells.unit_a.b.flares.remove(&id) {
+            crate::item_abilities::reveal(self, caster, x, y, area, dur);
+        }
+    }
+
+    /// One growth step of the blight of `unit`: waits (one `Dur` at a time) until the building is complete, then the radius
+    /// grows by `DataA` ("Expansion Amount") per step up to `Area`; `DataB` ("Creates Blight") decides whether the cells are
+    /// blighted or cleared. UNSURE: the cadence (`Dur` 0.08 s per 64 units) is the stock row read as a step interval.
+    fn blight_step(&mut self, unit: ObjKey, base: u32) {
+        let key = (unit, base);
+        let Some(&radius) = self.spells.unit_a.b.blight.get(&key) else { return };
+        let level = self.ability_level_record(unit, base);
+        let live = !self.unit(unit).removed && !self.unit(unit).dead && has(self, unit, base);
+        let Some(level) = level.filter(|_| live) else {
+            self.spells.unit_a.b.blight.remove(&key);
+            return;
+        };
+        let step = level.dur.to_f32().max(0.01);
+        if self.unit_completed(unit) {
+            let next = arith::add(radius, level.data[0]);
+            let next = if arith::lt(level.area, next) { level.area } else { next };
+            let (x, y) = (self.unit(unit).x, self.unit(unit).y);
+            self.blight_circle(x, y, next, level.data[1].to_bits() & 0x7FFF_FFFF != 0);
+            if !arith::lt(next, level.area) || !arith::lt(radius, next) {
+                self.spells.unit_a.b.blight.remove(&key);
+                self.spells.unit_a.b.blight_done.insert(key);
+                return;
+            }
+            self.spells.unit_a.b.blight.insert(key, next);
+        }
+        self.timers.start(step, false, Payload::Spell(SpellMsg::UnitSpell { kind: KIND_BLIGHT, unit, base, aux: 0 }));
+    }
+
+    /// Attribute Bonus: a hero with `Aamk` carries `F2I(DataA)` agility, `F2I(DataB)` intelligence and `F2I(DataC)` strength
+    /// more in its base counters (`attribute_values`); a level change or the loss of the ability adjusts the difference.
+    fn sync_attribute_skill(&mut self, unit: ObjKey) {
+        if self.unit(unit).hero.is_none() {
+            return;
+        }
+        let want = if has(self, unit, ATTRIBUTE_SKILL) {
+            self.ability_level_record(unit, ATTRIBUTE_SKILL).map_or((0, 0, 0), |l| crate::item_abilities::attribute_values(&l.data))
+        } else {
+            (0, 0, 0)
+        };
+        let have = self.spells.unit_a.b.attrs.get(&unit).copied().unwrap_or((0, 0, 0));
+        if want == have {
+            return;
+        }
+        let (da, di, ds) = (want.0 - have.0, want.1 - have.1, want.2 - have.2);
+        crate::natives::hero::change_hero_attributes(self, unit, false, |h| {
+            h.agi_base = h.agi_base.wrapping_add(da);
+            h.int_base = h.int_base.wrapping_add(di);
+            h.str_base = h.str_base.wrapping_add(ds);
+        });
+        if want == (0, 0, 0) {
+            self.spells.unit_a.b.attrs.remove(&unit);
+        } else {
+            self.spells.unit_a.b.attrs.insert(unit, want);
+        }
     }
 }
