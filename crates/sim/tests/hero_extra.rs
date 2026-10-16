@@ -342,12 +342,3 @@ fn ranger_arrows_need_the_mana() {
     assert_eq!(g.unit(e1).life.to_f32(), 500.0);
 }
 
-#[test]
-fn rally_point_is_stored() {
-    let mut h = host();
-    let c = unit(&h, "caster");
-    assert!(h.game().rally_point(c).is_none());
-    h.game_mut().set_rally_point(c, f(10.0), f(20.0));
-    assert_eq!(h.game().rally_point(c).map(|p| (p.0.to_f32(), p.1.to_f32())), Some((10.0, 20.0)));
-    assert_ne!(RALLY, NEUTRAL_SPELL);
-}

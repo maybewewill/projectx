@@ -28,10 +28,12 @@ Wiring (a few lines each): `cast.rs` (`run_effect` calls `hero_extra::run_effect
 | `AHfa` Searing Arrows | `CAbilityFlamingArrows` `0x6F8AE384` < RangerArrow | orb | on hit: `DataA` bonus (fire), structures allowed; `Cost` per hit | UNSURE |
 | `ACdv` creep Devour | `CAbilityCreepDevour` `0x6F8A571C` < Devour | 852247 unit | target (non-hero) disabled (`Bdvv`) for `DataA` (5) s, then killed by the devourer; released if the devourer dies | UNSURE |
 | `AOwd` | `CAbilityWard` `0x6F8F91E4` | 852504 | the base code of the Serpent Ward: `orc.rs` runs `AOsw` and now `AOwd` identically | CONFIRMED (class identity) |
-| `AAns` | `CAbilityNeutralSpell` `0x6F886C64` < Button | none | constant only: a button class, no effect in the sim | LIKELY |
-| `ARal` Rally | `CAbilityRally` `0x6F87C6F4` < Interfaced | smart/rally | only a stored rally point (`Game::set_rally_point` / `rally_point`); the unit rally natives and the spawn use are not wired | UNSURE |
 
 Orbs: always on once learned (the autocast toggle orders `852243..852245` etc. are not wired); a hit with less mana than `Cost`
 skips the orb. The orb damage is delivered as a separate spell-type hit after the attack (UNSURE).
 Open: Unicorn runs of the effect bodies (`0x6F08C100` launcher call, `0x6F135220`, Starfall/Tranquility effect objects `XEsf`
 `XEtq`), Metamorphosis morph, orb autocast toggles, stock-data wiring of `UnitID`/`DataC` rawcodes into `SpellLevel`.
+
+## Not done
+
+`AAns` (`CAbilityNeutralSpell`, a `CAbilityButton`: no effect body found, not proven a no-op) and `ARal` (`CAbilityRally`: needs the rally order and spawn use, `GetUnitRallyPoint` natives) have no model and no code constants.

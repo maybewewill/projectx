@@ -3,7 +3,7 @@
 //! Night elf: Fan of Knives `AEfk`, Mana Burn `AEmb`, Metamorphosis `AEme`, Poison Arrows `AEpa`, Starfall `AEsf`,
 //! Scout `AEst`, Spirit of Vengeance `AEsv`, Tranquility `AEtq`. Undead: Animate Dead `AUan`, Carrion Scarabs `AUcb`,
 //! Dark Summoning `AUds`, Locust Swarm `AUls`. Human: Cold Arrows `AHca`, Searing (Flaming) Arrows `AHfa`. Neutral:
-//! creep Animate Dead `ACad`, creep Devour `ACdv`, Neutral Spell `AAns`, Rally `ARal`. Orc: `AOwd` is the factory base of
+//! creep Animate Dead `ACad`, creep Devour `ACdv`,. Orc: `AOwd` is the factory base of
 //! the Serpent Ward (`orc.rs` runs it under `AOsw` and now also under its base code).
 //!
 //! The class identities, vtables, parents and cast order ids come from the ability atlas
@@ -39,8 +39,6 @@ pub const COLD_ARROWS: u32 = code(b"AHca");
 pub const SEARING_ARROWS: u32 = code(b"AHfa");
 pub const CREEP_ANIMATE_DEAD: u32 = code(b"ACad");
 pub const CREEP_DEVOUR: u32 = code(b"ACdv");
-pub const NEUTRAL_SPELL: u32 = code(b"AAns");
-pub const RALLY: u32 = code(b"ARal");
 
 pub const BUFF_METAMORPHOSIS: u32 = code(b"BEme");
 pub const BUFF_SCOUT: u32 = code(b"BEst");
@@ -107,8 +105,6 @@ pub struct State {
     next: u32,
     /// The unit type a spell creates when the level record carries none (Carrion Scarabs' `DataC` rawcode).
     extra_unit: BTreeMap<u32, u32>,
-    /// Rally points: unit -> (x, y).
-    rally: BTreeMap<ObjKey, (F32, F32)>,
     /// Starfall waves and Tranquility pulses delivered, `(caster, base, units hit)` (tests).
     pub pulses: Vec<(ObjKey, u32, usize)>,
 }
@@ -117,16 +113,6 @@ impl Game {
     /// Host API: the unit type `base` creates when its level record has no `UnitID` (Carrion Scarabs: `ucs1`..`ucs3`).
     pub fn set_extra_unit(&mut self, base: u32, unit_type: u32) {
         self.spells.hero.extra.extra_unit.insert(base, unit_type);
-    }
-
-    /// Rally: stores the rally point of `unit` (the `smart`/`setrally` order of a unit with `ARal`).
-    pub fn set_rally_point(&mut self, unit: ObjKey, x: F32, y: F32) {
-        self.spells.hero.extra.rally.insert(unit, (x, y));
-    }
-
-    /// The rally point of `unit`, if one was set.
-    pub fn rally_point(&self, unit: ObjKey) -> Option<(F32, F32)> {
-        self.spells.hero.extra.rally.get(&unit).copied()
     }
 
     /// The Starfall waves and Tranquility pulses so far, `(caster, ability, units affected)`.
