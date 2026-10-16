@@ -123,6 +123,7 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"AUdr", *b"AUfa", *b"AUfn", *b"AUfu", *b"Auhf", *b"AUim", *b"AUin", *b"AUsl", *b"AUts", *b"Aweb", *b"Ablo",
     *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
     *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm", *b"ANsg", *b"ANsq", *b"ANsw", *b"ANdh", *b"ANdb", *b"ANlm", *b"ANso", *b"ANab", *b"ANfl",
+    *b"ANtm", *b"ANdo",
 ];
 
 fn is_modelled(c: u32) -> bool {
@@ -159,6 +160,8 @@ pub struct State {
     pulv_armed: BTreeSet<ObjKey>,
     /// Mana Shield parameters `(DataA, DataB)` of the level the shield was cast at, by unit (valid while `BNms` exists).
     shield: BTreeMap<ObjKey, (F32, F32)>,
+    /// State of the S50 batch (`neutral_heroes2.rs`).
+    pub(crate) h2: crate::neutral_heroes2::State,
 }
 
 /// The order ids this module adds: `(order id, modelled code)`.
@@ -185,11 +188,12 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ] {
         ids.insert(id, base);
     }
+    crate::neutral_heroes2::register_orders(ids);
 }
 
 /// Abilities of this module cast without a target (Mana Shield, Howl of Terror).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    base == MANA_SHIELD || base == HOWL || is_summon(base)
+    base == MANA_SHIELD || base == HOWL || is_summon(base) || crate::neutral_heroes2::takes_no_target(base)
 }
 
 fn is_summon(base: u32) -> bool {
@@ -404,7 +408,8 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let level = gm.unit_types().get(gm.unit(target).type_id).map_or(0, |t| t.level);
             (level as f32 > max).then_some(BadTarget)
         }
-        _ => crate::unit_abilities_m::target_error(gm, caster, base, target),
+        _ => crate::neutral_heroes2::target_error(gm, caster, base, target)
+            .or_else(|| crate::unit_abilities_m::target_error(gm, caster, base, target)),
     }
 }
 
@@ -469,7 +474,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             crate::human_heroes::summon(game, rec, buff);
             true
         }
-        _ => crate::unit_abilities_m::run_effect(game, rt, rec),
+        _ => crate::neutral_heroes2::run_effect(game, rt, rec) || crate::unit_abilities_m::run_effect(game, rt, rec),
     }
 }
 
@@ -771,7 +776,10 @@ fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
 impl Game {
     /// Whether `unit` carries the Silence buff (it cannot start a spell).
     pub fn is_silenced(&self, unit: ObjKey) -> bool {
-        self.unit(unit).buffs.iter().any(|b| b.base == BUFF_SILENCE || b.base == BUFF_SOUL_BURN)
+        self.unit(unit)
+            .buffs
+            .iter()
+            .any(|b| b.base == BUFF_SILENCE || b.base == BUFF_SOUL_BURN || b.base == crate::neutral_heroes2::BUFF_DOOM)
     }
 
     /// Mana Shield (`CBuffManaShield` damage slot `0x6F126DD0`, structure CONFIRMED, numbers LIKELY): of an incoming

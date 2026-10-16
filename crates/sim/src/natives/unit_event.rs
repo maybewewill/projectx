@@ -173,6 +173,8 @@ pub(crate) fn dispatch_unit_death_by(
     }
     // The Ankh of Reincarnation (`AIrc`) carried by the dying unit.
     crate::item_abilities::on_unit_died(game, rt, unit);
+    // The removal notifications of the neutral hero buffs (Doom, Black Arrow, Incinerate; `neutral_heroes2.rs`).
+    crate::neutral_heroes2::on_unit_died(game, rt, unit, killer);
     // The death handler `0x6F2A4880` gives the kill experience first (UNSURE order against the JASS events).
     if let Some(k) = killer {
         crate::kill_xp::grant_kill_xp(&mut game.borrow_mut(), unit, k);

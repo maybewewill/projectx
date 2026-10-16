@@ -42,6 +42,7 @@ pub mod lockstep;
 pub mod missiles;
 pub mod mover;
 pub mod movement;
+pub mod neutral_heroes2;
 pub mod neutral_spells;
 pub mod natives;
 pub mod occupancy;
