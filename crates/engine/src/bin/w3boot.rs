@@ -5,11 +5,17 @@
 //!        [--ai-common common.ai] [--ai-script NAME=PATH]... [--computer SLOT[:RACE]]... [--ai-log N]
 //!        [--seed S] [--steps N] [--buildings] [--check-natives] map.w3x
 //! w3boot --replay FILE.w3g --check-sync
+//! w3boot --replay FILE.w3g --sim-sync [--sync-trace] [--sync-slots N] [--sync-after] [--sync-defer-main]
+//!        [--sync-constant K] [--pr-off MASK] --dll Game.dll --mpq ... MAP.w3x
 //! ```
 //!
 //! `--check-sync` needs no map or archives: it walks the replay's time slots and compares the stored 0x22 sync
 //! records with the model of `sim::sync` (net checksum, tick clock, record rule) and prints the first mismatch
 //! and the number of record pairs predicted exactly (`engine::sync_check`, `docs/spec/lockstep.md` section 15).
+//!
+//! `--sim-sync` boots the map from the replay, runs the whole simulation slot by slot and compares the 0x22 record computed from
+//! the simulated state with every record of the file: absolute and constant-calibrated matches, matching pairs, and the
+//! hidden-word event timelines (`engine::sim_sync`, `docs/spec/lockstep.md` section 18). `--sync-trace` prints one line per slot.
 //!
 //! `--mpq` reads `Scripts\common.j` and `Scripts\Blizzard.j` from the archives (later ones override),
 //! and the AI scripts `Scripts\common.ai`, `human.ai`, `orc.ai`, `undead.ai` and `elf.ai` when they are there.
