@@ -25,7 +25,9 @@ use std::collections::BTreeMap;
 use softfloat::{arith, F32};
 
 use crate::abilities::{buff_predicates, code, BuffPredicates};
-use crate::cast::{effect_duration, CastError, CastRec, CastTarget};
+use crate::cast::{effect_duration, CastError, CastRec, CastTarget, SpellMsg};
+use crate::natives::game::Payload;
+use crate::timer::TimerId;
 use crate::natives::game::{Game, ObjKey};
 use crate::natives::ScriptRuntime;
 use crate::unit_spells::{targs_ok, targs_word, UnitMods};
@@ -43,6 +45,25 @@ pub const PERM_INVIS: u32 = code(b"Apiv");
 pub const SHADOW_MELD: u32 = code(b"Ashm");
 pub const TRUE_SIGHT: u32 = code(b"Atru");
 pub const ULTRAVISION: u32 = code(b"Ault");
+/// S52: the `CAbilityMorph` transforms of this batch. Their order ids (primary / alternate getters) are in
+/// `unit_abilities_a::MORPH_ORDERS`, the morph machinery is batch A's.
+pub const RAVEN_FORM: u32 = code(b"Arav");
+pub const STONE_FORM: u32 = code(b"Astn");
+pub const MOUNT: u32 = code(b"Amou");
+pub const PHOENIX_MORPH: u32 = code(b"Aphx");
+pub const REPAIR: u32 = code(b"Arep");
+pub const RENEW: u32 = code(b"Aren");
+pub const RESTORATION: u32 = code(b"Arst");
+pub const RETURN: u32 = code(b"Artn");
+pub const REPLENISH: u32 = code(b"Arpb");
+pub const REPLENISH_LIFE: u32 = code(b"Arpl");
+pub const REPLENISH_MANA: u32 = code(b"Arpm");
+pub const UNSUMMON: u32 = code(b"Auns");
+pub const TAUNT: u32 = code(b"Atau");
+pub const PANDA_IMMOLATION: u32 = code(b"Apig");
+pub const AURA_REGEN_LIFE: u32 = code(b"Aoar");
+/// The aura buff code of `Aoar` (the code getter was not read: `B` + the ability's last letters, UNSURE).
+pub const BUFF_REGEN_LIFE: u32 = code(b"Boar");
 pub const BUFF_POISON: u32 = code(b"Bpoi");
 pub const BUFF_SPIRIT_LINK: u32 = code(b"Bspl");
 pub const BUFF_MILITIA: u32 = code(b"Bmil");
@@ -79,10 +100,10 @@ pub const CODES: &[(&[u8; 4], &str, &str, Status)] = &[
     (b"Amil", "CAbilityMilitia", "CAbilityCallToArms", Modelled),
     (b"Amin", "CAbilityLandMine", "CAbility", Listed),
     (b"Amls", "CAbilityMagicLeash", "CAbilitySimpleSpell", Modelled),
-    (b"Amou", "CAbilityMount", "CAbilityMorph", Listed),
+    (b"Amou", "CAbilityMount", "CAbilityMorph", Modelled),
     (b"Amtc", "CAbilityMeatCargo", "CAbilityCargoHold", Listed),
-    (b"Aphx", "CAbilityPhoenix", "CAbilityMorph", Listed),
-    (b"Apig", "CAbilityPandaImmolation", "CAbilityPermImmolation", Listed),
+    (b"Aphx", "CAbilityPhoenix", "CAbilityMorph", Modelled),
+    (b"Apig", "CAbilityPandaImmolation", "CAbilityPermImmolation", Modelled),
     (b"Apit", "CAbilityPurchaseItem", "CAbility", Listed),
     (b"Apiv", "CAbilityPermInvis", "CBonusBase", Query),
     (b"Apo2", "CAbilityPoisonDamage", "CAbilityPoisonAttack", Modelled),
@@ -92,21 +113,21 @@ pub const CODES: &[(&[u8; 4], &str, &str, Status)] = &[
     (b"Apsh", "CAbilityPhaseShift", "CAbilityModalSpell", Listed),
     (b"Apts", "CAbilityPlagueToss", "CAbilityPassive", Listed),
     (b"Apxf", "CAbilityPhoenixFire", "CAbilityPassive", Listed),
-    (b"Arav", "CAbilityRavenForm", "CAbilityMorph", Listed),
+    (b"Arav", "CAbilityRavenForm", "CAbilityMorph", Modelled),
     (b"Arbr", "CAbilityReinforce", "CAbilitySpiked", Listed),
     (b"Arem", "CAbilityRegenMana", "CAbilityRegenBase", Listed),
-    (b"Aren", "CAbilityRenew", "CAbilityRepair", Listed),
-    (b"Arep", "CAbilityRepair", "CAbilityAutoTargetSpell", Listed),
+    (b"Aren", "CAbilityRenew", "CAbilityRepair", Modelled),
+    (b"Arep", "CAbilityRepair", "CAbilityAutoTargetSpell", Modelled),
     (b"Aret", "CAbilityRetrain", "CAbilitySpell", Listed),
     (b"Arev", "CAbilityRevive", "CAbilityBuildQueue", Listed),
     (b"Arng", "CAbilityRevenge", "CAbilitySpell", Listed),
     (b"Aroc", "CAbilityBarrage", "CAbilityPassive", Listed),
     (b"Aroo", "CAbilityRoot", "CAbilityButton", Listed),
-    (b"Arpb", "CAbilityReplenish", "CAbilityAutoTargetSpell", Listed),
-    (b"Arpl", "CAbilityReplenishLife", "CAbilityReplenish", Listed),
-    (b"Arpm", "CAbilityReplenishMana", "CAbilityReplenish", Listed),
-    (b"Arst", "CAbilityRestoration", "CAbilityRepair", Listed),
-    (b"Artn", "CAbilityReturn", "CAbility", Listed),
+    (b"Arpb", "CAbilityReplenish", "CAbilityAutoTargetSpell", Modelled),
+    (b"Arpl", "CAbilityReplenishLife", "CAbilityReplenish", Modelled),
+    (b"Arpm", "CAbilityReplenishMana", "CAbilityReplenish", Modelled),
+    (b"Arst", "CAbilityRestoration", "CAbilityRepair", Modelled),
+    (b"Artn", "CAbilityReturn", "CAbility", Modelled),
     (b"Asac", "CAbilitySacrifice", "CAbilityTrain", Listed),
     (b"Asal", "CAbilitySalvage", "CAbilityPassive", Listed),
     (b"Asds", "CAbilitySelfDestruct", "CAbilityAutoTargetSpell", Listed),
@@ -126,8 +147,8 @@ pub const CODES: &[(&[u8; 4], &str, &str, Status)] = &[
     (b"Astd", "CAbilityStandDown", "CAbilityCargoDropInstant", Listed),
     (b"Aste", "CAbilitySteal", "CAbilityDarkRitual", Listed),
     (b"Asth", "CAbilityStormHammers", "CAbilityPassive", Listed),
-    (b"Astn", "CAbilityStoneForm", "CAbilityMorph", Listed),
-    (b"Atau", "CAbilityTaunt", "CAbilitySimpleSpell", Listed),
+    (b"Astn", "CAbilityStoneForm", "CAbilityMorph", Modelled),
+    (b"Atau", "CAbilityTaunt", "CAbilitySimpleSpell", Modelled),
     (b"Atdg", "CAbilityTornadoDamage", "CAbility", Listed),
     (b"Atdp", "CAbilityTankDropPilot", "CAbilitySpell", Listed),
     (b"Atlp", "CAbilityTankLoadPilot", "CAbilitySimpleSpell", Listed),
@@ -139,25 +160,36 @@ pub const CODES: &[(&[u8; 4], &str, &str, Status)] = &[
     (b"Atwa", "CAbilityTornadoWander", "CAbilityWander", Listed),
     (b"Auco", "CAbilityUnstableConcoction", "CAbilitySimpleSpell", Listed),
     (b"Ault", "CAbilityUltraVision", "CAbilityNightVision", Query),
-    (b"Auns", "CAbilityUnsummon", "CAbilitySimpleSpell", Listed),
+    (b"Auns", "CAbilityUnsummon", "CAbilitySimpleSpell", Modelled),
     (b"Avng", "CAbilityVengeance", "CAbilityCarrionScarabs", Listed),
     (b"Awan", "CAbilityWander", "CAbility", Listed),
     (b"Awha", "CAbilityWispHarvest", "CAbilityHarvestBase", Listed),
     (b"Awrp", "CAbilityWarp", "CAbility", Listed),
     (b"Andt", "CAbilityNeutralDetectAoe", "CAbilityNeutralSpell", Listed),
     (b"Aneu", "CAbilityNeutral", "CAbility", Listed),
-    (b"Aoar", "CAbilityAuraRegenLife", "CAbilityAura", Listed),
+    (b"Aoar", "CAbilityAuraRegenLife", "CAbilityAura", Modelled),
 ];
 
 /// `(order id, ability)`: the cast getters (slot `0x348`) of `docs/research/ability-orders/getters.tsv`. `Aps2`
 /// shares the id of `Apos`, so only the first class is registered (a unit with `Aps2` alone is handled through the
 /// alias row, see [`Game::set_spell_alias`]). `Amil` / `Amic` have no getter value in the table (their order
 /// is issued by the host or the AI directly through [`crate::cast::begin_cast`]).
-pub const SPELL_ORDERS: [(u32, u32); 4] = [
+pub const SPELL_ORDERS: [(u32, u32); 13] = [
     (852_196, POSSESSION),
     (852_483, SPELL_STEAL),
     (852_499, SPIRIT_LINK),
     (852_480, MAGIC_LEASH),
+    // S52. Cast getters (slot 0x348) of the repair and replenish classes; 852020 is `returnresources` from the
+    // original's order-name initializer (`orders/names.rs`), `Artn` has no cast getter.
+    (852_024, REPAIR),
+    (852_161, RENEW),
+    (852_202, RESTORATION),
+    (852_020, RETURN),
+    (852_542, REPLENISH),
+    (852_545, REPLENISH_LIFE),
+    (852_548, REPLENISH_MANA),
+    (852_210, UNSUMMON),
+    (852_520, TAUNT),
 ];
 
 /// Cast order ids of the codes that are only listed (cast getters, slot `0x348`).
@@ -198,6 +230,12 @@ pub struct State {
     /// `(unit, hit target)` of units whose life dropped to zero through a link share and still need their death
     /// dispatch (the host drains it).
     pub pending_deaths: Vec<(ObjKey, ObjKey)>,
+    /// Running repairs by builder (S52).
+    repairs: BTreeMap<ObjKey, RepairJob>,
+    /// Running replenish channels by caster (S52).
+    replenish: BTreeMap<ObjKey, ReplenishJob>,
+    /// Running permanent-immolation pulses by (unit, ability) (S52).
+    pulses: BTreeMap<(ObjKey, u32), TimerId>,
 }
 
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -208,7 +246,13 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// Abilities cast without a target (Call to Arms).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    base == MILITIA || base == MILITIA_CONVERT
+    matches!(base, MILITIA | MILITIA_CONVERT | RETURN | TAUNT)
+}
+
+/// Classes whose `Cast` field is the length of the effect (a channel of `Cast / Dur` ticks), not a delay before it:
+/// the replenish family (UNSURE, see the spec). `cast.rs` skips its stage-2 wait for them.
+pub(crate) fn cast_field_is_duration(base: u32) -> bool {
+    matches!(base, REPLENISH | REPLENISH_LIFE | REPLENISH_MANA)
 }
 
 pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
@@ -224,6 +268,29 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             }
             None
         }
+        REPAIR | RENEW | RESTORATION => {
+            // targs of the level rows (`AbilityData.slk`): the repair rows add `mechanical,nonancient`, the renew row
+            // has neither. The target must be hurt.
+            let w = if base == RENEW {
+                "friend,ground,air,structure,bridge,alive,dead,invu,vuln"
+            } else {
+                "mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln"
+            };
+            let u = gm.unit(target);
+            (bad(w) || !arith::lt(u.life, u.max_life)).then_some(CastError::BadTarget)
+        }
+        REPLENISH | REPLENISH_LIFE | REPLENISH_MANA => {
+            let u = gm.unit(target);
+            let hurt = arith::lt(u.life, u.max_life);
+            let dry = arith::lt(u.mana, u.max_mana);
+            let needs = match base {
+                REPLENISH_LIFE => hurt,
+                REPLENISH_MANA => dry,
+                _ => hurt || dry,
+            };
+            (bad("ground,air,friend,self,organic,vuln,invu") || !needs).then_some(CastError::BadTarget)
+        }
+        UNSUMMON => bad("structure,player").then_some(CastError::BadTarget),
         _ => None,
     }
 }
@@ -250,6 +317,32 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         }
         MILITIA | MILITIA_CONVERT => {
             call_to_arms(game, rec);
+            true
+        }
+        REPAIR | RENEW | RESTORATION => {
+            if let CastTarget::Unit(t) = rec.target {
+                start_repair(game, rec, t);
+            }
+            true
+        }
+        RETURN => {
+            game.borrow_mut().force_return(rec.caster);
+            true
+        }
+        REPLENISH | REPLENISH_LIFE | REPLENISH_MANA => {
+            if let CastTarget::Unit(t) = rec.target {
+                start_replenish(game, rec, t);
+            }
+            true
+        }
+        UNSUMMON => {
+            if let CastTarget::Unit(t) = rec.target {
+                unsummon(game, rec, t);
+            }
+            true
+        }
+        TAUNT => {
+            taunt(game, rec);
             true
         }
         _ => false,
@@ -476,5 +569,356 @@ impl Game {
         let dy = arith::sub(b.y, a.y);
         let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
         !arith::lt(arith::mul(level.area, level.area), d2)
+    }
+}
+
+// ---- S52: timers, repair, replenish, unsummon, taunt ----
+
+/// Timer kinds of this module (`SpellMsg::UnitSpell`, routed here by `unit_abilities_a::on_timer`).
+pub const KIND_REPAIR: u8 = 0x60;
+pub const KIND_REPLENISH: u8 = 0x61;
+pub const KIND_PULSE: u8 = 0x62;
+/// Seconds between two repair ticks (a model choice, UNSURE: the original's repair progress is a per-tick task of the
+/// builder that was not read).
+pub const REPAIR_PERIOD: f32 = 0.5;
+
+pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, _aux: u32) {
+    match kind {
+        KIND_REPAIR => game.borrow_mut().repair_tick(unit),
+        KIND_REPLENISH => game.borrow_mut().replenish_tick(unit),
+        KIND_PULSE => {
+            let dead = game.borrow_mut().pulse_tick(unit, base);
+            for victim in dead {
+                crate::natives::dispatch_unit_death_by(game, rt, victim, Some(unit));
+            }
+        }
+        _ => {}
+    }
+}
+
+impl Game {
+    /// Starts and stops the passive pulses of this module as `unit`'s abilities change (called from
+    /// `sync_unit_abilities_a`, so at creation and whenever abilities are added or removed).
+    pub(crate) fn sync_unit_abilities_m(&mut self, unit: ObjKey) {
+        let has = self.unit(unit).abilities.get(PANDA_IMMOLATION).is_some_and(|a| !a.is_removed());
+        let running = self.spells.m.pulses.contains_key(&(unit, PANDA_IMMOLATION));
+        if has && !running {
+            let level = self.spell_level(unit, PANDA_IMMOLATION);
+            let period = if arith::lt(F32::ZERO, level.dur) { level.dur.to_f32() } else { 1.0 };
+            let id = self.timers.start(
+                period,
+                true,
+                Payload::Spell(SpellMsg::UnitSpell { kind: KIND_PULSE, unit, base: PANDA_IMMOLATION, aux: 0 }),
+            );
+            self.spells.m.pulses.insert((unit, PANDA_IMMOLATION), id);
+        } else if !has && running {
+            if let Some(id) = self.spells.m.pulses.remove(&(unit, PANDA_IMMOLATION)) {
+                self.timers.cancel(id);
+            }
+        }
+    }
+
+    /// Panda Immolation (`CAbilityPandaImmolation < CAbilityPermImmolation`, always on): every `Dur` seconds the enemies
+    /// within `Area` of the unit (targs `ground,enemy,neutral,organic`) take `DataA` damage. LIKELY (the editor meaning
+    /// of the fields, as the toggled Immolation of `undead_ne.rs`); UNSURE: the damage type (the spell row 9 as the
+    /// toggle) and that the buff `Bpig` marks the victims (not modelled). Returns the victims that died.
+    fn pulse_tick(&mut self, unit: ObjKey, base: u32) -> Vec<ObjKey> {
+        let has = self.unit(unit).abilities.get(base).is_some_and(|a| !a.is_removed());
+        if self.unit(unit).removed || self.unit(unit).dead || !has {
+            if let Some(id) = self.spells.m.pulses.remove(&(unit, base)) {
+                self.timers.cancel(id);
+            }
+            return Vec::new();
+        }
+        let level = self.spell_level(unit, base);
+        let (x, y) = (self.unit(unit).x, self.unit(unit).y);
+        let word = targs_word("ground,enemy,neutral,organic");
+        let mut dead = Vec::new();
+        for k in crate::natives::group::circle_candidates(self, x, y, level.area) {
+            if k == unit || !self.alive(k) || !targs_ok(self, unit, k, word) || self.unit_is_invulnerable(k) {
+                continue;
+            }
+            if let Some(d) = self.unit_damage_target(unit, k, level.data[0], false, false, 0, 9) {
+                dead.push(d);
+            }
+        }
+        dead
+    }
+}
+
+/// A running repair: the builder is the map key.
+#[derive(Debug, Clone)]
+pub struct RepairJob {
+    pub target: ObjKey,
+    /// `DataA`: the share of the target's cost a full repair costs (editor default 0.35).
+    ratio_cost: F32,
+    /// `DataB`: the share of the build time a full repair takes (editor default 1.5).
+    ratio_time: F32,
+    /// Life restored so far.
+    repaired: F32,
+    /// Gold and lumber (x10) already paid.
+    paid: [i32; 2],
+    /// Where the builder stood when it started (it leaves the job by moving).
+    at: (F32, F32),
+    timer: TimerId,
+}
+
+/// A running replenish channel (the Moon Well).
+#[derive(Debug, Clone)]
+pub struct ReplenishJob {
+    pub target: ObjKey,
+    life: F32,
+    mana: F32,
+    ticks_left: u32,
+    period: f32,
+    timer: TimerId,
+}
+
+fn nonzero(x: F32) -> bool {
+    x.to_bits() & 0x7FFF_FFFF != 0
+}
+
+/// Repair, Renew, Restoration (`CAbilityRepair < CAbilityAutoTargetSpell`, `CAbilityRenew` and `CAbilityRestoration <
+/// CAbilityRepair`): the builder restores the target's life at `max life / (bldtm * DataB)` per second and pays
+/// `DataA * cost * repaired / max life` of gold and lumber as it goes; it stops when the target is whole, when the
+/// owner cannot pay, or when the builder moves. LIKELY structure (the editor meaning of `DataA` / `DataB`, the
+/// 0.35 / 1.5 defaults of `AbilityData.slk`), UNSURE: the 0.5 s tick, paying as it goes, `bldtm` as the base time
+/// (there is no repair-time column in `UnitBalance.slk`), and `DataC` / `DataD` (power build) are not modelled.
+fn start_repair(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    if let Some(old) = gm.spells.m.repairs.remove(&rec.caster) {
+        gm.timers.cancel(old.timer);
+    }
+    let timer = gm.timers.start(
+        REPAIR_PERIOD,
+        false,
+        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPAIR, unit: rec.caster, base: rec.base, aux: 0 }),
+    );
+    let at = (gm.unit(rec.caster).x, gm.unit(rec.caster).y);
+    gm.spells.m.repairs.insert(
+        rec.caster,
+        RepairJob { target, ratio_cost: rec.level.data[0], ratio_time: rec.level.data[1], repaired: F32::ZERO, paid: [0, 0], at, timer },
+    );
+}
+
+impl Game {
+    /// The target `builder` is repairing, if any.
+    pub fn m_repairing(&self, builder: ObjKey) -> Option<ObjKey> {
+        self.spells.m.repairs.get(&builder).map(|j| j.target)
+    }
+
+    fn end_repair(&mut self, builder: ObjKey) {
+        if let Some(j) = self.spells.m.repairs.remove(&builder) {
+            self.timers.cancel(j.timer);
+        }
+    }
+
+    fn repair_tick(&mut self, builder: ObjKey) {
+        let Some(job) = self.spells.m.repairs.get(&builder).cloned() else {
+            return;
+        };
+        let (target, mut paid) = (job.target, job.paid);
+        let moved = {
+            let b = self.unit(builder);
+            b.x.to_bits() != job.at.0.to_bits() || b.y.to_bits() != job.at.1.to_bits()
+        };
+        if !self.alive(builder) || !self.alive(target) || moved || self.is_stunned(builder) {
+            self.end_repair(builder);
+            return;
+        }
+        let (type_id, owner) = (self.unit(target).type_id, self.unit(target).owner);
+        let bldtm = self.production().build_seconds.get(&type_id).copied().unwrap_or(0);
+        let (life, max) = (self.unit(target).life, self.unit(target).max_life);
+        let deficit = arith::sub(max, life);
+        if bldtm <= 0 || !nonzero(max) || !arith::lt(F32::ZERO, deficit) {
+            self.end_repair(builder);
+            return;
+        }
+        // Life per tick: max life * period / (bldtm * time ratio).
+        let period = F32::from_bits(REPAIR_PERIOD.to_bits());
+        let secs = arith::mul(softfloat::conv::i2r(bldtm), job.ratio_time);
+        if !arith::lt(F32::ZERO, secs) {
+            self.end_repair(builder);
+            return;
+        }
+        let mut gain = self.soft_div(arith::mul(max, period), secs);
+        if arith::lt(deficit, gain) {
+            gain = deficit;
+        }
+        let repaired = arith::add(job.repaired, gain);
+        // What has been earned in resources so far, x10, and what is still to pay.
+        let ty = self.unit_types().get(type_id).map(|t| (t.gold_cost, t.wood_cost)).unwrap_or((0, 0));
+        let frac = self.soft_div(repaired, max);
+        let mut due = [0i32; 2];
+        for (i, cost) in [ty.0, ty.1].into_iter().enumerate() {
+            let total = softfloat::conv::f2i(arith::mul(softfloat::conv::i2r(cost.saturating_mul(10)), job.ratio_cost));
+            due[i] = softfloat::conv::f2i(arith::mul(softfloat::conv::i2r(total), frac)).max(paid[i]);
+        }
+        let need = [due[0] - paid[0], due[1] - paid[1]];
+        let affordable = self.economy.get(owner as usize).is_some_and(|p| {
+            p.stored(crate::economy::Res::Gold) >= need[0] && p.stored(crate::economy::Res::Lumber) >= need[1]
+        });
+        if !affordable {
+            // The owner cannot pay: the repair stops (the original raises an error and the builder idles, UNSURE).
+            self.end_repair(builder);
+            return;
+        }
+        for (i, res) in [crate::economy::Res::Gold, crate::economy::Res::Lumber].into_iter().enumerate() {
+            if need[i] > 0 {
+                crate::economy::change(&mut self.economy, owner as usize, res, -need[i], crate::economy::Flags::NONE);
+                paid[i] = due[i];
+            }
+        }
+        let next = arith::add(life, gain);
+        crate::natives::set_life(self, target, if arith::lt(max, next) { max } else { next });
+        let whole = !arith::lt(self.unit(target).life, max);
+        if whole {
+            self.end_repair(builder);
+            return;
+        }
+        let timer = self.timers.start(
+            REPAIR_PERIOD,
+            false,
+            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPAIR, unit: builder, base: REPAIR, aux: 0 }),
+        );
+        if let Some(j) = self.spells.m.repairs.get_mut(&builder) {
+            j.repaired = repaired;
+            j.paid = paid;
+            j.timer = timer;
+        }
+    }
+}
+
+/// Replenish Mana and Life / Life / Mana (`CAbilityReplenish`, `...Life`, `...Mana`; the Moon Well). UNSURE model: the
+/// `Cast` field is the channel length (`cast_field_is_duration`), `Dur` the tick period, and every tick gives the
+/// target `DataA` life (Arpb, Arpl) and `DataB` mana (Arpb, Arpm); the generic cast paid `Cost` mana once for the
+/// whole channel. The first tick is immediate.
+fn start_replenish(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    if let Some(old) = gm.spells.m.replenish.remove(&rec.caster) {
+        gm.timers.cancel(old.timer);
+    }
+    let l = &rec.level;
+    let life = if rec.base == REPLENISH_MANA { F32::ZERO } else { l.data[0] };
+    let mana = if rec.base == REPLENISH_LIFE { F32::ZERO } else { l.data[1] };
+    let period = if arith::lt(F32::ZERO, l.dur) { l.dur.to_f32() } else { 1.0 };
+    let ticks = if arith::lt(F32::ZERO, l.cast) { (l.cast.to_f32() / period).floor().max(1.0) as u32 } else { 1 };
+    let timer = gm.timers.start(
+        period,
+        false,
+        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPLENISH, unit: rec.caster, base: rec.base, aux: 0 }),
+    );
+    gm.spells.m.replenish.insert(rec.caster, ReplenishJob { target, life, mana, ticks_left: ticks, period, timer });
+    // The first tick now (the job's remaining count excludes it).
+    gm.replenish_tick_now(rec.caster);
+}
+
+impl Game {
+    fn replenish_tick_now(&mut self, caster: ObjKey) {
+        let Some(job) = self.spells.m.replenish.get(&caster).cloned() else {
+            return;
+        };
+        if !self.alive(caster) || !self.alive(job.target) {
+            self.end_replenish(caster);
+            return;
+        }
+        let t = job.target;
+        let (life, max_life, mana, max_mana) = {
+            let u = self.unit(t);
+            (u.life, u.max_life, u.mana, u.max_mana)
+        };
+        if nonzero(job.life) {
+            let sum = arith::add(life, job.life);
+            crate::natives::set_life(self, t, if arith::lt(max_life, sum) { max_life } else { sum });
+        }
+        if nonzero(job.mana) {
+            let sum = arith::add(mana, job.mana);
+            self.write_mana(t, if arith::lt(max_mana, sum) { max_mana } else { sum });
+        }
+        if let Some(j) = self.spells.m.replenish.get_mut(&caster) {
+            j.ticks_left = j.ticks_left.saturating_sub(1);
+        }
+    }
+
+    fn end_replenish(&mut self, caster: ObjKey) {
+        if let Some(j) = self.spells.m.replenish.remove(&caster) {
+            self.timers.cancel(j.timer);
+        }
+    }
+
+    fn replenish_tick(&mut self, caster: ObjKey) {
+        let Some(job) = self.spells.m.replenish.get(&caster).cloned() else {
+            return;
+        };
+        if job.ticks_left == 0 {
+            self.end_replenish(caster);
+            return;
+        }
+        self.replenish_tick_now(caster);
+        let left = self.spells.m.replenish.get(&caster).map_or(0, |j| j.ticks_left);
+        if left == 0 {
+            self.end_replenish(caster);
+            return;
+        }
+        let timer = self.timers.start(
+            job.period,
+            false,
+            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPLENISH, unit: caster, base: REPLENISH, aux: 0 }),
+        );
+        if let Some(j) = self.spells.m.replenish.get_mut(&caster) {
+            j.timer = timer;
+        }
+    }
+
+    /// The target of a running replenish channel of `caster`.
+    pub fn m_replenishing(&self, caster: ObjKey) -> Option<ObjKey> {
+        self.spells.m.replenish.get(&caster).map(|j| j.target)
+    }
+}
+
+/// Unsummon Building (`CAbilityUnsummon < CAbilitySimpleSpell`, order 852210, targs `structure,player`): the target is
+/// removed and its owner is refunded `DataA` of its gold and lumber cost (plain changer, no tax). UNSURE: what `DataA`
+/// (0.5) and `DataB` (50) mean, the original was not read.
+fn unsummon(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let (type_id, owner) = (gm.unit(target).type_id, gm.unit(target).owner);
+    let (gold, wood) = gm.unit_types().get(type_id).map(|t| (t.gold_cost, t.wood_cost)).unwrap_or((0, 0));
+    let share = |c: i32| softfloat::conv::f2i(arith::mul(softfloat::conv::i2r(c), rec.level.data[0]));
+    crate::natives::unit::remove_unit(&mut gm, target);
+    gm.credit_resource(owner, crate::economy::Res::Gold, share(gold), crate::economy::Flags::NONE);
+    gm.credit_resource(owner, crate::economy::Res::Lumber, share(wood), crate::economy::Flags::NONE);
+}
+
+/// Taunt (`CAbilityTaunt < CAbilitySimpleSpell`, immediate order 852520, targs `air,ground,enemy,vuln,invu`): every
+/// enemy within `Area` of the caster is ordered to attack it. UNSURE: the original may hold the order for `DataA` (10)
+/// seconds; here the order is an ordinary attack order that later orders replace.
+fn taunt(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    let (cx, cy) = (gm.unit(rec.caster).x, gm.unit(rec.caster).y);
+    let handle = gm.handle_of(rec.caster);
+    if handle == 0 {
+        return;
+    }
+    let word = targs_word("air,ground,enemy,vuln,invu");
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        if k == rec.caster || !gm.alive(k) || !targs_ok(&gm, rec.caster, k, word) {
+            continue;
+        }
+        let order = crate::orders::Order {
+            id: crate::orders::ORDER_ATTACK,
+            class: crate::orders::OrderClass::Target,
+            point: None,
+            target: handle,
+        };
+        let _ = gm.issue_order(k, order, true);
     }
 }
