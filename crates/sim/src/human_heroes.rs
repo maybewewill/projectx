@@ -659,7 +659,7 @@ fn water_elemental(game: &RefCell<Game>, rec: &CastRec) {
 /// `0x6F128BE0` (slot `0x3E4`) does not start a timed life; it only stores the summoner in the unit's `0x6F1132A0` buff.
 /// The stock Phoenix has `Dur` 0, so the summon is permanent (`BHwe` with a zero duration starts no timer).
 fn phoenix(game: &RefCell<Game>, rec: &CastRec) {
-    summon(game, rec, BUFF_WATER_ELEMENTAL);
+    summon_with(game, rec, None);
 }
 
 /// The summon loop of the Water Elemental family (`0x6F163390`, vtable slot `0x3C0` of `CAbilityWaterElemental`,
@@ -672,6 +672,12 @@ fn phoenix(game: &RefCell<Game>, rec: &CastRec) {
 /// duration (the timed-life buff) and the release. The count and duration arithmetic is Feral Spirit's
 /// (`orc::feral_plan`). The earlier model put the units on the caster and passed radians as degrees.
 pub(crate) fn summon(game: &RefCell<Game>, rec: &CastRec, timed_life: u32) {
+    summon_with(game, rec, Some(timed_life));
+}
+
+/// The summon loop with an optional timed-life buff: Summon Phoenix passes `None` (its class slot `0x3E4`, `0x6F128BE0`, only stores the
+/// summoner, V7: it never starts a timed life).
+pub(crate) fn summon_with(game: &RefCell<Game>, rec: &CastRec, timed_life: Option<u32>) {
     let mut gm = game.borrow_mut();
     let plan = crate::orc::feral_plan(rec.level.dur, F32::ZERO, rec.level.data[0]);
     let (x, y, owner, facing) = {
@@ -691,7 +697,9 @@ pub(crate) fn summon(game: &RefCell<Game>, rec: &CastRec, timed_life: u32) {
             crate::natives::unit::build(&mut gm, owner, rec.level.unit_id, px, py, crate::orc::rad_to_deg(facing), true)
         {
             gm.unit_mut(k).summoned = true;
-            gm.apply_timed_life(k, timed_life, plan.duration);
+            if let Some(buff) = timed_life {
+                gm.apply_timed_life(k, buff, plan.duration);
+            }
         }
     }
 }

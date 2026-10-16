@@ -589,3 +589,21 @@ meaning of slot `0x398`.
   passed the facing in radians where `build` takes degrees. `summon` (also used by Phoenix, Scout, Spirit of Vengeance and the
   neutral water elementals) now uses `feral_plan` / `feral_place`. Not run: the class slot `0x3E4` bodies (buff creation, Unicorn
   22 cases for the timed-life apply in `abilities-2.md`), the unit creator's own placement search.
+
+## 19. V7 verification (Unicorn, 0 mismatches)
+
+* **Summon Phoenix (`AHpx`) CONFIRMED (300):** the effect slot `0x3C0` (`0x6F11BA10`) registers a callback (`0x6F1132A0` is only the code
+  getter `'Aphx'`, `0x6F46D1B0` the registration, stubbed) and jumps into the summon loop `0x6F163390`; the whole entry ran
+  (`tools/emu/v7_phoenix_emu.py`): count `F2I(DataA)`, creator flag `0x502`/`2`, link, duration pointer. The post-create hook `0x6F128BE0`
+  stores the summoner and never starts a timed life, so the model's `phoenix` no longer applies one (`summon_with(.., None)`).
+* **Flame Strike (`AHfs`), decoded, NOT modelled:** stock row Cast 1.33, Dur 9, HeroDur 2.67, Area 200, DataA 15, DataB 0.33, DataC 4,
+  DataD 1, DataE 0.75, DataF 90, buff `BHfs`, effect `XHfs`. Timer `0xD01B4` (1.0 s) and the event `0xD019C` create the effect through
+  `0x6F08DC00`; `CBuffFlameStrike` (`BHfs`) keeps two (amount, interval) pairs and picks the "half" pair when its phase property
+  (`+0xFC`) is not above zero (`0x6F0B2820` / `0x6F0B2870`: full at `+0x118` / `+0xEC`, half at `+0x128` / `+0x120`); the setup `0x6F081180`
+  stores the amounts and intervals and starts the phase countdown when the 4th pointer is positive. The effect's
+  message handler `0x6F098380` and the area marker `BHfa` were not decoded.
+* **Siphon Mana (`AHdr`, class `CAbilityDrain`), decoded, NOT modelled:** stock row Dur 6, Area 800, Rng 600, DataA 0, DataB 15, DataC 1,
+  DataD 0, DataE 30; nine buffs (`Bdcb..Bdbm`). The effect `0x6F0B6900` selects one of three buff pairs: `A = DataA != 0`, `B = DataB != 0`,
+  `L = DataD != 0 && Misc DrainTransfersLife`, `M = DataE != 0 && Misc DrainTransfersMana`; mode 1 if `A`; else if `L == 0` mode 0 when
+  `!B && !M` else mode 2; else mode 2 if `B`, mode 1 if `!M`, else mode 0. The channel tick period is `DataC` (timer `0xD01C1`), the range
+  gate `0x6F4766E0` with `Area`, the readiness check `0x6F08A580`. The six buff classes that move the life / mana were not decoded.

@@ -1196,6 +1196,11 @@ impl Game {
         set_life(self, target, next).then_some(target)
     }
 
+    /// The Misc `MagicImmunesResistDamage` flag (read by the area collector gates, `unit_abilities_a2::ring_collect`).
+    pub(crate) fn misc_magic_immunes_resist(&self) -> bool {
+        self.combat.misc.magic_immunes_resist
+    }
+
     /// `UnitDamagePoint` body (`0x6F2C31D0`, structure CONFIRMED, membership test UNSURE): collects the live units in
     /// the circle first (the collector `0x6F2C2E80` runs for every candidate before any damage), then damages each
     /// through the same per-target path as `UnitDamageTarget` (`0x6F2BFED0` builds the record with the call's class,

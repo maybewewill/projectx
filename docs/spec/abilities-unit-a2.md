@@ -130,3 +130,34 @@ Tests: `crates/sim/tests/unit_abilities_a2_area.rs`.
 None run in this batch: every number is a level-record field used as the editor labels name it, and the cores reused
 (`unit_damage_target`, the buff framework, the income changer, `dispel_one`, the Rejuvenation tick) are the ones already
 checked. All labels are therefore LIKELY or UNSURE, none CONFIRMED.
+
+## V7: verification against the original (Unicorn, 0 mismatches)
+
+* **Area-damage collector `0x6F2C2E80` CONFIRMED (600 cases, membership `0x6F476C40` stubbed):** a unit takes the amount of the SMALLEST
+  ring (strictly smaller radius wins, the scan starts at twice the largest radius) whose membership test accepts it; max mode (context
+  flag and `0x6F26F2B0`) takes the largest amount (ordered compare, start 0.0); an amount equal to 0.0 stores nothing; the immunity gates:
+  Misc `MagicImmunesResistDamage` on: class mask A `0x033EE700` or row 4 -> invulnerable or magic-immune counter > 0 stops, class mask B
+  `0x00C11830` or rows 1,2,3,5,6 -> ethereal counter > 0 stops; off: every class except 16, 32, 0x4000000, 0x400000 is stopped by
+  invulnerability or magic immunity; the stored bucket is 0 / 1 / 2 by the two relation tests. `unit_abilities_a2::ring_collect`.
+  **Open:** the membership test is the collision-adjusted `0x6F476C40` (radius/32 + the unit's collision against the squared cell distance
+  of the unit's cell position; accepted when `V > D` or `|D - V| < 0.001`); the model keeps the circle test.
+* **Aflk CONFIRMED (handler 300 + collector 600):** `0x6F177D00` hands the area body three rings in this order: (Area, DataC),
+  (DataA, DataD), (DataB, DataE), the record's class / row / flag words and the ability's targs; it runs only when the ability is enabled
+  and its pause counter is not positive. **Model fixed:** the stock Frag Shards / Flak rows are no longer re-paired by sorting; a unit
+  takes the amount of the smallest ring that contains it (so a Frag Shards target 120 away takes `DataE`).
+* **Afsh CONFIRMED (handler 300 + collector 600):** `0x6F183B40` passes the same rings through a temporary object's slot 212.
+* **Adda CONFIRMED (handler 300 + collector 600):** `0x6F1E7200` creates the delayed damage object (`0x6F2C4D70`, delay = `Dur`,
+  rings (DataA, DataB), (DataC, DataD), count 2, class 16, the targs word) unless the ability is disabled, has flag `0x80`, the dying
+  unit is an illusion or removed. Model fixed (illusion / removed units do not explode; smallest ring). The damage class / row the delayed
+  object ends up with is not run (the model keeps class `0x400000`).
+* **Afak CONFIRMED (300, handler only):** `0x6F09DE00` writes the launch-record splash fields Hfact <- DataB, Qfact <- DataC, Farea <- DataD,
+  Harea <- DataE, Qarea <- Area when ability flag `0x400000` is set (and clears it). The verified splash engine (`splash::ring_factor`,
+  `bounce::launch_factors`: a zero factor becomes 0.5 / 0.25) now supplies the factors. The orb parent (`Cost`, the `DataA` bonus damage) is not run.
+* **Agld / Ahrl / Ahar CONFIRMED (300 each, init slots):** `Agld` (`0x6F0ACB00`): `f2i(DataA)` gold, `DataB` is a mining rate (1.0 when
+  exactly 0), `DataC` the slot count (`f2i`, capped at 32, 1 when 0); `Ahrl` (`0x6F0557D0`): `Area` harvest property, `f2i(DataA)` lumber
+  per hit, `f2i(DataB)` lumber capacity; `Ahar` (`0x6F055A20`) adds `f2i(DataC)` gold capacity. The earlier "DataB / DataC unused" for
+  `Agld` was wrong; `gold_mine_init` / `harvest_init`. The harvest cycle itself and the Misc `GoldMineOwnDuration` holder were not run.
+* **Not verified (reasons):** Acor / Afrz / Aliq / Afrb (their `0x14C / 0x150` handlers build a buff-applier from constants, the numbers
+  are read later by the buff classes); Aeat (properties `+0x88 = DataA`, `+0x90 = DataB`, the buff `0x6F0B7530` gets `DataC` and
+  `Dur`/`HeroDur`; the timers behind them were not run); Acan (heal tick lives in a buff class not found); Acoa / Acoh / Adec / Afla (effect
+  bodies need the unit builder / effect objects); Adet family (registration only, the range test is the vision system's).

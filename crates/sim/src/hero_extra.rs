@@ -102,6 +102,8 @@ pub struct State {
     /// Running channels (Starfall, Tranquility) by cast id.
     channels: BTreeMap<u32, Channel>,
     devours: BTreeMap<u32, Devour>,
+    /// Locust Swarms still releasing locusts by cast id (V7).
+    locusts: BTreeMap<u32, Locust>,
     next: u32,
     /// The unit type a spell creates when the level record carries none (Carrion Scarabs' `DataC` rawcode).
     extra_unit: BTreeMap<u32, u32>,
@@ -328,15 +330,48 @@ fn meta_start(game: &RefCell<Game>, id: u32) {
     if !gm.alive(caster) {
         return;
     }
-    let serial = gm.add_spell_buff(caster, BUFF_METAMORPHOSIS, BuffEffect::Marker, level.hero_dur);
-    if serial == 0 {
-        return;
+    // V7 (CONFIRMED, `0x6F13D5C0`): an earlier `BEme` buff is removed; the buff lasts `HeroDur + 0.01` (none for an illusion or a
+    // `HeroDur` that is not above zero); the `DataE` bonus goes through the life sink in mode 3 whether or not a buff was made.
+    let illusion = gm.unit(caster).illusion;
+    let plan = meta_in_plan(level.hero_dur, illusion, level.data[4]);
+    let serial = gm.add_spell_buff(caster, BUFF_METAMORPHOSIS, BuffEffect::Marker, plan.buff_duration.unwrap_or(F32::ZERO));
+    life_sink_mode3(&mut gm, caster, plan.sink_value);
+    if serial != 0 {
+        gm.spells.hero.extra.meta.insert(serial, (caster, plan.sink_value));
     }
-    let bonus = level.data[4];
-    let (max, life) = (gm.unit(caster).max_life, gm.unit(caster).life);
-    gm.write_max_life(caster, arith::add(max, bonus));
-    gm.write_life(caster, arith::add(life, bonus));
-    gm.spells.hero.extra.meta.insert(serial, (caster, bonus));
+}
+
+/// What the Metamorphosis morph-in hook (slot `0x40C`, `0x6F13D5C0`) does with the level: the buff duration `add(HeroDur, 0.01)`
+/// (`0x6FAAE480`) when the effective `HeroDur` (0.0 for an illusion caster) is above zero, and the life sink value `DataE`
+/// (mode 3). CONFIRMED (V7, Unicorn `tools/emu/v7_meta_emu.py`, 300 cases).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MetaIn {
+    pub buff_duration: Option<F32>,
+    pub sink_value: F32,
+}
+
+pub fn meta_in_plan(hero_dur: F32, illusion: bool, data_e: F32) -> MetaIn {
+    let effective = if illusion { F32::ZERO } else { hero_dur };
+    MetaIn {
+        buff_duration: arith::lt(F32::ZERO, effective).then(|| arith::add(effective, F32::from_bits(0x3C23_D70A))),
+        sink_value: data_e,
+    }
+}
+
+/// The revert hook (slot `0x414`, `0x6F111D20`): the stored bonus goes through the life sink negated (sign bit flipped), mode 3.
+/// CONFIRMED (V7).
+pub fn meta_out_value(stored: F32) -> F32 {
+    F32::from_bits(stored.to_bits() ^ 0x8000_0000)
+}
+
+/// The unit life sink `0x6F2AC450` in mode 3 (maximum and life rise together for a non-negative value; a negative value only
+/// lowers the maximum and clamps the life), CONFIRMED earlier (`tests/life_sink_vectors.rs`).
+fn life_sink_mode3(gm: &mut Game, unit: ObjKey, value: F32) {
+    let flagged = gm.unit(unit).dead;
+    let mut cells = gm.life_cells(unit);
+    let tables = gm.order_tables().cloned();
+    crate::heroes::life_sink(&mut cells, flagged, value, 3, tables.as_ref());
+    gm.put_life_cells(unit, cells);
 }
 
 /// The buff `serial` ended (called by `Game::drop_spell_buff`): the form wears off, the bonus hit points go.
@@ -347,11 +382,7 @@ pub(crate) fn on_buff_dropped(gm: &mut Game, serial: u32) {
     if !gm.alive(unit) {
         return;
     }
-    let max = arith::sub(gm.unit(unit).max_life, bonus);
-    gm.write_max_life(unit, max);
-    if arith::lt(max, gm.unit(unit).life) {
-        gm.write_life(unit, max);
-    }
+    life_sink_mode3(gm, unit, meta_out_value(bonus));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -389,12 +420,107 @@ fn summon_n(game: &RefCell<Game>, rec: &CastRec, timed_life: u32, count: i32, du
     }
 }
 
-/// Locust Swarm (`CAbilityLocustSwarm`, `0x6F8DDA84`): `UnitID` (`uloc`) locusts, `f2i(DataC)` of them, for `Dur`
-/// (LIKELY from the data: `Dur` 30, `DataC` 7). The life steal of the swarm (`DataD` 0.75 of the damage dealt returns to
-/// the caster) and the return of the locusts need per-attack hooks and are not modelled.
+/// The number of locusts a Locust Swarm releases: `f2i(DataA)` clamped to `1..=40` (stored at ability `+0x308`).
+/// CONFIRMED (V7, Unicorn `tools/emu/v7_locust_emu.py`, 300 cases, effect `0x6F134EA0`). Stock `DataA` is 20.
+pub fn locust_count(data_a: F32) -> i32 {
+    conv::f2i(data_a).clamp(1, 40)
+}
+
+/// The Locust Swarm plan (`0x6F134EA0`): the count, the step interval `DataB` (the value the 0xD01C1 timer gets), the total time
+/// `add(ability +0x9C, Dur)` of the 0xD01C4 timer and the numbers the locust ability `Aloc` gets (`0x6F124EF0`: `Area`,
+/// `f2i(DataC)`, `DataD`, `DataE`). CONFIRMED (V7).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LocustPlan {
+    pub count: i32,
+    pub interval: F32,
+    pub total: F32,
+    pub aloc: (F32, i32, F32, F32),
+}
+
+pub fn locust_plan(level: &SpellLevel, extra_9c: F32) -> LocustPlan {
+    LocustPlan {
+        count: locust_count(level.data[0]),
+        interval: level.data[1],
+        total: arith::add(level.dur, extra_9c),
+        aloc: (level.area, conv::f2i(level.data[2]), level.data[3], level.data[4]),
+    }
+}
+
+/// Whether the step that has made the `made`-th locust (1-based, the counter after `++`) arms the next one: `made < count`.
+pub fn locust_continues(made: i32, count: i32) -> bool {
+    made < count
+}
+
+/// One Locust Swarm swarm in progress: the original makes ONE locust per step (`0x6F12CE70`, a unit of `UnitID` at the caster
+/// for the caster's owner), the first at once and then one every `DataB` seconds (message `0xD01C1`; stock 0.2 s) until the
+/// count is reached; the swarm ends `Dur + (ability +0x9C)` seconds after the cast (message `0xD01C4`, `0x6F12F1B0(1)`
+/// releases every locust). Each locust's own ability `Aloc` gets `(Area, f2i(DataC), DataD, DataE)` (`0x6F124EF0`).
+#[derive(Debug, Clone, Copy)]
+struct Locust {
+    caster: ObjKey,
+    level: SpellLevel,
+    count: i32,
+    spawned: i32,
+    unit_type: u32,
+    /// The time left of the swarm when the next locust is made.
+    remaining: F32,
+}
+
+/// Locust Swarm (`CAbilityLocustSwarm`, `0x6F8DDA84`): V7 fixed the model (it made `f2i(DataC)` locusts at once and ignored
+/// `DataA`/`DataB`). The life steal (`DataD`, `DataE`) and the release of the locusts at the end need per-attack hooks and are
+/// not modelled (UNSURE: the model gives each locust a timed life of the swarm time left).
 fn locust_swarm(game: &RefCell<Game>, rec: &CastRec) {
-    let count = conv::f2i(rec.level.data[2]).max(1);
-    summon_n(game, rec, BUFF_LOCUST, count, rec.level.dur);
+    let mut gm = game.borrow_mut();
+    let unit_type = if rec.level.unit_id != 0 {
+        rec.level.unit_id
+    } else {
+        gm.spells.hero.extra.extra_unit.get(&rec.base).copied().unwrap_or(0)
+    };
+    if unit_type == 0 || !gm.alive(rec.caster) {
+        return;
+    }
+    gm.spells.hero.extra.next += 1;
+    let id = gm.spells.hero.extra.next;
+    let swarm = Locust {
+        caster: rec.caster,
+        level: rec.level,
+        count: locust_plan(&rec.level, F32::ZERO).count,
+        spawned: 0,
+        unit_type,
+        remaining: locust_plan(&rec.level, F32::ZERO).total,
+    };
+    gm.spells.hero.extra.locusts.insert(id, swarm);
+    locust_step(&mut gm, id);
+}
+
+/// `0x6F12CE70`: makes the next locust and, while `spawned < count`, arms the next step `DataB` seconds away.
+fn locust_step(gm: &mut Game, id: u32) {
+    let Some(mut sw) = gm.spells.hero.extra.locusts.get(&id).copied() else {
+        return;
+    };
+    if !gm.alive(sw.caster) || sw.spawned >= sw.count {
+        gm.spells.hero.extra.locusts.remove(&id);
+        return;
+    }
+    let (x, y, owner, facing) = {
+        let c = gm.unit(sw.caster);
+        (c.x, c.y, c.owner, c.facing)
+    };
+    if let Some((k, _)) = crate::natives::unit::build(gm, owner, sw.unit_type, x, y, facing, true) {
+        gm.unit_mut(k).summoned = true;
+        if arith::lt(F32::ZERO, sw.remaining) {
+            gm.apply_timed_life(k, BUFF_LOCUST, sw.remaining);
+        }
+    }
+    sw.spawned += 1;
+    let interval = sw.level.data[1];
+    if sw.spawned < sw.count {
+        sw.remaining = arith::sub(sw.remaining, interval);
+        gm.spells.hero.extra.locusts.insert(id, sw);
+        gm.timers_start_hero(interval.to_f32().max(0.0), TICK_CHANNEL, sw.caster, id);
+    } else {
+        gm.spells.hero.extra.locusts.remove(&id);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -436,16 +562,13 @@ fn animate_dead(game: &RefCell<Game>, rec: &CastRec) {
     let max = conv::f2i(rec.level.data[0]).max(0) as usize;
     let dur = arith::add(rec.level.dur, F32::ZERO);
     for corpse in corpses_near(&gm, cx, cy, rec.level.area).into_iter().take(max) {
-        let (ty, x, y, facing) = {
-            let u = gm.unit(corpse);
-            (u.type_id, u.x, u.y, u.facing)
-        };
-        crate::natives::unit::remove_unit(&mut gm, corpse);
-        if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty, x, y, facing, true) {
-            gm.unit_mut(k).summoned = true;
-            if arith::lt(F32::ZERO, dur) {
-                gm.apply_timed_life(k, BUFF_ANIMATE_DEAD, dur);
-            }
+        // V7 (read in `0x6F1B5A60` / `0x6F2A64A0`, not run): the original revives the corpse UNIT ITSELF in place (full life, the
+        // caster's player as the new owner, the "summoned" flag), it does not make a new unit. The handle stays the same.
+        gm.resurrect_unit(corpse);
+        crate::natives::unit::change_owner(&mut gm, corpse, owner);
+        gm.unit_mut(corpse).summoned = true;
+        if arith::lt(F32::ZERO, dur) {
+            gm.apply_timed_life(corpse, BUFF_ANIMATE_DEAD, dur);
         }
     }
 }
@@ -728,7 +851,14 @@ impl Game {
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, _unit: ObjKey, aux: u32) {
     match kind {
         TICK_META_START => meta_start(game, aux),
-        TICK_CHANNEL => channel_pulse(game, rt, aux),
+        TICK_CHANNEL => {
+            let swarm = game.borrow().spells.hero.extra.locusts.contains_key(&aux);
+            if swarm {
+                locust_step(&mut game.borrow_mut(), aux);
+            } else {
+                channel_pulse(game, rt, aux)
+            }
+        }
         TICK_DEVOUR_END => devour_end(game, rt, aux),
         _ => {}
     }

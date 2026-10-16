@@ -197,6 +197,85 @@ pub const ORDER_BERSERK: u32 = 852_100;
 pub const ORDER_ANTI_MAGIC: u32 = 852_186;
 pub const ORDER_CONTROL_MAGIC: u32 = 852_474;
 
+/// The flag the regeneration auras' ability apply (`0x6F06F430` Aabr, `0x6F06F310` Aoar, `0x6F06F3A0` Aarm) hands to the buff:
+/// the x87 compare `0.0 == DataB` (so `-0.0` is true and NaN false). The buff's apply (`0x6F043FA0`, `0x6F043A20`,
+/// `0x6F043CE0`) treats the rate as a fraction of the owner's maximum life / mana exactly when this flag is CLEAR.
+/// CONFIRMED (V7, Unicorn `tools/emu/v7_aura_emu.py`).
+pub fn regen_aura_absolute_flag(data_b: F32) -> bool {
+    !nonzero(data_b)
+}
+
+/// The regeneration rate a regeneration aura buff gives its owner: `DataA`, or `DataA * max` (soft mul, that order) when the
+/// absolute flag is clear. CONFIRMED (V7).
+pub fn regen_aura_amount(data_a: F32, data_b: F32, max: F32) -> F32 {
+    crate::auras::aura_stat_amount(!regen_aura_absolute_flag(data_b), data_a, max)
+}
+
+/// One step of the ethereal counter (unit `+0x158`): the ability init `0x6F07A340` (`add`) increments and runs the enter side
+/// effects when the count becomes 1; the removal `0x6F0796A0` decrements and runs the leave effects when it reaches 0 (an
+/// unbalanced removal goes negative and runs nothing). Returns `(count, entered, left)`. CONFIRMED (V7, Unicorn
+/// `tools/emu/v7_ethereal_emu.py`, 400 sequences, counter, the attack-block counter `+0x1C0` and the side-effect calls).
+pub fn ethereal_step(count: i32, add: bool) -> (i32, bool, bool) {
+    if add {
+        let c = count.wrapping_add(1);
+        (c, c == 1, false)
+    } else {
+        let c = count.wrapping_sub(1);
+        (c, false, c == 0)
+    }
+}
+
+/// The result of one `CBuffAuraSlow` update (slot `0x370`, `0x6F1AD2F0`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlowUpdate {
+    /// The base slots ran (the buff's owner / duration refresh).
+    pub refreshed: bool,
+    pub movement: F32,
+    pub attack: F32,
+    /// The applied bits afterwards (`0x200` movement, `0x100` attack speed).
+    pub flags: u32,
+    /// The sink calls in order: `('m', value)` movement multiplier, `('a', value)` attack speed.
+    pub sinks: Vec<(char, F32)>,
+}
+
+/// What a Slow aura buff does when it is applied again with strengths `new` (movement, attack speed) over the `stored`
+/// ones (`0x6F1AD2F0`, CONFIRMED by V7 in Unicorn): nothing at all when BOTH new strengths exceed the stored ones by the
+/// tolerance (weaker slows); otherwise the duration refreshes and each component whose stored strength exceeds the new one
+/// by the tolerance is undone (negated sink, only if applied) and replaced and re-applied; a component that does not
+/// is left as it was. `unit_has_move` / `unit_has_attack`: the owner's movement / attack abilities exist (they gate the sinks).
+pub fn slow_aura_update(flags: u32, stored: (F32, F32), new: (F32, F32), unit_has_move: bool, unit_has_attack: bool) -> SlowUpdate {
+    use crate::auras::{new_exceeds, stored_exceeds};
+    let mut u = SlowUpdate { refreshed: false, movement: stored.0, attack: stored.1, flags, sinks: Vec::new() };
+    if new_exceeds(new.0, stored.0) && new_exceeds(new.1, stored.1) {
+        return u;
+    }
+    u.refreshed = true;
+    let neg = |x: F32| F32::from_bits(x.to_bits() ^ 0x8000_0000);
+    if stored_exceeds(new.0, stored.0) {
+        if u.flags & 0x200 != 0 && unit_has_move {
+            u.flags &= !0x200;
+            u.sinks.push(('m', neg(stored.0)));
+        }
+        u.movement = new.0;
+        if u.flags & 0x200 == 0 && unit_has_move {
+            u.flags |= 0x200;
+            u.sinks.push(('m', u.movement));
+        }
+    }
+    if stored_exceeds(new.1, stored.1) {
+        if u.flags & 0x100 != 0 && unit_has_attack {
+            u.flags &= !0x100;
+            u.sinks.push(('a', neg(stored.1)));
+        }
+        u.attack = new.1;
+        if u.flags & 0x100 == 0 && unit_has_attack {
+            u.flags |= 0x100;
+            u.sinks.push(('a', u.attack));
+        }
+    }
+    u
+}
+
 fn nonzero(x: F32) -> bool {
     x.to_bits() & 0x7FFF_FFFF != 0
 }
@@ -210,10 +289,10 @@ impl Game {
         let counted = self.spells.unit_a.eth.contains(&unit);
         if has && !counted {
             self.spells.unit_a.eth.insert(unit);
-            self.unit_mut(unit).ethereal += 1;
+            self.unit_mut(unit).ethereal = ethereal_step(self.unit(unit).ethereal, true).0;
         } else if !has && counted {
             self.spells.unit_a.eth.remove(&unit);
-            self.unit_mut(unit).ethereal -= 1;
+            self.unit_mut(unit).ethereal = ethereal_step(self.unit(unit).ethereal, false).0;
         }
         for base in [AURA_BLIGHT_REGEN, AURA_REGEN_MANA, AURA_SLOW, AURA_WAR_DRUMS, crate::unit_abilities_m::AURA_REGEN_LIFE] {
             let has = self.unit(unit).abilities.get(base).is_some_and(|a| !a.is_removed());
@@ -273,17 +352,29 @@ impl Game {
         let mods = match base {
             AURA_BLIGHT_REGEN | crate::unit_abilities_m::AURA_REGEN_LIFE => {
                 preds.positive = true;
-                let amount = if nonzero(d[1]) { arith::mul(d[0], self.unit(target).max_life) } else { d[0] };
+                let amount = regen_aura_amount(d[0], d[1], self.unit(target).max_life);
                 UnitMods { life_regen: amount, ..UnitMods::default() }
             }
             AURA_REGEN_MANA => {
                 preds.positive = true;
-                let amount = if nonzero(d[1]) { arith::mul(d[0], self.unit(target).max_mana) } else { d[0] };
+                let amount = regen_aura_amount(d[0], d[1], self.unit(target).max_mana);
                 UnitMods { mana_regen: amount, ..UnitMods::default() }
             }
             AURA_SLOW => {
                 preds.negative = true;
-                UnitMods { move_delta: d[0], attack_delta: d[1], ..UnitMods::default() }
+                let mut mods = UnitMods { move_delta: d[0], attack_delta: d[1], ..UnitMods::default() };
+                // V7 (CONFIRMED, `0x6F1AD2F0`): an existing Slow buff keeps each strength unless the new one is
+                // stronger by the tolerance, and does nothing at all when both new strengths are weaker.
+                if let Some(i) = self.buff_position(target, buff) {
+                    if let Some(crate::auras::BuffEffect::Mods(old)) = self.unit(target).buffs[i].effect.clone() {
+                        let up = slow_aura_update(0x300, (old.move_delta, old.attack_delta), (d[0], d[1]), true, true);
+                        if !up.refreshed {
+                            return;
+                        }
+                        mods = UnitMods { move_delta: up.movement, attack_delta: up.attack, ..UnitMods::default() };
+                    }
+                }
+                mods
             }
             _ => {
                 // War Drums: the Command aura damage bonus. The original adds `round(DataA * base damage)` to the
