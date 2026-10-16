@@ -202,22 +202,28 @@ fn dispatch(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, killer: ObjKey, de
 // ---------------------------------------------------------------------------------------------------------------
 // Fan of Knives (`CAbilityFanOfKnives`, `0x6F8AAC14`, a `CAbilitySimpleSpell`, effect slot `0x428` = `0x6F08C100`).
 
-/// The damage each victim takes: `DataA`, or `DataB / n` when `n * DataA` exceeds the cap `DataB` (LIKELY: the tooltip
-/// "75 damage, at most 300 in total"; the original body `0x6F08C100` hands DataA/DataB to the area launcher `0x6F2C5C40`,
-/// whose cap arithmetic was not decoded). A zero cap means "no cap".
-pub fn fan_damage_each(gm: &Game, data_a: F32, data_b: F32, n: usize) -> F32 {
-    if n == 0 || !arith::lt(F32::ZERO, data_b) {
-        return data_a;
+/// The per-victim amounts of the area launcher `0x6F2C5C40` (CONFIRMED, Unicorn 400 cases, `tools/emu/v2_fan_emu.py`): `DataB` is a
+/// pool ("max damage", 1.0 when zero, then the pool is not used up), victims are taken nearest first; before each victim the loop
+/// stops unless the pool is above 0.0 or when `limit != 0 && i > limit` (`limit` = F2I(`DataC`), so `limit + 1` victims at
+/// most); a pool victim takes `prev - (prev - DataA)` through the truncating soft float (so it can differ from `DataA` by one
+/// ulp) and the pool falls by `DataA`: the victim that crosses zero is still hit in full.
+pub fn fan_plan(n: usize, data_a: F32, data_b: F32, limit: i32) -> Vec<F32> {
+    let pooled = data_b.to_f32() != 0.0;
+    let mut pool = if pooled { data_b } else { F32::from_bits(0x3F80_0000) };
+    let mut out = Vec::new();
+    for i in 0..n {
+        if !arith::lt(F32::ZERO, pool) || (limit != 0 && i as i64 > limit as i64) {
+            break;
+        }
+        let mut each = data_a;
+        if pooled {
+            let prev = pool;
+            pool = arith::sub(pool, data_a);
+            each = arith::sub(prev, pool);
+        }
+        out.push(each);
     }
-    let total = arith::mul(conv::i2r(n as i32), data_a);
-    if !arith::lt(data_b, total) {
-        return data_a;
-    }
-    match gm.order_tables() {
-        Some(t) => arith::div(data_b, conv::i2r(n as i32), t),
-        // A host without the Game.dll tables (tests): plain IEEE division.
-        None => F32::from_bits((data_b.to_f32() / n as f32).to_bits()),
-    }
+    out
 }
 
 fn fan_of_knives(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
@@ -236,8 +242,25 @@ fn fan_of_knives(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec
             .into_iter()
             .filter(|&k| is_enemy_unit(&gm, owner, k) && organic_ground_or_air(&gm, k) && !gm.unit_is_invulnerable(k))
             .collect();
-        let each = fan_damage_each(&gm, rec.level.data[0], rec.level.data[1], victims.len());
-        for k in victims {
+        // Nearest first (the launcher sorts its collector by distance, ties by unit id).
+        let mut victims: Vec<(F32, ObjKey)> = victims
+            .into_iter()
+            .map(|k| {
+                let u = gm.unit(k);
+                (arith::dist2(u.x, u.y, cx, cy), k)
+            })
+            .collect();
+        victims.sort_by(|a, b| {
+            if arith::lt(a.0, b.0) {
+                std::cmp::Ordering::Less
+            } else if arith::lt(b.0, a.0) {
+                std::cmp::Ordering::Greater
+            } else {
+                a.1 .0.cmp(&b.1 .0)
+            }
+        });
+        let plan = fan_plan(victims.len(), rec.level.data[0], rec.level.data[1], conv::f2i(rec.level.data[2]));
+        for ((_, k), each) in victims.into_iter().zip(plan) {
             if let Some(d) = gm.unit_damage_target(rec.caster, k, each, false, false, 0, DT_MAGIC) {
                 dead.push(d);
             }

@@ -188,22 +188,22 @@ fn fan_of_knives_damage_is_capped_in_total() {
     give(&mut h, FAN_OF_KNIVES);
     let (e1, e2, e3, far) = (unit(&h, "e1"), unit(&h, "e2"), unit(&h, "e3"), unit(&h, "far"));
     assert!(cast_immediate(&mut h, 852_526));
-    // 3 victims x 75 = 225 > cap 200 -> 66.67 each.
+    // Pool 200, 75 per victim: 200 -> 125 -> 50 -> -25, so all three are hit in full (the one that crosses zero too).
     for e in [e1, e2, e3] {
         let taken = 500.0 - life(&h, e);
-        assert!((taken - 200.0 / 3.0).abs() < 0.05, "got {taken}");
+        assert!((taken - 75.0).abs() < 0.05, "got {taken}");
     }
     assert_eq!(life(&h, far), 500.0);
     assert_eq!(life(&h, unit(&h, "friend")), 100.0);
 }
 
 #[test]
-fn fan_damage_each_uses_the_cap_only_when_exceeded() {
-    let h = host();
-    let g = h.game();
-    assert_eq!(fan_damage_each(&g, f(75.0), f(300.0), 3).to_f32(), 75.0);
-    assert_eq!(fan_damage_each(&g, f(75.0), f(0.0), 9).to_f32(), 75.0);
-    assert!((fan_damage_each(&g, f(75.0), f(300.0), 8).to_f32() - 37.5).abs() < 0.01);
+fn fan_plan_pool_stops_after_it_is_used_up() {
+    assert_eq!(fan_plan(3, f(75.0), f(300.0), 0).len(), 3);
+    assert_eq!(fan_plan(9, f(75.0), f(0.0), 0).len(), 9);
+    // 300 / 75 = 4 victims; the pool is exactly 0.0 afterwards.
+    assert_eq!(fan_plan(8, f(75.0), f(300.0), 0).len(), 4);
+    assert_eq!(fan_plan(12, f(52.0), f(0.0), 1).len(), 2);
 }
 
 #[test]
