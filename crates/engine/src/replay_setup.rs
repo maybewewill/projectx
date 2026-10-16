@@ -36,6 +36,13 @@ pub const SLOT_USED: u8 = 2;
 /// The settings flag that selects the fixed seed `0x77617233` (CONFIRMED rule, see `sim::rng`).
 pub const FIXED_SEED_FLAG: u32 = 0x8000;
 
+/// The replay-header settings bit that also selects the fixed seed. EVIDENCE (docs/spec/lockstep.md section 19): the
+/// EchoIsles replay (flags `0x00800002`, record seed `0x030b2473`) shows generator draws that follow the
+/// sequence of seed `0x77617233` (hundreds of matches of the recorded generator-hash changes, against about ten for
+/// any other seed). Which bit of the replay's flag word becomes the engine's `0x8000` is UNSURE; this one is the
+/// only candidate in that file.
+pub const REPLAY_FIXED_SEED_BIT: u32 = 0x0080_0000;
+
 /// Maps a replay race byte to the JASS race value (LIKELY bit layout: 0x01 human, 0x02 orc, 0x04 night
 /// elf, 0x08 undead). A random race (0x20) or any other value gives `None`: the original's random
 /// draw is not modelled.
@@ -97,9 +104,10 @@ pub fn setup_of(replay: &w3g::Replay) -> Result<ReplaySetup, SetupError> {
         });
     }
     let flags = game.settings.flags;
-    let seed = sim::rng::game_start_seed(flags, game.random_seed);
+    let fixed = if flags & REPLAY_FIXED_SEED_BIT != 0 { flags | FIXED_SEED_FLAG } else { flags };
+    let seed = sim::rng::game_start_seed(fixed, game.random_seed);
     let mut notes = Vec::new();
-    if flags & FIXED_SEED_FLAG != 0 {
+    if fixed & FIXED_SEED_FLAG != 0 {
         notes.push(format!(
             "settings flags {flags:#010x} have the fixed-seed bit: seed {seed:#010x} replaces the record seed (LIKELY link)"
         ));
@@ -180,6 +188,37 @@ pub fn apply_slots(game: &mut Game, setup: &ReplaySetup) -> Option<u32> {
     local
 }
 
+/// The slot race bit of a random race (`0x20`; the replay's `0x60` is random plus the "selectable" bit `0x40`).
+pub const RACE_RANDOM_BIT: u8 = 0x20;
+
+/// Resolves the random races of the occupied slots with the global generator, as the game load does
+/// (`0x6F3A31A0`, called from the load routine `0x6F3B0750` before the placement and before any script):
+/// for player objects `0..11` in order, a player whose race preference has the random bit takes one draw `r` of the
+/// global generator and the race `(r >> 30) + 1` (1 human, 2 orc, 3 undead, 4 night elf: the JASS values).
+/// CONFIRMED structure (machine code); EVIDENCE for the order and the seed: EchoIsles (docs/spec/lockstep.md
+/// section 19) resolves the human to Human with seed `0x77617233`, where the record seed would give a night elf.
+/// Returns one note per resolved slot.
+pub fn resolve_random_races(game: &mut Game, setup: &ReplaySetup) -> Vec<String> {
+    let mut notes = Vec::new();
+    for n in 0..PLAYER_SLOTS.min(12) {
+        let Some(s) = setup.slots.get(n) else { continue };
+        if s.status != SLOT_USED || s.race & RACE_RANDOM_BIT == 0 {
+            continue;
+        }
+        let Some((table, streams)) = game.rng_parts() else {
+            notes.push("random races stay as the map gave them: no RNG table".to_string());
+            return notes;
+        };
+        let r = streams.global.next_u32(table);
+        let race = (r >> 30) + 1;
+        if let Some(p) = game.player_mut(n as u32) {
+            p.race = race;
+        }
+        notes.push(format!("player {n}: random race resolved to {race} (draw {r:#010x})"));
+    }
+    notes
+}
+
 impl Engine {
     /// Boots the map of `inputs` with the game setup of a replay (`replay` is the `.w3g` file).
     ///
@@ -199,7 +238,10 @@ impl Engine {
         let local = {
             let host = engine.host();
             let mut game = host.game_mut();
-            apply_slots(&mut game, &setup)
+            let local = apply_slots(&mut game, &setup);
+            let resolved = resolve_random_races(&mut game, &setup);
+            setup.notes.extend(resolved);
+            local
         };
         if let Some(local) = local.or(setup.local_player) {
             engine.host().game_mut().set_local_player(local);
@@ -306,6 +348,47 @@ mod tests {
         assert_eq!(s.seed, sim::rng::FIXED_GAME_SEED);
         assert_eq!(s.record_seed, 0x1234_5678);
         assert_eq!(s.notes.len(), 1);
+    }
+
+    #[test]
+    fn replay_fixed_seed_bit_selects_the_fixed_seed() {
+        // EchoIsles: flags 0x00800002 and a record seed that is not the generator seed.
+        let r = replay_from(0x0080_0002, &three_slots(), 0x030b_2473, 2);
+        let s = setup_of(&r).unwrap();
+        assert_eq!(s.seed, sim::rng::FIXED_GAME_SEED);
+        assert_eq!(s.record_seed, 0x030b_2473);
+    }
+
+    #[test]
+    fn random_races_take_one_draw_each_in_player_order() {
+        use sim::rng::{Rng, RngTable};
+        let mut bytes = [0u8; 256];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = (i * 7 + 3) as u8; // a permutation of 0..=255 (7 is odd)
+        }
+        let table = RngTable::from_bytes(bytes).unwrap();
+        let slots = vec![
+            record(1, 2, 0, 0, 0, 0x60, 100),
+            record(2, 2, 1, 1, 1, 0x02, 100), // a fixed orc: no draw
+            record(3, 2, 1, 1, 2, 0x60, 100),
+        ];
+        let r = replay_from(0, &slots, 1, 2);
+        let s = setup_of(&r).unwrap();
+        let mut game = Game::new();
+        game.set_rng_table(Some(table.clone()));
+        {
+            let (t, streams) = game.rng_parts().unwrap();
+            streams.start_game(t, 0x7761_7233);
+        }
+        apply_slots(&mut game, &s);
+        let notes = resolve_random_races(&mut game, &s);
+        let mut rng = Rng::seeded(0x7761_7233);
+        let first = (rng.next_u32(&table) >> 30) + 1;
+        let second = (rng.next_u32(&table) >> 30) + 1;
+        assert_eq!(game.player(0).race, first);
+        assert_eq!(game.player(1).race, RACE_ORC);
+        assert_eq!(game.player(2).race, second);
+        assert_eq!(notes.len(), 2);
     }
 
     #[test]

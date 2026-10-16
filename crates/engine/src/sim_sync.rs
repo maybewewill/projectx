@@ -69,6 +69,11 @@ pub struct SimSyncReport {
     pub timeline: Vec<TimelineRow>,
     /// Slots where the replay stream could not be turned into commands.
     pub command_errors: Vec<String>,
+    /// Orders given to units, refused by the dispatcher/validator, and object references that resolved to nothing
+    /// (selections and orders together).
+    pub orders_accepted: usize,
+    pub orders_refused: usize,
+    pub refs_unresolved: usize,
     /// Per-slot trace lines (when requested).
     pub trace: Vec<String>,
     /// Final simulated words, for the report.
@@ -140,6 +145,11 @@ impl SimSyncReport {
             s,
             "  final simulated words: X {:#x}  Y {:#x}  R {:#010x}",
             self.final_x, self.final_y, self.final_r
+        );
+        let _ = writeln!(
+            s,
+            "  replay commands: orders accepted {}  refused {}  object references unresolved {}",
+            self.orders_accepted, self.orders_refused, self.refs_unresolved
         );
         for e in self.command_errors.iter().take(5) {
             let _ = writeln!(s, "  command error: {e}");
@@ -266,6 +276,8 @@ pub struct Options {
     pub register_units: bool,
     /// Do not run `main` before the first slot (default: run it, as the game does while loading).
     pub defer_main: bool,
+    /// Generator hash -> number of draws since the game-start seed (for the trace; empty: unknown).
+    pub draw_index: std::collections::HashMap<u32, u32>,
 }
 
 /// The simulated inputs of one computed record.
@@ -278,6 +290,8 @@ pub struct Inputs {
     pub game: u32,
     pub t: u32,
     pub net: u32,
+    /// Draws the global generator has made since the seed (`u32::MAX`: not known).
+    pub n: u32,
     /// Bit k: stream k's state changed since the previous slot; bit 45: the global generator.
     pub changed: u64,
 }
@@ -341,7 +355,8 @@ pub fn register_start_units(engine: &mut Engine, replay: &w3g::Replay, replay_pi
             engine
                 .commands_mut()
                 .register_object(sim::commands::ObjectRef { id1: id, id2: id }, k);
-            notes.push(format!("object {id:#x} -> unit {idx} of player {sim_player}"));
+            let ty = engine.host().game().unit(k).type_id;
+            notes.push(format!("object {id:#x} -> unit {idx} of player {sim_player} (type {ty:#010x})"));
         }
     }
     notes
@@ -399,12 +414,32 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                 };
                 let t_now = engine.sync().clock();
                 let predicted;
+                let outcomes;
                 if opts.after_commands {
-                    engine.apply_commands(&turn.actions);
+                    outcomes = engine.apply_commands(&turn.actions);
                     predicted = engine.sync_time_slot(*id, &payload);
                 } else {
                     predicted = engine.sync_time_slot(*id, &payload);
-                    engine.apply_commands(&turn.actions);
+                    outcomes = engine.apply_commands(&turn.actions);
+                }
+                for (o, (_, cmd)) in outcomes.iter().zip(&turn.actions) {
+                    if let sim::commands::Outcome::Ordered { refused, accepted, .. } = o {
+                        if *refused > 0 && report.notes.len() < 40 {
+                            report
+                                .notes
+                                .push(format!("slot {slot_index}: order refused by {refused} (accepted {accepted}): {cmd:?}"));
+                        }
+                    }
+                    match o {
+                        sim::commands::Outcome::Selected { unresolved, .. }
+                        | sim::commands::Outcome::Grouped { unresolved, .. } => report.refs_unresolved += unresolved,
+                        sim::commands::Outcome::Ordered { accepted, refused, unresolved } => {
+                            report.orders_accepted += accepted;
+                            report.orders_refused += refused;
+                            report.refs_unresolved += unresolved;
+                        }
+                        _ => {}
+                    }
                 }
                 let changed = {
                     let streams = engine.host().rng();
@@ -432,6 +467,7 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                         game: reg[sim::sync::slot::GAME].unwrap_or(0),
                         t: t_now,
                         net: engine.sync().net().value(),
+                        n: opts.draw_index.get(&engine.sync().rng_hash).copied().unwrap_or(u32::MAX),
                         changed,
                     }
                 };
@@ -589,7 +625,7 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
                 (0, 0)
             };
             report.trace.push(format!(
-                "  slot {:5}  file {:08x} sim {:08x} delta {:08x} hfile {:08x} hsim {:08x} | real change {:08x} [{}] sim change {:08x} [{}] | X {:#x} Y {:#x} R {:08x} rand {:08x} streams {}",
+                "  slot {:5}  file {:08x} sim {:08x} delta {:08x} hfile {:08x} hsim {:08x} | real change {:08x} [{}] sim change {:08x} [{}] | X {:#x} Y {:#x} R {:08x} n {} rand {:08x} streams {}",
                 r.slot,
                 r.file,
                 r.sim,
@@ -603,6 +639,7 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
                 r.inputs.x,
                 r.inputs.y,
                 r.inputs.r,
+                r.inputs.n as i64,
                 r.inputs.rand,
                 (0..46).filter(|k| r.inputs.changed >> k & 1 != 0).map(|k| if k == 45 { "G".to_string() } else { k.to_string() }).collect::<Vec<_>>().join(","),
             ));

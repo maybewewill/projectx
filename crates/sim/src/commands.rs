@@ -312,12 +312,37 @@ impl CommandState {
                 (class, Some((p.x, p.y)), 0)
             }
             OrderTarget::Object { object, point } => {
-                match self.resolve_in(&game.borrow(), object) {
+                let found = self.resolve_in(&game.borrow(), object).or_else(|| {
+                    // The agent-id model is not known for neutral objects (mines, creeps): the order names its target
+                    // by the point the replay carries, so the live unit nearest to that point stands in for the
+                    // object (EchoIsles: the gold mine `0x1929` of the harvest order).
+                    let p = point?;
+                    nearest_unit(&game.borrow(), p.x.to_f32(), p.y.to_f32(), NEAREST_UNIT_RADIUS)
+                });
+                match found {
                     Some(k) => {
                         let h = game.borrow().handle_of(k);
                         (OrderClass::Target, point.map(|p| (p.x, p.y)), h)
                     }
                     None => {
+                        if id == crate::production::ORDER_HARVEST {
+                            // The target is no unit: a harvest order at a tree (destructable). The replay's point
+                            // finds the tree (EchoIsles: `0x1929` is a tree of the forest next to the base).
+                            if let Some(p) = point {
+                                let mut gm = game.borrow_mut();
+                                let tree = gm.tree_near(p.x.to_f32(), p.y.to_f32(), NEAREST_UNIT_RADIUS);
+                                let mut accepted = 0;
+                                let mut refused = 0;
+                                for unit in self.selection(player).to_vec() {
+                                    if tree.is_some() && gm.order_harvest(unit, None, tree) {
+                                        accepted += 1;
+                                    } else {
+                                        refused += 1;
+                                    }
+                                }
+                                return Outcome::Ordered { accepted, refused, unresolved: 0 };
+                            }
+                        }
                         // Nothing is issued for an object the table does not know.
                         unresolved += 1;
                         return Outcome::Ordered {
@@ -332,6 +357,21 @@ impl CommandState {
         let units = self.selection(player).to_vec();
         let mut accepted = 0;
         let mut refused = 0;
+        if matches!(target, OrderTarget::None) && is_unit_rawcode(id) {
+            // A train order: the order id is the rawcode of the unit type. The queue is the production model's
+            // (the AI's path); the building that has the shortest queue would take it in the game's UI, here the
+            // selected buildings take it in selection order. UNSURE: the original routes it through the
+            // building's train ability (`CAbilityTrain`), which the order system does not hold.
+            for unit in units {
+                let mut gm = game.borrow_mut();
+                if gm.building_usable(unit) && gm.can_train(unit, id) && gm.train_unit(unit, id).is_ok() {
+                    accepted += 1;
+                } else {
+                    refused += 1;
+                }
+            }
+            return Outcome::Ordered { accepted, refused, unresolved };
+        }
         for unit in units {
             let order = Order {
                 id,
@@ -356,6 +396,31 @@ impl CommandState {
             unresolved,
         }
     }
+}
+
+/// Whether an order id is a four-letter rawcode (train and build orders carry the unit type as the id).
+fn is_unit_rawcode(id: u32) -> bool {
+    id >= 0x2020_2020 && id.to_be_bytes().iter().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// How far from the replay's point a unit may be to stand in for an unresolved target object (game units).
+pub const NEAREST_UNIT_RADIUS: f32 = 256.0;
+
+/// The live unit nearest to `(x, y)` within `radius` (ties: the lower object key). Presentation-grade stand-in for the
+/// replay's agent-id lookup, which is not decoded (`docs/spec/lockstep.md` section 19).
+fn nearest_unit(game: &Game, x: f32, y: f32, radius: f32) -> Option<ObjKey> {
+    let mut best: Option<(f32, ObjKey)> = None;
+    for (k, u) in game.unit_objects() {
+        if u.dead || u.removed {
+            continue;
+        }
+        let (dx, dy) = (u.x.to_f32() - x, u.y.to_f32() - y);
+        let d = (dx * dx + dy * dy).sqrt();
+        if d <= radius && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, k));
+        }
+    }
+    best.map(|(_, k)| k)
 }
 
 /// The object-pair model for units with no explicit registration (UNSURE, `docs/spec/replay-actions.md` section 10).
