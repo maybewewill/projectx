@@ -604,6 +604,8 @@ impl SpecDamage {
 impl SpecDamage {
     /// The target side of a basic attack record of amount `raw` on `victim` (class and table row of the weapon).
     fn side_of(&self, game: &Game, victim: ObjKey, weapon: &AttackType, raw: F32) -> F32 {
+        // `AIdd` (passive defense items) scale the record of their row before the armor (`item_abilities::target_defense`).
+        let raw = crate::item_abilities::target_defense(game, victim, u32::from(weapon.damage_type), raw);
         let defense = game.unit_defense(victim);
         let side = TargetSide {
             raw,

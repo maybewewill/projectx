@@ -231,6 +231,10 @@ pub struct UnitMods {
     pub morph: bool,
     /// One invulnerability count while the buff exists (the potion of invulnerability, `Bvul`).
     pub invuln: bool,
+    /// Flat attack damage added to the unit's attacks while the buff exists (the Potion of Vampirism, `BIpv`).
+    pub damage_flat: i32,
+    /// The life steal fraction of the unit's attacks while the buff exists (`BIpv`; read by `item_abilities::on_hit`).
+    pub life_steal: F32,
 }
 
 impl Default for UnitMods {
@@ -246,6 +250,8 @@ impl Default for UnitMods {
             root: false,
             morph: false,
             invuln: false,
+            damage_flat: 0,
+            life_steal: F32::ZERO,
         }
     }
 }
@@ -281,6 +287,9 @@ impl Game {
         if m.invuln {
             self.unit_mut(unit).invuln_count += 1;
         }
+        if m.damage_flat != 0 {
+            self.add_damage(unit, m.damage_flat);
+        }
     }
 
     /// Whether `unit` is rooted by a net (Ensnare, Web): its mover is halted while the count is above zero.
@@ -301,6 +310,8 @@ impl Game {
             root: false,
             morph: false,
             invuln: false,
+            damage_flat: m.damage_flat.wrapping_neg(),
+            life_steal: F32::ZERO,
         };
         self.apply_mods(unit, &neg);
         if m.invuln {
@@ -1316,12 +1327,20 @@ fn abolish_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec
 ///    for that long (not modelled: 0 in the data). The buff is negative and not magic (CBuffPurge overrides slot 118
 ///    to 0 and slot 120 to 1), so it is not dispellable (LIKELY: slot 204 reuses the magic test).
 fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target: ObjKey) {
-    let killed = {
-        let mut gm = game.borrow_mut();
+    let killed = purge_body(&mut game.borrow_mut(), rec, target);
+    if let Some(t) = killed {
+        crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
+/// The state part of [`purge`]: the dispel worker and the slow buff; returns the unit the worker killed (the caller runs
+/// the death dispatch). Shared with the Orb of Lightning (old), which fires the carrier's `AIlp` ability on a hit.
+pub(crate) fn purge_body(gm: &mut Game, rec: &CastRec, target: ObjKey) -> Option<ObjKey> {
+    {
         if !gm.alive(target) {
-            return;
+            return None;
         }
-        let killed = dispel_one(&mut gm, rec.caster, target, rec.level.data[2], rec.level.data[5], false, 1);
+        let killed = dispel_one(gm, rec.caster, target, rec.level.data[2], rec.level.data[5], false, 1);
         if killed.is_none() && gm.alive(target) {
             let owner = gm.unit(rec.caster).owner;
             if gm.is_enemy(owner, gm.unit(target).owner) {
@@ -1356,8 +1375,8 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
                         )
                     })
                 };
-                let move_timer = start(&mut gm, KIND_PURGE_MOVE, mtime);
-                let attack_timer = start(&mut gm, KIND_PURGE_ATTACK, atime);
+                let move_timer = start(gm, KIND_PURGE_MOVE, mtime);
+                let attack_timer = start(gm, KIND_PURGE_ATTACK, atime);
                 gm.spells.unit.purge.insert(
                     serial,
                     PurgeRec {
@@ -1372,9 +1391,6 @@ fn purge(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
             }
         }
         killed
-    };
-    if let Some(t) = killed {
-        crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
     }
 }
 

@@ -146,6 +146,19 @@ pub const ITEM_TELEPORT: u32 = code(b"AIte");
 pub const ITEM_WEB: u32 = code(b"AIwb");
 /// `CAbilityFreezeDamageBonus`.
 pub const ORB_FREEZING: u32 = code(b"AIzb");
+// S53 (spec section 17).
+/// `CAbilityItemChangeTOD` (the Moonstone).
+pub const ITEM_CHANGE_TOD: u32 = code(b"AIct");
+/// `CAbilityItemVampirePotion` (the Potion of Vampirism).
+pub const ITEM_VAMPIRE_POTION: u32 = code(b"AIpv");
+/// `CAbilityPassiveDefense` (the Arcanite Shield; the passive form of Defend).
+pub const ITEM_PASSIVE_DEFENSE: u32 = code(b"AIdd");
+/// `CAbilityLightningPurge`: its unit effect (`0x424`) is a plain jump to the Purge effect `0x6F107E10`.
+pub const ITEM_LIGHTNING_PURGE: u32 = code(b"AIlp");
+/// The Moonstone effect object class and the vampire potion buff.
+pub const BUFF_VAMPIRE_POTION: u32 = code(b"BIpv");
+/// `CBuffFreeze` (the Orb of Freezing stuns with it; a `CBuffStun` child).
+pub const BUFF_FREEZE: u32 = code(b"Bfre");
 /// Buff codes of the S45 abilities (`BuffID` of the stock rows).
 pub const BUFF_DEFENSE: u32 = code(b"Bdef");
 pub const BUFF_DETECT: u32 = code(b"Bdet");
@@ -258,6 +271,14 @@ pub enum Family {
     Illusion,
     /// `CAbilityItemAnimateDead`: up to `DataA` dead non-hero units of `Area` fight for the caster for `Dur` (UNSURE).
     AnimateDead,
+    // ---- S53 (spec section 17) ----
+    /// `CAbilityItemChangeTOD` (`AIct`): the time of day is set to `DataA + DataB / 60` hours for `Dur` seconds (the numbers
+    /// are CONFIRMED, see [`moonstone_args`]; the end of the effect is UNSURE).
+    Moonstone,
+    /// `CAbilityItemVampirePotion` (`AIpv`): the buff `BIpv` with `DataA` bonus damage and `DataB` life steal.
+    VampirePotion,
+    /// `CAbilityPassiveDefense` (`AIdd`): damage of the Pierce row is scaled by `DataA`, Spells and Magic rows by `DataE`.
+    PassiveDefense,
 }
 
 impl Family {
@@ -287,6 +308,7 @@ impl Family {
                 | Family::OrbCorruption
                 | Family::OrbLightning
                 | Family::OrbFreezing
+                | Family::PassiveDefense
         )
     }
 
@@ -344,6 +366,9 @@ impl Family {
             ITEM_COMMAND => Family::Command,
             ITEM_ILLUSION => Family::Illusion,
             ITEM_ANIMATE_DEAD => Family::AnimateDead,
+            ITEM_CHANGE_TOD => Family::Moonstone,
+            ITEM_VAMPIRE_POTION => Family::VampirePotion,
+            ITEM_PASSIVE_DEFENSE => Family::PassiveDefense,
             ITEM_RECALL | ITEM_TELEPORT => Family::TownPortal,
             ITEM_REINCARNATION => Family::ItemReincarnation,
             ORB_FIRE => Family::OrbFire,
@@ -437,6 +462,10 @@ pub struct State {
     deaths: Vec<(ObjKey, ObjKey)>,
     /// Cloak of Flames burns by buff serial.
     cloaks: BTreeMap<u32, CloakRec>,
+    /// The running Moonstone effect (S53): the saved time of day and the end timer.
+    moonstone: Option<MoonstoneRec>,
+    /// The flat move speed bonus applied per unit by `AIms` abilities (the maximum, [`speed_flat_bonus`]).
+    speed_bonus: BTreeMap<ObjKey, F32>,
     /// Visibility reveals of the flare and the potion of omniscience: id -> fog modifier.
     fogs: BTreeMap<u32, ObjKey>,
     next_fog: u32,
@@ -448,6 +477,14 @@ pub struct State {
     pub illusions_mana: bool,
     /// Misc `IntRegenBonus` (read by `0x6F2082C0`): mana regeneration per point of hero intelligence.
     pub int_regen_bonus: F32,
+}
+
+/// The Moonstone effect: the time of day to restore, whether the map had suspended the clock, the end timer.
+#[derive(Debug, Clone, Copy)]
+struct MoonstoneRec {
+    saved: F32,
+    map_suspended: bool,
+    timer: TimerId,
 }
 
 /// One Cloak of Flames: the burn per tick, the radius and the repeating timer.
@@ -610,6 +647,8 @@ pub fn borrowed_class(base: u32) -> Option<u32> {
         ITEM_SPIRIT_TROLL => Some(crate::orc::FERAL_SPIRIT),
         ITEM_MONSTER_LURE => Some(crate::unit_spells::SENTRY_WARD),
         ITEM_WEB => Some(crate::unit_spells::WEB),
+        // S53: the unit effect slot `0x424` of `CAbilityLightningPurge` is `jmp 0x6F107E10`, the Purge effect (CONFIRMED).
+        ITEM_LIGHTNING_PURGE => Some(crate::unit_spells::PURGE),
         _ => None,
     }
 }
@@ -739,10 +778,9 @@ fn apply_passive(gm: &mut Game, unit: ObjKey, item: ObjKey, alias: u32, fam: Fam
             gm.add_attack_speed(unit, a);
             Applied::AttackSpeed(a)
         }
-        Family::BonusMoveSpeed => {
-            add_move_speed(gm, unit, a);
-            Applied::MoveSpeed(a)
-        }
+        // `AIms`: the unit's flat bonus is the MAXIMUM over its abilities (`0x6F077590`, Unicorn `MS`), so the sum is
+        // refreshed after the record is stored (`refresh_speed_bonus`).
+        Family::BonusMoveSpeed => Applied::MoveSpeed(a),
         Family::BonusLife => {
             life_sink_delta(gm, unit, a, 1);
             Applied::Life(a)
@@ -805,7 +843,35 @@ fn apply_passive(gm: &mut Game, unit: ObjKey, item: ObjKey, alias: u32, fam: Fam
         }
         _ => return,
     };
+    let speed = matches!(applied, Applied::MoveSpeed(_));
     gm.spells.item.applied.insert((item, alias), (unit, applied));
+    if speed {
+        refresh_speed_bonus(gm, unit);
+    }
+}
+
+/// The flat move speed bonus of `unit` follows the maximum `DataA` of its `AIms` abilities ([`speed_flat_bonus`], CONFIRMED
+/// by Unicorn `MS`: `0x6F077590` takes the maximum of the abilities' slot `0x184` values starting from 0.0, and the speed
+/// computation `0x6F2019F0` adds that bonus to the base before the multiplier). The unit's speed gets the difference to the
+/// bonus applied before. The Misc switch `MoveSpeedBonusesStack` (absent from the shipped MiscData, so off) is not modelled.
+fn refresh_speed_bonus(gm: &mut Game, unit: ObjKey) {
+    let values: Vec<F32> = gm
+        .spells
+        .item
+        .applied
+        .values()
+        .filter(|(u, _)| *u == unit)
+        .filter_map(|(_, a)| match a {
+            Applied::MoveSpeed(v) => Some(*v),
+            _ => None,
+        })
+        .collect();
+    let bonus = speed_flat_bonus(&values);
+    let old = gm.spells.item.speed_bonus.get(&unit).copied().unwrap_or(F32::ZERO);
+    if bonus.to_bits() != old.to_bits() {
+        add_move_speed(gm, unit, arith::sub(bonus, old));
+        gm.spells.item.speed_bonus.insert(unit, bonus);
+    }
 }
 
 fn undo_applied(gm: &mut Game, unit: ObjKey, applied: Applied) {
@@ -813,7 +879,7 @@ fn undo_applied(gm: &mut Game, unit: ObjKey, applied: Applied) {
         Applied::Damage(v) => gm.add_damage(unit, v.wrapping_neg()),
         Applied::Armor(a) => gm.add_armor(unit, arith::neg(a)),
         Applied::AttackSpeed(a) => gm.add_attack_speed(unit, arith::neg(a)),
-        Applied::MoveSpeed(a) => add_move_speed(gm, unit, arith::neg(a)),
+        Applied::MoveSpeed(_) => refresh_speed_bonus(gm, unit),
         Applied::Life(a) => life_sink_delta(gm, unit, arith::neg(a), 1),
         Applied::Mana(a) => mana_sink_delta(gm, unit, arith::neg(a), 1),
         Applied::Sight(a) => add_sight(gm, unit, arith::neg(a)),
@@ -955,6 +1021,149 @@ pub fn orb_frost_duration(level: &SpellLevel, hero: bool) -> F32 {
 /// classes returns (`0x6F100880` for `AIfb`) is `1 << 26`.
 pub const ORB_DAMAGE_TYPE: u32 = 26;
 
+// ---- S53 cores (Unicorn rows `item_ability_vectors3.txt`, harness `tools/emu/item_cores3_emu.py`) ----
+
+/// The record class word `0x4000000` of the orb damage (`CAbilityDamageBonusBase` slot `0x324`).
+pub const ORB_CLASS_WORD: u32 = 0x0400_0000;
+
+/// The arguments the Moonstone hands to the effect start (`CAbilityItemChangeTOD` slot `0x3C0` = `0x6F109EB0`, Unicorn `CT`
+/// rows, 350): the time of day `DataA + DataB / 60.0` (hours and minutes; soft divide, soft add) and the duration `extra +
+/// Dur` (no hero rule). The start `0x6F104570` runs only when the duration is above 0.0 (x87 compare: a NaN does not).
+/// `div` is the soft-float divide of the host.
+pub fn moonstone_args(level: &SpellLevel, extra: F32, div: &dyn Fn(F32, F32) -> F32) -> Option<(F32, F32)> {
+    let minutes = div(level.data[1], F32::from_bits(0x4270_0000));
+    let tod = arith::add(level.data[0], minutes);
+    let dur = arith::add(extra, level.dur);
+    (0.0f32 < f32::from_bits(dur.to_bits())).then_some((tod, dur))
+}
+
+/// The arguments of the Potion of Vampirism's buff apply (`CAbilityItemVampirePotion` slot `0x428` = `0x6F109F70`, Unicorn
+/// `PV` rows, 350): the duration by the hero rule, then `DataB` (the life steal fraction, holder `+0xCC`/`+0xD0`), then
+/// `DataA` (the bonus damage, holder `+0xD4`/`+0xD8`).
+pub fn vampire_potion_args(level: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    (crate::cast::effect_duration(level, hero, extra), level.data[1], level.data[0])
+}
+
+/// The gates of the vampire buff's damage handler (`CBuffItemVampirePotion` slot `0x170` = `0x6F0FB7D0`, Unicorn `VP`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VampireHitInput {
+    /// The victim is mechanical (`+0x248` bit 3).
+    pub victim_mechanical: bool,
+    /// The relation test `0x6F285B20` answered yes (an enemy).
+    pub relation: bool,
+    /// The Misc switch at `0x6F8B4A5C`: with it the victim must not answer the vtable `0x11C` query or the immunity query.
+    pub misc_immunity_gate: bool,
+    pub victim_slot_11c: bool,
+    pub victim_immune: bool,
+    /// Misc `IllusionsCanRestoreLife`.
+    pub misc_illusions_heal: bool,
+    /// The buff gate `0x6F0F57A0`: the owner is an illusion and the Misc key `0x6F8B288C` is off.
+    pub owner_gate: bool,
+    pub victim_illusion: bool,
+}
+
+/// The heal of the vampire buff: `(effect shown, heal)`. The heal is `ratio * damage` for a damage above 0.0 (a NaN
+/// passes, x87 compare) unless the owner gate or an illusion victim with the Misc switch off blocks it.
+pub fn vampire_potion_heal(i: &VampireHitInput, ratio: F32, damage: F32) -> (bool, Option<F32>) {
+    if i.victim_mechanical || !i.relation {
+        return (false, None);
+    }
+    if i.misc_immunity_gate && (i.victim_slot_11c || i.victim_immune) {
+        return (false, None);
+    }
+    if !(0.0f32 >= f32::from_bits(damage.to_bits())) {
+        let heal = arith::mul(ratio, damage);
+        let blocked = i.owner_gate || (!i.misc_illusions_heal && i.victim_illusion);
+        return (true, (!blocked).then_some(heal));
+    }
+    (false, None)
+}
+
+/// What the Orb of Fire hands to the area body after an armed hit (`CAbilityFireDamageBonus` slot `0x154` = `0x6F0F2CD0`,
+/// Unicorn `FB` rows, 350): one shape `{Area, value}` (the value is the ability's `+0x88`, `DataA`), the class word
+/// `0x4000000`, the target word `targs | 0x10000` (enemies), the victim excluded by the callback `0x6F0DC570`, and the same
+/// amount delivered to the victim with the record's flag `0x100`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrbFirePlan {
+    pub area: F32,
+    pub value: F32,
+    pub flags: u32,
+    pub class: u32,
+    /// The flag the victim delivery gets (`record flags & 0x100`).
+    pub deliver_flag: u32,
+}
+
+/// The plan of [`OrbFirePlan`]; `None` when the pre-damage handler did not arm the ability (flag `0x100`).
+pub fn orb_fire_plan(armed: bool, area: F32, value: F32, targs: u32, record_flags: u32) -> Option<OrbFirePlan> {
+    armed.then_some(OrbFirePlan {
+        area,
+        value,
+        flags: targs | 0x10000,
+        class: ORB_CLASS_WORD,
+        deliver_flag: record_flags & 0x100,
+    })
+}
+
+/// The Orb of Freezing apply (`CAbilityFreezeDamageBonus` slot `0x154` = `0x6F108E20`, Unicorn `ZB` rows, 350): the stun
+/// buff `Bfre` (`CBuffFreeze < CBuffStun`) for the hero-rule duration (`HeroDur` for a hero victim, else `Dur`, no extra term
+/// and no positivity check) with the carrier's illusion bit; `None` when not armed.
+pub fn orb_freeze_plan(level: &SpellLevel, armed: bool, hero: bool, owner_illusion: bool) -> Option<(F32, bool)> {
+    armed.then(|| (orb_frost_duration(level, hero), owner_illusion))
+}
+
+/// The Orb of Corruption apply (`CAbilityCorruptionDamageBonus` slot `0x154` = `0x6F109B40`, Unicorn `CR` rows, 350): the
+/// buff `BIcb` for the hero-rule duration with the amount `DataB` (`0.0` when the carrier is an illusion); the buff takes
+/// the amount off the victim's armor unless the victim is an illusion (`0x6F0F3A90`). `None` when not armed.
+pub fn orb_corruption_plan(level: &SpellLevel, armed: bool, hero: bool, owner_illusion: bool) -> Option<(F32, F32)> {
+    armed.then(|| (orb_frost_duration(level, hero), if owner_illusion { F32::ZERO } else { level.data[1] }))
+}
+
+/// Whether the Orb of Lightning (old) fires the carrier's `AIlp` ability on the victim (`CAbilityLightningDamageBonus` slot
+/// `0x154` = `0x6F0F2F70`, Unicorn `LB` rows, 350): armed, the victim resolves, the carrier is not an illusion, the carrier
+/// has an `AIlp` ability and its blocked query (slot `0x42C`) answers no.
+pub fn orb_lightning_fires(armed: bool, victim: bool, owner_illusion: bool, ability_found: bool, blocked: bool) -> bool {
+    armed && victim && !owner_illusion && ability_found && !blocked
+}
+
+/// The flat move speed bonus of a unit's abilities (`0x6F077590`, Unicorn `MS` rows, 350): the maximum of the slot `0x184`
+/// values (`AIms`: `DataA`) starting from 0.0, so boots do **not** stack and a negative bonus counts as none. The x87
+/// compare replaces the current value when it is below the new one or the pair is unordered (a NaN).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn speed_flat_bonus(values: &[F32]) -> F32 {
+    let mut cur = F32::ZERO;
+    for &v in values {
+        if !(f32::from_bits(cur.to_bits()) >= f32::from_bits(v.to_bits())) {
+            cur = v;
+        }
+    }
+    cur
+}
+
+/// The factor the passive defense handler scales both record amounts by (`CAbilityPassiveDefense` slot `0xFC` = `0x6F098F90`,
+/// Unicorn `DD` rows, 350): for the Pierce row (2) `DataA` (`DataG` when armed), for the Spells and Magic rows (0 and 4)
+/// `DataE` (`DataH` when armed); a value that is exactly 1.0 falls back to the plain one and a final 1.0 changes nothing.
+/// `None` when no multiply happens. The armed flag (`0x200`, set by the slot `0x160` handler) is cleared by the handler.
+pub fn passive_defense_factor(row: u32, armed: bool, a: F32, e: F32, g: F32, h: F32) -> Option<F32> {
+    let one = 1.0f32;
+    let mut v = one;
+    if armed {
+        v = match row {
+            0 | 4 => f32::from_bits(h.to_bits()),
+            2 => f32::from_bits(g.to_bits()),
+            _ => one,
+        };
+    }
+    let mut bits = v.to_bits();
+    if v == one {
+        bits = match row {
+            0 | 4 => e.to_bits(),
+            2 => a.to_bits(),
+            _ => bits,
+        };
+    }
+    (f32::from_bits(bits) != one || f32::from_bits(bits).is_nan()).then_some(F32::from_bits(bits))
+}
+
 /// The summon batches of a figurine (`0x6F0B8A00`, Unicorn `FG` rows): the unit type of `DataC` times `f2i(DataA)` and
 /// the unit type of `DataD` times `f2i(DataB)` (a batch whose type is the empty marker `0x5F5F5F5F` is skipped), each
 /// with the lifetime `Dur + extra` (soft add) and the `Area`.
@@ -1048,6 +1257,21 @@ pub(crate) fn spell_reduction(gm: &Game, target: ObjKey, row: u32, flags: u32, r
             amount = scale_record(amount, F32::ZERO, factor).0;
         }
     }
+    target_defense(gm, target, row, amount)
+}
+
+/// `AIdd` abilities of `target` on a record of table row `row` and amount `raw` (the handler `0xFC` of the target side's
+/// first pass, `0x6F098F90`, [`passive_defense_factor`], CONFIRMED by Unicorn `DD`): the Pierce row is scaled by `DataA`
+/// (0.7 for the Arcanite Shield), the Spells and Magic rows by `DataE`. The "armed" branch (`DataG` / `DataH`, set by the
+/// slot `0x160` handler) is not reachable in the model: every stock row has them at 1.0.
+pub(crate) fn target_defense(gm: &Game, target: ObjKey, row: u32, raw: F32) -> F32 {
+    let mut amount = raw;
+    for level in passive_levels(gm, target, Family::PassiveDefense) {
+        let d = &level.data;
+        if let Some(v) = passive_defense_factor(row, false, d[0], d[4], d[6], d[7]) {
+            amount = arith::mul(amount, v);
+        }
+    }
     amount
 }
 
@@ -1069,6 +1293,8 @@ pub fn on_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32, vict
         .collect();
     let (a_owner, v_owner) = (gm.unit(attacker).owner, gm.unit(victim).owner);
     let enemy = gm.is_enemy(a_owner, v_owner);
+    // The vampire potion is a buff, not an ability of the carrier (S53).
+    vampire_hit(gm, attacker, victim, damage);
     for alias in abilities {
         let level = level_of(gm, alias);
         match gm.spells.item.family(alias) {
@@ -1086,6 +1312,7 @@ pub fn on_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32, vict
                     add_life(gm, attacker, heal);
                 }
             }
+            Some(Family::VampirePotion) | Some(Family::PassiveDefense) => {}
             Some(Family::OrbFire) if enemy && !gm.unit(attacker).illusion => {
                 orb_fire(gm, attacker, victim, &level, &mut died);
             }
@@ -1348,6 +1575,8 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
         }
         Family::Illusion => illusion(gm, caster, target, level),
         Family::AnimateDead => animate_dead(gm, caster, target, level),
+        Family::Moonstone => moonstone(gm, level),
+        Family::VampirePotion => vampire_potion(gm, caster, level),
         Family::Gold | Family::Lumber => {
             let t = effect_target(caster, target);
             let owner = gm.unit(t).owner;
@@ -1535,13 +1764,19 @@ fn stop_cloak(gm: &mut Game, unit: ObjKey) {
 /// The timer kinds of S45.
 pub const TICK_CLOAK: u8 = 2;
 pub const TICK_FOG: u8 = 3;
+/// The end of the Moonstone effect (S53).
+pub const TICK_TOD: u8 = 4;
 
 /// `AIcb` / `AIpb` / `AIlb` / `AIzb` after a basic hit (UNSURE models, see the family docs).
 fn orb_effects(gm: &mut Game, attacker: ObjKey, victim: ObjKey, fam: Family, level: &SpellLevel, died: &mut Vec<ObjKey>) {
     match fam {
         Family::OrbCorruption => {
+            // `0x6F109B40` (CONFIRMED, Unicorn `CR`): the hero-rule duration and the amount `DataB`; the buff takes the amount
+            // off the victim's armor unless the victim is an illusion (`0x6F0F3A90`). Carriers that are illusions never arm.
             let hero = gm.target_hero(victim);
-            let dur = if hero { level.hero_dur } else { level.dur };
+            let Some((dur, amount)) = orb_corruption_plan(level, true, hero, gm.unit(attacker).illusion) else {
+                return;
+            };
             if !arith::lt(F32::ZERO, dur) {
                 return;
             }
@@ -1551,8 +1786,9 @@ fn orb_effects(gm: &mut Game, attacker: ObjKey, victim: ObjKey, fam: Family, lev
                 dispellable: true,
                 ..crate::abilities::buff_predicates(BUFF_CORRUPTION)
             };
+            let armor = if gm.unit(victim).illusion { F32::ZERO } else { arith::neg(amount) };
             let mods = crate::unit_spells::UnitMods {
-                armor: arith::neg(level.data[0]),
+                armor,
                 ..Default::default()
             };
             gm.apply_mods_buff(victim, BUFF_CORRUPTION, preds, mods, dur);
@@ -1573,11 +1809,37 @@ fn orb_effects(gm: &mut Game, attacker: ObjKey, victim: ObjKey, fam: Family, lev
             gm.register_tick(victim, serial, attacker, level.data[0], false, 23, true);
         }
         Family::OrbLightning => {
-            if let Some(d) = gm.unit_damage_target(attacker, victim, level.data[0], false, false, 0, ORB_DAMAGE_TYPE) {
-                died.push(d);
+            // `0x6F0F2F70` (CONFIRMED, Unicorn `LB`): the orb has no damage of its own; it runs the unit effect of the
+            // carrier's `AIlp` ability (the Purge effect) on the victim.
+            let lp = gm
+                .unit(attacker)
+                .abilities
+                .iter()
+                .filter(|a| !a.is_removed())
+                .map(|a| a.base)
+                .find(|&a| gm.spells.item.base_of(a) == ITEM_LIGHTNING_PURGE);
+            if let Some(alias) = lp {
+                let rec = CastRec {
+                    id: 0,
+                    caster: attacker,
+                    base: crate::unit_spells::PURGE,
+                    target: CastTarget::Unit(victim),
+                    level: level_of(gm, alias),
+                };
+                if let Some(d) = crate::unit_spells::purge_body(gm, &rec, victim) {
+                    died.push(d);
+                }
             }
         }
-        Family::OrbFreezing => gm.frost_apply(victim, level),
+        Family::OrbFreezing => {
+            // `0x6F108E20` (CONFIRMED, Unicorn `ZB`): the stun buff `Bfre` (`CBuffFreeze < CBuffStun`) for the hero-rule duration.
+            let hero = gm.target_hero(victim);
+            if let Some((dur, _)) = orb_freeze_plan(level, true, hero, gm.unit(attacker).illusion) {
+                if arith::lt(F32::ZERO, dur) {
+                    gm.apply_stun_as(BUFF_FREEZE, victim, dur);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1649,6 +1911,15 @@ fn s45_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: O
             let mut gm = game.borrow_mut();
             if let Some(key) = gm.spells.item.fogs.remove(&aux) {
                 gm.fog_stop(key);
+            }
+        }
+        TICK_TOD => {
+            let mut gm = game.borrow_mut();
+            if let Some(rec) = gm.spells.item.moonstone.take() {
+                gm.set_time_of_day(rec.saved);
+                if !rec.map_suspended {
+                    gm.suspend_time_of_day(false);
+                }
             }
         }
         _ => {}
@@ -1823,6 +2094,97 @@ fn apply_speed(gm: &mut Game, target: ObjKey, level: &SpellLevel) {
         ..Default::default()
     };
     gm.apply_mods_buff(target, BUFF_SPEED, preds, mods, dur);
+}
+
+/// The Moonstone (`AIct`): the arguments are CONFIRMED ([`moonstone_args`], Unicorn `CT`): the time of day is set to
+/// `DataA + DataB / 60` hours and a timer of `Dur` seconds starts (`0x6F104570` finds the effect object `XIct` and calls
+/// `0x6F0F5690`: `SetFloatGameState(TIME_OF_DAY, x)` then the one-shot timer `0xD01C1`). At the expiry the handler
+/// `0x6F0F56D0` sets the time of day to the value saved in the effect (`+0x28`) and calls `0x6F429920(.., 2)`, which the
+/// model reads as the resume of the time of day. UNSURE: where `+0x28` is saved (the model keeps the time of day of the
+/// first cast) and that the effect suspends the clock while it lasts (the restore-and-resume pair suggests it).
+fn moonstone(gm: &mut Game, level: &SpellLevel) {
+    let Some((tod, dur)) = moonstone_args(level, F32::ZERO, &|a, b| gm.soft_div(a, b)) else {
+        return;
+    };
+    let active = gm.spells.item.moonstone.take();
+    let rec = match active {
+        Some(rec) => {
+            gm.timers.cancel(rec.timer);
+            rec
+        }
+        None => MoonstoneRec {
+            saved: gm.time_of_day(),
+            map_suspended: gm.game_state.time_of_day_suspended,
+            timer: TimerId(0),
+        },
+    };
+    if !rec.map_suspended {
+        gm.suspend_time_of_day(true);
+    }
+    gm.set_time_of_day(tod);
+    let timer = gm.timers.start(
+        dur.to_f32(),
+        false,
+        crate::natives::game::Payload::Spell(crate::cast::SpellMsg::Item { kind: TICK_TOD, unit: ObjKey(0), aux: 0 }),
+    );
+    gm.spells.item.moonstone = Some(MoonstoneRec { timer, ..rec });
+}
+
+/// The Potion of Vampirism (`AIpv`, slot `0x428` on the carrier): the buff `BIpv` for the hero-rule duration with
+/// `F2I(DataA)` bonus damage and the life steal fraction `DataB` ([`vampire_potion_args`], CONFIRMED by Unicorn `PV`; the
+/// holders `+0xD8` / `+0xD0` read by the buff's damage getters `0x6F0FB6C0` and its hit handler `0x6F0FB7D0`, `VP`).
+/// The buff flags (positive, magic, dispellable) are UNSURE.
+fn vampire_potion(gm: &mut Game, caster: ObjKey, level: &SpellLevel) {
+    if !gm.alive(caster) {
+        return;
+    }
+    let hero = gm.target_hero(caster);
+    let (dur, ratio, bonus) = vampire_potion_args(level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..crate::abilities::buff_predicates(BUFF_VAMPIRE_POTION)
+    };
+    let mods = crate::unit_spells::UnitMods {
+        damage_flat: conv::f2i(bonus),
+        life_steal: ratio,
+        ..Default::default()
+    };
+    gm.apply_mods_buff(caster, BUFF_VAMPIRE_POTION, preds, mods, dur);
+}
+
+/// The life steal of the vampire buff after a hit that dealt `damage` (the buff handler `0x6F0FB7D0`, [`vampire_potion_heal`]).
+fn vampire_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32) {
+    let ratio = gm.unit(attacker).buffs.iter().find_map(|b| match &b.effect {
+        Some(crate::auras::BuffEffect::Mods(m)) if b.base == BUFF_VAMPIRE_POTION => Some(m.life_steal),
+        _ => None,
+    });
+    let Some(ratio) = ratio else {
+        return;
+    };
+    let (a_owner, v_owner) = (gm.unit(attacker).owner, gm.unit(victim).owner);
+    let mechanical = {
+        let u = gm.unit(victim);
+        crate::natives::unit_attr::is_unit_type(gm, u, crate::unitclass::ty::MECHANICAL)
+    };
+    let input = VampireHitInput {
+        victim_mechanical: mechanical,
+        relation: gm.is_enemy(a_owner, v_owner),
+        // The Misc keys at `0x6F8B4A5C` and `0x6F8B288C` are not in the shipped MiscData (UNSURE: read as off).
+        misc_immunity_gate: false,
+        victim_slot_11c: false,
+        victim_immune: false,
+        misc_illusions_heal: gm.spells.item.illusions_heal,
+        owner_gate: gm.unit(attacker).illusion,
+        victim_illusion: gm.unit(victim).illusion,
+    };
+    if let (_, Some(heal)) = vampire_potion_heal(&input, ratio, damage) {
+        add_life(gm, attacker, heal);
+    }
 }
 
 /// Town portal (`AItp`, `CAbilityItemTownPortal`): UNSURE model. Decoded: a target structure (`targs`), the cast time

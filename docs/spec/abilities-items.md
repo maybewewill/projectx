@@ -306,3 +306,25 @@ Other changes: `item_abilities::run_effect` takes the runtime (death events of S
 `natives::misc::add_tech` is `pub(crate)`; `orc.rs` gets `Game::register_illusion`; the engine loader keeps the whole
 `UnitID` list of a row (`ItemAbilityData::unit_lists`). Known simplification: two items giving the same marker buff
 (`AIpi`) share it, and dropping one removes it.
+
+## 17. S53: the last AI* codes and Unicorn confirmation of the item models
+
+Harness `tools/emu/item_cores3_emu.py` (rows `crates/sim/tests/item_ability_vectors3.txt`, 350 per kind, 3,150 rows, 0
+mismatches, tests `item_ability_vectors3.rs`), behaviour tests `item_abilities4.rs`. The tracer got `item_trace_emu.LAST_TRACE`
+(the call trace is kept when a run raises).
+
+**Level data getters** (checked with distinct values): `0x6F02E760` Dur, `0x6F02E7D0` HeroDur, `0x6F02E900` Area,
+`0x6F02E9E0` DataA, `0x6F02EA50` DataB, `0x6F02EAC0` DataC, `0x6F02EB30` DataD, `0x6F02EBA0` DataE, `0x6F02EC10` DataF,
+`0x6F02EC80` DataG, `0x6F02ECF0` DataH, `0x6F02ED60` DataI. (Static readings that took `0x6F02EA50` for DataA are shifted by one.)
+
+| Code | Class / slots | Model | Label |
+|---|---|---|---|
+| `AIct` Moonstone (`moon`: `Dur` 30, `Cool` 70, `EfctID` `XIct`) | `CAbilityItemChangeTOD < CAbilitySpell`, `0x3C0` = `0x6F109EB0` | time of day `DataA + DataB / 60` (soft divide, soft add), duration `extra + Dur` (no hero rule), started only when the duration is above 0.0 (`0x6F104570` finds the effect object and calls `0x6F0F5690`: `SetFloatGameState(TIME_OF_DAY)` + one-shot timer `0xD01C1`). Expiry `0x6F0F56D0`: time of day := saved value (`+0x28`), `0x6F429920(.., 2)` (resume) | numbers **CONFIRMED** (`CT` 350); the saved value (taken at the first cast) and the clock suspension while it lasts **UNSURE** |
+| `AIpv` Potion of Vampirism (`vamp`: `Dur` 20, `HeroDur` 20, `DataA` 12, `DataB` 0.75, `BuffID` `BIpv`) | `CAbilityItemVampirePotion`, `0x428` = `0x6F109F70` (carrier) | buff `BIpv` for the hero-rule duration with `F2I(DataA)` flat damage (holder `+0xD4`/`+0xD8`, getters `0x6F0FB6C0`/`0x6F0FB750` over the weapons) and life steal `DataB` (holder `+0xCC`/`+0xD0`); on a hit the buff heals `ratio * damage` (`0x6F0FB7D0`: victim not mechanical, enemy relation, damage above 0, illusion gates) | apply arguments **CONFIRMED** (`PV` 350), hit handler gates **CONFIRMED** (`VP` 350); the Misc keys at `0x6F8B4A5C`/`0x6F8B288C` read as off, buff flags UNSURE |
+| `AIdd` Arcanite Shield (`arsh`: `DataA` 0.7, `DataE` 1) | `CAbilityPassiveDefense`, target-side handler `0xFC` = `0x6F098F90` | record amounts times `DataA` on the Pierce row (2), times `DataE` on the Spells and Magic rows (0, 4); the armed branch (`DataG`/`DataH`, flag `0x200`) is 1.0 in all stock rows. Hooked in `damage::side_of` (basic attacks) and `item_abilities::spell_reduction` (natives) | **CONFIRMED** (`DD` 350); the arming slot `0x160` is not modelled |
+| `AIlp` Lightning Purge (`olig`, row `Dur` 3, `HeroDur` 0.3, `DataA` 2, `DataC` 35) | `CAbilityLightningPurge < CAbilityPurge`, unit effect `0x424` = `jmp 0x6F107E10` | the Purge effect of `unit_spells` (`borrowed_class`) | **CONFIRMED** (identical code) |
+| `AIlb` Orb of Lightning (old) | `0x154` = `0x6F0F2F70` | **replaces the S45 damage model**: on an armed hit the carrier's `AIlp` ability is looked up (`'AIlp'` = `0x6F0DBE00`), and, unless its blocked query (slot `0x42C`) answers yes, its unit effect runs on the victim | **CONFIRMED** (`LB` 350); the blocked query is read as no |
+| `AIfb` Orb of Fire | `0x154` = `0x6F0F2CD0` | area body `0x6F2C31D0` with one shape `{Area, DataA}`, count 1, class `0x4000000`, flags `targs | 0x10000`, source = the carrier, callback `0x6F0DC570` (everything except the victim) and the victim as context; then the same record to the victim (`flag = record flags & 0x100`) | **CONFIRMED** (`FB` 350) - the S41 "how the area is used" question is closed |
+| `AIzb` Orb of Freezing | `0x154` = `0x6F108E20` | **replaces the S45 Frost model**: the stun buff `Bfre` (`CBuffFreeze < CBuffStun`) for the hero-rule duration; no stock row has a duration | **CONFIRMED** (`ZB` 350) |
+| `AIcb` Orb of Corruption (`ocor`) | `0x154` = `0x6F109B40` | buff `BIcb` for the hero-rule duration with amount **`DataB`** (0.0 for an illusion carrier, which never arms anyway); the buff takes it off the victim's armor unless the victim is an illusion (`0x6F0F3A90`) | **CONFIRMED** (`CR` 350) |
+| `AIms` Boots of Speed (`bspd`) | `CAbilityMoveSpeedBonus`, slot `0x184` = `0x6F0FF220` (returns `+0x88` = `DataA`) | the unit's flat bonus is the **maximum** over its abilities (`0x6F077590`, start 0.0, replace when below or unordered), added to the base before the multiplier (`0x6F2019F0`): boots do **not** stack. The Misc `MoveSpeedBonusesStack` branch of apply/remove stays off | **CONFIRMED** (`MS` 350) |
