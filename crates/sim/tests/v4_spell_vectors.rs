@@ -313,6 +313,26 @@ fn roar_readiness_matches_the_original() {
 }
 
 #[test]
+fn lightning_shield_effect_matches_the_original() {
+    // dur herodur DataA area extra hero | edi ebx | dur period area amount two vt64 order
+    let Some(t) = game_tables() else {
+        return;
+    };
+    let div = |a: F32, b: F32| softfloat::arith::div(a, b, &t);
+    let rows = hex_rows(include_str!("data/unit_spells/shield_effect.txt"));
+    assert!(rows.len() >= 300);
+    for r in &rows {
+        let mut l = level_of(&[r[2]], r[0], r[1]);
+        l.area = f(r[3]);
+        let (dur, period, amount) = shield_values(&l, r[5] != 0, f(r[4]), &div);
+        let w = &r[8..];
+        assert_eq!((w[0], w[1], w[2], w[3]), (dur.to_bits(), period.to_bits(), l.area.to_bits(), amount.to_bits()), "row {:08x?}", r);
+        assert_eq!(w[4], 2, "row {:08x?}", r);
+        assert_eq!(w[6], 0xD008E, "order id of Lightning Shield");
+    }
+}
+
+#[test]
 fn unholy_frenzy_effect_matches_the_original() {
     // dur herodur DataA DataB extra hero existing | calls e n | existing: dur owner B A / new: target dur owner B A
     let rows = hex_rows(include_str!("data/unit_spells/unholy_apply.txt"));

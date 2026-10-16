@@ -319,3 +319,8 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   (`roar_ready_error`, 400 cases), no check without a limit. NOT verified: what the buff (`CBuffRoar` shares the Inner Fire buff base) does
   with `DataA`..`DataD`; since Inner Fire's damage turned out to be an integer weapon bonus, `damage_pct = DataA` in `roar()` is probably wrong
   in the same way.
+* **Lightning Shield (`Alsh`) PARTLY verified (no row)**: effect `0x6F13C690` hands the buff creator `0x6F13C360` the hero-rule duration, the tick period
+  `recip(C)`, `Area`, the damage per tick `DataA / C` and the constant 2 with `C` = the 2.0 at `0x6FAB0FA4` (`shield_values`, 400 cases with the real
+  soft divisions and reciprocal). The per-victim tick slot `0x364` = `0x6F13C410` skips a victim that carries the shield's marker buff (`0x6F10FFB0`
+  code), whose unit word `+0xEC` is above zero (signed), or that is the shielded unit; blocked victims (`0x6F28D750`) get only the marker; the model lacks
+  the first two skips (meaning of `+0xEC` unknown) and this tick filter was not run.

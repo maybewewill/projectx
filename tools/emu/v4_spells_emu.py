@@ -706,6 +706,35 @@ def _group_effect(cases, r, rows, vt, abil, effect, slot, idx):
         rows.append([n, da, db, dc, dur, hdur, extra] + flat + [k] + out)
 
 
+VT_LSH_ABIL, ABIL_LSH = 0x6F8DB48C, 0x416C7368
+
+
+def check_shield_effect(cases, r, rows):
+    """Lightning Shield effect 0x6F13C690 -> 0x6F13C360 (recorded). Rows: dur herodur DataA area extra hero | edi ebx | &dur
+    period area amount two vt64 order."""
+    S.install()
+    ret_var(0x6F1D2660, 0, 4)
+    A.patch_jump(0x6F13C360, recorder(0x100, [(1, True), (2, True), (3, True), (4, True), (5, False), (6, False), (7, False)], 0x20, regs=True))
+    unit_vtables()
+    wr(VTU + 0x64, A.stub_ret(0, 0x66))
+    for _ in range(cases):
+        dur, hdur, da = rbits(r), rbits(r), rbits(r)
+        area = rbits(r) if r.random() < 0.3 else f2u(160.0)
+        extra = rbits(r) if r.random() < 0.3 else 0
+        hero = r.random() < 0.5
+        A.make_ability(VT_LSH_ABIL, ABIL_LSH, 75)
+        level(A.LVL, dur, hdur, [da])
+        wr(A.LVL + 0x18, area)
+        wr(A.OBJ + 0x9C, extra)
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT, VTU)
+        S.make_target(False)
+        S.clear_cap()
+        wr(VARS + 4, int(hero))
+        S.call(0x6F13C690, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append([dur, hdur, da, area, extra, int(hero)] + [rd(CAP + 0x100 + 4 * i) for i in range(9)])
+
+
 VT_ROAR_ABIL, ABIL_ROAR = 0x6F8A21BC, 0x41726F61
 
 
@@ -765,6 +794,7 @@ CHECKS = {
     "taunt_compare": check_taunt_compare,
     "taunt_effect": check_taunt_effect,
     "roar_effect": check_roar_effect,
+    "shield_effect": check_shield_effect,
     "roar_ready": check_roar_ready,
     "unholy_apply": check_unholy_apply,
     "rejuv_effect": check_rejuv_effect,

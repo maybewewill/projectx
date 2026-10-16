@@ -1842,8 +1842,11 @@ fn lightning_shield(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     if !arith::lt(F32::ZERO, dur) {
         return;
     }
-    let amount = gm.soft_div(rec.level.data[0], F32::from_bits(0x4000_0000));
-    let period = gm.soft_div(F32::ONE, F32::from_bits(0x4000_0000));
+    let (amount, period) = {
+        let div = |a: F32, b: F32| gm.soft_div(a, b);
+        let v = shield_values(&rec.level, hero, F32::ZERO, &div);
+        (v.2, v.1)
+    };
     let preds = crate::abilities::BuffPredicates {
         positive: true,
         magic: true,
@@ -2106,6 +2109,14 @@ pub fn rejuvenation_effect_args(l: &SpellLevel, hero: bool, extra: F32) -> (F32,
 pub fn rejuv_buff_values(t: F32, data_a: F32, data_b: F32, div: &dyn Fn(F32, F32) -> F32) -> (F32, F32, F32) {
     let dur = if 0.0f32 < t.to_f32() { arith::add(t, F32::from_bits(TICK_FIRST_DELAY_BITS)) } else { t };
     (dur, div(data_a, t), div(data_b, t))
+}
+
+/// What Lightning Shield's effect `0x6F13C690` hands to the buff creator `0x6F13C360` (CONFIRMED by Unicorn, V4): the hero rule
+/// duration, the tick period `recip(C)` and the damage per tick `DataA / C` with `C` = the constant at `0x6FAB0FA4` (2.0:
+/// `DataA` is damage per second, ticks every 0.5 s), and `Area`. Returns `(duration, period, damage per tick)`.
+pub fn shield_values(l: &SpellLevel, hero: bool, extra: F32, div: &dyn Fn(F32, F32) -> F32) -> (F32, F32, F32) {
+    let c = F32::from_bits(0x4000_0000);
+    (effect_duration(l, hero, extra), div(F32::ONE, c), div(l.data[0], c))
 }
 
 /// Whether Purge slows the target: not when the target is dead (`+0x5C & 0x100`) or the caster's player is passively
