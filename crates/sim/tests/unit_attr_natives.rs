@@ -548,7 +548,8 @@ fn support_tables_cover_the_work_list() {
     // Plus IsUnitType, IsUnitIdType, UnitAddType, UnitRemoveType, IsUnitInTransport, UnitSetUsesAltIcon (unit-classification.md).
     // Plus SetUnitUseFood and UnitSuspendDecay (lane_f.rs).
     // Plus SelectHeroSkill (the hero learn, heroes.md section 12).
-    assert_eq!(implemented, 86);
+    // Plus IsUnitInvisible and IsUnitDetected (invisibility.rs, S44).
+    assert_eq!(implemented, 88);
 
     let host = host_for(
         r#"
