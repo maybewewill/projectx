@@ -469,6 +469,17 @@ mismatches; `tests/data/orc/cmdaura.txt`, `tests/orc_cmdaura.rs`). Rust: `orc::c
 set), the weapon-type filters (`+0xDC + 4w` == 1 for ranged or `2..8` for the other kinds, `+0x218 + 4w` targs masks `0x80`, 1,
 `0x40`, `0x100` allowed) which stay as in `buffs.md`.
 
+**V1: the whole weapon-slot bonus of the Command / Trueshot buff `0x6F1ACC40` is CONFIRMED by Unicorn, 400 cases, 0
+mismatches** (`tools/emu/spell_buff_emu.py` check `command_aura`, the real routine on a fake buff with random fraction, flag
+bits 8..10, one or two weapon slots, random dice, bonus, weapon kind `+0xDC + 4w` and `targs` `+0x218 + 4w`;
+`crates/sim/tests/data/unit_spells/command_aura.txt`, `spell_buff_vectors.rs`; Rust `orc::command_aura_weapon_amount`, used by
+`auras.rs`). Beyond the average-damage getter above: a weapon slot is skipped when its `targs` is not one of `1`, `0x40`,
+`0x80`, `0x100` and (kind 1 with bit 8 clear, or kind 2..=8 with bit 9 clear); bit 10 makes the amount `F2I(DataA)`
+(flat); **a zero result takes the sign of `DataA`** (+1 for a positive fraction, so the aura always adds at least one
+point; -1 for a negative or NaN one; 0 for exactly zero), which the model lacked; a negative result is clamped from below
+by `-(bonus + count)`; the amount goes into the weapon's damage counter and the buff keeps it for the undo. The mapping of
+`DataB` / `DataC` / `DataD` to bits 8 / 9 / 10 of the buff's flag word is from `buffs.md` (not part of this run).
+
 Endurance Aura (`AOae`): the movement bonus `DataA` and the attack speed bonus `DataB` are applied as in `buffs.md` (additive
 agile multiplier cell snapped to 1.0 within 0.001; attack ability re-arm in proportion); no new number was decoded in S39.
 

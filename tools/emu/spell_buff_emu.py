@@ -287,6 +287,32 @@ def check_cripple(cases, r, rows):
                        rd(BUFF + 0xF4)])
 
 
+def check_command_aura(cases, r, rows):
+    """The attack-bonus routine of the Command / Trueshot aura buffs `0x6F1ACC40` (real) on a fake buff. Rows: fraction
+    flags(bits 8..10) slots | weapon 0 (count sides bonus targs kind) | weapon 1 | counter deltas | stored amounts +0xE4/+0xE8."""
+    kinds = [1, 1, 2, 3, 4, 5, 6, 7, 8, 0, 9, r.randint(0, 12)]
+    for _ in range(cases):
+        frac = rbits(r)
+        if r.random() < 0.5:
+            frac = f2u(r.choice([0.05, 0.1, 0.15, 0.2, 0.25, 0.5, r.uniform(-0.5, 0.5), 1.0, 2.0, r.uniform(0, 3)]))
+        flags = r.getrandbits(3) << 8
+        slots = r.choice([1, 2, 2, 2])
+        weap = random_weapons(r)
+        make_target(False)
+        base0, base1 = r.randint(0, 5), r.randint(0, 5)
+        make_attack(weap, base0, base1)
+        for w in range(2):
+            wr(ATK + 0xDC + 4 * w, r.choice(kinds))
+        mu.mem_write(BUFF, b"\0" * 0x400)
+        wr(BUFF + 0x20, flags)
+        wr(BUFF + 0x30, TGT)
+        wr(BUFF + 0xD0, frac)
+        wr(BUFF + 0xE0, slots)
+        call(0x6F1ACC40, ecx=BUFF)
+        rows.append([frac, flags, slots] + [x for w, t in zip(weap, (0, 1)) for x in w + (rd(ATK + 0xDC + 4 * t),)]
+                    + [u32(rd(ATK + 0xAC) - base0), u32(rd(ATK + 0xB0) - base1), rd(BUFF + 0xE4), rd(BUFF + 0xE8)])
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -303,6 +329,8 @@ def main():
     check_innerfire(cases, r, out["innerfire"])
     out["cripple"] = []
     check_cripple(cases, r, out["cripple"])
+    out["command_aura"] = []
+    check_command_aura(cases, r, out["command_aura"])
     for name, rows in out.items():
         print("%s rows %d" % (name, len(rows)))
         for row in rows[:4]:

@@ -1610,6 +1610,51 @@ pub fn command_base_damage(count: i32, sides: i32, bonus: i32) -> F32 {
     arith::add(conv::i2r(bonus), arith::mul(conv::i2r(count), per_die))
 }
 
+/// Whether a weapon `targs` word is one of the four the Command Aura routine treats as "allowed" (`1`, `0x40`, `0x80`,
+/// `0x100`; `0x6F1ACC40`).
+fn command_targs_allowed(targs: u32) -> bool {
+    matches!(targs, 1 | 0x40 | 0x80 | 0x100)
+}
+
+/// The damage bonus the Command and Trueshot aura buffs give one weapon slot (`0x6F1ACC40`, CONFIRMED, **Unicorn 400/400**,
+/// `tools/emu/spell_buff_emu.py`, the real routine on a fake buff). `flags` is the buff's flag word (`+0x20`): bit 8
+/// (`DataB`), bit 9 (`DataC`) and bit 10 (`DataD`, flat). `kind` is the weapon kind (`+0xDC + 4w`, the `weapTp` enum),
+/// `targs` the weapon's target word (`+0x218 + 4w`). `None` = the slot is skipped: a kind-1 weapon whose `targs` is not
+/// allowed is skipped unless bit 8 is set, and a kind 2..=8 weapon whose `targs` is not allowed is skipped unless bit 9
+/// is set. Otherwise `F2I(fraction)` when bit 10 is set, else `F2I(add(mul(fraction, X), 0.5))` with `X` the weapon's
+/// average damage ([`command_base_damage`]); a zero result takes the sign of `fraction` (+1, -1, NaN -1, 0 for exactly
+/// zero); a negative result is clamped from below by `-(bonus + count)`. The amount is added to the weapon's damage
+/// counter and kept in the buff for the undo.
+pub fn command_aura_weapon_amount(fraction: F32, flags: u32, count: i32, sides: i32, bonus: i32, kind: u32, targs: u32) -> Option<i32> {
+    let (bit8, bit9, flat) = (flags & 0x100 != 0, flags & 0x200 != 0, flags & 0x400 != 0);
+    if !command_targs_allowed(targs) && ((!bit8 && kind == 1) || (!bit9 && (2..=8).contains(&kind))) {
+        return None;
+    }
+    let mut amount = if flat {
+        conv::f2i(fraction)
+    } else {
+        let half = F32::from_bits(0x3F00_0000);
+        conv::f2i(arith::add(arith::mul(fraction, command_base_damage(count, sides, bonus)), half))
+    };
+    if amount == 0 {
+        let v = fraction.to_f32();
+        amount = if v == 0.0 {
+            0
+        } else if v > 0.0 {
+            1
+        } else {
+            -1
+        };
+    }
+    if amount < 0 {
+        let floor = bonus.wrapping_add(count).wrapping_neg();
+        if amount < floor {
+            amount = floor;
+        }
+    }
+    Some(amount)
+}
+
 // ---- Earthquake (`AOeq`, `CAbilityEarthquake`, vtable `0x6F8A8154`; effect `CEffectEarthquake`, vtable `0x6F88F86C`) ----
 
 /// Earthquake's ability id.

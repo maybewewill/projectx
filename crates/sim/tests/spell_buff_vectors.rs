@@ -130,3 +130,45 @@ fn cripple_values_match_the_original() {
     assert!(zero > 20 && positive > 5 && negative > 100 && clamped > 5, "{zero} {positive} {negative} {clamped}");
 }
 
+#[test]
+fn command_aura_weapon_bonus_matches_the_original() {
+    // 0 fraction, 1 flags, 2 slots | 3..8 weapon 0 (count sides bonus targs kind) | 8..13 weapon 1 | 13, 14 counter
+    // deltas | 15, 16 stored amounts
+    let rows = hex_rows(include_str!("data/unit_spells/command_aura.txt"));
+    assert!(rows.len() >= 300);
+    let (mut skipped, mut flat, mut signed, mut clamped) = (0, 0, 0, 0);
+    for r in &rows {
+        let slots = r[2] as usize;
+        for w in 0..2 {
+            let o = 3 + 5 * w;
+            let want = if w < slots {
+                sim::orc::command_aura_weapon_amount(f(r[0]), r[1], r[o] as i32, r[o + 1] as i32, r[o + 2] as i32, r[o + 4], r[o + 3])
+            } else {
+                None
+            };
+            let (delta, stored) = (r[13 + w], r[15 + w]);
+            match want {
+                None => {
+                    assert_eq!((delta, stored), (0, 0), "weapon {w}, row {:08x?}", r);
+                    if w < slots {
+                        skipped += 1;
+                    }
+                }
+                Some(a) => {
+                    assert_eq!((delta, stored), (a as u32, a as u32), "weapon {w}, row {:08x?}", r);
+                    if r[1] & 0x400 != 0 {
+                        flat += 1;
+                    }
+                    if a.abs() == 1 {
+                        signed += 1;
+                    }
+                    if a < 0 && a == (r[o + 2] as i32).wrapping_add(r[o] as i32).wrapping_neg() {
+                        clamped += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(skipped > 20 && flat > 50 && signed > 20 && clamped > 2, "{skipped} {flat} {signed} {clamped}");
+}
+
