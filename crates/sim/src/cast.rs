@@ -1042,7 +1042,7 @@ pub fn process_interrupts(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime) {
 
 // ---- the class effects (slot 0x424) ----
 
-fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastRec) {
+pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastRec) {
     // An item ability that borrows a unit spell class runs that class under its class code (`item_abilities`).
     let resolved = crate::item_abilities::resolve_rec(&game.borrow(), item_rec);
     let rec = &resolved;

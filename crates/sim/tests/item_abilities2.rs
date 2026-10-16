@@ -403,7 +403,7 @@ fn runed_bracers_scale_spells_damage_only() {
 }
 
 #[test]
-fn orb_of_fire_hits_the_victim_and_the_enemies_around_it() {
+fn orb_of_fire_splashes_the_enemies_around_the_victim_but_not_the_victim() {
     let h = started("setup_orbs");
     let (u, foe, foe2, foe3) = (global_unit(&h, "u"), global_unit(&h, "foe"), global_unit(&h, "foe2"), global_unit(&h, "foe3"));
     let mut g = h.game_mut();
@@ -411,7 +411,7 @@ fn orb_of_fire_hits_the_victim_and_the_enemies_around_it() {
     let died = on_hit(&mut g, u, foe, f(30.0), true);
     assert!(died.is_empty());
     let after: Vec<f32> = [foe, foe2, foe3].iter().map(|&k| g.unit(k).life.to_f32()).collect();
-    assert_eq!(before[0] - after[0], 5.0, "DataA to the victim");
+    assert_eq!(before[0], after[0], "the victim takes its normal attack, not the splash record (Unicorn FB: the callback skips it)");
     assert_eq!(before[1] - after[1], 5.0, "an enemy inside Area 140 of the victim");
     assert_eq!(before[2], after[2], "an enemy outside the area");
 }

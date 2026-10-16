@@ -653,6 +653,51 @@ fn load_item_abilities(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), E
             out.item_abilities.specs.insert(code, spec);
         }
     }
+    // The Spell Effect Bonus (`AIsb`, the orbs of slow, lightning and darkness) names the spell it casts in `UnitID`, a row no
+    // item lists: it is loaded like an alias (base and level records) so that the proc can cast it.
+    let children: Vec<u32> = out
+        .item_abilities
+        .bases
+        .iter()
+        .filter(|(_, &b)| b == sim::item_abilities::ITEM_SPELL_BONUS)
+        .filter_map(|(a, _)| out.item_abilities.levels.get(a).and_then(|l| l.first()).map(|l| l.unit_id))
+        .filter(|&u| u != 0)
+        .collect();
+    for alias in children {
+        if out.item_abilities.levels.contains_key(&alias) {
+            continue;
+        }
+        let name = String::from_utf8_lossy(&alias.to_be_bytes()).into_owned();
+        let Some(def) = gamedata::abilitytype::read_ability(&abilities, &name) else {
+            continue;
+        };
+        if let Some(base) = abilities.raw(&name, "code").map(|t| t.trim().trim_matches('"')).filter(|t| !t.is_empty()) {
+            out.item_abilities.bases.insert(alias, gamedata::abilitytype::raw_code(base));
+        }
+        let f = |v: f32| F32::from_bits(v.to_bits());
+        let levels = def
+            .levels
+            .iter()
+            .map(|l| {
+                let mut data = [F32::ZERO; 9];
+                for (d, v) in data.iter_mut().zip(l.data.iter()) {
+                    *d = f(*v);
+                }
+                sim::cast::SpellLevel {
+                    cast: f(l.cast),
+                    dur: f(l.dur),
+                    hero_dur: f(l.hero_dur),
+                    cost: l.cost,
+                    cool: f(l.cool),
+                    area: f(l.area),
+                    rng: f(l.rng),
+                    data,
+                    unit_id: l.unit_id,
+                }
+            })
+            .collect();
+        out.item_abilities.levels.insert(alias, levels);
+    }
     Ok(())
 }
 

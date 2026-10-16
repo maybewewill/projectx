@@ -237,7 +237,10 @@ fn scroll_of_protection_gives_armor_for_its_duration() {
 
 #[test]
 fn corruption_orb_lowers_the_victim_armor_for_its_duration() {
-    let rows = [row(b"tcb1", b"AIcb", b"AIcb", lvl(5.0, 0.0, 5.0))];
+    // S53: the amount is DataB (Unicorn `CR`), not DataA.
+    let mut l = lvl(5.0, 0.0, 5.0);
+    l.data[1] = f(5.0);
+    let rows = [row(b"tcb1", b"AIcb", b"AIcb", l)];
     let mut h = started(&rows, c(b"tcb1"), &|_| {});
     let (u, foe) = (gu(&h, "u"), gu(&h, "foe"));
     on_hit(&mut h.game_mut(), u, foe, f(30.0), true);
@@ -248,30 +251,10 @@ fn corruption_orb_lowers_the_victim_armor_for_its_duration() {
     assert_eq!(h.game().unit(foe).bonuses.armor.to_f32(), 0.0);
 }
 
-#[test]
-fn lightning_orb_adds_its_damage() {
-    let rows = [row(b"tlb1", b"AIlb", b"AIlb", lvl(0.0, 0.0, 6.0))];
-    let h = started(&rows, c(b"tlb1"), &|_| {});
-    let (u, foe) = (gu(&h, "u"), gu(&h, "foe"));
-    let before = h.game().unit(foe).life.to_f32();
-    on_hit(&mut h.game_mut(), u, foe, f(30.0), true);
-    assert_eq!(before - h.game().unit(foe).life.to_f32(), 6.0);
-}
+// S53: the Orb of Lightning (old) fires the carrier's AIlp ability instead of adding damage (see item_abilities4.rs).
 
-#[test]
-fn venom_orb_poisons_the_victim_over_time() {
-    let rows = [row(b"tpb1", b"AIpb", b"AIpb", lvl(0.0, 0.0, 5.0))];
-    let mut h = started(&rows, c(b"tpb1"), &|_| {});
-    let (u, foe) = (gu(&h, "u"), gu(&h, "foe"));
-    let before = h.game().unit(foe).life.to_f32();
-    on_hit(&mut h.game_mut(), u, foe, f(30.0), true);
-    assert!(h.game().unit(foe).buffs.iter().any(|b| b.base == sim::neutral_spells::BUFF_POISON));
-    for _ in 0..25 {
-        h.step();
-    }
-    let lost = before - h.game().unit(foe).life.to_f32();
-    assert!(lost >= 5.0, "at least the first tick, lost {lost}");
-}
+// S53: the Orb of Venom's poison is its second ability `Apo2` (the poison attack module); `AIpb` itself only adds the attack bonus
+// (see item_abilities4.rs).
 
 #[test]
 fn cloak_of_flames_burns_nearby_enemies_while_carried() {

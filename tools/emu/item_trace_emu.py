@@ -39,6 +39,7 @@ RETSTUB = D + 0x3000
 OWNER = D + 0x3400
 ALLOW = [(0x6F6EE000, 0x6F6F1000), (0x6F02E500, 0x6F02EE00)]
 DATA_NAMES = "ABCDEFGHI"
+LAST_TRACE = []  # the call trace of the last trace_call (kept when the run raises)
 
 
 def f32(x):
@@ -214,6 +215,7 @@ def trace_call(fn, ecx, args=(), stub_ret=None, stub_fn=None, into=(), span=0x60
     try:
         r = emu.call(fn, ecx=ecx, edx=edx, stack_args=args)
     finally:
+        LAST_TRACE[:] = trace
         mu.hook_del(h1)
         mu.hook_del(h2)
         mu.hook_del(h3)
