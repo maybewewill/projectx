@@ -519,6 +519,89 @@ fn mana_shield(game: &RefCell<Game>, rec: &CastRec) {
     gm.spells.neutral.shield.insert(rec.caster, (rec.level.data[0], rec.level.data[1]));
 }
 
+/// What the Mana Shield damage hook `0x6F126DD0` does, in the order the original does it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShieldEvent {
+    /// The buff is destroyed (`0x6F079CC0`).
+    Remove,
+    /// The damage record's amount is reduced by this many points (`0x6F255790`, bits of the float).
+    Reduce(u32),
+    /// This much mana is spent (`0x6F283DB0`, bits of the float).
+    Spend(u32),
+}
+
+fn nf(v: F32) -> f32 {
+    f32::from_bits(v.to_bits())
+}
+
+/// `0x6F022530`: `x / p` where `p` is a property cell's value; a zero `p` (x87 equal) answers 1.0 for `x == 0`, else
+/// plus or minus the largest float (`0x6FAAE624` / `0x6FAAE628`).
+pub fn shield_safe_div(x: F32, p: F32, div: &dyn Fn(F32, F32) -> F32) -> F32 {
+    if nf(p) == 0.0 {
+        if nf(x) == 0.0 {
+            F32::from_bits(0x3F80_0000)
+        } else if nf(x) > 0.0 {
+            F32::from_bits(0x7F7F_FFFF)
+        } else {
+            F32::from_bits(0xFF7F_FFFF)
+        }
+    } else {
+        div(x, p)
+    }
+}
+
+/// The Mana Shield damage hook (`CBuffManaShield` slot `0x6F126DD0`): `share` is the buff's `+0xD8` value (`DataB`), `per`
+/// the value of the cell at `+0xCC` (`DataA`, damage absorbed per mana point), `amount` the record's amount, `mana` the
+/// unit's mana, `mana_after(spent)` the mana once the spend is done. `flags` is the record's flag word (`0x10` skips the
+/// shield), `source` whether the record's source resolves. Rows `MS` of `v3_vectors.txt`.
+pub fn mana_shield_hit(
+    flags: u32,
+    source: bool,
+    share: F32,
+    per: F32,
+    amount: F32,
+    mana: F32,
+    mana_after: &dyn Fn(F32) -> F32,
+    div: &dyn Fn(F32, F32) -> F32,
+) -> Vec<ShieldEvent> {
+    if !source || flags & 0x10 != 0 {
+        return Vec::new();
+    }
+    let mut covered = arith::mul(amount, share);
+    let check = arith::sub(covered, F32::ZERO);
+    let eps = f32::from_bits(0x3A83_126F);
+    if eps > f32::from_bits(check.to_bits() & 0x7FFF_FFFF) {
+        return Vec::new();
+    }
+    // The mana the whole share would cost; when the mana cannot pay it the covered part is what the mana buys.
+    let need = shield_safe_div(covered, per, div);
+    if nf(mana) < nf(need) {
+        covered = arith::mul(mana, per);
+    }
+    let spent = shield_safe_div(covered, per, div);
+    let mut events = Vec::new();
+    if nf(covered) == 0.0 {
+        events.push(ShieldEvent::Remove);
+    }
+    events.push(ShieldEvent::Reduce(covered.to_bits()));
+    events.push(ShieldEvent::Spend(spent.to_bits()));
+    let after = nf(mana_after(spent));
+    if !(after > 0.0) && !after.is_nan() {
+        events.push(ShieldEvent::Remove);
+    }
+    events
+}
+
+/// `0x6F255790(record, &x, &0.0)` on the record's first amount: when the amount is not above `x` (x87 compare; NaN takes
+/// the other path) the amount becomes exactly 0.0, otherwise it is `amount - x` (soft subtraction). Rows `RR`.
+pub fn record_reduce(amount: F32, x: F32) -> F32 {
+    if nf(amount) <= nf(x) {
+        F32::ZERO
+    } else {
+        arith::sub(amount, x)
+    }
+}
+
 /// Cyclone (`Acyc`, `CAbilityCyclone`; buffs `Bcyc` / `Bcy2`, `CBuffCycloneTwo < CBuffCyclone`): the target is lifted for
 /// the hero-rule duration, cannot act (the stun count) and cannot be hurt (the invulnerability count). The Misc key
 /// `CycloneStasis` (read by the effect slot `0x6F1CCC70`) only decides whether the effect object freezes the target
@@ -811,22 +894,28 @@ impl Game {
             self.spells.neutral.shield.remove(&target);
             return amount;
         }
-        if !arith::lt(F32::ZERO, amount) || !arith::lt(F32::ZERO, per_mana) {
-            return amount;
-        }
-        let absorbed = arith::mul(share, amount);
-        let need = self.soft_div(absorbed, per_mana);
         let mana = self.unit(target).mana;
-        if arith::le(need, mana) {
-            self.write_mana(target, arith::sub(mana, need));
-            arith::sub(amount, absorbed)
-        } else {
-            let covered = arith::mul(mana, per_mana);
-            self.write_mana(target, F32::ZERO);
-            self.remove_buff_code(target, BUFF_MANA_SHIELD);
-            self.spells.neutral.shield.remove(&target);
-            arith::sub(amount, covered)
+        // The mana after the spend (the sink `0x6F283DB0` is a plain subtraction here: no mana modifiers in the model).
+        let after = |spent: F32| arith::sub(mana, spent);
+        let events = {
+            let this = &*self;
+            mana_shield_hit(0, true, share, per_mana, amount, mana, &after, &|a, b| this.soft_div(a, b))
+        };
+        let mut amount = amount;
+        for e in events {
+            match e {
+                ShieldEvent::Reduce(x) => amount = record_reduce(amount, F32::from_bits(x)),
+                ShieldEvent::Spend(x) => {
+                    let m = self.unit(target).mana;
+                    self.write_mana(target, arith::sub(m, F32::from_bits(x)));
+                }
+                ShieldEvent::Remove => {
+                    self.remove_buff_code(target, BUFF_MANA_SHIELD);
+                    self.spells.neutral.shield.remove(&target);
+                }
+            }
         }
+        amount
     }
 
     /// Cleaving Attack (`ANca`, `CAbilityCleavingAttack < CAbilityPassive`; swing start `0x6F1B1440` arms it when the

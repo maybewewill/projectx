@@ -97,6 +97,69 @@ fn need_tables(what: &str) -> bool {
     true
 }
 
+fn tables() -> Option<softfloat::Tables> {
+    let path = std::env::var("GAME_DLL").ok()?;
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("reading GAME_DLL={path}: {e}"));
+    Some(softfloat::Tables::from_game_dll(&bytes).expect("tables are in the image"))
+}
+
+#[test]
+fn record_reduce_matches_the_original() {
+    let rs = rows("RR");
+    assert!(rs.len() >= 300);
+    for r in &rs {
+        assert_eq!(r[3], "|");
+        let got = sim::neutral_spells::record_reduce(F32::from_bits(h(r[1])), F32::from_bits(h(r[2])));
+        let want = h(r[4]);
+        // NaN results: only the NaN-ness is compared (the sign of a NaN produced by a soft subtraction is the library's).
+        if f32::from_bits(want).is_nan() {
+            assert!(f32::from_bits(got.to_bits()).is_nan(), "row {r:?}");
+        } else {
+            assert_eq!(got.to_bits(), want, "row {r:?}");
+        }
+    }
+}
+
+#[test]
+fn mana_shield_hook_matches_the_original() {
+    use sim::neutral_spells::{mana_shield_hit, ShieldEvent};
+    let Some(t) = tables() else {
+        eprintln!("GAME_DLL not set: Mana Shield vectors skipped");
+        return;
+    };
+    let rs = rows("MS");
+    assert!(rs.len() >= 300);
+    let (mut spent, mut removed, mut none) = (0, 0, 0);
+    for r in &rs {
+        assert_eq!(r[8], "|");
+        let after = F32::from_bits(h(r[7]));
+        let events = mana_shield_hit(
+            h(r[1]),
+            r[2] == "0",
+            F32::from_bits(h(r[3])),
+            F32::from_bits(h(r[4])),
+            F32::from_bits(h(r[5])),
+            F32::from_bits(h(r[6])),
+            &|_| after,
+            &|a, b| softfloat::arith::div(a, b, &t),
+        );
+        let got: Vec<String> = events
+            .iter()
+            .map(|e| match e {
+                ShieldEvent::Remove => "R".to_string(),
+                ShieldEvent::Reduce(x) => format!("D{x:x}"),
+                ShieldEvent::Spend(x) => format!("S{x:x}"),
+            })
+            .collect();
+        let want: Vec<String> = r[9..].iter().filter(|s| **s != "-").map(|s| s.to_string()).collect();
+        assert_eq!(got, want, "row {r:?}");
+        spent += usize::from(got.iter().any(|e| e.starts_with('S')));
+        removed += usize::from(got.iter().any(|e| e == "R"));
+        none += usize::from(got.is_empty());
+    }
+    assert!(spent > 50 && removed > 20 && none > 20, "{spent} {removed} {none}");
+}
+
 #[test]
 fn scroll_of_protection_callback_matches_the_original() {
     if !need_tables("AIda") {

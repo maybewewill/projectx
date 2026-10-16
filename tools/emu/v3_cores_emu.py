@@ -12,6 +12,11 @@ by crates/sim/tests/v3_vectors.rs against the Rust model. Row kinds (hex, `|` se
                                                         Scroll of Protection (AIda) area callback 0x6F0B61D0: the life
                                                         and mana adder calls and the buff apply (Bdef) arguments
 
+  RR  amount x | amount'                              damage record reduce 0x6F255790 (first amount)
+  MS  recflags srcnull share per amount mana mana' | events
+                                                        Mana Shield damage hook 0x6F126DD0 (events: R remove buff, Dx reduce
+                                                        the record by x, Sx spend x mana; mana' = the mana after the spend)
+
 Usage: GAME_DLL=/path/Game.dll py tools/emu/v3_cores_emu.py OUT.txt [CASES] [SEED] [KINDS]
 """
 import os
@@ -183,7 +188,82 @@ def case_da(r):
     return out
 
 
-GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da)]
+# ---------------------------------------------------------------- MS: the Mana Shield damage hook
+T.ALLOW.append((0x6F022500, 0x6F022600))
+MS_HOOK = 0x6F126DD0
+PROP_GET, SMART_PTR, REDUCE, MANA_CHANGE, REMOVE_BUFF = 0x6F4773A0, 0x6F038450, 0x6F255790, 0x6F283DB0, 0x6F079CC0
+
+
+def nice(r):
+    k = r.random()
+    if k < 0.55:
+        return fbits(r.choice([0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 0.25, 10.0, 100.0, 7.0, 33.0, r.uniform(0.1, 20.0), r.uniform(1, 400)]))
+    return rand_real(r)
+
+
+def case_ms(r):
+    prep()
+    BUFF, REC, UNITO, SMART = T.D + 0x4000, T.D + 0x4800, T.D + 0x4C00, T.D + 0x5000
+    for a in (BUFF, REC, UNITO, SMART):
+        mu.mem_write(a, bytes(0x400))
+    flags = r.choice([0, 0, 0, 0x10, 0x11, r.getrandbits(8)])
+    srcnull = r.choice([0, 0, 0, 0, 1])
+    share, per, amount, mana = nice(r), nice(r), nice(r), nice(r)
+    after = r.choice([0, nice(r), nice(r), 0x80000000, 0x7FC00000, fbits(1e-9)])
+    if r.random() < 0.15:
+        per = r.choice([0, 0x80000000])
+    if r.random() < 0.1:
+        amount = 0
+    w32(BUFF + 0xD8, share)
+    w32(BUFF + 0xD0, per)
+    w32(BUFF + 0x30, UNITO)
+    w32(REC + 0x10, amount)
+    w32(REC + 0xC, flags)
+    w32(REC, 0x1234)
+    ev = []
+    calls = [0]
+
+    def smart(uc, c, d, st):
+        w32(c, 0 if srcnull else SMART + 0x10)
+        return c
+
+    def getter(uc, c, d, st):
+        w32(st[0], mana if calls[0] == 0 else after)
+        calls[0] += 1
+        return st[0]
+
+    def red(uc, c, d, st):
+        ev.append('D%x' % r32(st[0]))
+        return 0
+
+    def spend(uc, c, d, st):
+        ev.append('S%x' % r32(st[1]))
+        return 0
+
+    def rm(uc, c, d, st):
+        ev.append('R')
+        return 0
+
+    T.trace_call(MS_HOOK, BUFF, (REC,), stub_fn={SMART_PTR: smart, PROP_GET: getter, REDUCE: red, MANA_CHANGE: spend, REMOVE_BUFF: rm},
+                 span=0x300, cleanup={SMART_PTR: 4, REDUCE: 8, MANA_CHANGE: 12, REMOVE_BUFF: 4})
+    return 'MS %x %d %x %x %x %x %x | %s' % (flags, srcnull, share, per, amount, mana, after, ' '.join(ev) or '-')
+
+
+def case_rr(r):
+    prep()
+    REC, XA = T.D + 0x4800, T.D + 0x4A00
+    mu.mem_write(REC, bytes(0x40))
+    amount = nice(r)
+    x = r.choice([amount, nice(r), nice(r), 0, 0x80000000, 0x7FC00000])
+    w32(REC + 0x10, amount)
+    w32(REC + 0x18, r.choice([0, nice(r)]))
+    w32(XA, x)
+    w32(XA + 4, 0)
+    T.trace_call(REDUCE, REC, (XA, XA + 4), span=0x100)
+    return 'RR %x %x | %x' % (amount, x, r32(REC + 0x10))
+
+
+GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da), ('MS', case_ms), ('RR', case_rr)]
 
 
 def main():
