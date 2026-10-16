@@ -62,7 +62,7 @@ pub const UNSUMMON: u32 = code(b"Auns");
 pub const TAUNT: u32 = code(b"Atau");
 pub const PANDA_IMMOLATION: u32 = code(b"Apig");
 pub const AURA_REGEN_LIFE: u32 = code(b"Aoar");
-/// The aura buff code of `Aoar` (the code getter was not read: `B` + the ability's last letters, UNSURE).
+/// The aura buff code of `Aoar`: the code getter of `CBuffAuraRegenLife` (`0x6F022D40`) returns this, CONFIRMED (S52).
 pub const BUFF_REGEN_LIFE: u32 = code(b"Boar");
 pub const BUFF_POISON: u32 = code(b"Bpoi");
 pub const BUFF_SPIRIT_LINK: u32 = code(b"Bspl");
