@@ -174,10 +174,19 @@ def behaviour():
     bound = sum(1 for n in natives if f'"{n}"' in code and n not in not_impl)
     spec = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "docs" / "spec").glob("*.md"))
     marks = {k: len(re.findall(r"\b" + k + r"\b", spec)) for k in ("CONFIRMED", "LIKELY", "UNSURE")}
+    confirmed_abilities = 0
+    spec_lines = spec.splitlines()
+    for c in codes:
+        pat = re.compile(r"\b" + re.escape(c) + r"\b")
+        if any(pat.search(l) and "CONFIRMED" in l and not re.search("UNSURE|LIKELY|NOT CONFIRMED|not CONFIRMED", l)
+               for l in spec_lines):
+            confirmed_abilities += 1
     replay = json.loads((ROOT / "tools" / "metrics.json").read_text(encoding="utf-8"))["replay"]
     rows = [
-        {"name": "Способности", "hint": "базовые способности игры, которые есть в симуляции",
-         "have": abilities, "total": len(codes), "weight": 35},
+        {"name": "Способности: есть модель", "hint": "базовые способности, у которых в симуляции есть поведение (не обязательно точное)",
+         "have": abilities, "total": len(codes), "weight": 10},
+        {"name": "Способности: сверены с оригиналом", "hint": "в спецификациях есть строка CONFIRMED без LIKELY/UNSURE для этой способности",
+         "have": confirmed_abilities, "total": len(codes), "weight": 25},
         {"name": "Сверка с реплеем", "hint": "записи контрольной суммы реплея, совпавшие точно",
          "have": replay["exact_pairs"], "total": replay["pairs"], "weight": 35},
         {"name": "Подтверждённые факты", "hint": "CONFIRMED среди CONFIRMED/LIKELY/UNSURE в спецификациях",
