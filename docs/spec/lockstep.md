@@ -1577,10 +1577,27 @@ generators changed). `--pr-off MASK` switches the pathing-object hooks of the si
   (0x6F3A1690), so human orders and AI production change it; (c) the first tag changes of the real game are in the thousands of bits (`dY` 1861 at slot 11),
   so the birth tag after the map load is in the thousands (trees and other map objects register), against 107 in the sim.
 
+### 18.3b Replay object ids and the human's orders (new data, UNSURE meaning)
+
+`cargo run -p engine --example objids -- FILE.w3g` prints the object pairs of the selection and order actions. On EchoIsles every unit pair has two equal
+words: the hall of the human is `0x3a3c` (14908; the train orders at slots 137 and 140 follow its selection), the peasants are `0x3a71`, `0x3a9d`,
+`0x3ab3` (14961, 15005, 15027; selected for the move orders), a harvest target (`0xD0032` at slot 243) is `0x1929` (6441). The peasants are 22 apart
+(`0x3a71 + 22k`, k = 0..4: 22 agents per peasant) and the hall is 53 below the first peasant. So the ids are **agent ids from one counter that every agent
+draws from** (trees and doodads first, about 15,000 of them, then the start units with their abilities), not the handle ids (`0x100000` up) and not the
+sim's `(handle, 0)` model: without help **no order of the replay reaches a unit in the simulation**. `sim_sync::register_start_units` (`--sync-register`)
+registers the human's pairs by a heuristic (ids in ascending order are the player's start units in creation order, spaced by the smallest gap); it is
+off by default because it makes the comparison worse (exact pairs 1,302 to 373): with the human's peasants moving, the sim registers pathing objects in
+nearly every slot (8,608 mover starts, `Game::chase_route` replans a point order every batch), while the recorded game shows a tag change only in the
+one or two pairs after each human order (slots 122, 166, 174, 189, 212, 230, 243, 254: tag-only changes in two consecutive pairs, then quiet) and none
+while the peasant walks. That is direct evidence for the registration model: **a mover start and a stop register; walking does not**, and a point order
+must not replan every batch. The per-order Y step looks small (the first change after the order at slot 122, `0x2040`, can be read as `rol6(1) ^ rol9(16)`, a single birth plus a
+free-list head change, not three; the other reading is a 12-bit Y step); the agent-id counter and the first-order step are the two numbers to decode next.
+
 ### 18.4 Open
 
 1. The static constant `K`: hashes of the registry slots 5, 7, 8, 9 and 12 to 19 from the game data (ability database `0x6F005D60`, custom data kinds).
 2. Birth and presence tags after the map load (destructables, regions, relations): needs the creation/registration counts of a whole map load.
 3. The AI cadence in the first slots (first draw one slot later than the sim), and the production events (the game-hash slot's player data).
 4. The generator link: verify the seed with an isolated draw (a quiet pair whose only change is a draw count), or decode the random-race draw at the game start.
-5. Why the pause takes exactly one extra unit (probably the frame driver finishes the unit in progress); the rule is fitted on one replay.
+5. The agent-id counter (14,908 for the human's hall): per-type agent counts of a unit (22 for a peasant) and the order of map-load creation, to resolve the replay's object pairs and let the human's orders act.
+6. Why the pause takes exactly one extra unit (probably the frame driver finishes the unit in progress); the rule is fitted on one replay.

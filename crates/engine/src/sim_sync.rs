@@ -262,6 +262,8 @@ pub struct Options {
     pub trace: bool,
     /// A constant to XOR into every computed value (the static slots), if known.
     pub constant: u32,
+    /// Register the replay's object ids of the human's start units ([`register_start_units`]).
+    pub register_units: bool,
     /// Do not run `main` before the first slot (default: run it, as the game does while loading).
     pub defer_main: bool,
 }
@@ -289,6 +291,62 @@ pub struct Rec {
     pub inputs: Inputs,
 }
 
+/// Registers the replay's object pairs of one player's start units (docs/spec/lockstep.md section 18.3).
+///
+/// The replay names units by `(id, id)` pairs; the original's ids come from a counter that every agent (units, their
+/// abilities, trees, doodads) draws from, around 15,000 at the start units of EchoIsles. The simulation does not
+/// allocate such ids, so without help no order of the replay reaches a unit. The heuristic used by the oracle (not
+/// the original's rule): the player's start units are the units the simulation created for `sim_player`, in
+/// creation order; the ids the player's selections name, in ascending order, are those units in the same order, the
+/// first id being the first unit and the following ones placed by their distance in multiples of the smallest gap
+/// (on EchoIsles the hall is 14908 and the peasants 14961, 14983, 15005, 15027, 15049: 22 agents per peasant).
+/// Returns a note per registered pair.
+pub fn register_start_units(engine: &mut Engine, replay: &w3g::Replay, replay_pid: u8, sim_player: u32) -> Vec<String> {
+    let mut ids: Vec<u32> = Vec::new();
+    for block in &replay.blocks {
+        if let Block::TimeSlot { commands, .. } = block {
+            for c in commands.iter().filter(|c| c.player_id == replay_pid) {
+                for a in c.decode().unwrap_or_default() {
+                    let units = match &a {
+                        w3g::Action::SelectionChange { units, .. } => units.as_slice(),
+                        w3g::Action::AssignGroup { units, .. } => units.as_slice(),
+                        _ => continue,
+                    };
+                    for u in units {
+                        if u.id1 == u.id2 && !ids.contains(&u.id1) {
+                            ids.push(u.id1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids.sort_unstable();
+    let units = engine.host().game().owned_units(sim_player);
+    let mut notes = Vec::new();
+    if ids.is_empty() || units.is_empty() {
+        return notes;
+    }
+    // Index of each id among the units: the first id is unit 0; the others by multiples of the smallest gap
+    // between the ids after the first (one unit when there is a single other id).
+    let rest = &ids[1..];
+    let gap = rest.windows(2).map(|w| w[1] - w[0]).filter(|&g| g > 0).min().unwrap_or(1);
+    let mut chosen: Vec<(u32, usize)> = vec![(ids[0], 0)];
+    for &id in rest {
+        let idx = 1 + ((id - rest[0] + gap / 2) / gap) as usize;
+        chosen.push((id, idx));
+    }
+    for (id, idx) in chosen {
+        if let Some(&k) = units.get(idx) {
+            engine
+                .commands_mut()
+                .register_object(sim::commands::ObjectRef { id1: id, id2: id }, k);
+            notes.push(format!("object {id:#x} -> unit {idx} of player {sim_player}"));
+        }
+    }
+    notes
+}
+
 /// Runs `replay` on `engine` (booted from the same replay) and compares every computed record.
 pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> SimSyncReport {
     let speed = GameSpeed::from_setting(replay_file.game.settings.flags & 3);
@@ -297,6 +355,19 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
     let mut recs: Vec<Rec> = Vec::new();
     if !opts.defer_main {
         let _ = engine.begin();
+    }
+    if opts.register_units {
+        // The local human: the first non-computer slot of the replay (replay player id of that slot).
+        let human = replay_file
+            .game
+            .slots
+            .iter()
+            .enumerate()
+            .find(|(_, sl)| sl.status == crate::replay_setup::SLOT_USED && sl.computer == 0)
+            .map(|(n, sl)| (sl.player_id, n as u32));
+        if let Some((pid, player)) = human {
+            report.notes.extend(register_start_units(engine, replay_file, pid, player));
+        }
     }
     // (slot, increment, predicted value, inputs) of the slot whose record is the next 0x22 block.
     let mut pending: Option<(usize, u16, u32, Inputs)> = None;

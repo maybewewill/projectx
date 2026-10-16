@@ -52,6 +52,7 @@ struct Args {
     sync_constant: u32,
     sync_defer_main: bool,
     pr_off: u32,
+    sync_register: bool,
     ai_delay: u64,
     ai_period: u64,
     steps: u64,
@@ -123,6 +124,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--sync-trace" => args.sync_trace = true,
             "--sync-after" => args.sync_after = true,
             "--sync-defer-main" => args.sync_defer_main = true,
+            "--sync-register" => args.sync_register = true,
             "--pr-off" => args.pr_off = parse_seed(&value("--pr-off")?)?,
             "--ai-delay" => {
                 let v = value("--ai-delay")?;
@@ -216,6 +218,7 @@ fn run(argv: &[String]) -> Result<(), String> {
             trace: args.sync_trace,
             constant: args.sync_constant,
             defer_main: args.sync_defer_main,
+            register_units: args.sync_register,
         };
         engine.host().game_mut().set_pr_disabled(args.pr_off);
         engine.set_ai_cadence(args.ai_delay, args.ai_period);
