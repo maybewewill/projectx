@@ -351,6 +351,47 @@ mod tests {
     }
 
     #[test]
+    fn replay_fixed_seed_bit_selects_the_fixed_seed() {
+        // EchoIsles: flags 0x00800002 and a record seed that is not the generator seed.
+        let r = replay_from(0x0080_0002, &three_slots(), 0x030b_2473, 2);
+        let s = setup_of(&r).unwrap();
+        assert_eq!(s.seed, sim::rng::FIXED_GAME_SEED);
+        assert_eq!(s.record_seed, 0x030b_2473);
+    }
+
+    #[test]
+    fn random_races_take_one_draw_each_in_player_order() {
+        use sim::rng::{Rng, RngTable};
+        let mut bytes = [0u8; 256];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = (i * 7 + 3) as u8; // a permutation of 0..=255 (7 is odd)
+        }
+        let table = RngTable::from_bytes(bytes).unwrap();
+        let slots = vec![
+            record(1, 2, 0, 0, 0, 0x60, 100),
+            record(2, 2, 1, 1, 1, 0x02, 100), // a fixed orc: no draw
+            record(3, 2, 1, 1, 2, 0x60, 100),
+        ];
+        let r = replay_from(0, &slots, 1, 2);
+        let s = setup_of(&r).unwrap();
+        let mut game = Game::new();
+        game.set_rng_table(Some(table.clone()));
+        {
+            let (t, streams) = game.rng_parts().unwrap();
+            streams.start_game(t, 0x7761_7233);
+        }
+        apply_slots(&mut game, &s);
+        let notes = resolve_random_races(&mut game, &s);
+        let mut rng = Rng::seeded(0x7761_7233);
+        let first = (rng.next_u32(&table) >> 30) + 1;
+        let second = (rng.next_u32(&table) >> 30) + 1;
+        assert_eq!(game.player(0).race, first);
+        assert_eq!(game.player(1).race, RACE_ORC);
+        assert_eq!(game.player(2).race, second);
+        assert_eq!(notes.len(), 2);
+    }
+
+    #[test]
     fn local_player_is_the_first_occupied_human() {
         let r = replay_from(0, &three_slots(), 1, 2);
         let s = setup_of(&r).unwrap();
