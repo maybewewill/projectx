@@ -43,6 +43,14 @@ pub const ABILITIES: &[Info] = &[
     Info { code: code(b"Afrz"), class: "CAbilityFreezingBreath", parent: "CAbilityPassive", sim: Sim::Strike, conf: Conf::Likely, note: "on hit against a structure: Bfrz (CBuffFreezingBreath < CBuffStun) stuns the structure and the structures within Area for Dur" },
     Info { code: code(b"Aliq"), class: "CAbilityLiquidFire", parent: "CAbilityPassive", sim: Sim::Strike, conf: Conf::Likely, note: "on hit against a structure: Bliq (CBuffLiquidFire < CBuffPoisonAttack): DataA damage per second, attack speed -DataC, for Dur" },
     Info { code: code(b"Adda"), class: "CAbilityDeathDamageAoe", parent: "CAbility", sim: Sim::Strike, conf: Conf::Unsure, note: "when the unit dies: after Dur, DataB damage within DataA and DataD damage within DataC (labels: full / partial radius and amount)" },
+    Info { code: code(b"Aeat"), class: "CAbilityEatTree", parent: "CAbilitySimpleSpell", sim: Sim::Terrain, conf: Conf::Likely, note: "order eattree 852146 at a tree: after DataA seconds the tree is felled, DataB seconds later buff Beat (CBuffEatTree < CBuffRejuvination) heals DataC over Dur" },
+    Info { code: code(b"Agra"), class: "CAbilityGrabTree", parent: "CAbilityEatTree", sim: Sim::Terrain, conf: Conf::Unsure, note: "order grabtree 852511 at a tree: after DataA seconds the tree is felled and Bgra stays for DataE attacks, then DataB seconds more; the weapon switch (DataC/DataD) is not modelled" },
+    Info { code: code(b"Acoa"), class: "CAbilityCoupleArcher", parent: "CAbilityCouple", sim: Sim::Convert, conf: Conf::Likely, note: "couple: order coupletarget 852507 on a unit of the partner type DataA (rawcode bits) merges both into UnitID" },
+    Info { code: code(b"Acoh"), class: "CAbilityCoupleHippogryph", parent: "CAbilityCouple", sim: Sim::Convert, conf: Conf::Likely, note: "the same from the other side (partner DataA = the archer)" },
+    Info { code: code(b"Acoi"), class: "CAbilityCoupleInstant", parent: "CAbilityClosestTargetSpell", sim: Sim::Convert, conf: Conf::Unsure, note: "order coupleinstant 852508: couples with the closest own unit of the partner type (the search radius is not decoded: unlimited)" },
+    Info { code: code(b"Adec"), class: "CAbilityDecouple", parent: "CAbilitySimpleSpell", sim: Sim::Convert, conf: Conf::Likely, note: "order decouple 852509: the rider splits into the units DataA and DataB (life fraction kept)" },
+    Info { code: code(b"Abtl"), class: "CAbilityBattlestations", parent: "CAbilitySpell", sim: Sim::Convert, conf: Conf::Unsure, note: "order battlestations 852099: own UnitID units within Area (busy ones when DataB != 0) go into the burrow's cargo" },
+    Info { code: code(b"Alam"), class: "CAbilitySacrificialLamb", parent: "CAbilitySimpleSpell", sim: Sim::Convert, conf: Conf::Unsure, note: "order requestsacrifice 852201 on an own structure: the acolyte is consumed and a Shade appears (the pit's Asac train is not modelled)" },
     Info { code: code(b"Aent"), class: "CAbilityEntangle", parent: "CPower", sim: Sim::Economy, conf: Conf::Likely, note: "the Tree of Life turns a neutral gold mine into UnitID after Cast seconds; order entangle 852147, autocast scan 1 s within Rng" },
 ];
 
@@ -53,6 +61,8 @@ pub struct State {
     entanglers: BTreeSet<ObjKey>,
     /// Units that carry `Agld` and were made a resource node by this module.
     mine_nodes: BTreeSet<ObjKey>,
+    /// Units holding a grabbed tree: attacks left before it is dropped.
+    grabbed: BTreeMap<ObjKey, i32>,
 }
 
 impl State {
@@ -74,6 +84,13 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
         (852_020, HARVEST_ABILITY),
         (ORDER_ACOLYTE_HARVEST, ACOLYTE_HARVEST_ABILITY),
         (852_147, ENTANGLE_ABILITY),
+        (ORDER_EAT_TREE, EAT_TREE),
+        (ORDER_GRAB_TREE, GRAB_TREE),
+        (ORDER_COUPLE_TARGET, COUPLE_ARCHER),
+        (ORDER_COUPLE_INSTANT, COUPLE_ARCHER),
+        (ORDER_DECOUPLE, DECOUPLE),
+        (ORDER_BATTLESTATIONS, BATTLESTATIONS),
+        (ORDER_SACRIFICE, SACRIFICIAL_LAMB),
     ] {
         ids.insert(id, base);
     }
@@ -82,6 +99,11 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 /// A shared order id resolves to the ability the unit actually has: `harvest` / `returnresources` belong to `Ahar` for the
 /// peasant and `Ahrl` for the ghoul.
 pub(crate) fn order_alias(gm: &Game, unit: ObjKey, order_id: u32, base: u32) -> u32 {
+    if order_id == ORDER_COUPLE_TARGET || order_id == ORDER_COUPLE_INSTANT {
+        // The order is shared by the three couple classes: the unit's own class answers it.
+        let has = |c: u32| gm.unit(unit).abilities.get(c).is_some_and(|a| !a.is_removed());
+        return [COUPLE_ARCHER, COUPLE_HIPPO, COUPLE_INSTANT].into_iter().find(|&c| has(c)).unwrap_or(base);
+    }
     if (order_id == ORDER_HARVEST || order_id == 852_020) && base == HARVEST_ABILITY {
         let has = |c: u32| gm.unit(unit).abilities.get(c).is_some_and(|a| !a.is_removed());
         if !has(HARVEST_ABILITY) && has(LUMBER_HARVEST_ABILITY) {
@@ -97,12 +119,12 @@ fn is_harvest(base: u32) -> bool {
 
 /// Abilities of this part cast without a target (`returnresources`).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    is_harvest(base)
+    is_harvest(base) || is_couple(base) || matches!(base, DECOUPLE | BATTLESTATIONS)
 }
 
 /// Abilities whose order the unit walks to (the worker approaches the mine or tree itself): no range gate at the cast.
 pub(crate) fn ignores_range(base: u32) -> bool {
-    is_harvest(base) || base == ENTANGLE_ABILITY
+    is_harvest(base) || is_couple(base) || base == ENTANGLE_ABILITY || matches!(base, EAT_TREE | GRAB_TREE | SACRIFICIAL_LAMB)
 }
 
 /// Extra target rules of this part.
@@ -114,6 +136,11 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let hall = gm.unit(target).owner == gm.unit(caster).owner
                 && gm.unit(target).class_flags & crate::production::CLASS_TOWNHALL != 0;
             (!mine && !hall).then_some(CastError::BadTarget)
+        }
+        COUPLE_ARCHER | COUPLE_HIPPO | COUPLE_INSTANT => (!gm.couple_partner_ok(caster, target)).then_some(CastError::BadTarget),
+        SACRIFICIAL_LAMB => {
+            let pit = targs_ok(gm, caster, target, targs_word("structure,player")) && gm.alive(target);
+            (!pit).then_some(CastError::BadTarget)
         }
         ENTANGLE_ABILITY => {
             let neutral = gm.resource_amount(target).is_some_and(|a| a > 0)
@@ -152,12 +179,46 @@ pub(crate) fn run_effect(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, rec:
             }
             true
         }
+        EAT_TREE | GRAB_TREE => {
+            if let CastTarget::Point(x, y) = rec.target {
+                game.borrow_mut().start_tree_cast(rec, x, y);
+            }
+            true
+        }
+        COUPLE_ARCHER | COUPLE_HIPPO | COUPLE_INSTANT => {
+            let mut gm = game.borrow_mut();
+            let partner = match rec.target {
+                CastTarget::Unit(t) => Some(t),
+                _ => gm.closest_partner(rec.caster),
+            };
+            if let Some(t) = partner {
+                gm.couple(rec.caster, t);
+            }
+            true
+        }
+        DECOUPLE => {
+            game.borrow_mut().decouple(rec.caster, &rec.level);
+            true
+        }
+        BATTLESTATIONS => {
+            game.borrow_mut().battlestations(rec.caster, &rec.level);
+            true
+        }
+        SACRIFICIAL_LAMB => {
+            if let CastTarget::Unit(pit) = rec.target {
+                game.borrow_mut().sacrifice(rec.caster, pit);
+            }
+            true
+        }
         _ => false,
     }
 }
 
 /// Timer dispatch for the kinds of this part.
-pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, _base: u32, _aux: u32) {
+pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, aux: u32) {
+    if kind == KIND_TREE {
+        game.borrow_mut().tree_stage(unit, base, aux);
+    }
     if kind == KIND_DEATH_AOE {
         let died = game.borrow_mut().death_explosion(unit);
         for t in died {
@@ -247,6 +308,7 @@ impl Game {
     /// units that died of the extra damage (the caller runs their death events).
     pub fn a2_on_hit(&mut self, attacker: ObjKey, target: ObjKey) -> Vec<ObjKey> {
         let mut died = Vec::new();
+        self.grab_hit(attacker);
         for base in [FLAMING_ATTACK, FLAK_CANNON, FRAG_SHARDS, CORROSIVE_BREATH, FROST_BREATH, FREEZING_BREATH, LIQUID_FIRE] {
             if !self.alive(target) {
                 break;
@@ -448,5 +510,231 @@ impl Game {
             }
         }
         died
+    }
+}
+
+
+// ---- trees: Eat Tree and Grab Tree (Aeat, Agra) ----
+
+pub const EAT_TREE: u32 = code(b"Aeat");
+pub const GRAB_TREE: u32 = code(b"Agra");
+pub const BUFF_EAT_TREE: u32 = code(b"Beat");
+pub const BUFF_GRAB_TREE: u32 = code(b"Bgra");
+/// Order ids: the original cast getters (slot `0x348`, `docs/research/ability-orders/getters.tsv`).
+pub const ORDER_EAT_TREE: u32 = 852_146;
+pub const ORDER_GRAB_TREE: u32 = 852_511;
+/// Timer kind of the tree stages.
+pub const KIND_TREE: u8 = 0x51;
+/// How far from the caster the tree may stand when the cast takes effect (the unit walks up to the tree in the original;
+/// the model has no approach, so a farther tree makes the order a no-op: a stand-in).
+const TREE_CAST_REACH: f32 = 160.0;
+
+impl Game {
+    /// The order on a tree: the tree under `(x, y)` that the caster can reach is torn out after `DataA` seconds (the "rip
+    /// delay" / "attach delay" labels); nothing happens when no standing tree is there.
+    fn start_tree_cast(&mut self, rec: &CastRec, x: F32, y: F32) {
+        let Some(i) = self.tree_near(x.to_f32(), y.to_f32(), TREE_PICK_RADIUS) else { return };
+        let t = self.production().trees[i];
+        let (cx, cy) = (self.unit(rec.caster).x.to_f32(), self.unit(rec.caster).y.to_f32());
+        if ((t.x - cx).powi(2) + (t.y - cy).powi(2)).sqrt() > TREE_CAST_REACH {
+            return;
+        }
+        let delay = rec.level.data[0].to_f32().max(0.0);
+        self.timers.start(
+            delay,
+            false,
+            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_TREE, unit: rec.caster, base: rec.base, aux: (i as u32) << 2 }),
+        );
+    }
+
+    /// One stage of a tree ability (`aux` = tree index << 2 | stage). Eat Tree: stage 0 fells the tree and waits `DataB`;
+    /// stage 1 gives `Beat`, which heals `DataC` over `Dur` as a Rejuvenation. Grab Tree: stage 0 fells the tree and puts
+    /// `Bgra` on the unit for `DataE` attacks (`DataD` "enabled attack index" = 1, the weapon switch is not modelled);
+    /// stage 2 (the remove delay after the last attack) takes the buff off.
+    pub(crate) fn tree_stage(&mut self, unit: ObjKey, base: u32, aux: u32) {
+        let (i, stage) = ((aux >> 2) as usize, aux & 3);
+        if !self.alive(unit) {
+            return;
+        }
+        let Some(level) = self.ability_level_record(unit, base) else { return };
+        match (base, stage) {
+            (EAT_TREE, 0) | (GRAB_TREE, 0) => {
+                if self.production().trees.get(i).is_none_or(|t| t.wood <= 0) {
+                    return;
+                }
+                self.fell_tree(i);
+                if base == EAT_TREE {
+                    let delay = level.data[1].to_f32().max(0.0);
+                    self.timers.start(
+                        delay,
+                        false,
+                        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_TREE, unit, base, aux: (aux & !3) | 1 }),
+                    );
+                } else {
+                    let attacks = conv::f2i(level.data[4]).max(1);
+                    self.spells.unit_a.b.grabbed.insert(unit, attacks);
+                    let preds = BuffPredicates { positive: true, ..buff_predicates(BUFF_GRAB_TREE) };
+                    self.apply_mods_buff(unit, BUFF_GRAB_TREE, preds, Default::default(), F32::ZERO);
+                }
+            }
+            (EAT_TREE, 1) => {
+                let dur = hero_dur(self, unit, &level);
+                if !arith::lt(F32::ZERO, dur) {
+                    return;
+                }
+                let per_second = self.soft_div(level.data[2], dur);
+                let preds = BuffPredicates { positive: true, magic: true, dispellable: true, ..buff_predicates(BUFF_EAT_TREE) };
+                let total = arith::add(dur, F32::from_bits(0.01f32.to_bits()));
+                let serial = self.apply_mods_buff(unit, BUFF_EAT_TREE, preds, Default::default(), total);
+                self.register_tick(unit, serial, unit, per_second, true, 0, false);
+            }
+            (GRAB_TREE, 2) => {
+                self.spells.unit_a.b.grabbed.remove(&unit);
+                self.remove_buff_code(unit, BUFF_GRAB_TREE);
+            }
+            _ => {}
+        }
+    }
+
+    /// An attack hit by a unit that holds a tree: one of its `DataE` attacks is used up; after the last one the tree is
+    /// dropped `DataB` seconds later.
+    fn grab_hit(&mut self, attacker: ObjKey) {
+        let Some(left) = self.spells.unit_a.b.grabbed.get_mut(&attacker) else { return };
+        *left -= 1;
+        if *left > 0 {
+            return;
+        }
+        *left = i32::MAX;
+        let delay = self.ability_level_record(attacker, GRAB_TREE).map_or(0.0, |l| l.data[1].to_f32().max(0.0));
+        self.timers.start(
+            delay,
+            false,
+            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_TREE, unit: attacker, base: GRAB_TREE, aux: 2 }),
+        );
+    }
+}
+
+
+// ---- units: Couple, Decouple, Battlestations, Sacrificial Lamb (Acoa, Acoh, Acoi, Adec, Abtl, Alam) ----
+
+pub const COUPLE_ARCHER: u32 = code(b"Acoa");
+pub const COUPLE_HIPPO: u32 = code(b"Acoh");
+pub const COUPLE_INSTANT: u32 = code(b"Acoi");
+pub const DECOUPLE: u32 = code(b"Adec");
+pub const BATTLESTATIONS: u32 = code(b"Abtl");
+pub const SACRIFICIAL_LAMB: u32 = code(b"Alam");
+/// Order ids: the names `coupletarget`, `coupleinstant`, `decouple`, `battlestations`, `requestsacrifice` of the original
+/// table; the cast getters of `Acoi` (852507 cast, 852508 primary), `Adec`, `Abtl` and `Alam` agree.
+pub const ORDER_COUPLE_TARGET: u32 = 852_507;
+pub const ORDER_COUPLE_INSTANT: u32 = 852_508;
+pub const ORDER_DECOUPLE: u32 = 852_509;
+pub const ORDER_BATTLESTATIONS: u32 = 852_099;
+pub const ORDER_SACRIFICE: u32 = 852_201;
+/// The Shade an acolyte becomes at the Sacrificial Pit (`ushd`; the type comes from the pit's train list in the original).
+const SHADE: u32 = code(b"ushd");
+/// Distance of the two units a rider splits into.
+const SPLIT_OFFSET: f32 = 32.0;
+
+fn is_couple(base: u32) -> bool {
+    matches!(base, COUPLE_ARCHER | COUPLE_HIPPO | COUPLE_INSTANT)
+}
+
+impl Game {
+    /// The couple data of `unit`: `(partner type, result type)`. `DataA` of the stock rows is a rawcode text; the level
+    /// loader stores a rawcode field as the bits of the `F32` (the host's `spell_levels` hookup, as for `UnitID`).
+    fn couple_data(&self, unit: ObjKey) -> Option<(u32, u32)> {
+        [COUPLE_ARCHER, COUPLE_HIPPO].into_iter().filter(|&c| has(self, unit, c)).find_map(|c| {
+            let l = self.ability_level_record(unit, c)?;
+            Some((l.data[0].to_bits(), l.unit_id))
+        })
+    }
+
+    /// Whether `other` can be coupled with `unit`: an own, living, free unit of the partner type.
+    pub(crate) fn couple_partner_ok(&self, unit: ObjKey, other: ObjKey) -> bool {
+        let Some((partner, _)) = self.couple_data(unit) else { return false };
+        other != unit
+            && self.alive(other)
+            && !self.unit(other).loaded
+            && self.unit(other).owner == self.unit(unit).owner
+            && self.unit(other).type_id == partner
+    }
+
+    /// The closest eligible partner of `unit` (`coupleinstant`).
+    fn closest_partner(&self, unit: ObjKey) -> Option<ObjKey> {
+        let at = (self.unit(unit).x, self.unit(unit).y);
+        self.unit_objects()
+            .map(|(k, _)| k)
+            .filter(|&k| self.couple_partner_ok(unit, k))
+            .map(|k| (k, dist2(self, at, k)))
+            .min_by(|a, b| a.1.to_f32().total_cmp(&b.1.to_f32()).then(a.0.cmp(&b.0)))
+            .map(|(k, _)| k)
+    }
+
+    /// Merges `unit` and `partner` into one unit of the result type at `unit`'s place.
+    fn couple(&mut self, unit: ObjKey, partner: ObjKey) -> Option<ObjKey> {
+        let (_, result) = self.couple_data(unit)?;
+        if !self.couple_partner_ok(unit, partner) || result == 0 || self.unit_types().get(result).is_none() {
+            return None;
+        }
+        let (owner, x, y, face) = {
+            let u = self.unit(unit);
+            (u.owner, u.x, u.y, u.facing)
+        };
+        crate::natives::unit::remove_unit(self, partner);
+        crate::natives::unit::remove_unit(self, unit);
+        crate::natives::unit::build(self, owner, result, x, y, face, true).map(|(k, _)| k)
+    }
+
+    /// Splits the rider into the units `DataA` and `DataB`, either side of it; both get the rider's life fraction.
+    fn decouple(&mut self, unit: ObjKey, level: &SpellLevel) {
+        let (a, b) = (level.data[0].to_bits(), level.data[1].to_bits());
+        if self.unit_types().get(a).is_none() || self.unit_types().get(b).is_none() {
+            return;
+        }
+        let (owner, x, y, face, lf) = {
+            let u = self.unit(unit);
+            let lf = if arith::lt(F32::ZERO, u.max_life) { self.soft_div(u.life, u.max_life) } else { F32::ONE };
+            (u.owner, u.x, u.y, u.facing, lf)
+        };
+        crate::natives::unit::remove_unit(self, unit);
+        let off = F32::from_bits(SPLIT_OFFSET.to_bits());
+        for (ty, dx) in [(a, arith::neg(off)), (b, off)] {
+            if let Some((k, _)) = crate::natives::unit::build(self, owner, ty, arith::add(x, dx), y, face, true) {
+                let max = self.unit(k).max_life;
+                self.write_life(k, arith::mul(max, lf));
+            }
+        }
+    }
+
+    /// Battlestations: every own unit of the allowed type (`UnitID`) within `Area` goes into the burrow while it has room;
+    /// units on a harvest cycle only when `DataB` ("Summon Busy Units") is set. The walk to the burrow is skipped.
+    fn battlestations(&mut self, burrow: ObjKey, level: &SpellLevel) {
+        let (owner, at) = (self.unit(burrow).owner, (self.unit(burrow).x, self.unit(burrow).y));
+        let busy = level.data[1].to_bits() & 0x7FFF_FFFF != 0;
+        for k in crate::natives::group::circle_candidates(self, at.0, at.1, level.area) {
+            if self.unit(k).owner != owner || self.unit(k).type_id != level.unit_id || !self.can_load(burrow, k) {
+                continue;
+            }
+            if self.is_harvesting(k) {
+                if !busy {
+                    continue;
+                }
+                self.end_harvest(k);
+            }
+            self.load_unit(burrow, k);
+        }
+    }
+
+    /// Sacrificial Lamb: the acolyte is consumed and a Shade stands at the pit.
+    fn sacrifice(&mut self, acolyte: ObjKey, pit: ObjKey) {
+        if !self.alive(pit) || self.unit_types().get(SHADE).is_none() {
+            return;
+        }
+        let (owner, x, y, face) = {
+            let p = self.unit(pit);
+            (self.unit(acolyte).owner, p.x, p.y, p.facing)
+        };
+        crate::natives::unit::remove_unit(self, acolyte);
+        crate::natives::unit::build(self, owner, SHADE, x, y, face, true);
     }
 }

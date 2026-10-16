@@ -101,6 +101,24 @@ endfunction
 function harvest_tree takes nothing returns nothing
     set accepted = IssuePointOrderById(worker, 852018, 10.0, 100.0)
 endfunction
+function give_aeat takes nothing returns nothing
+    call UnitAddAbility(worker, 'Aeat')
+endfunction
+function give_agra takes nothing returns nothing
+    call UnitAddAbility(worker, 'Agra')
+endfunction
+function eat_tree takes nothing returns nothing
+    set accepted = IssuePointOrderById(worker, 852146, 10.0, 100.0)
+endfunction
+function grab_tree takes nothing returns nothing
+    set accepted = IssuePointOrderById(worker, 852511, 10.0, 100.0)
+endfunction
+function eat_far_tree takes nothing returns nothing
+    set accepted = IssuePointOrderById(worker, 852146, 900.0, 900.0)
+endfunction
+function low_life takes nothing returns nothing
+    call SetWidgetLife(worker, 400.0)
+endfunction
 function entangle_mine takes nothing returns nothing
     set accepted = IssueTargetOrderById(tol, 852147, mine)
 endfunction
@@ -133,6 +151,9 @@ fn host() -> ScriptHost {
             // Ghoul harvest: 2 per hit, 20 lumber.
             (code(b"Ahrl"), level(900.0, &[2.0, 20.0])),
             (code(b"Aaha"), level(0.0, &[])),
+            // Eat Tree: rip 0.8, eat 2.5, 500 hit points over 30 s. Grab Tree: attach 0.8, remove 2.5, 15 attacks.
+            (code(b"Aeat"), SpellLevel { dur: f(30.0), hero_dur: f(30.0), rng: f(32.0), ..level(0.0, &[0.8, 2.5, 500.0]) }),
+            (code(b"Agra"), SpellLevel { cool: f(5.0), rng: f(32.0), ..level(0.0, &[0.8, 2.5, 0.0, 1.0, 15.0]) }),
             // Haunted mine: 10 gold per 1 s, 5 miners, radius 200.
             // (a test row: 25 gold so the payments tell the ability record from the 10-gold default)
             (code(b"Abgm"), level(0.0, &[25.0, 1.0, 5.0, 200.0])),
@@ -291,4 +312,69 @@ fn entangle_autocast_finds_the_mine_in_range_by_itself() {
     run(&mut h, 80);
     let made = h.game().unit_objects().filter(|(_, u)| u.type_id == ENTANGLED && !u.removed).count();
     assert_eq!(made, 1);
+}
+
+fn life_of(h: &ScriptHost, k: ObjKey) -> f32 {
+    h.game().unit(k).life.to_f32()
+}
+
+#[test]
+fn eat_tree_fells_the_tree_then_heals_the_data_c_hit_points_over_the_duration() {
+    let mut h = started();
+    let worker = unit(&h, "worker");
+    h.game_mut().production_mut().trees.push(Tree { x: 10.0, y: 100.0, wood: 50 });
+    call(&mut h, "give_aeat");
+    call(&mut h, "low_life");
+    run(&mut h, 2);
+    call(&mut h, "eat_tree");
+    run(&mut h, 2);
+    assert!(accepted(&h));
+    assert_eq!(h.game().production().trees[0].wood, 50, "the rip delay 0.8 s has not run out");
+    run(&mut h, 10);
+    assert_eq!(h.game().production().trees[0].wood, 0, "the tree is gone after 0.8 s");
+    assert_eq!(life_of(&h, worker), 400.0, "the heal waits for the 2.5 s eat delay");
+    run(&mut h, 50);
+    assert!(h.game().buffs(worker).iter().any(|b| b.base == code(b"Beat")));
+    let mid = life_of(&h, worker);
+    assert!(mid > 400.0 && mid < 900.0, "{mid}");
+    // 500 hit points over 30 s: about 16.7 per second, the buff runs for 30.01 s.
+    run(&mut h, 360);
+    assert!((life_of(&h, worker) - 900.0).abs() < 1.5, "{}", life_of(&h, worker));
+    assert!(!h.game().buffs(worker).iter().any(|b| b.base == code(b"Beat")));
+}
+
+#[test]
+fn eat_tree_ignores_a_tree_out_of_reach_or_missing() {
+    let mut h = started();
+    h.game_mut().production_mut().trees.push(Tree { x: 900.0, y: 900.0, wood: 50 });
+    call(&mut h, "give_aeat");
+    run(&mut h, 2);
+    call(&mut h, "eat_far_tree");
+    run(&mut h, 60);
+    assert_eq!(h.game().production().trees[0].wood, 50, "the caster cannot reach it");
+}
+
+#[test]
+fn grab_tree_holds_the_tree_for_fifteen_attacks() {
+    let mut h = started();
+    let worker = unit(&h, "worker");
+    h.game_mut().production_mut().trees.push(Tree { x: 10.0, y: 100.0, wood: 50 });
+    call(&mut h, "give_agra");
+    run(&mut h, 2);
+    call(&mut h, "grab_tree");
+    run(&mut h, 15);
+    assert!(accepted(&h));
+    assert_eq!(h.game().production().trees[0].wood, 0);
+    assert!(h.game().buffs(worker).iter().any(|b| b.base == code(b"Bgra")));
+    // 15 hits through the hook (the attack cycle itself is tested with the strike family).
+    for _ in 0..14 {
+        let _ = h.game_mut().a2_on_hit(worker, worker);
+    }
+    run(&mut h, 40);
+    assert!(h.game().buffs(worker).iter().any(|b| b.base == code(b"Bgra")), "one attack is left");
+    let _ = h.game_mut().a2_on_hit(worker, worker);
+    run(&mut h, 10);
+    assert!(h.game().buffs(worker).iter().any(|b| b.base == code(b"Bgra")), "dropped only after the 2.5 s remove delay");
+    run(&mut h, 30);
+    assert!(!h.game().buffs(worker).iter().any(|b| b.base == code(b"Bgra")));
 }

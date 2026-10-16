@@ -1496,6 +1496,11 @@ impl Game {
         }
     }
 
+    /// Ends the harvest cycle of `unit` (another job takes it; S51).
+    pub fn end_harvest(&mut self, unit: ObjKey) {
+        self.release_harvester(unit);
+    }
+
     /// Whether the worker has a harvest cycle.
     pub fn is_harvesting(&self, unit: ObjKey) -> bool {
         self.production.harvesters.contains_key(&unit)

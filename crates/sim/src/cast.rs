@@ -761,7 +761,7 @@ pub fn begin_cast(
                 }
             }
             CastTarget::Point(px, py) => {
-                if arith::lt(F32::ZERO, level.rng) {
+                if arith::lt(F32::ZERO, level.rng) && !crate::unit_abilities_a2::ignores_range(class) {
                     let a = gm.unit(caster);
                     let dx = arith::sub(px, a.x);
                     let dy = arith::sub(py, a.y);

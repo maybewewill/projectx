@@ -51,3 +51,37 @@ Tests: `crates/sim/tests/unit_abilities_a2_strike.rs` (real attacks through the 
 
 Not modelled in this family: `Aimp` (Impaling Bolt) and `Agyb` (Gyro Bombs) have no data fields in the 1.26a rows and
 `Alit` (Lightning Attack: "Graphic Delay", "Graphic Duration") is presentation only.
+
+## Trees (Aeat, Agra)
+
+The cast infrastructure takes unit and point targets, so a tree order is a point order at the tree (the nearest standing tree
+within 128 units of the point, `Game::tree_near`) and the tree is a `production` tree (its wood goes to 0 when felled,
+`Game::fell_tree`). The caster must stand within 160 units of the tree when the order takes effect (the unit walks up to it in
+the original; the model has no approach, so a farther tree makes the order a no-op: a stand-in). Range gates are skipped for
+these classes (`ignores_range`, two lines in `cast.rs`). Timers: kind `0x51`. Tests: `unit_abilities_a2.rs`.
+
+| Code | Class (parent) | Model | Label |
+|---|---|---|---|
+| Aeat | CAbilityEatTree (SimpleSpell), order `eattree` 852146 (cast getter, CONFIRMED) | after `DataA` ("Rip Delay") the tree is felled; `DataB` ("Eat Delay") seconds later the caster gets `Beat` (CBuffEatTree < CBuffRejuvination, atlas) for `Dur` + 0.01 s healing `DataC` ("Hit Points Gained", 500) / `Dur` per second as the Rejuvenation tick (`register_tick`, hot) | LIKELY (numbers from the labels), UNSURE (which delay the heal waits for) |
+| Agra | CAbilityGrabTree (EatTree), order `grabtree` 852511 (getter, CONFIRMED) | after `DataA` ("Attach Delay") the tree is felled and `Bgra` (CBuffGrabTree) marks the unit; `DataE` ("Maximum Attacks", 15) attack hits use it up; `DataB` ("Remove Delay") seconds after the last one the buff goes. The weapon switch (`DataC` disabled / `DataD` enabled attack index) is NOT modelled | UNSURE |
+
+`Aesn` (Sentinel, order 852182, `XEsn` effect class with no `UnitID`) is not modelled: the owl's vision and lifetime are not
+in the level row and no unit type is named.
+
+## Unit conversion (Acoa, Acoh, Acoi, Adec, Abtl, Alam)
+
+Tests: `crates/sim/tests/unit_abilities_a2_units.rs`. A rawcode data field (`DataA` of `Acoa`/`Acoh`/`Adec`, partner types
+as text in the SLK) is stored by the host's level loader as the BITS of the `F32` (`UnitID` has its own field). Engine hookup
+(not done, `crates/engine` is outside this lane): `objdata` must load `Acoa`, `Acoh`, `Adec`, `Abtl` and the economy codes
+into `spell_levels` with that convention.
+
+| Code | Class (parent) | Model | Label |
+|---|---|---|---|
+| Acoa / Acoh | CAbilityCoupleArcher / CoupleHippogryph (CAbilityCouple) | order `coupletarget` 852507 (getter of `Acoi`, CONFIRMED value) on an own, free unit of the partner type `DataA`: both are removed and a unit of `UnitID` (Hippogryph Rider) is built at the caster's place; the unit's own class answers the shared order (`order_alias`). `Rng` 100 (mount distance) is not enforced (no approach) | LIKELY |
+| Acoi | CAbilityCoupleInstant (ClosestTargetSpell) | order `coupleinstant` 852508 (primary getter): the closest eligible partner is taken; the search radius is not decoded (modelled unlimited). The ability carries no data row; the data come from `Acoa` / `Acoh` | UNSURE |
+| Adec | CAbilityDecouple (SimpleSpell), order 852509 (getter) | the rider is removed and units `DataA` and `DataB` are built 32 units either side of it with the rider's life fraction (the fraction is a choice, UNSURE); cooldown from `Cool` by the cast core | LIKELY |
+| Abtl | CAbilityBattlestations (Spell), order 852099 (getter) | own units of type `UnitID` within `Area` go into the holder's cargo while it has room (capacity from the hold abilities, `unit_abilities_a.rs`); units on a harvest cycle only when `DataB` ("Summon Busy Units") is set, and leave the cycle (`end_harvest`). The walk is skipped | UNSURE |
+| Alam | CAbilitySacrificialLamb (SimpleSpell), order `requestsacrifice` 852201 (getter) | on an own structure (targs structure,player): the acolyte is removed and a Shade (`ushd`) is built at the structure. In the original the pit's `Asac` (CAbilityTrain) does the conversion; the type name is a stand-in | UNSURE |
+
+Not modelled: `Acha` (Chaos, no data row) and `Achl` (Chaos cargo load: only `UnitID` ncpn; the chaos transformation table
+is not in the level rows).
