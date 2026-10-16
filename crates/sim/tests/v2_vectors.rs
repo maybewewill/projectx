@@ -32,6 +32,58 @@ fn fan_of_knives_plan_matches_the_launcher() {
     assert!(rows >= 400 && pooled > 100 && limited > 100 && short > 100, "{rows} {pooled} {limited} {short}");
 }
 
+fn tables() -> Option<softfloat::Tables> {
+    let path = std::env::var("GAME_DLL").ok()?;
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("reading GAME_DLL={path}: {e}"));
+    Some(softfloat::Tables::from_game_dll(&bytes).expect("tables are in the image"))
+}
+
+#[test]
+fn spirit_link_split_matches_the_original() {
+    use sim::unit_abilities_m::spirit_link_split;
+    let Some(t) = tables() else {
+        eprintln!("GAME_DLL not set: spirit link vectors skipped");
+        return;
+    };
+    let text = include_str!("data/v2/spiritlink.txt");
+    let (mut rows, mut gated, mut shared_rows) = (0, 0, 0);
+    for line in text.lines() {
+        let (head, tail) = line.split_once('|').expect("separator");
+        let h: Vec<&str> = head.split_whitespace().collect();
+        let (amount, frac) = (f(h[0]), f(h[1]));
+        let n: usize = h[2].parse().unwrap();
+        let gate = h[3] == "1";
+        let (rflags, rclass) = (hex(h[4]), hex(h[5]));
+        let w: Vec<&str> = tail.split_whitespace().collect();
+        let after = hex(w[0]);
+        let nshares: usize = w[1].parse().unwrap();
+        let active = gate && amount.to_f32() != 0.0 && rflags & 0x10 == 0 && rclass != 0x1000000;
+        if !active {
+            assert_eq!((after, nshares), (amount.to_bits(), 0), "row {line}");
+            gated += 1;
+            rows += 1;
+            continue;
+        }
+        let (own, per) = spirit_link_split(amount, frac, n, |a, b| softfloat::arith::div(a, b, &t));
+        assert_eq!(own.to_bits(), after, "own, row {line}");
+        match per {
+            Some(p) if n > 0 => {
+                assert_eq!(nshares, n, "row {line}");
+                for sh in &w[2..] {
+                    let p4: Vec<&str> = sh.split(':').collect();
+                    assert_eq!(hex(p4[1]), p.to_bits(), "share, row {line}");
+                    assert_eq!(hex(p4[2]), 0x1000000, "class, row {line}");
+                    assert_eq!(hex(p4[3]), (rflags & !4) | 0x42, "flags, row {line}");
+                }
+                shared_rows += 1;
+            }
+            _ => assert_eq!(nshares, 0, "row {line}"),
+        }
+        rows += 1;
+    }
+    assert!(rows >= 400 && gated > 50 && shared_rows > 60, "{rows} {gated} {shared_rows}");
+}
+
 #[test]
 fn mana_burn_impact_matches_the_original() {
     use sim::hero_extra::mana_burn_result;

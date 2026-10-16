@@ -226,6 +226,8 @@ pub struct State {
     /// Link group of each linked unit (the group id is a counter).
     link_of: BTreeMap<ObjKey, u32>,
     groups: BTreeMap<u32, Vec<ObjKey>>,
+    /// Share fraction (`DataA`) of each group: the part of a hit the struck unit keeps.
+    frac: BTreeMap<u32, F32>,
     next_group: u32,
     /// `(unit, hit target)` of units whose life dropped to zero through a link share and still need their death
     /// dispatch (the host drains it).
@@ -403,29 +405,38 @@ fn spell_steal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     gm.apply_mods_buff(rec.caster, base, preds, UnitMods::default(), dur);
 }
 
-/// Spirit Link (`CAbilitySpiritLink`, buff `Bspl`): the target and up to `DataA - 1` other friendly units within
-/// `Area` of it are linked; the buff lasts `Dur` (UNSURE: 120 s when the level has none). The damage share is
-/// [`Game::m_link_share`].
+/// Spirit Link (`CAbilitySpiritLink`, buff `Bspl`): the chain of `F2I(DataB)` units (the target first, then each time the
+/// nearest eligible friendly unit within `Area` of the LAST unit chosen; CONFIRMED roles: `DataB` is the count and `DataA` the
+/// fraction a struck unit keeps, `0x6F1FFA00`; the nearest-pick details of `0x6F1DEDC0` are UNSURE); the buff lasts `Dur` /
+/// `HeroDur` (120 s here when the level has none, UNSURE). The damage share is [`Game::m_link_share`].
 fn spirit_link(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let mut gm = game.borrow_mut();
     if !gm.alive(target) {
         return;
     }
-    let max = softfloat::conv::f2i(rec.level.data[0]).max(1) as usize;
-    let (cx, cy) = (gm.unit(target).x, gm.unit(target).y);
+    let max = softfloat::conv::f2i(rec.level.data[1]).max(1) as usize;
     let word = targs_word("air,ground,friend,organic");
     let mut members = vec![target];
-    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
-        if members.len() >= max {
-            break;
+    while members.len() < max {
+        let last = *members.last().expect("non-empty");
+        let (cx, cy) = (gm.unit(last).x, gm.unit(last).y);
+        let mut best: Option<(F32, ObjKey)> = None;
+        for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+            if members.contains(&k) || !gm.alive(k) || !targs_ok(&gm, rec.caster, k, word) {
+                continue;
+            }
+            if gm.is_enemy(gm.unit(rec.caster).owner, gm.unit(k).owner) {
+                continue;
+            }
+            let d = arith::dist2(gm.unit(k).x, gm.unit(k).y, cx, cy);
+            if best.is_none_or(|(bd, _)| arith::lt(d, bd)) {
+                best = Some((d, k));
+            }
         }
-        if k == target || members.contains(&k) || !gm.alive(k) || !targs_ok(&gm, rec.caster, k, word) {
-            continue;
+        match best {
+            Some((_, k)) => members.push(k),
+            None => break,
         }
-        if gm.is_enemy(gm.unit(rec.caster).owner, gm.unit(k).owner) {
-            continue;
-        }
-        members.push(k);
     }
     let hero = gm.target_hero(target);
     let dur = effect_duration(&rec.level, hero, F32::ZERO);
@@ -438,6 +449,21 @@ fn spirit_link(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
         gm.spells.m.link_of.insert(k, id);
     }
     gm.spells.m.groups.insert(id, members);
+    gm.spells.m.frac.insert(id, rec.level.data[0]);
+}
+
+/// The Spirit Link split of one hit (CONFIRMED, Unicorn 400 cases, `tools/emu/v2_spiritlink_emu.py`: handler `0x6F1E9760` and
+/// the share routine `0x6F1EFED0`): the struck unit's record is scaled to `own = amount * fraction`; the rest
+/// `shared = amount - own` (soft sub) is divided by the number `n` of linked units (`div(shared, I2R(n))`) and EACH linked unit,
+/// the struck one included, takes that as a separate record of class `0x1000000`. Nothing is shared when `shared` is zero.
+/// Returns `(own, per-unit share)`.
+pub fn spirit_link_split(amount: F32, fraction: F32, n: usize, div: impl Fn(F32, F32) -> F32) -> (F32, Option<F32>) {
+    let own = arith::mul(amount, fraction);
+    let shared = arith::sub(amount, own);
+    if n == 0 || arith::eq(shared, F32::ZERO) {
+        return (own, None);
+    }
+    (own, Some(div(shared, softfloat::conv::i2r(n as i32))))
 }
 
 /// Call to Arms (`CAbilityMilitia`, `CAbilityMilitiaConvert`, both `CAbilityCallToArms`): friendly units within `Area`
@@ -502,10 +528,11 @@ impl Game {
         }
     }
 
-    /// The damage share of Spirit Link: a linked unit that takes `amount` takes `amount / n` itself and every other
-    /// live linked unit loses the same share (`n` = live members). Returns the amount for `target`. LIKELY. The
-    /// others are set through `set_life`; a unit that dies of its share is recorded in
-    /// [`State::pending_deaths`] (UNSURE: the death dispatch of those is left to the host).
+    /// The damage share of Spirit Link ([`spirit_link_split`], CONFIRMED arithmetic): the struck unit keeps `amount * DataA`
+    /// of the hit and every live linked unit (itself included) takes `(amount - own) / n` as well. Returns the amount to
+    /// apply to `target`: `own` plus its own part of the share (the original delivers them as two records; the sum is the
+    /// model's, UNSURE by at most an ulp). The others are set through `set_life`; a unit that dies of its share is
+    /// recorded in [`State::pending_deaths`] (the death dispatch of those is left to the host).
     pub(crate) fn m_link_share(&mut self, target: ObjKey, amount: F32) -> F32 {
         let Some(&g) = self.spells.m.link_of.get(&target) else {
             return amount;
@@ -524,21 +551,24 @@ impl Game {
             .into_iter()
             .filter(|&k| self.alive(k) && self.buff_position(k, BUFF_SPIRIT_LINK).is_some())
             .collect();
-        if members.len() < 2 || !members.contains(&target) {
+        if members.is_empty() || !members.contains(&target) || arith::eq(amount, F32::ZERO) {
             return amount;
         }
-        let n = F32::from_bits((members.len() as f32).to_bits());
-        let share = self.soft_div(amount, n);
+        let frac = self.spells.m.frac.get(&g).copied().unwrap_or(F32::ZERO);
+        let (own, per) = spirit_link_split(amount, frac, members.len(), |a, b| self.soft_div(a, b));
+        let Some(per) = per else {
+            return own;
+        };
         for k in members {
             if k == target {
                 continue;
             }
-            let next = arith::sub(self.unit(k).life, share);
+            let next = arith::sub(self.unit(k).life, per);
             if crate::natives::set_life(self, k, next) {
                 self.spells.m.pending_deaths.push((k, target));
             }
         }
-        share
+        arith::add(own, per)
     }
 
     /// Takes the units that died of a link share since the last call, with the unit whose hit caused it.
