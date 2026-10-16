@@ -330,15 +330,48 @@ fn meta_start(game: &RefCell<Game>, id: u32) {
     if !gm.alive(caster) {
         return;
     }
-    let serial = gm.add_spell_buff(caster, BUFF_METAMORPHOSIS, BuffEffect::Marker, level.hero_dur);
-    if serial == 0 {
-        return;
+    // V7 (CONFIRMED, `0x6F13D5C0`): an earlier `BEme` buff is removed; the buff lasts `HeroDur + 0.01` (none for an illusion or a
+    // `HeroDur` that is not above zero); the `DataE` bonus goes through the life sink in mode 3 whether or not a buff was made.
+    let illusion = gm.unit(caster).illusion;
+    let plan = meta_in_plan(level.hero_dur, illusion, level.data[4]);
+    let serial = gm.add_spell_buff(caster, BUFF_METAMORPHOSIS, BuffEffect::Marker, plan.buff_duration.unwrap_or(F32::ZERO));
+    life_sink_mode3(&mut gm, caster, plan.sink_value);
+    if serial != 0 {
+        gm.spells.hero.extra.meta.insert(serial, (caster, plan.sink_value));
     }
-    let bonus = level.data[4];
-    let (max, life) = (gm.unit(caster).max_life, gm.unit(caster).life);
-    gm.write_max_life(caster, arith::add(max, bonus));
-    gm.write_life(caster, arith::add(life, bonus));
-    gm.spells.hero.extra.meta.insert(serial, (caster, bonus));
+}
+
+/// What the Metamorphosis morph-in hook (slot `0x40C`, `0x6F13D5C0`) does with the level: the buff duration `add(HeroDur, 0.01)`
+/// (`0x6FAAE480`) when the effective `HeroDur` (0.0 for an illusion caster) is above zero, and the life sink value `DataE`
+/// (mode 3). CONFIRMED (V7, Unicorn `tools/emu/v7_meta_emu.py`, 300 cases).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MetaIn {
+    pub buff_duration: Option<F32>,
+    pub sink_value: F32,
+}
+
+pub fn meta_in_plan(hero_dur: F32, illusion: bool, data_e: F32) -> MetaIn {
+    let effective = if illusion { F32::ZERO } else { hero_dur };
+    MetaIn {
+        buff_duration: arith::lt(F32::ZERO, effective).then(|| arith::add(effective, F32::from_bits(0x3C23_D70A))),
+        sink_value: data_e,
+    }
+}
+
+/// The revert hook (slot `0x414`, `0x6F111D20`): the stored bonus goes through the life sink negated (sign bit flipped), mode 3.
+/// CONFIRMED (V7).
+pub fn meta_out_value(stored: F32) -> F32 {
+    F32::from_bits(stored.to_bits() ^ 0x8000_0000)
+}
+
+/// The unit life sink `0x6F2AC450` in mode 3 (maximum and life rise together for a non-negative value; a negative value only
+/// lowers the maximum and clamps the life), CONFIRMED earlier (`tests/life_sink_vectors.rs`).
+fn life_sink_mode3(gm: &mut Game, unit: ObjKey, value: F32) {
+    let flagged = gm.unit(unit).dead;
+    let mut cells = gm.life_cells(unit);
+    let tables = gm.order_tables().cloned();
+    crate::heroes::life_sink(&mut cells, flagged, value, 3, tables.as_ref());
+    gm.put_life_cells(unit, cells);
 }
 
 /// The buff `serial` ended (called by `Game::drop_spell_buff`): the form wears off, the bonus hit points go.
@@ -349,11 +382,7 @@ pub(crate) fn on_buff_dropped(gm: &mut Game, serial: u32) {
     if !gm.alive(unit) {
         return;
     }
-    let max = arith::sub(gm.unit(unit).max_life, bonus);
-    gm.write_max_life(unit, max);
-    if arith::lt(max, gm.unit(unit).life) {
-        gm.write_life(unit, max);
-    }
+    life_sink_mode3(gm, unit, meta_out_value(bonus));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
