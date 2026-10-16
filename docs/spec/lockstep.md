@@ -1601,3 +1601,41 @@ free-list head change, not three; the other reading is a 12-bit Y step); the age
 4. The generator link: verify the seed with an isolated draw (a quiet pair whose only change is a draw count), or decode the random-race draw at the game start.
 5. The agent-id counter (14,908 for the human's hall): per-type agent counts of a unit (22 for a peasant) and the order of map-load creation, to resolve the replay's object pairs and let the human's orders act.
 6. Why the pause takes exactly one extra unit (probably the frame driver finishes the unit in progress); the rule is fitted on one replay.
+
+## 19. Pass 16 (2026-10-17): the seed link, random races, and what the first 0x22 records still need (R2)
+
+Replay `echoisles_ai_1.w3g` (not committed). Tests: `crates/sim/tests/echoisles_generator.rs` (needs `GAME_DLL`), `engine::replay_setup` tests.
+
+### 19.1 CONFIRMED: the generator is seeded with the fixed seed 0x77617233
+The record seed is `0x030b2473`, the replay flags `0x00800002`. Searching the recorded hidden-word deltas (`rol3(R_a ^ R_b)`, R = `rng_state_hash`)
+against the draw sequence of each candidate seed: fixed seed `0x77617233` matches 417 of 1,412 high-entropy events, the record seed and a control
+seed about 11 each (chance). Eight isolated single-draw slots have a **zero residual** (slot 42: draws 29 to 30, 51: 30 to 31, 102: 31 to 32, 150: 44 to 45,
+173: 46 to 47, 384: 62 to 63, 404: 63 to 64, 414: 66 to 67; pinned in the test). Which replay flag bit becomes the engine's `0x8000`
+is UNSURE; `0x00800000` is the only candidate in this file (`replay_setup::REPLAY_FIXED_SEED_BIT`).
+
+### 19.2 CONFIRMED structure: random races draw from the global generator
+Game load `0x6F3B0750` calls `0x6F3A31A0`: for player objects 0..11 in order, a player with the random bit (0x20) takes one draw `r` of the global
+generator and race `(r >> 30) + 1` (1 human, 2 orc, 3 undead, 4 night elf). With the fixed seed the first two draws give Human and Undead: the replay's
+human trains `hpea` (Human, 1 in 4 by chance), so the computer is **Undead** (the sim had guessed Orc). `Engine::boot_from_replay` now does this
+(`resolve_random_races`). The placement (`0x6F3AA700` -> `0x6F3A5090`/`0x6F3A51A0`, shuffle `0x6F4ACF60`) draws from the same generator after the races
+and is NOT modelled; hero proper-name pick at unit creation (`0x6F430DF0`, only when the type has several names) also draws.
+
+### 19.3 What the draw anchors say
+Real draws by slot 41: 29 (n(41) = 29); the sim has 7 (2 races + AI). The undead AI loop `peon_assignment` draws `Sleep(GetRandomInt(1,3))`
+(common.ai/undead.ai have only 4 draw sites), so the AI explains few of the 22 missing draws; the pre-slot-0 count n0 (placement, other load draws) and
+engine-side consumers are open. Draw timing in the real file is about 1 per 10 slots between 42 and 383; the sim's is 1 per 57.
+
+### 19.4 The game-hash slot (registry 6) depends on agent id pairs
+Player hash `0x6F40FEB0` folds the unit-count table (+0x2D0), two floats, the dead-hero list and `0x6F4244E0` over the player's agent lists; each listed
+agent contributes `rol(id_a ^ id_b)`. For units both words are equal (replay pairs), so only counts and walk order matter. Not modelled.
+
+### 19.5 Replay object ids (task item)
+Selection ids still resolve by the start-unit heuristic (now on by default in `--sim-sync`; `--sync-no-register` switches it off). New: a target object that
+resolves to nothing is replaced by the live unit nearest to the order's point (256 units); a harvest order whose target is no unit (EchoIsles `0x1929` is a
+tree) starts a lumber cycle on the tree nearest to the point; train orders (id = unit rawcode) go to the production queue. Registering the human's units makes the
+sim's pathing-tag churn visible (5,038 tag events against 1,180 recorded): exact pairs fall from 2,146 to 397, so the pair count is not a score yet.
+
+### 19.6 Status
+Absolute exact records: 0 of 5,504, first mismatch slot 0 (unchanged). Pairs (no registration): 1,302 -> 2,146 after the seed and race fixes. Needed for slot 0:
+the static constant K (slots 5..9, 12..19), X0/Y0 after the load, n0, and the game hash. Next: placement shuffle draws, load-time draw consumers, per-leg
+registration (walking must not register), agent-id counter.
