@@ -1,6 +1,6 @@
 //! Unit abilities, batch M (S47). Spec: `docs/spec/abilities-unit-m.md`.
 //!
-//! The batch covers the 85 rawcodes of [`CODES`]. Every code is listed with its RTTI class and parent (atlas
+//! The batch covers the 79 rawcodes of [`CODES`]. Every code is listed with its RTTI class and parent (atlas
 //! `docs/research/ability-atlas/factory.tsv`) and the cast-getter order ids of `docs/research/ability-orders`
 //! (`tools/analysis/ability_orders.py`). Codes that have a behaviour here are marked in [`Status`]; the rest are
 //! recorded as structure so later passes can pick them up. Labels: CONFIRMED = read in the machine code, LIKELY =
