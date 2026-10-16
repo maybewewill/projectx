@@ -124,6 +124,7 @@ fn host() -> ScriptHost {
             COLD_ARROWS,
             SEARING_ARROWS,
             POISON_ARROWS,
+            LOCUST_SWARM,
         ] {
             g.ability_types_mut().insert(code, AbilityType { max_level: Some(1) });
         }
@@ -142,6 +143,9 @@ fn host() -> ScriptHost {
         g.set_spell_levels(COLD_ARROWS, vec![level(8, 6.0, 1.0, 0.0, &[5.0, 0.3, 0.3, 7.0])]);
         g.set_spell_levels(SEARING_ARROWS, vec![level(8, 0.0, 0.0, 0.0, &[10.0])]);
         g.set_spell_levels(POISON_ARROWS, vec![level(0, 10.0, 10.0, 0.0, &[10.0, 4.0])]);
+        let mut locust = level(150, 30.0, 30.0, 800.0, &[5.0, 0.2, 7.0, 0.75, 20.0]);
+        locust.unit_id = OWL;
+        g.set_spell_levels(LOCUST_SWARM, vec![locust]);
         for &(id, base) in ORDERS {
             g.set_spell_order(id, base);
         }
@@ -344,3 +348,22 @@ fn ranger_arrows_need_the_mana() {
     assert_eq!(g.unit(e1).life.to_f32(), 500.0);
 }
 
+
+#[test]
+fn locust_swarm_releases_data_a_locusts_one_every_data_b_seconds() {
+    // V7 (0x6F134EA0, 0x6F12CE70): N = f2i(DataA) clamped to 1..=40 (5 here, not DataC = 7), the first locust at once, then one
+    // every DataB = 0.2 s.
+    let mut h = host();
+    give(&mut h, LOCUST_SWARM);
+    let before = h.game().object_count();
+    assert!(cast_immediate(&mut h, 852_556));
+    assert_eq!(h.game().object_count(), before + 1, "the first locust is made at once");
+    run(&mut h, 3);
+    let mid = h.game().object_count() - before;
+    assert!((2..=3).contains(&mid), "about one more every 0.2 s, got {mid}");
+    run(&mut h, 20);
+    assert_eq!(h.game().object_count(), before + 5, "DataA locusts in all");
+    assert_eq!(h.game().unit(ObjKey(before as u32)).type_id, OWL);
+    assert_eq!(locust_count(f(0.0)), 1);
+    assert_eq!(locust_count(f(41.0)), 40);
+}
