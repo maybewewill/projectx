@@ -285,16 +285,24 @@ fn tranquility_heals_friends_each_second() {
 
 #[test]
 fn animate_dead_raises_the_nearest_corpse_as_a_timed_unit() {
+    // V7: the original revives the corpse object in place (`0x6F1B5A60` -> `0x6F2A64A0`, read in the machine code): same handle,
+    // the caster's player as owner, full life; DataA = 1 raises one corpse.
     let mut h = host();
     give(&mut h, ANIMATE_DEAD);
     h.start("make_corpses", &[]).unwrap();
     run(&mut h, 1);
+    let corpse = unit(&h, "corpse1");
+    let other = unit(&h, "corpse2");
+    assert!(h.game().unit(corpse).dead);
     let before = h.game().object_count();
     assert!(cast_immediate(&mut h, 852_217));
-    assert_eq!(h.game().object_count(), before + 1, "DataA = 1");
-    let raised = ObjKey(before as u32);
+    assert_eq!(h.game().object_count(), before, "no new unit is made");
+    let raised = corpse;
+    assert!(!h.game().unit(raised).dead);
     assert_eq!(h.game().unit(raised).owner, 0);
     assert!(h.game().unit(raised).summoned);
+    assert_eq!(life(&h, raised), 500.0, "full life");
+    assert!(h.game().unit(other).dead, "DataA = 1: the second corpse stays");
     run(&mut h, 420);
     assert!(h.game().unit(raised).dead, "Dur 40 s");
 }

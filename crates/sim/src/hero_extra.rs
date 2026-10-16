@@ -562,16 +562,13 @@ fn animate_dead(game: &RefCell<Game>, rec: &CastRec) {
     let max = conv::f2i(rec.level.data[0]).max(0) as usize;
     let dur = arith::add(rec.level.dur, F32::ZERO);
     for corpse in corpses_near(&gm, cx, cy, rec.level.area).into_iter().take(max) {
-        let (ty, x, y, facing) = {
-            let u = gm.unit(corpse);
-            (u.type_id, u.x, u.y, u.facing)
-        };
-        crate::natives::unit::remove_unit(&mut gm, corpse);
-        if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty, x, y, facing, true) {
-            gm.unit_mut(k).summoned = true;
-            if arith::lt(F32::ZERO, dur) {
-                gm.apply_timed_life(k, BUFF_ANIMATE_DEAD, dur);
-            }
+        // V7 (read in `0x6F1B5A60` / `0x6F2A64A0`, not run): the original revives the corpse UNIT ITSELF in place (full life, the
+        // caster's player as the new owner, the "summoned" flag), it does not make a new unit. The handle stays the same.
+        gm.resurrect_unit(corpse);
+        crate::natives::unit::change_owner(&mut gm, corpse, owner);
+        gm.unit_mut(corpse).summoned = true;
+        if arith::lt(F32::ZERO, dur) {
+            gm.apply_timed_life(corpse, BUFF_ANIMATE_DEAD, dur);
         }
     }
 }
