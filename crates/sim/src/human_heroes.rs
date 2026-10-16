@@ -662,10 +662,18 @@ fn phoenix(game: &RefCell<Game>, rec: &CastRec) {
     summon(game, rec, BUFF_WATER_ELEMENTAL);
 }
 
+/// The summon loop of the Water Elemental family (`0x6F163390`, vtable slot `0x3C0` of `CAbilityWaterElemental`,
+/// `CAbilityScout`, `CAbilitySpiritOfVengeance`; the Phoenix effect `0x6F11BA10` enters the same loop). CONFIRMED, V5:
+/// the real loop on a fake ability, 450 cases over the three vtables, 0 mismatches (`tools/emu/v5_summon_emu.py`,
+/// `tests/data/human_heroes/summon_loop.txt`): `n = F2I(DataA)` units of the level's `UnitID` for the caster's owner, the
+/// creator flag word `0x502` when `Dur + ability+0x9C` is exactly zero else `2`, every unit is requested at the point
+/// `caster + M * (Area, 0, 0)` (the creator wrapper `0x6F1D27A0` gets the `Area` pointer and the constant 1, i.e. the
+/// caster's facing; `orc::feral_place`), then the link `0x6F052EC0`, the class slot `0x3E4` with a pointer to the
+/// duration (the timed-life buff) and the release. The count and duration arithmetic is Feral Spirit's
+/// (`orc::feral_plan`). The earlier model put the units on the caster and passed radians as degrees.
 pub(crate) fn summon(game: &RefCell<Game>, rec: &CastRec, timed_life: u32) {
     let mut gm = game.borrow_mut();
-    let n = conv::f2i(rec.level.data[0]);
-    let dur = arith::add(rec.level.dur, F32::ZERO);
+    let plan = crate::orc::feral_plan(rec.level.dur, F32::ZERO, rec.level.data[0]);
     let (x, y, owner, facing) = {
         let c = gm.unit(rec.caster);
         (c.x, c.y, c.owner, c.facing)
@@ -673,12 +681,17 @@ pub(crate) fn summon(game: &RefCell<Game>, rec: &CastRec, timed_life: u32) {
     if rec.level.unit_id == 0 {
         return;
     }
-    for _ in 0..n.max(0) {
-        // UNSURE: the original places the unit at a spot found around the caster (`0x6F1D26B0`); the model uses the
-        // caster's position.
-        if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, rec.level.unit_id, x, y, facing, true) {
+    let (px, py) = match gm.softfloat_tables().cloned() {
+        Some(t) => crate::orc::feral_place(x, y, facing, rec.level.area, &t),
+        None => (x, y),
+    };
+    for _ in 0..plan.count.max(0) {
+        // UNSURE: the unit creator `0x6F29F990` spreads units requested at one point by its own placement search.
+        if let Some((k, _)) =
+            crate::natives::unit::build(&mut gm, owner, rec.level.unit_id, px, py, crate::orc::rad_to_deg(facing), true)
+        {
             gm.unit_mut(k).summoned = true;
-            gm.apply_timed_life(k, timed_life, dur);
+            gm.apply_timed_life(k, timed_life, plan.duration);
         }
     }
 }
