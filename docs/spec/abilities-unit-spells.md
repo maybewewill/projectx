@@ -258,3 +258,74 @@ runs in its own process).
 Not covered by V1 (still as labelled above): the refresh paths of the buff slots, the autocast filters, weapon slot 2,
 the second dispel of Divine Shield being absent from the model (idempotent).
 
+
+## 13. V4 verification wave (Unicorn, `tools/emu/v4_spells_emu.py`, vectors `crates/sim/tests/data/unit_spells/`, test `crates/sim/tests/v4_spell_vectors.rs`)
+
+Method as V1: the original function runs on fake objects, world-dependent callees (buff lookup/allocator, Misc readers,
+relation tests, life adder) are stubs that read per-case switches or record their arguments. 400 random cases per check,
+0 mismatches. Each check runs in its own process (`--only NAME`).
+
+* **Heal (`Ahea`) CONFIRMED**: effect `0x6F108280` (amount `DataA`, times Misc `EtherealHealBonus` when the target's
+  ethereal count `+0x158` is above zero by a signed compare; marker duration `(Cool + 0.01) + 1.0`, existing marker through
+  buff slot `0x350`, new one through `0x354`); target rule `0x6F0F0290` (`0xA2` illusion, `0x1C` deficit below 1.0,
+  `0xAE` a `Bhea` marker whose maker is not the caster); autocast filter `0x6F0F0370`; comparator `0x6F0DADD0` (earlier
+  run, 600 cases). **Bugs fixed**: (1) the foreign-marker refusal (`0xAE`) applies to manual casts too, the model only had
+  it in the autocast filter; (2) the autocast filter refuses a candidate whose unit type `regenHP` (type record `+0x7C`)
+  is below zero (ordered compare; NaN passes), missing in the model.
+* **Dispel Magic (`Adis`), Purge (`Aprg`), Abolish Magic (`Aadm`) CONFIRMED** (worker `0x6F0EEF00` earlier, 1,600 cases; here the
+  three effects hand it these stack arguments `[target, order id, ability, positive, negative, a6, a7, &damage, &mana, flags]`
+  with `ecx` = the ability's owner and `edx` = the owner's slot `0xEC`; IDA labels of the "this" push/pop pairs in
+  `0x6F107CC0` and `0x6F106C00` are saved registers, not arguments). Dispel callback `0x6F0EF210`: `[1, 1, 0, 1]`, damage
+  `DataB`, mana `DataA`, flags 64. Purge `0x6F107E10`: `[1, 1, 0, 1]`, damage `DataC`, mana `DataF`, flags 64; afterwards a
+  target that is dead (`+0x5C & 0x100`) or passively allied (`0x6F285AC0`) is left alone, otherwise the hero rule picks
+  `HeroDur`, else `Dur + ability +0x9C` by soft add (a denormal `Dur` flushes to 0, model fixed to use
+  `effect_duration`), an existing `Bprg` is removed (`0x6F079CC0`) and the apply slot `0x354` gets `(target, &dur, owner,
+  &DataA, &DataB, &DataD, &DataE)`. Abolish `0x6F0EF0F0`: smart = Misc `AbolishMagicDispelSmart` ? `DataC != 0.0` : ability
+  flag bit 21; smart removes positive buffs from non-allies (`0x6F285B00`) and negative ones from the rest, else both;
+  `a6` = flag bit 21; **`a7` = 1 without the flag, else `reqLevel != 0`** (`0x6F02E5A0` reads the definition's `+0x40`,
+  NOT `DataI` as the model assumed; fixed). Abolish autocast filter `0x6F0E2B90`: base filter, then reject when the caster's
+  flag word lacks bit 2 and the candidate's `+0x248` has `0x200`, then the buff scan `0x6F076D00` with
+  `[0, 1, 0, 0, 1, a7, a8, owner, reqLevel != 0]`, `(a7, a8) = (0, 1)` for an ally, `(1, 0)` otherwise. Not modelled: the
+  buff-scan exclusion of buffs whose `+0x20` has `0x20000000` unless `reqLevel != 0`, and the two unit flag words.
+* **Polymorph (`Aply`) PARTLY verified (no confirmed-abilities row)**: target rule `0x6F11C230` (`0x33` when `F2I(DataA) > 0`
+  and the target is a creep above that level (`0x6F1D2630(target, level)`), else `0x9F` for a summoned unit) and effect
+  `0x6F12F560` (illusion: target slot `0x124` with a zero amount and nothing else; otherwise the hero-rule duration and
+  `0x6F12DAA0(level index, target +0x1FC)` feed the ability's slot `0x43C` = `0x6F13F790`; no duration test in the effect)
+  run in Unicorn, 400 cases each, 0 mismatches. The morph itself (buff apply `0x6F12A0B0`/`0x6F13F710`) and the type pick's
+  random die are NOT verified, so no row yet. The creep-level rule is not modelled (no creep levels in the sim).
+* **Curse (`Acrs`) and Faerie Fire (`Afae`) CONFIRMED** at the cast and autocast level. Effects `0x6F0B8450` / `0x6F0B8750`: the
+  hero rule duration (`HeroDur`, else `Dur + ability +0x9C` by soft add) and `DataA` go to the buff; an existing buff is
+  re-applied through slot `0x358` (Curse: smart ref, dur, DataA, owner player) / `0x360` (Faerie: smart ref, dur, owner,
+  DataA), a new one is created (`0x6F0B52E0` / `0x6F0B5480`) and gets slot `0x354` / `0x35C` with the target first;
+  there is no duration test in the effect (the model's early return for dur <= 0 is a stand-in). Curse filter `0x6F09BF80`:
+  base filter, candidate has the attack ability and a resolved attack target, relation `0x6F285B60(caster owner, target
+  owner)` nonzero, no `Bcrs` on the candidate. Faerie Fire filter `0x6F09C240` (**autocast was missing from the model, added**,
+  toggle ids 852150/852151): base filter, candidate life fraction > 0.1, then `DataB != 0` needs only no `Bfae`, otherwise
+  the candidate must be attacking a unit whose owner passes the relation, and no `Bfae`. Curse's evade decision was
+  confirmed earlier (1,800 cases, `curse_vectors.rs`). The 400-case rows for each check are in `v4_spell_vectors.rs`.
+* **Rejuvenation (`Arej`) CONFIRMED**: effect `0x6F108530` hands the buff the hero-rule duration, `DataA`, `DataB` and two flags
+  `F2I(DataC) & 1`, `F2I(DataC) & 2` (slot `0x358` for an existing buff, `0x354` with the target first for a new one);
+  the apply `0x6F0F0650` makes the buff last `T + 0.01` for `T > 0` (else `T`), sets buff flags `0x100` / `0x200` from the
+  two flags, and stores `DataA / T` (life) and `DataB / T` (mana) per tick (soft divisions, `DataA` first). The model now
+  takes duration and life per tick from `rejuv_buff_values`; the mana half (`DataB`) and the tick handler are not modelled.
+* **Unholy Frenzy (`Auhf`) PARTLY verified (no row)**: effect `0x6F18C070` -> `0x6F18BF60` hands `(smart ref or target, &dur,
+  owner, &DataB, &DataA)` to the buff (existing: slot `0x37C`; new: slot `0x378` with the target first), duration by the hero
+  rule; 400 cases, 0 mismatches. The `CBuffDoT` internals (attack speed sink, damage per tick, tick period) are not run.
+* **Roar (`Aroa`) PARTLY verified (no row)**: effect `0x6F1EED60` has the same shape as Taunt: the group within `Area` is collected into 20-byte
+  records, `n = F2I(DataG)` (nonzero) sorts them with the comparators `0x6F1D3BF0` (= Taunt's base comparator, same code), `0x6F1DC030` (`f3`
+  first, chosen by `DataF != 0`) or `0x6F1DC050` (`f4` first, chosen by `DataE != 0`), limits to `n`, and gives each chosen unit the effect slot
+  `0x3EC` with `HeroDur` / `Dur + 0x9C`. The model now uses `group_plan` (400 cases with the real sort, `v4_spell_vectors.rs`; before, every
+  friend in reach got the buff). Readiness `0x6F1EEBF0`: after the base check, `F2I(DataG) != 0` and an empty collector gives error 221
+  (`roar_ready_error`, 400 cases), no check without a limit. NOT verified: what the buff (`CBuffRoar` shares the Inner Fire buff base) does
+  with `DataA`..`DataD`; since Inner Fire's damage turned out to be an integer weapon bonus, `damage_pct = DataA` in `roar()` is probably wrong
+  in the same way.
+* **Lightning Shield (`Alsh`) PARTLY verified (no row)**: effect `0x6F13C690` hands the buff creator `0x6F13C360` the hero-rule duration, the tick period
+  `recip(C)`, `Area`, the damage per tick `DataA / C` and the constant 2 with `C` = the 2.0 at `0x6FAB0FA4` (`shield_values`, 400 cases with the real
+  soft divisions and reciprocal). The per-victim tick slot `0x364` = `0x6F13C410` skips a victim that carries the shield's marker buff (`0x6F10FFB0`
+  code), whose unit word `+0xEC` is above zero (signed), or that is the shielded unit; blocked victims (`0x6F28D750`) get only the marker; the model lacks
+  the first two skips (meaning of `+0xEC` unknown) and this tick filter was not run.
+* **Healing Ward (`Ahwd`) and Sentry Ward (`Aeye`) CONFIRMED** (point effects `0x6F0BABB0` / `0x6F0B8510`, 400 cases each): the unit creator
+  `0x6F29F990` gets `ecx` = the caster's owner (slot `0xEC`), `edx` = the level's `UnitID`, stack `(&x, &y, &facing, flags, 1, -1)` with the cast
+  point, **facing = Misc `BuildingAngle`** (`orc::building_angle_radians`, a multiple of 90 degrees) and flags `2` for a nonzero `Dur + ability
+  +0x9C` else `0x502` (food bits). **Bug fixed**: the model created wards with the caster's facing. Stasis Trap (`0x6F1FD180`) shares the model and
+  the fix; its own effect was not run. The ward's timed life buff and the aura/ability of the ward unit type are outside this check.

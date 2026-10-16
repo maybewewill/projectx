@@ -179,7 +179,7 @@ pub const SPELL_ORDERS: [(u32, u32); 20] = [
 ];
 
 /// `(autocast on order, autocast off order, ability)`.
-const TOGGLES: [(u32, u32, u32); 7] = [
+const TOGGLES: [(u32, u32, u32); 8] = [
     (852_133, 852_134, ABOLISH_MAGIC),
     (852_212, 852_213, WEB),
     (852_191, 852_192, CURSE),
@@ -187,6 +187,7 @@ const TOGGLES: [(u32, u32, u32); 7] = [
     (ORDER_HEAL_ON, ORDER_HEAL_OFF, HEAL),
     (852_067, 852_068, INNER_FIRE),
     (852_102, 852_103, BLOODLUST),
+    (852_150, 852_151, FAERIE_FIRE),
 ];
 
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -671,18 +672,38 @@ pub fn targs_ok(gm: &Game, caster: ObjKey, target: ObjKey, w: u32) -> bool {
     w & rel != 0
 }
 
-/// The deficit rule of Heal's slot `0x3F0`: `max life - life >= 1.0` (the error `0x1C` otherwise). A NaN deficit
-/// passes (the unordered compare).
-fn heal_needs(gm: &Game, target: ObjKey) -> bool {
-    let u = gm.unit(target);
-    let deficit = arith::sub(u.max_life, u.life);
-    !arith::lt(deficit, F32::ONE)
+
+/// Roar's readiness rule, slot `0x3DC` = `0x6F1EEBF0` after the base check (CONFIRMED by Unicorn, V4): `221` when
+/// `F2I(DataG)` is nonzero and the collector found no candidate, else `0`.
+pub fn roar_ready_error(data_g: F32, found: bool) -> u32 {
+    if softfloat::conv::f2i(data_g) == 0 || found {
+        0
+    } else {
+        221
+    }
+}
+
+fn roar_has_candidate(gm: &Game, caster: ObjKey, level: &crate::cast::SpellLevel) -> bool {
+    let (cx, cy, owner) = {
+        let c = gm.unit(caster);
+        (c.x, c.y, c.owner)
+    };
+    crate::natives::group::circle_candidates(gm, cx, cy, level.area).into_iter().any(|k| {
+        let u = gm.unit(k);
+        gm.alive(k)
+            && !u.hidden
+            && (k == caster || u.owner == owner || !gm.is_enemy(owner, u.owner))
+            && !is_unit_type(gm, u, ty::STRUCTURE)
+    })
 }
 
 /// Errors of a cast without a target (the readiness error "no corpse" of Raise Dead).
 pub(crate) fn untargeted_error(gm: &Game, caster: ObjKey, base: u32, level: &crate::cast::SpellLevel) -> Option<CastError> {
     match base {
         RAISE_DEAD if pick_corpse(gm, caster, level.area).is_none() => Some(CastError::BadTarget),
+        // `0x6F1EEBF0` (CONFIRMED by Unicorn, V4): with `F2I(DataG) != 0` the cast needs at least one candidate in reach
+        // (error 221 otherwise); without a limit there is no check.
+        ROAR if roar_ready_error(level.data[6], roar_has_candidate(gm, caster, level)) != 0 => Some(CastError::BadTarget),
         _ => None,
     }
 }
@@ -716,10 +737,12 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             {
                 return Some(CastError::BadTarget);
             }
-            if t.illusion && !gm.spells.unit.illusions_can_restore_life {
-                return Some(CastError::BadTarget);
-            }
-            if !heal_needs(gm, target) {
+            let (life, max) = (t.life, t.max_life);
+            let marker = gm.heal_mark_source(target);
+            
+            // `0x6F0F0290`: illusion rule, `max - life >= 1.0`, a marker of another healer .
+            let code = heal_target_code(gm.spells.unit.illusions_can_restore_life, t.illusion, life, max, marker, caster);
+            if code != 0 {
                 return Some(CastError::BadTarget);
             }
             None
@@ -1099,6 +1122,9 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
         dispellable: true,
         ..buff_predicates(BUFF_ROAR)
     };
+    // The group is collected into records, sorted and limited like Taunt's (`group_plan`, CONFIRMED by Unicorn, V4): the
+    // limit is `F2I(DataG)`, the comparator keys `DataE` / `DataF`; each chosen unit gets the effect slot `0x3EC`.
+    let mut cands: Vec<(ObjKey, crate::unit_abilities_m::TauntRec, bool)> = Vec::new();
     for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
         if !gm.alive(k) || gm.unit(k).hidden {
             continue;
@@ -1108,8 +1134,22 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
         if !ally || is_unit_type(&gm, u, ty::STRUCTURE) {
             continue;
         }
+        let (dx, dy) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
+        let f1 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
         let hero = gm.target_hero(k);
-        let dur = effect_duration(&rec.level, hero, F32::ZERO);
+        let id = gm.handle_of(k) as i32;
+        cands.push((k, crate::unit_abilities_m::TauntRec { f1, f2: F32::ZERO, f3: 1, f4: 0, id }, hero));
+    }
+    let plan = crate::unit_abilities_m::group_plan(
+        &rec.level,
+        d[6],
+        d[4],
+        d[5],
+        F32::ZERO,
+        &cands.iter().map(|(_, r, h)| (*r, *h)).collect::<Vec<_>>(),
+    );
+    for (i, dur) in plan {
+        let k = cands[i].0;
         if !arith::lt(F32::ZERO, dur) {
             continue;
         }
@@ -1311,11 +1351,15 @@ fn abolish_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec
         if !gm.alive(target) {
             return;
         }
-        let a7 = u32::from(arith::lt(F32::ZERO, rec.level.data[8]));
         // Smart mode (relation-aware removal) only for a cast the autocast started (see `scan`); a manual order removes
-        // both polarities like Dispel Magic (UNSURE: the ability flag `0x200000` decides in the original).
+        // both polarities like Dispel Magic. In the original the ability flag `0x200000` decides (Misc
+        // `AbolishMagicDispelSmart` is absent from the data, so the flag branch is taken); `abolish_args` is CONFIRMED.
         let smart = gm.spells.unit.auto_started.remove(&(rec.caster, ABOLISH_MAGIC));
-        dispel_one(&mut gm, rec.caster, target, rec.level.data[1], rec.level.data[0], smart, a7)
+        let flags = if smart { 0x20_0000 } else { 0 };
+        let not_ally = gm.is_enemy(gm.unit(rec.caster).owner, gm.unit(target).owner);
+        let req = gm.hero_ability_def(ABOLISH_MAGIC).map_or(0, |d| d.req_level as u32);
+        let a = abolish_args(false, flags, &rec.level, not_ally, req);
+        dispel_one(&mut gm, rec.caster, target, a.damage, a.mana, smart, a.a7)
     };
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
@@ -1348,12 +1392,13 @@ pub(crate) fn purge_body(gm: &mut Game, rec: &CastRec, target: ObjKey) -> Option
         if !gm.alive(target) {
             return None;
         }
-        let killed = dispel_one(gm, rec.caster, target, rec.level.data[2], rec.level.data[5], false, 1);
+        let args = purge_args(&rec.level);
+        let killed = dispel_one(gm, rec.caster, target, args.damage, args.mana, false, args.a7);
         if killed.is_none() && gm.alive(target) {
             let owner = gm.unit(rec.caster).owner;
-            if gm.is_enemy(owner, gm.unit(target).owner) {
+            if purge_slows(false, !gm.is_enemy(owner, gm.unit(target).owner)) {
                 let hero = gm.target_hero(target);
-                let dur = if hero { rec.level.hero_dur } else { rec.level.dur };
+                let dur = effect_duration(&rec.level, hero, F32::ZERO);
                 let div = |a: F32, b: F32| gm.soft_div(a, b);
                 let (mv, mstep, mtime) = purge_schedule(rec.level.data[0], dur, &div);
                 let (av, astep, atime) = purge_schedule(rec.level.data[1], dur, &div);
@@ -1548,14 +1593,14 @@ fn ward(game: &RefCell<Game>, rec: &CastRec, buff: u32) {
     if ty == 0 {
         return;
     }
-    let (owner, facing) = {
-        let c = gm.unit(rec.caster);
-        (c.owner, c.facing)
-    };
+    let owner = gm.unit(rec.caster).owner;
+    // The ward faces the Misc `BuildingAngle` (snapped to a multiple of 90 degrees), not the caster (CONFIRMED by Unicorn, V4).
+    let (total, facing_rad, _flags) = ward_create_values(rec.level.dur, F32::ZERO, gm.production().building_angle);
+    let facing = crate::orc::rad_to_deg(facing_rad);
     if let Some((k, _)) = crate::natives::unit::build(&mut gm, owner, ty, x, y, facing, true) {
         gm.unit_mut(k).summoned = true;
-        if arith::lt(F32::ZERO, rec.level.dur) {
-            gm.apply_timed_life(k, buff, rec.level.dur);
+        if arith::lt(F32::ZERO, total) {
+            gm.apply_timed_life(k, buff, total);
         }
     }
 }
@@ -1797,8 +1842,11 @@ fn lightning_shield(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     if !arith::lt(F32::ZERO, dur) {
         return;
     }
-    let amount = gm.soft_div(rec.level.data[0], F32::from_bits(0x4000_0000));
-    let period = gm.soft_div(F32::ONE, F32::from_bits(0x4000_0000));
+    let (amount, period) = {
+        let div = |a: F32, b: F32| gm.soft_div(a, b);
+        let v = shield_values(&rec.level, hero, F32::ZERO, &div);
+        (v.2, v.1)
+    };
     let preds = crate::abilities::BuffPredicates {
         positive: true,
         magic: true,
@@ -1937,7 +1985,8 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
             if !gm.alive(k) || gm.unit(k).hidden {
                 continue;
             }
-            if let Some(t) = dispel_one(&mut gm, rec.caster, k, rec.level.data[1], rec.level.data[0], false, 1) {
+            let args = dispel_magic_args(&rec.level);
+            if let Some(t) = dispel_one(&mut gm, rec.caster, k, args.damage, args.mana, false, args.a7) {
                 killed.push(t);
             }
         }
@@ -1945,6 +1994,145 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
     for t in killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
     }
+}
+
+/// The stack arguments the three dispel-family effects hand to the worker `0x6F0EEF00` (CONFIRMED by Unicorn, V4,
+/// `tools/emu/v4_spells_emu.py` `dispel_args` / `purge_args` / `abolish_args`, 400 cases each): the worker removes
+/// positive / negative buffs by `positive` / `negative`, `a6` and `a7` are the pass-through words, `damage` is the
+/// summoned-unit damage, `mana` the mana loss, `flags` the damage record flags.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkerArgs {
+    pub positive: u32,
+    pub negative: u32,
+    pub a6: u32,
+    pub a7: u32,
+    pub damage: F32,
+    pub mana: F32,
+    pub flags: u32,
+}
+
+/// Dispel Magic's callback `0x6F0EF210`: both polarities, `(a6, a7) = (0, 1)`, damage `DataB`, mana loss `DataA`, flags 64.
+pub fn dispel_magic_args(l: &SpellLevel) -> WorkerArgs {
+    WorkerArgs { positive: 1, negative: 1, a6: 0, a7: 1, damage: l.data[1], mana: l.data[0], flags: 64 }
+}
+
+/// Purge's effect `0x6F107E10`: both polarities, `(0, 1)`, damage `DataC`, mana loss `DataF`, flags 64.
+pub fn purge_args(l: &SpellLevel) -> WorkerArgs {
+    WorkerArgs { positive: 1, negative: 1, a6: 0, a7: 1, damage: l.data[2], mana: l.data[5], flags: 64 }
+}
+
+/// Abolish Magic's effect `0x6F0EF0F0`. `not_ally` is `0x6F285B00(owner, target)` (the passive alliance row says the target
+/// is not an ally); `misc_smart` Misc `AbolishMagicDispelSmart`; `ability_flags` the ability's `+0x20`. Smart mode
+/// (`misc_smart ? DataC != 0.0 (an unordered compare counts as unequal) : flag bit 21`) removes positive buffs from
+/// non-allies and negative ones from the rest; otherwise both. `a6` is flag bit 21; `a7` is 1 without that flag, else
+/// whether the definition's `reqLevel` (`0x6F02E5A0`, definition `+0x40`; 1 when there is no definition) is nonzero. Damage `DataB`, mana `DataA`, flags 64.
+pub fn abolish_args(misc_smart: bool, ability_flags: u32, l: &SpellLevel, not_ally: bool, req_level: u32) -> WorkerArgs {
+    let bit = (ability_flags >> 21) & 1;
+    let smart = if misc_smart { l.data[2].to_f32() != 0.0 } else { bit != 0 };
+    let (positive, negative) = if smart { (u32::from(not_ally), u32::from(!not_ally)) } else { (1, 1) };
+    let a7 = if ability_flags & 0x20_0000 != 0 { u32::from(req_level != 0) } else { 1 };
+    WorkerArgs { positive, negative, a6: bit, a7, damage: l.data[1], mana: l.data[0], flags: 64 }
+}
+
+/// Abolish Magic's autocast filter, slot `0x450` = `0x6F0E2B90` (CONFIRMED by Unicorn, V4): rejects when the base filter
+/// fails or when the caster's unit flag word has bit 2 clear while the candidate's `+0x248` has bit `0x200`; otherwise
+/// asks the buff scan `0x6F076D00` with `[a2..a10]` = `[0, 1, 0, 0, 1, a7, a8, owner, reqLevel != 0]` where `(a7, a8)` is
+/// `(0, 1)` for an ally (a negative buff to remove) and `(1, 0)` for anyone else (a positive one). `None` = rejected.
+pub fn abolish_filter_scan(base_ok: bool, owner_flags: u32, cand_flags248: u32, ally: bool, req_level: u32, owner: u32) -> Option<[u32; 9]> {
+    if !base_ok || (owner_flags & 4 == 0 && cand_flags248 & 0x200 != 0) {
+        return None;
+    }
+    let (a7, a8) = if ally { (0, 1) } else { (1, 0) };
+    Some([0, 1, 0, 0, 1, a7, a8, owner, u32::from(req_level != 0)])
+}
+
+/// Polymorph's target rule, slot `0x3F0` = `0x6F11C230` (CONFIRMED by Unicorn, V4): `0x33` when `F2I(DataA)` (the highest
+/// creep level) is above zero and the target is a creep above it (`creep_over`, the host's `0x6F1D2630`), else `0x9F` for a
+/// summoned unit (`+0x248 & 4`), else `0`.
+pub fn polymorph_target_code(data_a: F32, creep_over: bool, summoned: bool) -> u32 {
+    if conv::f2i(data_a) > 0 && creep_over {
+        0x33
+    } else if summoned {
+        0x9F
+    } else {
+        0
+    }
+}
+
+/// What Polymorph's effect `0x6F12F560` does with a target (CONFIRMED by Unicorn, V4): an illusion is killed through
+/// the target's slot `0x124` with a zero amount and nothing else happens (`None`); any other target goes to the
+/// ability's slot `0x43C` with the hero-rule duration (`Dur + 0x9C` by soft add, `HeroDur` for a hero) and the type picked
+/// by `0x6F12DAA0(level index, target movement class)`. The original does not test the duration here.
+pub fn polymorph_effect_duration(l: &SpellLevel, hero: bool, illusion: bool) -> Option<F32> {
+    if illusion {
+        None
+    } else {
+        Some(effect_duration(l, hero, F32::ZERO))
+    }
+}
+
+/// Curse's autocast filter, slot `0x450` = `0x6F09BF80` (CONFIRMED by Unicorn, V4): the base filter, the candidate has the
+/// attack ability and a resolved attack target, the relation `0x6F285B60(caster owner, target owner)` is nonzero and the
+/// candidate does not carry `Bcrs`.
+pub fn curse_filter_ok(base_ok: bool, has_attack: bool, target_present: bool, rel: bool, has_buff: bool) -> bool {
+    base_ok && has_attack && target_present && rel && !has_buff
+}
+
+/// Faerie Fire's autocast filter, slot `0x450` = `0x6F09C240` (CONFIRMED by Unicorn, V4): the base filter and a life
+/// fraction strictly above 0.1 (`0x6FAAE4A0`); then, when `DataB` differs from 0.0 (NaN counts as different), only a missing
+/// `Bfae` is required; with `DataB == 0` the candidate must have an attack target (`attacks`, `0x6F26D5D0`) whose owner
+/// passes the relation `0x6F285B60`, and again a missing `Bfae`.
+pub fn faerie_filter_ok(base_ok: bool, life_fraction: F32, data_b: F32, attacks_target: bool, rel: bool, has_buff: bool) -> bool {
+    if !base_ok || !(0.1f32 < life_fraction.to_f32()) {
+        return false;
+    }
+    let always = data_b.to_f32() != 0.0;
+    (always || (attacks_target && rel)) && !has_buff
+}
+
+/// The values Unholy Frenzy's effect `0x6F18C070` hands to the buff (CONFIRMED by Unicorn, V4): the hero rule duration
+/// (`HeroDur`, else `Dur + 0x9C` by soft add), `DataA` (attack speed) and `DataB` (damage per second).
+pub fn unholy_frenzy_values(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    (effect_duration(l, hero, extra), l.data[0], l.data[1])
+}
+
+/// What Rejuvenation's effect `0x6F108530` hands to the buff (CONFIRMED by Unicorn, V4): the hero rule duration, `DataA`,
+/// `DataB`, and two flags from `F2I(DataC)`: bit 0 and bit 1 (the buff's `0x100` / `0x200` flags).
+pub fn rejuvenation_effect_args(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32, u32, u32) {
+    let c = conv::f2i(l.data[2]);
+    (effect_duration(l, hero, extra), l.data[0], l.data[1], (c & 1) as u32, (c & 2) as u32)
+}
+
+/// The Rejuvenation buff apply `0x6F0F0650` (CONFIRMED by Unicorn, V4): the buff lasts `T + 0.01` when `T > 0` (else
+/// `T`; a NaN counts as not above zero) and heals `DataA / T` life and `DataB / T` mana per tick (soft divisions). Returns
+/// `(buff duration, life per tick, mana per tick)`.
+pub fn rejuv_buff_values(t: F32, data_a: F32, data_b: F32, div: &dyn Fn(F32, F32) -> F32) -> (F32, F32, F32) {
+    let dur = if 0.0f32 < t.to_f32() { arith::add(t, F32::from_bits(TICK_FIRST_DELAY_BITS)) } else { t };
+    (dur, div(data_a, t), div(data_b, t))
+}
+
+/// What Lightning Shield's effect `0x6F13C690` hands to the buff creator `0x6F13C360` (CONFIRMED by Unicorn, V4): the hero rule
+/// duration, the tick period `recip(C)` and the damage per tick `DataA / C` with `C` = the constant at `0x6FAB0FA4` (2.0:
+/// `DataA` is damage per second, ticks every 0.5 s), and `Area`. Returns `(duration, period, damage per tick)`.
+pub fn shield_values(l: &SpellLevel, hero: bool, extra: F32, div: &dyn Fn(F32, F32) -> F32) -> (F32, F32, F32) {
+    let c = F32::from_bits(0x4000_0000);
+    (effect_duration(l, hero, extra), div(F32::ONE, c), div(l.data[0], c))
+}
+
+/// What the ward point effects (`0x6F0BABB0` Healing Ward, `0x6F0B8510` Sentry Ward) hand the unit creator `0x6F29F990` (CONFIRMED by
+/// Unicorn, V4): the total duration `Dur + ability +0x9C` (soft add), the facing from Misc `BuildingAngle` (`orc::building_angle_radians`:
+/// truncated, `% 360`, snapped to a multiple of 90, times pi / 180) and the creation flags: `2` when the total duration is nonzero (an x87
+/// compare, NaN counts as nonzero), `0x502` (which adds the food bits) when it is zero. The type is the level's `UnitID`.
+pub fn ward_create_values(dur: F32, extra: F32, building_angle: F32) -> (F32, F32, u32) {
+    let total = arith::add(dur, extra);
+    let flags = if total.to_f32() != 0.0 || total.to_f32().is_nan() { 2 } else { 0x502 };
+    (total, crate::orc::building_angle_radians(building_angle), flags)
+}
+
+/// Whether Purge slows the target: not when the target is dead (`+0x5C & 0x100`) or the caster's player is passively
+/// allied with it (`0x6F285AC0`). `0x6F107E10`, CONFIRMED by Unicorn (V4).
+pub fn purge_slows(target_dead: bool, allied: bool) -> bool {
+    !target_dead && !allied
 }
 
 /// One unit of a dispel: builds the worker inputs from the model and carries out the calls of
@@ -2046,7 +2234,7 @@ fn rejuvenation(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     }
     let total = rec.level.data[0];
     let amount = match gm.order_tables() {
-        Some(t) => arith::div(total, dur, t),
+        Some(t) => rejuv_buff_values(dur, total, rec.level.data[1], &|a, b| arith::div(a, b, t)).1,
         None => F32::from_bits((total.to_f32() / dur.to_f32()).to_bits()),
     };
     let preds = crate::abilities::BuffPredicates {
@@ -2055,7 +2243,7 @@ fn rejuvenation(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
         dispellable: true,
         ..buff_predicates(BUFF_REJUVENATION)
     };
-    let buff_dur = arith::add(dur, F32::from_bits(TICK_FIRST_DELAY_BITS));
+    let buff_dur = rejuv_buff_values(dur, total, F32::ZERO, &|a, _| a).0;
     let serial = gm.apply_mods_buff(target, BUFF_REJUVENATION, preds, UnitMods::default(), buff_dur);
     gm.register_tick(target, serial, rec.caster, amount, true, 0, false);
 }
@@ -2433,16 +2621,56 @@ fn curse(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     gm.apply_mods_buff(target, BUFF_CURSE, preds, mods, dur);
 }
 
+/// The two values of Heal's effect slot `0x424` = `0x6F108280` (CONFIRMED by Unicorn, V4, 400 cases,
+/// `tests/v4_spell_vectors.rs`): the amount handed to the life adder (`DataA`, times Misc `EtherealHealBonus` when the
+/// target's ethereal count is above zero, a signed compare) and the `Bhea` marker duration `(Cool + 0.01) + 1.0`.
+pub fn heal_values(data_a: F32, cool: F32, ethereal: i32, bonus: F32) -> (F32, F32) {
+    let amount = if ethereal > 0 { arith::mul(data_a, bonus) } else { data_a };
+    let extra = arith::add(cool, F32::from_bits(MARK_EXTRA_BITS));
+    (amount, arith::add(extra, F32::ONE))
+}
+
+/// Heal's target rule, slot `0x3F0` = `0x6F0F0290` (CONFIRMED by Unicorn, V4): `0xA2` for an illusion unless Misc
+/// `IllusionsCanRestoreLife`; `0x1C` when `max - life` is ordered below 1.0 (NaN passes); `0xAE` when the target
+/// carries a `Bhea` marker whose maker is not the caster (`marker`: `None` = no marker, `Some(None)` = a null maker);
+/// `0` otherwise.
+pub fn heal_target_code<T: PartialEq>(can_restore: bool, illusion: bool, life: F32, max: F32, marker: Option<Option<T>>, caster: T) -> u32 {
+    if !can_restore && illusion {
+        return 0xA2;
+    }
+    if arith::lt(arith::sub(max, life), F32::ONE) {
+        return 0x1C;
+    }
+    match marker {
+        Some(maker) if maker != Some(caster) => 0xAE,
+        _ => 0,
+    }
+}
+
+/// Heal's autocast filter, slot `0x450` = `0x6F0F0370` (CONFIRMED by Unicorn, V4): the base filter, the illusion rule
+/// (Misc `IllusionsGetAutocast`), an ally candidate, a candidate type whose `regenHP` is not ordered below zero, and a
+/// `Bhea` marker made by the caster itself (or none).
+pub fn heal_filter_ok<T: PartialEq>(base_ok: bool, get_autocast: bool, illusion: bool, ally: bool, regen_hp: F32, marker: Option<Option<T>>, caster: T) -> bool {
+    if !base_ok || (!get_autocast && illusion) || !ally {
+        return false;
+    }
+    if arith::lt(regen_hp, F32::ZERO) {
+        return false;
+    }
+    match marker {
+        Some(maker) => maker == Some(caster),
+        None => true,
+    }
+}
+
 /// `0x6F108280`: heal, then the marker buff.
 fn heal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let mut gm = game.borrow_mut();
     if !gm.alive(target) {
         return;
     }
-    let mut amount = rec.level.data[0];
-    if gm.unit(target).ethereal > 0 {
-        amount = arith::mul(amount, gm.spells.unit.ethereal_heal_bonus);
-    }
+    let eth = gm.unit(target).ethereal;
+    let (amount, duration) = heal_values(rec.level.data[0], rec.level.cool, eth as i32, gm.spells.unit.ethereal_heal_bonus);
     let (life, max) = {
         let u = gm.unit(target);
         (u.life, u.max_life)
@@ -2450,9 +2678,7 @@ fn heal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let sum = arith::add(amount, life);
     let next = if arith::lt(max, sum) { max } else { sum };
     set_life(&mut gm, target, next);
-    // The marker: duration 1.0 + (Cool + 0.01), the set-duration rule when the buff already exists.
-    let extra = arith::add(rec.level.cool, F32::from_bits(MARK_EXTRA_BITS));
-    let duration = arith::add(F32::ONE, extra);
+    // The marker: duration (Cool + 0.01) + 1.0, the set-duration rule when the buff already exists.
     gm.heal_mark(target, rec.caster, duration);
 }
 
@@ -2636,12 +2862,10 @@ fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
     }
     match base {
         HEAL => {
-            if let Some(src) = gm.heal_mark_source(k) {
-                if src != Some(unit) {
-                    return false;
-                }
-            }
-            true
+            // `0x6F0F0370`: base filter and illusion rule above, ally by the target rule, the candidate type's regenHP
+            // not below zero, a marker only from this healer.
+            let regen = gm.unit_types().get(gm.unit(k).type_id).map_or(F32::ZERO, |t| t.regen_hp);
+            heal_filter_ok(true, true, false, true, regen, gm.heal_mark_source(k), unit)
         }
         ABOLISH_MAGIC => {
             // `0x6F0E2B90` (CONFIRMED structure). The first class-word rule (the caster's `+0x5C & 4`, the candidate's
@@ -2665,16 +2889,17 @@ fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
             // a current attack target whose owner satisfies the relation `0x6F285B60` against the caster's owner
             // (an alliance row test, which row UNSURE: taken as "not an enemy of the caster's player", i.e. the
             // candidate is attacking one of ours), and must not carry `Bcrs` yet.
-            let Some(target) = gm.attack_view(k).and_then(|v| v.target) else {
-                return false;
-            };
-            if !gm.alive(target) {
-                return false;
-            }
-            if gm.is_enemy(gm.unit(unit).owner, gm.unit(target).owner) {
-                return false;
-            }
-            gm.buff_position(k, BUFF_CURSE).is_none()
+            let target = gm.attack_view(k).and_then(|v| v.target).filter(|t| gm.alive(*t));
+            let rel = target.is_some_and(|t| !gm.is_enemy(gm.unit(unit).owner, gm.unit(t).owner));
+            curse_filter_ok(true, true, target.is_some(), rel, gm.buff_position(k, BUFF_CURSE).is_some())
+        }
+        FAERIE_FIRE => {
+            // `0x6F09C240`: life fraction above 0.1; `DataB != 0` (always autocast) needs only a missing `Bfae`, else the
+            // candidate must be attacking a unit of ours.
+            let target = gm.attack_view(k).and_then(|v| v.target).filter(|t| gm.alive(*t));
+            let rel = target.is_some_and(|t| !gm.is_enemy(gm.unit(unit).owner, gm.unit(t).owner));
+            let data_b = gm.ability_level_record(unit, base).map_or(F32::ZERO, |l| l.data[1]);
+            faerie_filter_ok(true, life_fraction(gm, k), data_b, target.is_some(), rel, gm.buff_position(k, BUFF_FAERIE_FIRE).is_some())
         }
         INNER_FIRE | BLOODLUST => {
             let (buff, threshold) = if base == INNER_FIRE {
