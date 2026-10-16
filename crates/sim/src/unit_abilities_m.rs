@@ -1073,12 +1073,27 @@ pub fn crt_qsort<T>(v: &mut [T], width: usize, cmp: &dyn Fn(&T, &T) -> i32) {
 /// `n` records each get the effect slot `0x42C` with `HeroDur` for a hero, else `Dur + 0x9C`. Without a limit the records
 /// keep the collection order. Returns `(index into the input, duration)` in application order.
 pub fn taunt_plan(l: &crate::cast::SpellLevel, extra: F32, recs: &[(TauntRec, bool)]) -> Vec<(usize, F32)> {
-    let limit = softfloat::conv::f2i(l.data[0]) as u32;
+    group_plan(l, l.data[0], l.data[1], l.data[2], extra, recs)
+}
+
+/// The shared selection of Taunt and Roar (`0x6F17B5A0`, `0x6F1EED60`): `limit_field` is the level real whose integer
+/// part limits the units (Taunt `DataA`, Roar `DataG`), `key2` picks the second-flag comparator when nonzero (Taunt `DataB`, Roar
+/// `DataE`), `key1` the first-flag comparator (Taunt `DataC`, Roar `DataF`). Roar's comparators `0x6F1D3BF0`, `0x6F1DC030`,
+/// `0x6F1DC050` are the same code as Taunt's (CONFIRMED by Unicorn, V4).
+pub fn group_plan(
+    l: &crate::cast::SpellLevel,
+    limit_field: F32,
+    key2: F32,
+    key1: F32,
+    extra: F32,
+    recs: &[(TauntRec, bool)],
+) -> Vec<(usize, F32)> {
+    let limit = softfloat::conv::f2i(limit_field) as u32;
     let mut order: Vec<(usize, TauntRec, bool)> = recs.iter().enumerate().map(|(i, (r, h))| (i, *r, *h)).collect();
     if limit != 0 {
-        let mode = if taunt_nonzero(l.data[1]) {
+        let mode = if taunt_nonzero(key2) {
             2
-        } else if taunt_nonzero(l.data[2]) {
+        } else if taunt_nonzero(key1) {
             1
         } else {
             0

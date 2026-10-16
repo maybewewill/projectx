@@ -267,6 +267,52 @@ fn taunt_selection_and_application_match_the_original() {
 }
 
 #[test]
+fn roar_selection_and_application_match_the_original() {
+    use sim::unit_abilities_m::{group_plan, TauntRec};
+    // n DataG DataE DataF dur herodur extra | 10 x (f1 f2 f3 f4 id hero) | applied | 10 x (index, dur)
+    let rows = hex_rows(include_str!("data/unit_spells/roar_effect.txt"));
+    assert!(rows.len() >= 300);
+    let (mut limited, mut unlimited, mut big) = (0, 0, 0);
+    for r in &rows {
+        let n = r[0] as usize;
+        let l = level_of(&[], r[4], r[5]);
+        let recs: Vec<(TauntRec, bool)> = (0..n)
+            .map(|k| {
+                let o = 7 + 6 * k;
+                (TauntRec { f1: f(r[o]), f2: f(r[o + 1]), f3: r[o + 2] as i32, f4: r[o + 3] as i32, id: r[o + 4] as i32 }, r[o + 5] != 0)
+            })
+            .collect();
+        let plan = group_plan(&l, f(r[1]), f(r[2]), f(r[3]), f(r[6]), &recs);
+        assert_eq!(r[67] as usize, plan.len(), "applied count, row {:08x?}", r);
+        for (i, (idx, dur)) in plan.iter().enumerate() {
+            assert_eq!((r[68 + 2 * i], r[69 + 2 * i]), (*idx as u32, dur.to_bits()), "application {i}, row {:08x?}", r);
+        }
+        if softfloat::conv::f2i(f(r[1])) != 0 && plan.len() < n {
+            limited += 1;
+        } else {
+            unlimited += 1;
+        }
+        big += usize::from(n > 8);
+    }
+    assert!(limited > 40 && unlimited > 40 && big > 40, "{limited} {unlimited} {big}");
+}
+
+#[test]
+fn roar_readiness_matches_the_original() {
+    // base_error DataG found | result
+    let rows = hex_rows(include_str!("data/unit_spells/roar_ready.txt"));
+    assert!(rows.len() >= 300);
+    let (mut denied, mut base) = (0, 0);
+    for r in &rows {
+        let want = if r[0] != 0 { r[0] } else { roar_ready_error(f(r[1]), r[2] != 0) };
+        assert_eq!(r[3], want, "row {:08x?}", r);
+        denied += usize::from(r[3] == 221);
+        base += usize::from(r[0] != 0);
+    }
+    assert!(denied > 20 && base > 20, "{denied} {base}");
+}
+
+#[test]
 fn unholy_frenzy_effect_matches_the_original() {
     // dur herodur DataA DataB extra hero existing | calls e n | existing: dur owner B A / new: target dur owner B A
     let rows = hex_rows(include_str!("data/unit_spells/unholy_apply.txt"));

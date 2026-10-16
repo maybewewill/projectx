@@ -311,3 +311,11 @@ relation tests, life adder) are stubs that read per-case switches or record thei
 * **Unholy Frenzy (`Auhf`) PARTLY verified (no row)**: effect `0x6F18C070` -> `0x6F18BF60` hands `(smart ref or target, &dur,
   owner, &DataB, &DataA)` to the buff (existing: slot `0x37C`; new: slot `0x378` with the target first), duration by the hero
   rule; 400 cases, 0 mismatches. The `CBuffDoT` internals (attack speed sink, damage per tick, tick period) are not run.
+* **Roar (`Aroa`) PARTLY verified (no row)**: effect `0x6F1EED60` has the same shape as Taunt: the group within `Area` is collected into 20-byte
+  records, `n = F2I(DataG)` (nonzero) sorts them with the comparators `0x6F1D3BF0` (= Taunt's base comparator, same code), `0x6F1DC030` (`f3`
+  first, chosen by `DataF != 0`) or `0x6F1DC050` (`f4` first, chosen by `DataE != 0`), limits to `n`, and gives each chosen unit the effect slot
+  `0x3EC` with `HeroDur` / `Dur + 0x9C`. The model now uses `group_plan` (400 cases with the real sort, `v4_spell_vectors.rs`; before, every
+  friend in reach got the buff). Readiness `0x6F1EEBF0`: after the base check, `F2I(DataG) != 0` and an empty collector gives error 221
+  (`roar_ready_error`, 400 cases), no check without a limit. NOT verified: what the buff (`CBuffRoar` shares the Inner Fire buff base) does
+  with `DataA`..`DataD`; since Inner Fire's damage turned out to be an integer weapon bonus, `damage_pct = DataA` in `roar()` is probably wrong
+  in the same way.

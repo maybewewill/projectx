@@ -673,10 +673,37 @@ pub fn targs_ok(gm: &Game, caster: ObjKey, target: ObjKey, w: u32) -> bool {
 }
 
 
+/// Roar's readiness rule, slot `0x3DC` = `0x6F1EEBF0` after the base check (CONFIRMED by Unicorn, V4): `221` when
+/// `F2I(DataG)` is nonzero and the collector found no candidate, else `0`.
+pub fn roar_ready_error(data_g: F32, found: bool) -> u32 {
+    if softfloat::conv::f2i(data_g) == 0 || found {
+        0
+    } else {
+        221
+    }
+}
+
+fn roar_has_candidate(gm: &Game, caster: ObjKey, level: &crate::cast::SpellLevel) -> bool {
+    let (cx, cy, owner) = {
+        let c = gm.unit(caster);
+        (c.x, c.y, c.owner)
+    };
+    crate::natives::group::circle_candidates(gm, cx, cy, level.area).into_iter().any(|k| {
+        let u = gm.unit(k);
+        gm.alive(k)
+            && !u.hidden
+            && (k == caster || u.owner == owner || !gm.is_enemy(owner, u.owner))
+            && !is_unit_type(gm, u, ty::STRUCTURE)
+    })
+}
+
 /// Errors of a cast without a target (the readiness error "no corpse" of Raise Dead).
 pub(crate) fn untargeted_error(gm: &Game, caster: ObjKey, base: u32, level: &crate::cast::SpellLevel) -> Option<CastError> {
     match base {
         RAISE_DEAD if pick_corpse(gm, caster, level.area).is_none() => Some(CastError::BadTarget),
+        // `0x6F1EEBF0` (CONFIRMED by Unicorn, V4): with `F2I(DataG) != 0` the cast needs at least one candidate in reach
+        // (error 221 otherwise); without a limit there is no check.
+        ROAR if roar_ready_error(level.data[6], roar_has_candidate(gm, caster, level)) != 0 => Some(CastError::BadTarget),
         _ => None,
     }
 }
@@ -1095,6 +1122,9 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
         dispellable: true,
         ..buff_predicates(BUFF_ROAR)
     };
+    // The group is collected into records, sorted and limited like Taunt's (`group_plan`, CONFIRMED by Unicorn, V4): the
+    // limit is `F2I(DataG)`, the comparator keys `DataE` / `DataF`; each chosen unit gets the effect slot `0x3EC`.
+    let mut cands: Vec<(ObjKey, crate::unit_abilities_m::TauntRec, bool)> = Vec::new();
     for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
         if !gm.alive(k) || gm.unit(k).hidden {
             continue;
@@ -1104,8 +1134,22 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
         if !ally || is_unit_type(&gm, u, ty::STRUCTURE) {
             continue;
         }
+        let (dx, dy) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
+        let f1 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
         let hero = gm.target_hero(k);
-        let dur = effect_duration(&rec.level, hero, F32::ZERO);
+        let id = gm.handle_of(k) as i32;
+        cands.push((k, crate::unit_abilities_m::TauntRec { f1, f2: F32::ZERO, f3: 1, f4: 0, id }, hero));
+    }
+    let plan = crate::unit_abilities_m::group_plan(
+        &rec.level,
+        d[6],
+        d[4],
+        d[5],
+        F32::ZERO,
+        &cands.iter().map(|(_, r, h)| (*r, *h)).collect::<Vec<_>>(),
+    );
+    for (i, dur) in plan {
+        let k = cands[i].0;
         if !arith::lt(F32::ZERO, dur) {
             continue;
         }

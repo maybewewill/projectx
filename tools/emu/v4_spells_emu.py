@@ -635,7 +635,7 @@ def check_taunt_compare(cases, r, rows):
         rows.append([mode] + list(recs[0]) + list(recs[1]) + [res & 0xFFFFFFFF])
 
 
-def check_taunt_effect(cases, r, rows):
+def _group_effect(cases, r, rows, vt, abil, effect, slot, idx):
     """Taunt effect 0x6F17B5A0 with the group collector replaced by a prepared record array: the real qsort and comparators, the
     count rule and the application loop (ability slot 0x42C recorded). Rows: n DataA DataB DataC dur herodur extra |
     10 x (f1 f2 f3 f4 id hero) | applied count | 10 x (unit index, dur)."""
@@ -661,12 +661,14 @@ def check_taunt_effect(cases, r, rows):
         dc = r.choice([0, 0, 0, f2u(1.0), 0x80000000, rbits(r)])
         dur, hdur = rbits(r), rbits(r)
         extra = rbits(r) if r.random() < 0.3 else 0
-        A.make_ability(VT_TAUNT_ABIL, ABIL_TAUNT, 75)
-        level(A.LVL, dur, hdur, [da, db, dc])
+        A.make_ability(vt, abil, 75)
+        data = [0] * 9
+        data[idx[0]], data[idx[1]], data[idx[2]] = da, db, dc
+        level(A.LVL, dur, hdur, data)
         wr(A.OBJ + 0x9C, extra)
         wr(A.OBJ + 0x30, A.UNIT)
         wr(A.UNIT, VTU)
-        copy_vtable(VT_TAUNT_ABIL, {0x42C: s42c})
+        copy_vtable(vt, {slot: s42c})
         wr(VARS + 0x40, n)
         recs = []
         for k in range(n):
@@ -692,7 +694,7 @@ def check_taunt_effect(cases, r, rows):
             wr(rec + 16, f4)
         S.clear_cap()
         wr(CAP + 0x1F0, 0)
-        S.call(0x6F17B5A0, ecx=A.OBJ)
+        S.call(effect, ecx=A.OBJ)
         k = rd(CAP + 0x1F0)
         out = []
         for i in range(10):
@@ -702,6 +704,42 @@ def check_taunt_effect(cases, r, rows):
                 out += [0xFFFF, 0]
         flat = [x for rec in recs for x in rec] + [0] * (6 * (10 - n))
         rows.append([n, da, db, dc, dur, hdur, extra] + flat + [k] + out)
+
+
+VT_ROAR_ABIL, ABIL_ROAR = 0x6F8A21BC, 0x41726F61
+
+
+def check_taunt_effect(cases, r, rows):
+    _group_effect(cases, r, rows, VT_TAUNT_ABIL, ABIL_TAUNT, 0x6F17B5A0, 0x42C, (0, 1, 2))
+
+
+def check_roar_effect(cases, r, rows):
+    """Roar effect 0x6F1EED60: as Taunt, limit DataG, comparator keys DataE / DataF, per-unit slot 0x3EC. Rows as Taunt with
+    (DataG, DataE, DataF) in place of (DataA, DataB, DataC)."""
+    _group_effect(cases, r, rows, VT_ROAR_ABIL, ABIL_ROAR, 0x6F1EED60, 0x3EC, (6, 4, 5))
+
+
+def check_roar_ready(cases, r, rows):
+    """Roar readiness slot 0x3DC = 0x6F1EEBF0. Rows: base_error DataG found | result."""
+    S.install()
+    unit_vtables()
+    wr(VTU + 0xB8, new_code(b"\x8B\x44\x24\x04\xC2\x04\x00"))
+    A.patch_jump(0x6F4743A0, A.stub_ret(0, 0))
+    ret_var(0x6F050880, 8, 0)
+    A.patch_jump(0x6F6EB558, A.stub_ret(0x10, 0))
+    A.patch_jump(0x6F2A3270, new_code(b"\x8B\x44\x24\x08\x8B\x0D" + a32(VARS + 4) + b"\x89\x48\x28\xC3"))
+    for _ in range(cases):
+        base = r.choice([0, 0, 0, 0x33])
+        dg = f2u(float(r.choice([0, 1, 3, -1]))) if r.random() < 0.85 else rbits(r)
+        found = r.random() < 0.5
+        A.make_ability(VT_ROAR_ABIL, ABIL_ROAR, 75)
+        level(A.LVL, 0, 0, [0, 0, 0, 0, 0, 0, dg])
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT, VTU)
+        wr(VARS + 0, base)
+        wr(VARS + 4, int(found))
+        res = S.call(0x6F1EEBF0, ecx=A.OBJ, stack_args=(0, 0))
+        rows.append([base, dg, int(found), res & 0xFFFFFFFF])
 
 
 def _trace_install():
@@ -726,6 +764,8 @@ CHECKS = {
     "faerie_filter": check_filter_pair(VT_FAERIE_ABIL, ABIL_FAERIE, 0x6F09C240, "faerie"),
     "taunt_compare": check_taunt_compare,
     "taunt_effect": check_taunt_effect,
+    "roar_effect": check_roar_effect,
+    "roar_ready": check_roar_ready,
     "unholy_apply": check_unholy_apply,
     "rejuv_effect": check_rejuv_effect,
     "rejuv_buff": check_rejuv_buff,
