@@ -260,6 +260,8 @@ pub struct SpellSystem {
     pub item: crate::item_abilities::State,
     /// Creep / neutral alias abilities (`neutral_spells.rs`).
     pub neutral: crate::neutral_spells::State,
+    /// Unit abilities batch A (`unit_abilities_a.rs`).
+    pub unit_a: crate::unit_abilities_a::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -348,6 +350,7 @@ impl SpellSystem {
         crate::orc::register_orders(&mut s.order_ids);
         crate::unit_spells::register_orders(&mut s.order_ids);
         crate::neutral_spells::register_orders(&mut s.order_ids);
+        crate::unit_abilities_a::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
             s.order_ids.insert(id, base);
         }
@@ -737,7 +740,7 @@ pub fn begin_cast(
                 if !gm.alive(t) {
                     return Err(CastError::BadTarget);
                 }
-                if let Some(e) = crate::unit_spells::target_error(&gm, caster, class, t) {
+                if let Some(e) = crate::unit_spells::target_error(&gm, caster, class, t).or_else(|| crate::unit_abilities_a::target_error(&gm, caster, class, t)) {
                     return Err(e);
                 }
                 if arith::lt(F32::ZERO, level.rng) {
@@ -768,6 +771,7 @@ pub fn begin_cast(
                     && !crate::undead_ne::is_immediate(class)
                     && !crate::item_abilities::takes_no_target(&gm, base)
                     && !crate::neutral_spells::takes_no_target(class)
+                    && !crate::unit_abilities_a::takes_no_target(class)
                 {
                     return Err(CastError::BadTarget);
                 }
@@ -1034,6 +1038,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastR
     if crate::unit_spells::run_effect(game, rt, rec) {
         return;
     }
+    if crate::unit_abilities_a::run_effect(game, rt, rec) {
+        return;
+    }
     if crate::neutral_spells::run_effect(game, rt, rec) {
         return;
     }
@@ -1215,6 +1222,7 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
         SpellMsg::HeroSpell { kind, unit, aux } if kind >= 0x80 => crate::orc::on_timer(game, rt, kind, unit, aux),
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
         SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
+        SpellMsg::UnitSpell { kind, unit, base, aux } if kind >= 0x40 => crate::unit_abilities_a::on_timer(game, rt, kind, unit, base, aux),
         SpellMsg::UnitSpell { kind, unit, base, aux } => crate::unit_spells::on_timer(game, rt, kind, unit, base, aux),
         SpellMsg::Item { kind, unit, aux } => crate::item_abilities::on_timer(game, rt, kind, unit, aux),
     }

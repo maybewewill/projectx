@@ -557,6 +557,9 @@ impl Game {
 
 /// The immediate orders of this module: the autocast toggles. `None` when `id` is not one of them.
 pub(crate) fn immediate_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Option<bool> {
+    if let Some(r) = crate::unit_abilities_a::immediate_order(game, unit, id) {
+        return Some(r);
+    }
     if let Some(r) = crate::neutral_spells::toggle_order(game, unit, id) {
         return Some(r);
     }
