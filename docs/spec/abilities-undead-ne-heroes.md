@@ -291,3 +291,14 @@ removed when the victim's dead flag (`+0x5C & 0x100`) is set. The buff's init sl
 Area (`0x6F2AE9E0`) and creates the effect object `XUdd` (`CEffectDeathAndDecay` < `CEffectTranquility` < `CEffectRangeListener`: the buff follows range-listener events).
 Model: local channel (Dur 35 s from the cast, `dnd_stop` for the lifecycle owner), a 0.1 s poll stands in for the range listener, enemies only (UNSURE), first pulse after the
 stream-22 draw, then every 1.0 s. DataB (stock 1) is not used by the pulse; role unknown.
+
+## V2: verification wave (Unicorn against the original, 0 mismatches required)
+
+Harnesses `tools/emu/v2_*_emu.py` (`GAME_DLL=... py tools/emu/v2_NAME_emu.py --dump crates/sim/tests/data/v2 400 SEED`), vectors
+`crates/sim/tests/data/v2/*.txt`, tests `crates/sim/tests/v2_vectors.rs`.
+
+* Thorns Aura / Spiked Carapace reflect (`AEah`, `AUts`; `CBuffAuraThorns` handler `0x6F1AD4E0`): CONFIRMED, 400 cases (`v2_thorns_emu.py`):
+  percent mode (buff flag `0x100`) `strength * (amount - reduced)`, flat mode the bare `strength`, both floored at 1.0; the gates (record
+  ignore flag, class `0x10`, allied, invulnerable, blocked) and "an illusion owner delivers nothing but plays the effect" match. The model
+  had the right percent arithmetic; the flat mode was added. Open: what sets the percent flag (stock `DataB = 1`).
+* Fan of Knives (`AEfk`), Mana Burn (`AEmb`) and Spirit Link (`Aspl`): see `abilities-hero-extra.md` and `abilities-unit-m.md` (three bugs fixed).

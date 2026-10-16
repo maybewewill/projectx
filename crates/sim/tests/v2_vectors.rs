@@ -85,6 +85,37 @@ fn spirit_link_split_matches_the_original() {
 }
 
 #[test]
+fn thorns_reflect_matches_the_original() {
+    use sim::undead_ne::thorns_reflect;
+    let text = include_str!("data/v2/thorns.txt");
+    let (mut rows, mut delivered, mut flat, mut floored) = (0, 0, 0, 0);
+    for line in text.lines() {
+        let (head, tail) = line.split_once('|').expect("separator");
+        let h: Vec<&str> = head.split_whitespace().collect();
+        let (strength, amount, reduced) = (f(h[0]), f(h[1]), f(h[2]));
+        let percent = h[3] == "1";
+        let (rflags, rclass) = (hex(h[4]), hex(h[5]));
+        let (allied, invuln, blocked, illusion) = (h[6] == "1", h[7] == "1", h[8] == "1", h[9] == "1");
+        let w: Vec<&str> = tail.split_whitespace().collect();
+        let gates = rflags & 1 == 0 && rclass == 0x10 && !allied && !invuln && !blocked;
+        let (got_amt, effect) = if w[0] == "-" { (None, w[1]) } else { (Some(hex(w[0])), w[2]) };
+        assert_eq!(effect, if gates { "1" } else { "0" }, "effect, row {line}");
+        if gates && !illusion {
+            let want = thorns_reflect(strength, amount, reduced, percent);
+            assert_eq!(got_amt, Some(want.to_bits()), "amount, row {line}");
+            assert_eq!(hex(w[1]), 0x100000, "class, row {line}");
+            delivered += 1;
+            flat += (!percent) as u32;
+            floored += (want.to_f32() == 1.0) as u32;
+        } else {
+            assert_eq!(got_amt, None, "no record, row {line}");
+        }
+        rows += 1;
+    }
+    assert!(rows >= 400 && delivered > 100 && flat > 20 && floored > 20, "{rows} {delivered} {flat} {floored}");
+}
+
+#[test]
 fn mana_burn_impact_matches_the_original() {
     use sim::hero_extra::mana_burn_result;
     let text = include_str!("data/v2/manaburn.txt");
