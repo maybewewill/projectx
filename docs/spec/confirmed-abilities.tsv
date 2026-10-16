@@ -102,3 +102,4 @@ AIcb	tools/emu/item_cores3_emu.py CR	350	V6 from spec s17: Orb of Corruption dur
 AIms	tools/emu/item_cores3_emu.py MS	350	V6 from spec s17: move speed bonus is the maximum over abilities 0x6F077590 (boots do not stack)
 AIsb	tools/emu/item_cores3_emu.py SB	350	V6 from spec s17: spell effect bonus proc 0x6F0F3DD0 (PRD on stream 36, kind chances)
 AIil	tools/emu/item_cores3_emu.py IL	350	V6 from spec s17: Wand of Illusion apply arguments 0x6F13DFD0 (spawn spot 0x6F1D26B0 not run)
+AItp	tools/emu/v6_emu.py TN	350	V6: Town Portal destination callback 0x6F0264B0 (nearest candidate, strict <, first-flag stop, refusal slot 0x3EC); the refusal predicate, the teleported group and the cluster direction not run
