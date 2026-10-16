@@ -1153,10 +1153,25 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
         if !arith::lt(F32::ZERO, dur) {
             continue;
         }
+        // The per-unit slot `0x3EC` shares the Inner Fire buff apply (CONFIRMED, Unicorn V8): the damage is an integer weapon
+        // bonus from `DataA`, the armor sink gets `DataB`, the regeneration modifiers `DataC` / `DataD`.
+        let type_id = gm.unit(k).type_id;
+        let ty = gm.attack_type(type_id);
+        let targs = gm.weapon_extra(type_id, 0).map_or(0, |e| e.targs);
+        let (fraction, armor, life, mana) = roar_unit_values(&rec.level);
+        let damage = inner_fire_weapon_bonus(
+            fraction,
+            i32::try_from(ty.dice).unwrap_or(i32::MAX),
+            i32::try_from(ty.sides).unwrap_or(i32::MAX),
+            ty.dice_bonus,
+            targs,
+        )
+        .unwrap_or(0);
         let mods = UnitMods {
-            damage_pct: d[0],
-            armor: d[1],
-            life_regen: d[2],
+            damage_int: damage,
+            armor,
+            life_regen: inner_fire_regen(life),
+            mana_regen: inner_fire_regen(mana),
             ..UnitMods::default()
         };
         gm.apply_mods_buff(k, BUFF_ROAR, preds, mods, dur);
@@ -2457,6 +2472,13 @@ pub fn inner_fire_weapon_bonus(fraction: F32, count: i32, sides: i32, bonus: i32
         }
     }
     Some(amount)
+}
+
+/// What Roar's per-unit slot `0x3EC` (`0x6F1FB1F0` -> creator `0x6F1FAF90`) hands to the Inner Fire buff apply (CONFIRMED,
+/// **Unicorn V8**, `tools/emu/v8_spells_emu.py` check `roar_unit`): `(damage fraction, armor, life regen, mana regen)` =
+/// `(DataA, DataB, DataC, DataD)`; the duration argument reaches the buff unchanged.
+pub fn roar_unit_values(l: &SpellLevel) -> (F32, F32, F32, F32) {
+    (l.data[0], l.data[1], l.data[2], l.data[3])
 }
 
 /// The regeneration value Inner Fire passes on (`0x6F123920` / `0x6F123A00`, CONFIRMED by Unicorn): `value` when the
