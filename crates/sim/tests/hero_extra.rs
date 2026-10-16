@@ -216,9 +216,11 @@ fn mana_burn_takes_mana_and_deals_that_much_damage() {
     run(&mut h, 1);
     assert!(accepted(&h));
     assert_eq!(h.game().unit(e1).mana.to_f32(), 0.0, "burned min(30, 50)");
-    assert_eq!(life(&h, e1), 470.0, "damage = burned * DataC");
-    let (b, d) = mana_burn_amounts(f(200.0), f(50.0), f(1.0));
-    assert_eq!((b.to_f32(), d.to_f32()), (50.0, 50.0));
+    assert_eq!(life(&h, e1), 470.0, "damage = burned");
+    let (rest, d) = mana_burn_result(f(200.0), f(50.0), false);
+    assert_eq!((rest.to_f32(), d.to_f32()), (150.0, 50.0));
+    let (rest, d) = mana_burn_result(f(200.0), f(50.0), true);
+    assert_eq!((rest.to_f32(), d.to_f32()), (200.0, 0.0));
 }
 
 #[test]

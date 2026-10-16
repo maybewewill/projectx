@@ -31,3 +31,29 @@ fn fan_of_knives_plan_matches_the_launcher() {
     }
     assert!(rows >= 400 && pooled > 100 && limited > 100 && short > 100, "{rows} {pooled} {limited} {short}");
 }
+
+#[test]
+fn mana_burn_impact_matches_the_original() {
+    use sim::hero_extra::mana_burn_result;
+    let text = include_str!("data/v2/manaburn.txt");
+    let (mut rows, mut blocked_rows, mut clipped) = (0, 0, 0);
+    for line in text.lines() {
+        let (head, tail) = line.split_once('|').expect("separator");
+        let h: Vec<&str> = head.split_whitespace().collect();
+        let (mana, amount) = (f(h[0]), f(h[1]));
+        let (invuln, has_ability, immune) = (h[2] == "1", h[3] == "1", h[4] == "1");
+        let w: Vec<&str> = tail.split_whitespace().collect();
+        assert_eq!(w.len(), 4, "row {line}");
+        assert_eq!(w[2], "4000", "record class, row {line}");
+        let blocked = invuln || !has_ability || immune;
+        let (rest, dmg) = mana_burn_result(mana, amount, blocked);
+        assert_eq!(rest.to_bits(), hex(w[0]), "mana after, row {line}");
+        assert_eq!(dmg.to_bits(), hex(w[1]), "damage, row {line}");
+        // record flag 0x10 exactly when the amount is zero
+        assert_eq!(hex(w[3]), if dmg.to_f32() == 0.0 { 0x10 } else { 0 }, "flags, row {line}");
+        rows += 1;
+        blocked_rows += blocked as u32;
+        clipped += (mana.to_f32() < amount.to_f32() && !blocked) as u32;
+    }
+    assert!(rows >= 400 && blocked_rows > 80 && clipped > 50, "{rows} {blocked_rows} {clipped}");
+}
