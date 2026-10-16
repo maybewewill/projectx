@@ -78,6 +78,7 @@ pub mod unit_position;
 mod unit_stats;
 pub mod unitz;
 pub mod vision;
+pub mod wander;
 
 mod pe;
 
