@@ -38,6 +38,28 @@ pub const CYCLONE: u32 = code(b"Acyc");
 pub const SILENCE: u32 = code(b"ANsi");
 pub const CHARM: u32 = code(b"ANch");
 pub const HOWL: u32 = code(b"ANht");
+/// S44 neutral heroes: Beastmaster summons (`CAbilitySummon* < CAbilityWaterElemental`), Brewmaster Drunken Haze
+/// (`CAbilityDrunkenHaze < CAbilitySilence`) and Drunken Brawler (`CAbilityDrunkenBrawler < CAbilityCriticalStrike`).
+pub const SUMMON_GRIZZLY: u32 = code(b"ANsg");
+pub const SUMMON_QUILBEAST: u32 = code(b"ANsq");
+pub const SUMMON_EAGLE: u32 = code(b"ANsw");
+pub const BUFF_GRIZZLY: u32 = code(b"BNsg");
+pub const BUFF_QUILBEAST: u32 = code(b"BNsq");
+pub const BUFF_EAGLE: u32 = code(b"BNsw");
+pub const HAZE: u32 = code(b"ANdh");
+pub const BUFF_HAZE: u32 = code(b"BNdh");
+pub const BRAWLER: u32 = code(b"ANdb");
+/// Firelord Summon Lava Spawn (`CAbilityLavaMonster < CAbilityWaterElemental`), Soul Burn (`CAbilitySoulBurn <
+/// CAbilitySimpleSpell`), Alchemist Acid Bomb (`CAbilityAcidBomb < CAbilitySimpleSpell`), Sea Witch Forked Lightning.
+pub const LAVA_SPAWN: u32 = code(b"ANlm");
+pub const BUFF_LAVA_SPAWN: u32 = code(b"BNlm");
+pub const SOUL_BURN: u32 = code(b"ANso");
+pub const BUFF_SOUL_BURN: u32 = code(b"BNso");
+pub const ACID_BOMB: u32 = code(b"ANab");
+pub const BUFF_ACID_BOMB: u32 = code(b"BNab");
+pub const FORKED_LIGHTNING: u32 = code(b"ANfl");
+/// The damage type of the over-time and lightning damage of the neutral hero spells (the orc spell type).
+const NEUTRAL_SPELL_DAMAGE_TYPE: u32 = 15;
 pub const BUFF_MANA_SHIELD: u32 = code(b"BNms");
 pub const BUFF_CYCLONE: u32 = code(b"Bcyc");
 /// The second Cyclone buff (`CBuffCycloneTwo < CBuffCyclone`, the invulnerability half in this model).
@@ -100,7 +122,7 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"Arej", *b"Aroa", *b"Aslo", *b"Aspo", *b"Asta", *b"AUau", *b"AUav", *b"AUcs", *b"AUdc", *b"AUdd", *b"AUdp",
     *b"AUdr", *b"AUfa", *b"AUfn", *b"AUfu", *b"Auhf", *b"AUim", *b"AUin", *b"AUsl", *b"AUts", *b"Aweb", *b"Ablo",
     *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
-    *b"ANch", *b"ANht", *b"AHbz",
+    *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm", *b"ANsg", *b"ANsq", *b"ANsw", *b"ANdh", *b"ANdb", *b"ANlm", *b"ANso", *b"ANab", *b"ANfl",
 ];
 
 fn is_modelled(c: u32) -> bool {
@@ -152,6 +174,14 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
         (852_144, CYCLONE),
         (852_592, SILENCE),
         (852_588, HOWL),
+        (852_585, HAZE),
+        (852_594, SUMMON_GRIZZLY),
+        (852_595, SUMMON_QUILBEAST),
+        (852_596, SUMMON_EAGLE),
+        (852_667, LAVA_SPAWN),
+        (852_668, SOUL_BURN),
+        (852_662, ACID_BOMB),
+        (852_587, FORKED_LIGHTNING),
     ] {
         ids.insert(id, base);
     }
@@ -159,7 +189,11 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// Abilities of this module cast without a target (Mana Shield, Howl of Terror).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    base == MANA_SHIELD || base == HOWL
+    base == MANA_SHIELD || base == HOWL || is_summon(base)
+}
+
+fn is_summon(base: u32) -> bool {
+    base == SUMMON_GRIZZLY || base == SUMMON_QUILBEAST || base == SUMMON_EAGLE || base == LAVA_SPAWN
 }
 
 /// The autocast toggle orders of Neutral Heal (`healon` / `healoff` of the neutral class). `None` for any other id.
@@ -356,6 +390,10 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let w = targs_word("ground,enemy,neutral,organic");
             (gm.unit(target).removed || !targs_ok(gm, caster, target, w)).then_some(BadTarget)
         }
+        HAZE | SOUL_BURN | ACID_BOMB | FORKED_LIGHTNING => {
+            let w = targs_word("air,ground,enemy,organic,neutral");
+            (gm.unit(target).removed || !targs_ok(gm, caster, target, w)).then_some(BadTarget)
+        }
         CHARM => {
             let w = targs_word("air,ground,nonhero,enemy,neutral,organic");
             if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
@@ -395,6 +433,40 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             if let CastTarget::Unit(t) = rec.target {
                 charm(game, rt, rec, t);
             }
+            true
+        }
+        HAZE => {
+            haze(game, rec);
+            true
+        }
+        SOUL_BURN => {
+            if let CastTarget::Unit(t) = rec.target {
+                soul_burn(game, rec, t);
+            }
+            true
+        }
+        ACID_BOMB => {
+            if let CastTarget::Unit(t) = rec.target {
+                acid_bomb(game, rec, t);
+            }
+            true
+        }
+        FORKED_LIGHTNING => {
+            if let CastTarget::Unit(t) = rec.target {
+                forked_lightning(game, rt, rec, t);
+            }
+            true
+        }
+        SUMMON_GRIZZLY | SUMMON_QUILBEAST | SUMMON_EAGLE | LAVA_SPAWN => {
+            // `CAbilitySummon* < CAbilityWaterElemental` (one override each, the class code): the summon loop
+            // `0x6F163390` creates `f2i(DataA)` units of the level's `UnitID` with a timed life of `Dur`.
+            let buff = match rec.base {
+                SUMMON_GRIZZLY => BUFF_GRIZZLY,
+                SUMMON_QUILBEAST => BUFF_QUILBEAST,
+                LAVA_SPAWN => BUFF_LAVA_SPAWN,
+                _ => BUFF_EAGLE,
+            };
+            crate::human_heroes::summon(game, rec, buff);
             true
         }
         _ => false,
@@ -484,6 +556,156 @@ fn silence(game: &RefCell<Game>, rec: &CastRec) {
     }
 }
 
+/// Drunken Haze (`ANdh`, `CAbilityDrunkenHaze < CAbilitySilence`, buff `BNdh`; order 852585): the Silence area shape
+/// around the target (a unit in the data: `Rng` 550, `Area` 200): every enemy air / ground organic or neutral unit in
+/// the area gets `BNdh` for the hero-rule duration. The buff makes the unit miss with chance `DataB` (the Curse miss
+/// walk, [`UnitMods::miss_chance`]) and slows its movement by `DataC` (`move_delta = -DataC`). The role of the two
+/// numbers (miss `DataB` 0.45..0.8, slow `DataC` 0.15..0.5) is read from the tooltip order, not from a run: LIKELY /
+/// UNSURE. Spell-immune units are skipped.
+fn haze(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    let (cx, cy) = match rec.target {
+        CastTarget::Point(x, y) => (x, y),
+        CastTarget::Unit(t) => (gm.unit(t).x, gm.unit(t).y),
+        CastTarget::None => return,
+    };
+    let word = targs_word("air,ground,enemy,organic,neutral");
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_HAZE)
+    };
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        {
+            let u = gm.unit(k);
+            if u.removed || u.hidden || u.dead || u.magic_immune > 0 {
+                continue;
+            }
+        }
+        if !targs_ok(&gm, rec.caster, k, word) {
+            continue;
+        }
+        let dur = duration_for(&gm, &rec.level, k);
+        if arith::lt(F32::ZERO, dur) {
+            let mods = UnitMods {
+                miss_chance: rec.level.data[1],
+                move_delta: arith::neg(rec.level.data[2]),
+                ..UnitMods::default()
+            };
+            gm.apply_mods_buff(k, BUFF_HAZE, preds, mods, dur);
+        }
+    }
+}
+
+/// Soul Burn (`ANso`, `CAbilitySoulBurn < CAbilitySimpleSpell`, buff `BNso`; order 852668): the target takes `DataA`
+/// damage per second for the hero-rule duration (first tick at 0.01 s, then every second, like the other over-time
+/// buffs) and cannot cast (the silence of [`Game::is_silenced`]). The numbers: `DataA` 7.14 x 14 s = 100 total at
+/// level 1 (CONFIRMED by the data, the role of `DataB` = 1 and `DataC` = 0.5 is not decoded). Structure LIKELY, the
+/// silence UNSURE.
+fn soul_burn(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let dur = duration_for(&gm, &rec.level, target);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_SOUL_BURN)
+    };
+    let serial = gm.apply_mods_buff(target, BUFF_SOUL_BURN, preds, UnitMods::default(), dur);
+    gm.register_tick(target, serial, rec.caster, rec.level.data[0], false, NEUTRAL_SPELL_DAMAGE_TYPE, true);
+}
+
+/// Acid Bomb (`ANab`, `CAbilityAcidBomb < CAbilitySimpleSpell`, buff `BNab`; order 852662): the target loses `DataC`
+/// armor and takes `DataD` damage per second for the hero-rule duration (editor values 3 / 4 / 5 and 5 / 10 / 15 over
+/// 15 s). The assignment of the data fields is from the value shapes (UNSURE); `DataE` (3 / 6.5 / 10) and the
+/// 4 overrides (effect, buff apply, AI hints) are not modelled.
+fn acid_bomb(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+    let mut gm = game.borrow_mut();
+    if !gm.alive(target) {
+        return;
+    }
+    let dur = duration_for(&gm, &rec.level, target);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_ACID_BOMB)
+    };
+    let mods = UnitMods { armor: arith::neg(rec.level.data[2]), ..UnitMods::default() };
+    let serial = gm.apply_mods_buff(target, BUFF_ACID_BOMB, preds, mods, dur);
+    gm.register_tick(target, serial, rec.caster, rec.level.data[3], false, NEUTRAL_SPELL_DAMAGE_TYPE, true);
+}
+
+/// Forked Lightning (`ANfl`, `CAbilityForkedLightning < CAbilitySimpleSpell`; order 852587): the target and the nearest
+/// other enemy units within `Area` of it, `DataB` units in all, take `DataA` damage each (editor: 85 / 160 / 250, 3
+/// targets, `Area` 125, `Dur` 0.7 is the lightning's life). The real spell is a fork along a line (`DataC` 900 long, `DataD`
+/// 300 wide); the area form is a stand-in (UNSURE).
+fn forked_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target: ObjKey) {
+    let killed: Vec<ObjKey> = {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(target) {
+            return;
+        }
+        let (cx, cy) = (gm.unit(target).x, gm.unit(target).y);
+        let word = targs_word("air,ground,enemy,organic,neutral");
+        let mut picks: Vec<(F32, ObjKey)> = Vec::new();
+        for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+            if k == target {
+                continue;
+            }
+            {
+                let u = gm.unit(k);
+                if u.removed || u.hidden || u.dead || u.magic_immune > 0 {
+                    continue;
+                }
+            }
+            if !targs_ok(&gm, rec.caster, k, word) {
+                continue;
+            }
+            let u = gm.unit(k);
+            let (dx, dy) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
+            picks.push((arith::add(arith::mul(dx, dx), arith::mul(dy, dy)), k));
+        }
+        // Nearest first (strict `<`, equal distances keep the walk order).
+        picks.sort_by(|a, b| {
+            if arith::lt(a.0, b.0) {
+                std::cmp::Ordering::Less
+            } else if arith::lt(b.0, a.0) {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+        let total = softfloat::conv::f2i(rec.level.data[1]).max(1) as usize;
+        let mut victims = vec![target];
+        victims.extend(picks.into_iter().map(|p| p.1).take(total - 1));
+        let mut killed = Vec::new();
+        for k in victims {
+            let immune = gm.unit(k).magic_immune > 0;
+            if immune {
+                continue;
+            }
+            if let Some(t) = gm.unit_damage_target(rec.caster, k, rec.level.data[0], false, false, 0, NEUTRAL_SPELL_DAMAGE_TYPE) {
+                killed.push(t);
+            }
+        }
+        killed
+    };
+    for t in killed {
+        dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+    }
+}
+
 /// Howl of Terror (`ANht`, `CAbilityHowlOfTerror < CAbilityRoar`, buff `BNht`): the mirror of Roar: every enemy ground
 /// or air unit within `Area` of the caster loses `DataA` (a fraction) of its damage for the hero-rule duration. The
 /// sign and the relation come from the level's `targs` (`air,ground,enemy,neutral`); the buff base is the Roar one
@@ -549,7 +771,7 @@ fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
 impl Game {
     /// Whether `unit` carries the Silence buff (it cannot start a spell).
     pub fn is_silenced(&self, unit: ObjKey) -> bool {
-        self.unit(unit).buffs.iter().any(|b| b.base == BUFF_SILENCE)
+        self.unit(unit).buffs.iter().any(|b| b.base == BUFF_SILENCE || b.base == BUFF_SOUL_BURN)
     }
 
     /// Mana Shield (`CBuffManaShield` damage slot `0x6F126DD0`, structure CONFIRMED, numbers LIKELY): of an incoming

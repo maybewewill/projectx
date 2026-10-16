@@ -1012,6 +1012,7 @@ impl Game {
                     && !u.hidden
                     && self.is_enemy(owner, u.owner)
                     && !self.unit_is_invulnerable(c)
+                    && self.invisibility_gate(c, owner)
                     && self.choose_weapon(unit, c).is_some()
             })
     }
@@ -1033,11 +1034,13 @@ impl Game {
             .unit(target)
             .abilities
             .iter()
-            .filter(|a| a.base == crate::abilities::EVASION && !a.is_removed())
+            .filter(|a| (a.base == crate::abilities::EVASION || a.base == crate::neutral_spells::BRAWLER) && !a.is_removed())
             // The chance is the level record's DataA (`+0x20`, `0x6F02E9E0`); a level outside the table gives 0.0.
+            // Drunken Brawler (S44, UNSURE) carries its evasion in DataD.
             .map(|a| {
+                let idx = usize::from(a.base == crate::neutral_spells::BRAWLER) * 3;
                 self.ability_level_record(target, a.base)
-                    .map_or(F32::ZERO, |record| record.data[0])
+                    .map_or(F32::ZERO, |record| record.data[idx])
             })
             .collect();
         let Some(chance) = crate::damage::evasion_select(scores) else {

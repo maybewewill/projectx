@@ -348,6 +348,7 @@ impl SpellSystem {
         crate::orc::register_orders(&mut s.order_ids);
         crate::unit_spells::register_orders(&mut s.order_ids);
         crate::neutral_spells::register_orders(&mut s.order_ids);
+        crate::invisibility::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
             s.order_ids.insert(id, base);
         }
@@ -1035,6 +1036,9 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastR
         return;
     }
     if crate::neutral_spells::run_effect(game, rt, rec) {
+        return;
+    }
+    if crate::invisibility::run_effect(game, rt, rec) {
         return;
     }
     if crate::item_abilities::run_effect(game, item_rec) {
