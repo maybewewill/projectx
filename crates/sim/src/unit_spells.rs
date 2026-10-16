@@ -52,7 +52,7 @@ use std::collections::BTreeMap;
 use softfloat::{arith, conv, F32};
 
 use crate::abilities::{buff_predicates, code, Buff};
-use crate::cast::{begin_cast, effect_duration, CastError, CastRec, CastTarget, SpellMsg};
+use crate::cast::{begin_cast, effect_duration, CastError, CastRec, CastTarget, SpellLevel, SpellMsg};
 use crate::natives::game::{Game, ObjKey, Payload};
 use crate::natives::unit_attr::is_unit_type;
 use crate::natives::{set_life, ScriptRuntime};
@@ -2151,13 +2151,89 @@ fn run_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, seri
     }
 }
 
-/// Inner Fire (`0x6F13BFA0`) and Bloodlust (`0x6F1CB080`), CONFIRMED structure: the duration is `HeroDur` for a hero
-/// target, `Dur` plus the unknown extra otherwise; the buff is found by its code (refresh) or created, and gets the
-/// level's data. Inner Fire: `DataA` damage fraction, `DataB` armor, `DataD` life regeneration, `DataE` mana
-/// regeneration (`DataC` is the autocast range, read by the scan); Bloodlust: `DataA` attack speed, `DataB` movement
-/// speed (`DataC` is the model scale, presentation). The meaning of each field is LIKELY (the editor labels), the
-/// sinks are CONFIRMED (Inner Fire: armor sink `0x6F2769C0` and the attack record modifiers; Bloodlust: the attack
-/// speed and movement sinks).
+/// What Bloodlust's effect slot `0x6F1CB080` hands to its buff (CONFIRMED, **Unicorn 400/400**,
+/// `tools/emu/spell_buff_emu.py`: the real effect, the real buff creator `0x6F1CAF70`, the real `CBuffBloodlust` apply slot
+/// `0x35C` and the real sink routines `0x6F0D59A0` / `0x6F0D59F0` on a fake buff): the duration is `HeroDur` for a hero and
+/// `Dur` plus the ability's extra term (`+0x9C`, soft add) otherwise; the **movement** sink `0x6F202FF0` receives `DataB`
+/// and the **attack speed** sink `0x6F0C9090` receives `DataA` (both unchanged). Returns `(duration, movement, attack)`.
+pub fn bloodlust_values(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    (effect_duration(l, hero, extra), l.data[1], l.data[0])
+}
+
+/// What Inner Fire's effect slot `0x6F13BFA0` hands to its buff (CONFIRMED, **Unicorn 400/400**, same harness):
+/// the duration as for Bloodlust, `DataA` the damage fraction (see [`inner_fire_weapon_bonus`]), `DataB` the armor sink
+/// `0x6F2769C0`, `DataD` the life regeneration and `DataE` the mana regeneration modifiers (created only when the value
+/// differs from zero by the `0.001` property test, [`crate::cast::prop_differs`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InnerFireValues {
+    pub dur: F32,
+    pub damage_fraction: F32,
+    pub armor: F32,
+    pub life_regen: F32,
+    pub mana_regen: F32,
+}
+
+pub fn inner_fire_values(l: &SpellLevel, hero: bool, extra: F32) -> InnerFireValues {
+    InnerFireValues {
+        dur: effect_duration(l, hero, extra),
+        damage_fraction: l.data[0],
+        armor: l.data[1],
+        life_regen: l.data[3],
+        mana_regen: l.data[4],
+    }
+}
+
+/// The `targs` words of a weapon slot that Inner Fire's attack helper `0x6F1236F0` skips (CONFIRMED by Unicorn): `1`, `0x40`,
+/// `0x80`, `0x100`.
+pub const INNER_FIRE_SKIPPED_TARGS: [u32; 4] = [1, 0x40, 0x80, 0x100];
+
+/// The damage Inner Fire adds to one weapon slot (`0x6F1236F0`, CONFIRMED, **Unicorn 400/400**, both slots): `None` when the
+/// slot's `targs` word is in [`INNER_FIRE_SKIPPED_TARGS`]; otherwise `F2I(add(mul(DataA, X), 0.5))` (when that is 0 the
+/// sign of `DataA` instead: +1, -1 or 0) with `X` the weapon's AVERAGE damage ([`crate::orc::command_base_damage`], the same `0x6F26D5F0` the Command Aura scales), clamped from below
+/// by `-(bonus + count)` (the smallest possible roll, `0x6F0C6C70`). The amount is added to the attack ability's damage
+/// counter (`0x6F0C6C10`) as an INTEGER and stored in the buff for the exact undo; it is not a percentage of the rolled damage.
+pub fn inner_fire_weapon_bonus(fraction: F32, count: i32, sides: i32, bonus: i32, targs: u32) -> Option<i32> {
+    if INNER_FIRE_SKIPPED_TARGS.contains(&targs) {
+        return None;
+    }
+    let x = crate::orc::command_base_damage(count, sides, bonus);
+    let half = F32::from_bits(0x3F00_0000);
+    let mut amount = conv::f2i(arith::add(arith::mul(fraction, x), half));
+    if amount == 0 {
+        // A zero result takes the sign of the fraction instead (x87 compares of `0x6F1237F5`): at least one point of
+        // damage for a positive fraction, -1 for a negative or NaN one, 0 for exactly zero.
+        let v = fraction.to_f32();
+        amount = if v == 0.0 {
+            0
+        } else if v > 0.0 {
+            1
+        } else {
+            -1
+        };
+    }
+    if amount < 0 {
+        let floor = bonus.wrapping_add(count).wrapping_neg();
+        if amount < floor {
+            amount = floor;
+        }
+    }
+    Some(amount)
+}
+
+/// The regeneration value Inner Fire passes on (`0x6F123920` / `0x6F123A00`, CONFIRMED by Unicorn): `value` when the
+/// `0.001` property test says it differs from zero, otherwise nothing is created.
+pub fn inner_fire_regen(value: F32) -> F32 {
+    if crate::cast::prop_differs(value, F32::ZERO) {
+        value
+    } else {
+        F32::ZERO
+    }
+}
+
+/// Inner Fire (`0x6F13BFA0`) and Bloodlust (`0x6F1CB080`): the duration is `HeroDur` for a hero target, `Dur` plus the
+/// unknown extra otherwise; the buff is found by its code (refresh) or created, and gets the level's data. The value
+/// mappings are CONFIRMED by Unicorn ([`bloodlust_values`], [`inner_fire_values`], [`inner_fire_weapon_bonus`]). Not run:
+/// the refresh path (`slot 0x358`) and the damage of the second weapon slot (the sim keeps one damage counter).
 fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let mut gm = game.borrow_mut();
     if !gm.alive(target) {
@@ -2189,22 +2265,37 @@ fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
             },
         )
     } else if rec.base == INNER_FIRE {
+        let v = inner_fire_values(&rec.level, hero, F32::ZERO);
+        // The damage is an integer bonus per weapon slot computed from the target's attack record at the moment of the
+        // application (`inner_fire_weapon_bonus`); the sim keeps one damage counter, so slot 0 stands for the unit.
+        let type_id = gm.unit(target).type_id;
+        let ty = gm.attack_type(type_id);
+        let targs = gm.weapon_extra(type_id, 0).map_or(0, |e| e.targs);
+        let damage = inner_fire_weapon_bonus(
+            v.damage_fraction,
+            i32::try_from(ty.dice).unwrap_or(i32::MAX),
+            i32::try_from(ty.sides).unwrap_or(i32::MAX),
+            ty.dice_bonus,
+            targs,
+        )
+        .unwrap_or(0);
         (
             BUFF_INNER_FIRE,
             UnitMods {
-                damage_pct: d[0],
-                armor: d[1],
-                life_regen: d[3],
-                mana_regen: d[4],
+                damage_int: damage,
+                armor: v.armor,
+                life_regen: inner_fire_regen(v.life_regen),
+                mana_regen: inner_fire_regen(v.mana_regen),
                 ..UnitMods::default()
             },
         )
     } else {
+        let (_, mv, atk) = bloodlust_values(&rec.level, hero, F32::ZERO);
         (
             BUFF_BLOODLUST,
             UnitMods {
-                attack_delta: d[0],
-                move_delta: d[1],
+                attack_delta: atk,
+                move_delta: mv,
                 ..UnitMods::default()
             },
         )

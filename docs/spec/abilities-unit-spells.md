@@ -82,15 +82,29 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   `0x6F1CB080` reads `DataB, DataA`; both pick `HeroDur` for a hero target (`0x6F1D2660`), `Dur + extra` otherwise,
   look for the buff by its code (`0x6F10F480` / the Bloodlust getter): found = the buff's apply slot `0x358` (runs the
   set-duration slot `0x6F0D4EF0` first, never shorten, then rebuilds the effects), not found = a new buff.
-* Buff effects (CONFIRMED sinks by scanning the buff classes' apply slots): `CBuffBloodlust` -> attack speed
-  (`0x6F0C9090`) and movement (`0x6F202FF0`) sinks; `CBuffInnerFire` -> the armor sink (`0x6F2769C0`) and the
-  attack-record modifiers (record `+4/+8` for the weapons, `+0x24`) plus two regeneration modifiers. Field meanings are
-  the editor's (LIKELY): Inner Fire `DataA` damage fraction, `DataB` armor, `DataD` life regeneration, `DataE` mana
-  regeneration, `DataC` the autocast range; Bloodlust `DataA` attack speed, `DataB` movement, `DataC` scale.
-* Model: `UnitMods` (armor, move/attack deltas, a new percentage damage modifier `bonuses.damage_pct` multiplying the
-  attack's raw damage by `1 + pct` in `damage.rs`, regeneration), `Game::apply_mods_buff` (replace on refresh), undone
-  exactly on removal (`BuffEffect::Mods`). UNSURE: the damage modifier is applied to the raw damage after the dice
-  (the original keeps it in the record modifiers, order against Critical Strike not read); the `Dur` extra term is 0.
+* Buff effects, **CONFIRMED by Unicorn, 400 cases each, 0 mismatches** (V1, `tools/emu/spell_buff_emu.py`, vectors
+  `crates/sim/tests/data/unit_spells/{bloodlust,innerfire}.txt`, test `crates/sim/tests/spell_buff_vectors.rs`; the real
+  effect slot, buff creator, buff apply slot and holder-to-sink routines on a fake buff; only the buff allocator, the
+  existing-buff lookup, the holder set-value objects and the final sinks are stubs):
+  * Bloodlust: duration = `HeroDur` for a hero target, else `Dur` plus the ability's `+0x9C` by soft add; the movement sink
+    `0x6F202FF0` gets `DataB` and the attack speed sink `0x6F0C9090` gets `DataA`, both unchanged (`bloodlust_values`).
+    `DataC` goes to the model-scale holder (presentation).
+  * Inner Fire: same duration rule; `DataB` is the armor sink `0x6F2769C0` value (always called); `DataD` / `DataE` are the
+    life / mana regeneration modifiers (`0x6F02DC60` / `0x6F02DD00`), created only when the `0.001` property test
+    (`prop_differs(value, 0)`) says the value differs from zero (`inner_fire_regen`); `DataA` is a damage **fraction**
+    that becomes an INTEGER bonus per weapon slot (`0x6F1236F0`, `inner_fire_weapon_bonus`): skipped when the slot's
+    `targs` is `1`, `0x40`, `0x80` or `0x100`; else `F2I(add(mul(DataA, X), 0.5))` with `X` the weapon's AVERAGE damage
+    (`orc::command_base_damage`, the same getter the Command Aura uses); when that is 0 the result is the sign of `DataA`
+    (+1, -1, or 0 for exactly zero; NaN gives -1), so a positive fraction always adds at least one point; a negative amount
+    is clamped from below by `-(bonus + count)`; the amount is added to the attack ability's damage counter (`0x6F0C6C10`)
+    and kept in the buff for the exact undo.
+* Model: `UnitMods` (armor, move/attack deltas, regeneration, `damage_int`), `Game::apply_mods_buff` (replace on refresh),
+  undone exactly on removal (`BuffEffect::Mods`). **Corrected in V1**: Inner Fire used a percentage multiplier
+  (`damage_pct`) on the rolled damage; it is now the integer `damage_int` computed from the target's attack record at
+  application time (weapon slot 0 only: the sim keeps one damage counter, so the second weapon's amount is not
+  represented). Still UNSURE: the refresh path (buff slot `0x358`, same argument mapping by reading only), a duration
+  of zero or less (the model applies nothing; the original passes the value to the set-duration slot), and the
+  `Dur` extra term (0 in the model).
 * Autocast filters (CONFIRMED, static): Bloodlust `0x6F1AFF10` and Inner Fire `0x6F123DC0` accept a candidate only if
   it has the attack ability and a current attack target that is hostile to its player (`0x6F285AC0` is the passive
   alliance mask test), does not have the buff, and has life fraction above 0.1 (`0x6FAAE4A0`); with the fraction below
