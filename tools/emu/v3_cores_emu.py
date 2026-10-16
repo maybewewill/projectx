@@ -15,6 +15,8 @@ by crates/sim/tests/v3_vectors.rs against the Rust model. Row kinds (hex, `|` se
   RR  amount x | amount'                              damage record reduce 0x6F255790 (first amount)
   MT  fl5c miscL miscM immune A B maxmana | lc L mc M ret   Rune of Mana area callback 0x6F1269E0 (AImr)
   RT  fl5c miscL miscM immune A B maxmana | lc L mc M ret   Restoration area callback 0x6F1E6130 (AIra)
+  RG  fl5c miscL miscM immune hero dur herodur A B | called dur A B ctx4 ctx18 ctx1c ctx20
+                                                        Regeneration area callback 0x6F108800 (AIrg)
   MS  recflags srcnull share per amount mana mana' | events
                                                         Mana Shield damage hook 0x6F126DD0 (events: R remove buff, Dx reduce
                                                         the record by x, Sx spend x mana; mana' = the mana after the spend)
@@ -322,7 +324,52 @@ def case_rt(r):
     return area_cb_case(r, VT_RA, 0x6F1E6130, 'RT')
 
 
-GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da), ('MS', case_ms), ('RR', case_rr), ('MT', case_mt), ('RT', case_rt)]
+# ---------------------------------------------------------------- RG: the Regeneration (AIrg) area callback
+VT_RG = int(_tt.factory_row('AIrg')['vtable'], 16)
+RG_APPLY = 0x6F108620
+
+
+def case_rg(r):
+    T.setup(VT_RG)
+    cand = C.ITEM
+    mu.mem_write(cand, bytes(0x400))
+    w32(cand, T.UVT)
+    fl5c = r.choice([0, 0x40000000, 0x40000000, r.getrandbits(32)])
+    w32(cand + 0x5C, fl5c)
+    ctx = T.D + 0x6000
+    mu.mem_write(ctx, bytes(0x40))
+    dur, herodur = nice(r), nice(r)
+    a = r.choice([0, 0x80000000, 0x7FC00000]) if r.random() < 0.3 else nice(r)
+    b = r.choice([0, 0x80000000, 0x7FC00000]) if r.random() < 0.3 else nice(r)
+    for off, v in ((0, T.ABIL), (4, 0x11111111), (8, dur), (0xC, herodur), (0x10, a), (0x14, b), (0x18, 0x18181818),
+                   (0x1C, 0x1C1C1C1C), (0x20, 0x20202020)):
+        w32(ctx + off, v)
+    immune = r.choice([0, 0, 0, 1])
+    miscl, miscm = r.choice([0, 1]), r.choice([0, 1])
+    hero = r.choice([0, 1])
+    got = []
+    slot3f0 = struct.unpack('<I', bytes(mu.mem_read(VT_RG + 0x3F0, 4)))[0]
+
+    def apply(uc, c, d, st):
+        from unicorn.x86_const import UC_X86_REG_ESP
+        sp = struct.unpack('<8I', bytes(uc.mem_read(uc.reg_read(UC_X86_REG_ESP), 32)))
+        got.append((r32(sp[2]), r32(sp[3]), r32(sp[4]), sp[1], sp[5], sp[6], sp[7]))
+        return 0
+
+    T.trace_call(0x6F108800, cand, (), edx=ctx,
+                 stub_fn={slot3f0: lambda *x: immune, MISC_BOOL: lambda uc, c, d, st: miscl if d == 0x6F876B18 else miscm,
+                          0x6F1D2660: lambda *x: hero, RG_APPLY: apply},
+                 span=0x200, cleanup={RG_APPLY: 0x20})
+    out = 'RG %x %x %x %x %x %x %x %x %x |' % (fl5c, miscl, miscm, immune, hero, dur, herodur, a, b)
+    if got:
+        g = got[0]
+        out += ' 1 %x %x %x %x %x %x %x' % g
+    else:
+        out += ' 0 0 0 0 0 0 0 0'
+    return out
+
+
+GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da), ('MS', case_ms), ('RR', case_rr), ('MT', case_mt), ('RT', case_rt), ('RG', case_rg)]
 
 
 def main():

@@ -1332,6 +1332,24 @@ pub fn restore_area_callback(
     Some((a, b))
 }
 
+/// The Regeneration area callback `0x6F108800` (`AIrg` scrolls): the same candidate rules as [`restore_area_callback`]
+/// (the immunity answer is slot `0x3F0` of the ability; the life amount is `DataA`, the mana amount `DataB`), then the
+/// regeneration apply `0x6F108620` is called with the duration the context carries for the candidate: `HeroDur` for a hero
+/// (`0x6F1D2660`), else `Dur`. Returns that duration, or `None` when the candidate is skipped. Rows `RG`.
+pub fn regen_area_callback(
+    illusion: bool,
+    misc_life: bool,
+    misc_mana: bool,
+    immune: bool,
+    hero: bool,
+    dur: F32,
+    hero_dur: F32,
+    a: F32,
+    b: F32,
+) -> Option<F32> {
+    restore_area_callback(illusion, misc_life, misc_mana, immune, a, b).map(|_| if hero { hero_dur } else { dur })
+}
+
 /// The three attribute values the attribute tome and the attribute bonus read (`0x6F0E5D50`, `0x6F0E57E0`): the
 /// integer parts (`F2I`) of `DataA`, `DataB` and `DataC`, handed to the agility, intelligence and strength adders.
 pub fn attribute_values(d: &[F32; 9]) -> (i32, i32, i32) {
@@ -1693,7 +1711,16 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
             // The scroll forms (`Area` above 0) act on the units around the target or owner (`0x6F1088D0`), the potions on
             // the target or the owner (`0x6F108AC0`).
             let units = if arith::lt(F32::ZERO, level.area) {
-                area_units(gm, caster, target, level)
+                let (misc_life, misc_mana) = (gm.spells.item.illusions_heal, gm.spells.item.illusions_mana);
+                area_friends(gm, caster, target, level)
+                    .into_iter()
+                    .filter(|&k| {
+                        let illusion = gm.unit(k).illusion;
+                        let hero = gm.target_hero(k);
+                        regen_area_callback(illusion, misc_life, misc_mana, false, hero, level.dur, level.hero_dur, d[0], d[1])
+                            .is_some()
+                    })
+                    .collect()
             } else {
                 vec![effect_target(caster, target)]
             };

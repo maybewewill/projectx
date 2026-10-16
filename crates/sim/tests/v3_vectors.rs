@@ -224,6 +224,38 @@ fn restoration_area_callback_matches_the_original() {
 }
 
 #[test]
+fn regeneration_area_callback_matches_the_original() {
+    let rs = rows("RG");
+    assert!(rs.len() >= 300);
+    let (mut gave, mut skipped) = (0, 0);
+    for r in &rs {
+        assert_eq!(r[10], "|");
+        let (dur, herodur, a, b) = (h(r[6]), h(r[7]), h(r[8]), h(r[9]));
+        let got = sim::item_abilities::regen_area_callback(
+            h(r[1]) & 0x4000_0000 != 0,
+            h(r[2]) != 0,
+            h(r[3]) != 0,
+            h(r[4]) != 0,
+            h(r[5]) != 0,
+            F32::from_bits(dur),
+            F32::from_bits(herodur),
+            F32::from_bits(a),
+            F32::from_bits(b),
+        );
+        if r[11] == "1" {
+            assert_eq!(got.map(|v| v.to_bits()), Some(h(r[12])), "row {r:?}");
+            // The apply gets the context's amounts untouched.
+            assert_eq!((h(r[13]), h(r[14])), (a, b), "row {r:?}");
+            gave += 1;
+        } else {
+            assert_eq!(got, None, "row {r:?}");
+            skipped += 1;
+        }
+    }
+    assert!(gave > 30 && skipped > 30, "{gave}/{skipped}");
+}
+
+#[test]
 fn scroll_of_protection_callback_matches_the_original() {
     if !need_tables("AIda") {
         return;
