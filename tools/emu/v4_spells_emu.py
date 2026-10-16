@@ -400,6 +400,102 @@ def check_polymorph_effect(cases, r, rows):
                      rd(CAP + 0x124), rd(CAP + 0x1E4), rd(CAP + 0x140), rd(CAP + 0x144), rd(CAP + 0x148)])
 
 
+TGT2 = M + 0x9000        # the attack target of an autocast candidate (refcount at +4, vtable slot 0xEC)
+VT_CURSE_ABIL, ABIL_CURSE = 0x6F8A9694, 0x41637273
+VT_FAERIE_ABIL, ABIL_FAERIE = 0x6F8AA36C, 0x41666165
+
+
+def check_buff_apply(name, vt, code, effect, existing_slot, new_slot, creator, flavour):
+    """The target effect of Curse / Faerie Fire: hero-rule duration and DataA reach the buff. Rows: dur herodur DataA extra hero
+    existing | path (1 existing, 2 new) | smart arg-is-ability | duration | DataA | owner player | target."""
+    def run(cases, r, rows):
+        S.install()
+        ret_var(0x6F1D2660, 0, 4)
+        A.patch_jump(0x6F0787D0, new_code(b"\xA1" + a32(VARS + 8) + b"\xC2\x14\x00"))
+        A.patch_jump(creator, A.stub_ret(0, BUFF))
+        A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+        unit_vtables()
+        if flavour == "curse":      # (smart, &dur, &DataA, owner) existing / (target, &dur, &DataA, owner) new
+            spec_e = [(1, True), (2, True), (3, False)]
+            spec_n = [(0, False), (1, True), (2, True), (3, False)]
+        else:                       # faerie: (smart, &dur, owner, &DataA) / (target, &dur, owner, &DataA)
+            spec_e = [(1, True), (3, True), (2, False)]
+            spec_n = [(0, False), (1, True), (3, True), (2, False)]
+        s_e = recorder(0x140, spec_e, 0x10, counter=0x1E4)
+        s_n = recorder(0x160, spec_n, 0x10, counter=0x1E8)
+        s324 = A.stub_ret(4, 0)
+        for _ in range(cases):
+            dur, hdur, da = rbits(r), rbits(r), rbits(r)
+            extra = rbits(r) if r.random() < 0.4 else 0
+            hero = r.random() < 0.5
+            existing = r.random() < 0.4
+            A.make_ability(vt, code, 75)
+            level(A.LVL, dur, hdur, [da])
+            wr(A.OBJ + 0x9C, extra)
+            wr(A.OBJ + 0x30, A.UNIT)
+            wr(A.UNIT, VTU)
+            S.make_target(False)
+            mu.mem_write(S.FVT, b"\0" * 0x400)
+            wr(S.FVT + 0x324, s324)
+            wr(S.FVT + existing_slot, s_e)
+            wr(S.FVT + new_slot, s_n)
+            mu.mem_write(BUFF, b"\0" * 0x200)
+            wr(BUFF, S.FVT)
+            S.clear_cap()
+            wr(VARS + 4, int(hero))
+            wr(VARS + 8, BUFF if existing else 0)
+            S.call(effect, ecx=A.OBJ, stack_args=(TGT,))
+            base = 0x140 if existing else 0x160
+            n = 3 if existing else 4
+            rows.append([dur, hdur, da, extra, int(hero), int(existing), rd(CAP + 0x1E4), rd(CAP + 0x1E8)]
+                        + [rd(CAP + base + 4 * i) for i in range(n)] + [0] * (4 - n))
+    return run
+
+
+def check_filter_pair(vt, code, filt, kind):
+    def run(cases, r, rows):
+        """Autocast filters of Curse (0x6F09BF80) and Faerie Fire (0x6F09C240). Rows: base has_attack target_present rel frac DataB
+        attacks has_buff | result."""
+        S.install()
+        ret_var(0x6F030730, 8, 0)
+        A.patch_jump(0x6F4786B0, new_code(b"\xA1" + a32(VARS + 12) + b"\xC3"))
+        A.patch_jump(0x6F285B60, new_code(b"\xA1" + a32(VARS + 16) + b"\xC2\x04\x00"))
+        A.patch_jump(0x6F0787D0, new_code(b"\xA1" + a32(VARS + 20) + b"\xC2\x14\x00"))
+        A.patch_jump(0x6F020640, new_code(b"\x8B\x44\x24\x04\x8B\x15" + a32(VARS + 24) + b"\x89\x10\xC2\x04\x00"))
+        ret_var(0x6F26D5D0, 0, 28)
+        unit_vtables()
+        for _ in range(cases):
+            base = r.random() < 0.8
+            has_attack = r.random() < 0.8
+            tpresent = r.random() < 0.8
+            rel = r.random() < 0.5
+            frac = f2u(r.choice([0.05, 0.1, 0.11, 0.5, 1.0, 0.0])) if r.random() < 0.8 else rbits(r)
+            db = r.choice([0, 0, f2u(1.0), 0x80000000, 0x7FC00000, rbits(r)])
+            attacks = r.random() < 0.7
+            hasbuff = r.random() < 0.4
+            A.make_ability(vt, code, 75)
+            level(A.LVL, 0, 0, [0, db])
+            wr(A.OBJ + 0x30, A.UNIT)
+            wr(A.UNIT, VTU)
+            S.make_target(False)
+            mu.mem_write(S.ATK, b"\0" * 0x400)
+            wr(TGT + 0x1E8, S.ATK if has_attack else 0)
+            wr(S.ATK + 0x6C, 0xFFFFFFFF if not tpresent else 5)
+            wr(S.ATK + 0x70, 0xFFFFFFFF if not tpresent else 5)
+            mu.mem_write(TGT2, b"\0" * 0x100)
+            wr(TGT2 + 4, 100)
+            wr(TGT2, VTT)
+            wr(VARS + 0, int(base))
+            wr(VARS + 12, TGT2)
+            wr(VARS + 16, int(rel))
+            wr(VARS + 20, 0x6666 if hasbuff else 0)
+            wr(VARS + 24, frac)
+            wr(VARS + 28, int(attacks and has_attack))
+            res = S.call(filt, ecx=A.OBJ, stack_args=(TGT, 0))
+            rows.append([int(base), int(has_attack), int(tpresent), int(rel), frac, db, int(attacks), int(hasbuff), res & 0xFF])
+    return run
+
+
 def _trace_install():
     from collections import deque
     from unicorn import UC_HOOK_CODE
@@ -416,6 +512,10 @@ CHECKS = {
     "purge_args": check_purge_args,
     "abolish_args": check_abolish_args,
     "abolish_filter": check_abolish_filter,
+    "curse_apply": check_buff_apply("curse", VT_CURSE_ABIL, ABIL_CURSE, 0x6F0B8450, 0x358, 0x354, 0x6F0B52E0, "curse"),
+    "faerie_apply": check_buff_apply("faerie", VT_FAERIE_ABIL, ABIL_FAERIE, 0x6F0B8750, 0x360, 0x35C, 0x6F0B5480, "faerie"),
+    "curse_filter": check_filter_pair(VT_CURSE_ABIL, ABIL_CURSE, 0x6F09BF80, "curse"),
+    "faerie_filter": check_filter_pair(VT_FAERIE_ABIL, ABIL_FAERIE, 0x6F09C240, "faerie"),
     "polymorph_target": check_polymorph_target,
     "polymorph_effect": check_polymorph_effect,
 }

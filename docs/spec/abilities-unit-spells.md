@@ -293,3 +293,13 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   `0x6F12DAA0(level index, target +0x1FC)` feed the ability's slot `0x43C` = `0x6F13F790`; no duration test in the effect)
   run in Unicorn, 400 cases each, 0 mismatches. The morph itself (buff apply `0x6F12A0B0`/`0x6F13F710`) and the type pick's
   random die are NOT verified, so no row yet. The creep-level rule is not modelled (no creep levels in the sim).
+* **Curse (`Acrs`) and Faerie Fire (`Afae`) CONFIRMED** at the cast and autocast level. Effects `0x6F0B8450` / `0x6F0B8750`: the
+  hero rule duration (`HeroDur`, else `Dur + ability +0x9C` by soft add) and `DataA` go to the buff; an existing buff is
+  re-applied through slot `0x358` (Curse: smart ref, dur, DataA, owner player) / `0x360` (Faerie: smart ref, dur, owner,
+  DataA), a new one is created (`0x6F0B52E0` / `0x6F0B5480`) and gets slot `0x354` / `0x35C` with the target first;
+  there is no duration test in the effect (the model's early return for dur <= 0 is a stand-in). Curse filter `0x6F09BF80`:
+  base filter, candidate has the attack ability and a resolved attack target, relation `0x6F285B60(caster owner, target
+  owner)` nonzero, no `Bcrs` on the candidate. Faerie Fire filter `0x6F09C240` (**autocast was missing from the model, added**,
+  toggle ids 852150/852151): base filter, candidate life fraction > 0.1, then `DataB != 0` needs only no `Bfae`, otherwise
+  the candidate must be attacking a unit whose owner passes the relation, and no `Bfae`. Curse's evade decision was
+  confirmed earlier (1,800 cases, `curse_vectors.rs`). The 400-case rows for each check are in `v4_spell_vectors.rs`.

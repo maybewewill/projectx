@@ -179,7 +179,7 @@ pub const SPELL_ORDERS: [(u32, u32); 20] = [
 ];
 
 /// `(autocast on order, autocast off order, ability)`.
-const TOGGLES: [(u32, u32, u32); 7] = [
+const TOGGLES: [(u32, u32, u32); 8] = [
     (852_133, 852_134, ABOLISH_MAGIC),
     (852_212, 852_213, WEB),
     (852_191, 852_192, CURSE),
@@ -187,6 +187,7 @@ const TOGGLES: [(u32, u32, u32); 7] = [
     (ORDER_HEAL_ON, ORDER_HEAL_OFF, HEAL),
     (852_067, 852_068, INNER_FIRE),
     (852_102, 852_103, BLOODLUST),
+    (852_150, 852_151, FAERIE_FIRE),
 ];
 
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -2023,6 +2024,25 @@ pub fn polymorph_effect_duration(l: &SpellLevel, hero: bool, illusion: bool) -> 
     }
 }
 
+/// Curse's autocast filter, slot `0x450` = `0x6F09BF80` (CONFIRMED by Unicorn, V4): the base filter, the candidate has the
+/// attack ability and a resolved attack target, the relation `0x6F285B60(caster owner, target owner)` is nonzero and the
+/// candidate does not carry `Bcrs`.
+pub fn curse_filter_ok(base_ok: bool, has_attack: bool, target_present: bool, rel: bool, has_buff: bool) -> bool {
+    base_ok && has_attack && target_present && rel && !has_buff
+}
+
+/// Faerie Fire's autocast filter, slot `0x450` = `0x6F09C240` (CONFIRMED by Unicorn, V4): the base filter and a life
+/// fraction strictly above 0.1 (`0x6FAAE4A0`); then, when `DataB` differs from 0.0 (NaN counts as different), only a missing
+/// `Bfae` is required; with `DataB == 0` the candidate must have an attack target (`attacks`, `0x6F26D5D0`) whose owner
+/// passes the relation `0x6F285B60`, and again a missing `Bfae`.
+pub fn faerie_filter_ok(base_ok: bool, life_fraction: F32, data_b: F32, attacks_target: bool, rel: bool, has_buff: bool) -> bool {
+    if !base_ok || !(0.1f32 < life_fraction.to_f32()) {
+        return false;
+    }
+    let always = data_b.to_f32() != 0.0;
+    (always || (attacks_target && rel)) && !has_buff
+}
+
 /// Whether Purge slows the target: not when the target is dead (`+0x5C & 0x100`) or the caster's player is passively
 /// allied with it (`0x6F285AC0`). `0x6F107E10`, CONFIRMED by Unicorn (V4).
 pub fn purge_slows(target_dead: bool, allied: bool) -> bool {
@@ -2783,16 +2803,17 @@ fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
             // a current attack target whose owner satisfies the relation `0x6F285B60` against the caster's owner
             // (an alliance row test, which row UNSURE: taken as "not an enemy of the caster's player", i.e. the
             // candidate is attacking one of ours), and must not carry `Bcrs` yet.
-            let Some(target) = gm.attack_view(k).and_then(|v| v.target) else {
-                return false;
-            };
-            if !gm.alive(target) {
-                return false;
-            }
-            if gm.is_enemy(gm.unit(unit).owner, gm.unit(target).owner) {
-                return false;
-            }
-            gm.buff_position(k, BUFF_CURSE).is_none()
+            let target = gm.attack_view(k).and_then(|v| v.target).filter(|t| gm.alive(*t));
+            let rel = target.is_some_and(|t| !gm.is_enemy(gm.unit(unit).owner, gm.unit(t).owner));
+            curse_filter_ok(true, true, target.is_some(), rel, gm.buff_position(k, BUFF_CURSE).is_some())
+        }
+        FAERIE_FIRE => {
+            // `0x6F09C240`: life fraction above 0.1; `DataB != 0` (always autocast) needs only a missing `Bfae`, else the
+            // candidate must be attacking a unit of ours.
+            let target = gm.attack_view(k).and_then(|v| v.target).filter(|t| gm.alive(*t));
+            let rel = target.is_some_and(|t| !gm.is_enemy(gm.unit(unit).owner, gm.unit(t).owner));
+            let data_b = gm.ability_level_record(unit, base).map_or(F32::ZERO, |l| l.data[1]);
+            faerie_filter_ok(true, life_fraction(gm, k), data_b, target.is_some(), rel, gm.buff_position(k, BUFF_FAERIE_FIRE).is_some())
         }
         INNER_FIRE | BLOODLUST => {
             let (buff, threshold) = if base == INNER_FIRE {

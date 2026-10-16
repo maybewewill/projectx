@@ -139,6 +139,79 @@ fn abolish_magic_worker_arguments_match_the_original() {
     assert!(smart > 40 && plain > 40 && a7zero > 5, "{smart} {plain} {a7zero}");
 }
 
+fn check_buff_apply(text: &str, curse: bool) {
+    // dur herodur DataA extra hero existing | existing calls, new calls | 4 recorded words
+    let rows = hex_rows(text);
+    assert!(rows.len() >= 300);
+    let (mut ex, mut cr, mut heroes) = (0, 0, 0);
+    for r in &rows {
+        let l = level_of(&[r[2]], r[0], r[1]);
+        let hero = r[4] != 0;
+        let dur = sim::cast::effect_duration(&l, hero, f(r[3])).to_bits();
+        let w = &r[8..];
+        if r[5] != 0 {
+            ex += 1;
+            assert_eq!((r[6], r[7]), (1, 0), "row {:08x?}", r);
+            // curse: dur DataA owner; faerie: dur DataA owner (recorded in the same order)
+            assert_eq!((w[0], w[1], w[2]), (dur, r[2], 0x77), "existing buff, row {:08x?}", r);
+        } else {
+            cr += 1;
+            assert_eq!((r[6], r[7]), (0, 1), "row {:08x?}", r);
+            assert_eq!((w[0], w[1], w[2], w[3]), (0x402000, dur, r[2], 0x77), "created buff, row {:08x?}", r);
+        }
+        heroes += usize::from(hero);
+    }
+    let _ = curse;
+    assert!(ex > 60 && cr > 100 && heroes > 100);
+}
+
+#[test]
+fn curse_effect_matches_the_original() {
+    check_buff_apply(include_str!("data/unit_spells/curse_apply.txt"), true);
+}
+
+#[test]
+fn faerie_fire_effect_matches_the_original() {
+    check_buff_apply(include_str!("data/unit_spells/faerie_apply.txt"), false);
+}
+
+#[test]
+fn curse_autocast_filter_matches_the_original() {
+    // base has_attack target_present rel frac DataB attacks has_buff | result
+    let rows = hex_rows(include_str!("data/unit_spells/curse_filter.txt"));
+    assert!(rows.len() >= 300);
+    let (mut yes, mut no) = (0, 0);
+    for r in &rows {
+        let ok = curse_filter_ok(r[0] != 0, r[1] != 0, r[2] != 0, r[3] != 0, r[7] != 0);
+        assert_eq!(r[8], ok as u32, "row {:08x?}", r);
+        if ok {
+            yes += 1;
+        } else {
+            no += 1;
+        }
+    }
+    assert!(yes > 15 && no > 100, "{yes} {no}");
+}
+
+#[test]
+fn faerie_fire_autocast_filter_matches_the_original() {
+    let rows = hex_rows(include_str!("data/unit_spells/faerie_filter.txt"));
+    assert!(rows.len() >= 300);
+    let (mut yes, mut no) = (0, 0);
+    for r in &rows {
+        let attacks = r[6] != 0 && r[1] != 0;
+        // the pair of the attack object is only resolved when the candidate attacks
+        let ok = faerie_filter_ok(r[0] != 0, f(r[4]), f(r[5]), attacks && r[2] != 0, r[3] != 0, r[7] != 0);
+        assert_eq!(r[8], ok as u32, "row {:08x?}", r);
+        if ok {
+            yes += 1;
+        } else {
+            no += 1;
+        }
+    }
+    assert!(yes > 15 && no > 100, "{yes} {no}");
+}
+
 #[test]
 fn polymorph_target_rule_matches_the_original() {
     // DataA creep_over summoned | code
