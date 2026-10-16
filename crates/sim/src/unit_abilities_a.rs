@@ -423,6 +423,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     let _ = aux;
     match kind {
         KIND_AURA_SCAN => game.borrow_mut().a_aura_scan(unit, base),
+        KIND_DETECT => game.borrow_mut().recompute_detection(),
         KIND_CARGO => {
             let dead = game.borrow_mut().cargo_upkeep(unit);
             for (victim, killer) in dead {
@@ -653,11 +654,121 @@ impl Game {
     }
 
     fn sync_cargo_and_detect(&mut self, unit: ObjKey) {
+        self.sync_detect(unit);
         // A holder that lost its last hold ability lets its passengers out.
         if !self.cargo_of(unit).is_empty() && self.cargo_capacity(unit) == 0 {
             self.unload_all(unit);
         }
     }
 
-    fn sync_ghosts(&mut self, _unit: ObjKey) {}
+
+}
+
+// ---- detection and the invisibility hooks (Adet, Adts, Agyv, Abdt, Agho, Aeth) ----
+
+pub const DETECTOR: u32 = code(b"Adet");
+pub const MAGIC_SENTRY: u32 = code(b"Adts");
+pub const GYRO_VISION: u32 = code(b"Agyv");
+pub const BURROW_DETECTOR: u32 = code(b"Abdt");
+pub const GHOST: u32 = code(b"Agho");
+pub const GHOST_VISIBLE: u32 = code(b"Aeth");
+const DETECTORS: [u32; 4] = [DETECTOR, MAGIC_SENTRY, GYRO_VISION, BURROW_DETECTOR];
+/// The detector rescan period (a model choice; the original updates on movement and on a timer: UNSURE).
+const DETECT_PERIOD: f32 = 0.5;
+
+impl Game {
+    fn detector_range(&self, unit: ObjKey) -> Option<F32> {
+        let mut best: Option<F32> = None;
+        for c in DETECTORS {
+            if self.unit(unit).abilities.get(c).is_some_and(|a| !a.is_removed()) {
+                let r = self.spell_level(unit, c).rng;
+                best = Some(match best {
+                    Some(b) if arith::lt(r, b) => b,
+                    _ => r,
+                });
+            }
+        }
+        best
+    }
+
+    /// Recomputes the detection masks from every living detector: each unit within a detector's `Rng` is detected by
+    /// the detector's player. (`CAbilityDetector`, `Rng` = the detection radius of the rows, e.g. 900 for the Magic
+    /// Sentry, 1100 for the Sentry Ward; the bitmask is the per-player reveal the invisibility module reads.)
+    fn recompute_detection(&mut self) {
+        let detectors: Vec<ObjKey> = self.spells.unit_a.detectors.keys().copied().collect();
+        let mut masks: BTreeMap<ObjKey, u16> = BTreeMap::new();
+        for d in detectors {
+            if !self.alive(d) || self.unit(d).loaded {
+                continue;
+            }
+            let Some(r) = self.detector_range(d) else {
+                continue;
+            };
+            let (x, y, owner) = (self.unit(d).x, self.unit(d).y, self.unit(d).owner);
+            for t in crate::natives::group::circle_candidates(self, x, y, r) {
+                let u = self.unit(t);
+                if u.removed || u.dead {
+                    continue;
+                }
+                *masks.entry(t).or_insert(0) |= 1u16 << owner.min(15);
+            }
+        }
+        self.spells.unit_a.detected = masks;
+    }
+
+    /// Whether `player` currently detects `unit` (some detector of the player has it in range).
+    pub fn unit_detected_by(&self, unit: ObjKey, player: u32) -> bool {
+        self.spells.unit_a.detected.get(&unit).is_some_and(|m| m & (1u16 << player.min(15)) != 0)
+    }
+
+    /// Whether `unit` is permanently invisible through `Agho` (hook for the invisibility module, S44).
+    pub fn is_ghost(&self, unit: ObjKey) -> bool {
+        self.spells.unit_a.ghosts.contains(&unit)
+    }
+
+    /// Whether `unit` carries `Aeth` (sees ghosts, hook).
+    pub fn sees_ghosts(&self, unit: ObjKey) -> bool {
+        self.spells.unit_a.ghost_seers.contains(&unit)
+    }
+
+    /// Whether a ghost is visible to `player`: its own player, a detecting player, or a player with a ghost seer
+    /// (hook: the sight and attack rules of the invisibility module combine this with the fog).
+    pub fn ghost_visible_to(&self, unit: ObjKey, player: u32) -> bool {
+        !self.is_ghost(unit) || self.unit(unit).owner == player || self.unit_detected_by(unit, player)
+    }
+
+    fn sync_detect(&mut self, unit: ObjKey) {
+        let has = self.detector_range(unit).is_some();
+        let running = self.spells.unit_a.detectors.contains_key(&unit);
+        if has && !running {
+            let id = self.timers.start(
+                DETECT_PERIOD,
+                true,
+                Payload::Spell(SpellMsg::UnitSpell { kind: KIND_DETECT, unit, base: 0, aux: 0 }),
+            );
+            self.spells.unit_a.detectors.insert(unit, id);
+            self.recompute_detection();
+        } else if !has && running {
+            if let Some(id) = self.spells.unit_a.detectors.remove(&unit) {
+                self.timers.cancel(id);
+            }
+            self.recompute_detection();
+        }
+    }
+
+    fn sync_ghosts(&mut self, unit: ObjKey) {
+        let has = |g: &Game, c: u32| g.unit(unit).abilities.get(c).is_some_and(|a| !a.is_removed());
+        let ghost = has(self, GHOST);
+        let seer = has(self, GHOST_VISIBLE);
+        if ghost {
+            self.spells.unit_a.ghosts.insert(unit);
+        } else {
+            self.spells.unit_a.ghosts.remove(&unit);
+        }
+        if seer {
+            self.spells.unit_a.ghost_seers.insert(unit);
+        } else {
+            self.spells.unit_a.ghost_seers.remove(&unit);
+        }
+    }
 }

@@ -379,3 +379,75 @@ fn devour_digests_the_target_until_it_dies() {
     assert!(h.game().unit(foe).dead);
     assert!(h.game().cargo_of(src).is_empty());
 }
+
+// ---- detection and ghost hooks ----
+
+const DETECT_SRC: &str = r#"
+function give_detector takes nothing returns nothing
+    call UnitAddAbility(src, 'Adts')
+endfunction
+function drop_detector takes nothing returns nothing
+    call UnitRemoveAbility(src, 'Adts')
+endfunction
+function give_ghost takes nothing returns nothing
+    call UnitAddAbility(foe, 'Agho')
+    call UnitAddAbility(src, 'Aeth')
+endfunction
+"#;
+
+fn detect_host() -> ScriptHost {
+    let full = format!("{PRELUDE}\n{SRC}\n{DETECT_SRC}");
+    let prog = jass::parse(&full).expect("parse");
+    let module = compile(&[prog]).expect("compile");
+    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), None).expect("vm");
+    {
+        let mut g = h.game_mut();
+        g.unit_types_mut().insert(
+            FOOT,
+            UnitType { name: "Footman".to_string(), max_life: f(1000.0), move_speed: f(270.0), ..Default::default() },
+        );
+        for (c, l) in [
+            // Magic Sentry: radius 900.
+            (code(b"Adts"), SpellLevel { rng: f(900.0), ..level(0.0, &[3.0]) }),
+            (code(b"Agho"), level(0.0, &[1.0, 1.0, 0.0])),
+            (code(b"Aeth"), level(0.0, &[1.0, 1.0])),
+        ] {
+            g.ability_types_mut().insert(c, AbilityType { max_level: Some(1) });
+            g.set_spell_levels(c, vec![l]);
+        }
+    }
+    h
+}
+
+#[test]
+fn a_detector_detects_units_in_its_range_for_its_player_and_loses_them_when_removed() {
+    let mut h = detect_host();
+    call(&mut h, "setup");
+    run(&mut h, 1);
+    let (near, far, foe) = (unit(&h, "near"), unit(&h, "far"), unit(&h, "foe"));
+    call(&mut h, "give_detector");
+    run(&mut h, 2);
+    assert!(h.game().unit_detected_by(foe, 0));
+    assert!(h.game().unit_detected_by(near, 0));
+    assert!(!h.game().unit_detected_by(far, 0), "3000 away");
+    assert!(!h.game().unit_detected_by(foe, 1), "the bit is the detector's player");
+    call(&mut h, "drop_detector");
+    run(&mut h, 2);
+    assert!(!h.game().unit_detected_by(foe, 0));
+}
+
+#[test]
+fn ghost_and_ghost_seer_are_tracked_for_the_invisibility_module() {
+    let mut h = detect_host();
+    call(&mut h, "setup");
+    run(&mut h, 1);
+    let (src, foe) = (unit(&h, "src"), unit(&h, "foe"));
+    call(&mut h, "give_ghost");
+    run(&mut h, 1);
+    assert!(h.game().is_ghost(foe) && h.game().sees_ghosts(src));
+    assert!(!h.game().ghost_visible_to(foe, 0), "player 0 does not detect the ghost");
+    assert!(h.game().ghost_visible_to(foe, 1), "its owner always sees it");
+    call(&mut h, "give_detector");
+    run(&mut h, 2);
+    assert!(h.game().ghost_visible_to(foe, 0), "a detector of player 0 reveals it");
+}
