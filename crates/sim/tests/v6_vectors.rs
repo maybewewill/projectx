@@ -162,3 +162,36 @@ fn poison_kind(kind: &str) {
     }
     assert!(seen.iter().all(|&c| c > 20), "every path is reached: {seen:?}");
 }
+
+#[test]
+fn cyclone_effect_matches_the_original() {
+    let rs = rows("CY");
+    assert!(rs.len() >= 300);
+    let mut seen = [0usize; 4];
+    for r in &rs {
+        // CY hero dur herodur extra dataA stasis kind flag100 | removed creator dur
+        let hero = r[1] == "1";
+        let (dur, herodur, extra, data_a) = (h(r[2]), h(r[3]), h(r[4]), h(r[5]));
+        let (stasis, kind, flag100) = (r[6].parse::<i32>().unwrap(), r[7].parse::<i32>().unwrap(), r[8] == "1");
+        assert_eq!(r[9], "|");
+        let lv = sim::cast::SpellLevel {
+            dur: f(dur),
+            hero_dur: f(herodur),
+            data: [f(data_a), F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO, F32::ZERO],
+            ..Default::default()
+        };
+        let plan = sim::neutral_spells::cyclone_plan(hero, &lv, f(extra), stasis, kind == 2, flag100);
+        let removed = r[10] != "-";
+        assert_eq!(plan.removes, removed, "row {r:?}");
+        if removed {
+            assert_eq!(r[10], "100001101.010001101", "the two removal passes, row {r:?}");
+        }
+        assert_eq!(plan.creator as u32, r[11].parse::<u32>().unwrap(), "row {r:?}");
+        seen[plan.creator as usize] += 1;
+        if plan.creator != 0 {
+            assert_eq!(plan.dur.to_bits(), h(r[12]), "row {r:?}");
+        }
+        seen[3] += usize::from(!removed);
+    }
+    assert!(seen.iter().all(|&c| c > 15), "every path is reached: {seen:?}");
+}

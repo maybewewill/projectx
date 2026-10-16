@@ -632,6 +632,18 @@ fn cyclone(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     if !gm.alive(target) {
         return;
     }
+    // `0x6F1CCB50` (CONFIRMED, V6 `CY` rows): before the buff goes on, the walker `0x6F079FE0` removes the target's physical and
+    // then its magic buffs of both polarities (timed life and aura buffs stay, no dispellable test).
+    for (physical, magic) in [(true, false), (false, true)] {
+        let select = crate::abilities::BuffSelect {
+            remove_positive: true,
+            remove_negative: true,
+            physical,
+            magic,
+            ..Default::default()
+        };
+        gm.remove_buffs(target, select);
+    }
     let dur = duration_for(&gm, &rec.level, target);
     if !arith::lt(F32::ZERO, dur) {
         return;
@@ -644,6 +656,38 @@ fn cyclone(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
         ..buff_predicates(BUFF_CYCLONE_TWO)
     };
     gm.apply_mods_buff(target, BUFF_CYCLONE_TWO, preds, UnitMods { invuln: true, ..UnitMods::default() }, dur);
+}
+
+/// What the Cyclone effect `0x6F1CCC70` does before and while it puts the buff on (Unicorn `CY` rows of `tools/emu/v6_emu.py`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CyclonePlan {
+    /// The two removal passes (physical buffs, then magic buffs; both polarities) run: false only for a target whose type kind
+    /// (`0x6F29C240`) is 2.
+    pub removes: bool,
+    /// The buff creator: 0 none (a target with unit flag `0x100`, or kind 2), 1 = `0x6F1C9160` (taken when `DataA` is not zero,
+    /// or NaN, and Misc `CycloneStasis` is 0), 2 = `0x6F1C9230`.
+    pub creator: u8,
+    /// `HeroDur` for a hero target, else `Dur` plus the ability's `+0x9C` term (soft add).
+    pub dur: F32,
+}
+
+/// See [`CyclonePlan`].
+pub fn cyclone_plan(hero: bool, level: &SpellLevel, extra: F32, stasis: i32, kind_is_2: bool, flag100: bool) -> CyclonePlan {
+    let dur = effect_duration(level, hero, extra);
+    if kind_is_2 {
+        return CyclonePlan { removes: false, creator: 0, dur };
+    }
+    // x87 equality with 0.0: only an ordered equal compare is "zero" (NaN is unordered and counts as nonzero)
+    let a = level.data[0].to_f32();
+    let nonzero = !(a == 0.0);
+    let creator = if flag100 {
+        0
+    } else if nonzero && stasis == 0 {
+        1
+    } else {
+        2
+    };
+    CyclonePlan { removes: true, creator, dur }
 }
 
 /// Silence (`ANsi`, `CAbilitySilence`; buff `CBuffSilence < CBuffSpeed`, `BNsi`): every enemy air or ground organic

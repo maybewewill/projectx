@@ -11,6 +11,7 @@ Row kinds (hex unless noted, `|` separates input from output):
   CE  ill hasowner | kind    Charm effect 0x6F1B13E0: 1 = vtable 0x124(0.0) on an illusion target, 2 = owner change 0x6F1B0C80
   PA  srcill hero existing flag200 dur herodur a b c d | path dur a b c d8 dfull   poison attack apply 0x6F13F2F0 (Envenomed Spears); path 1 new buff, 2 refresh of the existing one, 3 stacking buff, 0 stacking skipped
   PS  (same fields as PA)      poison attack apply 0x6F13F500 (Slow Poison)
+  CY  hero dur herodur extra dataA stasis kind flag100 | removed creator dur   Cyclone effect 0x6F1CCC70 -> 0x6F1CCB50: two buff removals (physical, then magic), buff creator 1 = 0x6F1C9160 / 2 = 0x6F1C9230, duration; 0 = skipped
   TM  e0 e8 flagD illusion goldcost woodcost bounty_g bounty_w bounty_flag | called gold wood ...  Transmute buff action 0x6F1B59B0 -> 0x6F1B58B0
 
 Usage: GAME_DLL=/path/Game.dll py tools/emu/v6_emu.py OUT.txt [CASES] [SEED] [KIND,KIND]
@@ -258,6 +259,70 @@ def poison_case(r, tag, vt_code, fn, new_creator, stack_creator):
     return out
 
 
+# ---------------------------------------------------------------- CY: Cyclone effect
+CY_VT = 0x6F9147C4
+CY_VICT = D + 0xBC00
+CY_BUFF = D + 0xB000
+CY_BUFFVT = D + 0xB200
+CY_S324 = D + 0xA000
+CY_S354 = D + 0xA020
+
+
+def case_cy(r):
+    hero = r.choice([0, 1])
+    dur, herodur, extra = rand_real(r), rand_real(r), rand_real(r)
+    data_a = r.choice([0, 0, fbits(1.0), fbits(0.5), 0x80000000, rand_real(r)])
+    stasis = r.choice([0, 0, 1, r.randint(-2, 3)])
+    kind = r.choice([0, 0, 1, 2, 3])
+    flag100 = r.choice([0, 0, 0, 1])
+    T.setup(CY_VT)
+    setrec(dur=dur, herodur=herodur, a=data_a)
+    w32(T.ABIL + 0x9C, extra)
+    mu.mem_write(CY_VICT, bytes(0x300))
+    w32(CY_VICT, T.UVT)
+    w32(CY_VICT + 0x5C, 0x100 if flag100 else 0)
+    mu.mem_write(CY_BUFF, bytes(0x200))
+    mu.mem_write(CY_BUFFVT, bytes(0x400))
+    w32(CY_BUFF, CY_BUFFVT)
+    w32(CY_BUFFVT + 0x324, CY_S324)
+    w32(CY_BUFFVT + 0x354, CY_S354)
+    got = {'rem': [], 'creator': 0}
+
+    def cap(name):
+        def f(uc, c_, d_, st):
+            from unicorn.x86_const import UC_X86_REG_ESP
+            esp = uc.reg_read(UC_X86_REG_ESP)
+            words = struct.unpack('<9I', bytes(uc.mem_read(esp, 36)))
+            if name == 'rem':
+                got['rem'].append(''.join(str(w & 1) for w in words))
+            elif name == 'apply':
+                got['dur'] = r32(words[2])
+            return 0
+        return f
+
+    def creator(which):
+        def f(*x):
+            got['creator'] = which
+            return CY_BUFF
+        return f
+
+    sf = {
+        0x6F1D2660: lambda *x: hero,
+        0x6F009F90: lambda *x: stasis & 0xffffffff,
+        0x6F29C240: lambda *x: kind,
+        0x6F079FE0: cap('rem'),
+        0x6F1C9160: creator(1),
+        0x6F1C9230: creator(2),
+        CY_S324: lambda *x: 0,
+        CY_S354: cap('apply'),
+    }
+    T.trace_call(0x6F1CCC70, T.ABIL, (CY_VICT,), stub_fn=sf, into=(0x6F1CCB50,), span=0x300,
+                 cleanup={0x6F079FE0: 36, CY_S324: 4, CY_S354: 12, 0x6F042B20: 8, 0x6F079CA0: 4, 0x6F009F90: 4})
+    out = 'CY %d %x %x %x %x %d %d %d |' % (hero, dur, herodur, extra, data_a, stasis, kind, flag100)
+    out += ' %s %d %x' % ('.'.join(got['rem']) or '-', got['creator'], got.get('dur', 0))
+    return out
+
+
 # ---------------------------------------------------------------- TM: Transmute buff action (inner body)
 TM_INNER = 0x6F1B58B0
 TM_TRAMP = D + 0xF000
@@ -328,7 +393,7 @@ def case_tm(r):
     return out
 
 
-GENS = [('TN', case_tn), ('TM', case_tm), ('CL', case_cl), ('CE', case_ce), ('PA', case_pa), ('PS', case_ps)]
+GENS = [('TN', case_tn), ('TM', case_tm), ('CL', case_cl), ('CE', case_ce), ('PA', case_pa), ('PS', case_ps), ('CY', case_cy)]
 
 
 def main():
