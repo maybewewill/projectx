@@ -430,12 +430,39 @@ def check_divine_shield(cases, r, rows):
                     + [rd(CAP + 0x120 + 4 * k) for k in range(9)] + [rd(CAP + 0x108), rd(A.OBJ + 0x20)])
 
 
+VT_SLOW_ABIL = 0x6F92280C
+VT_SLOW_BUFF = 0x6F9224AC
+
+
+def check_slow(cases, r, rows):
+    """Slow's effect slot `0x424` (`0x6F1FC2A0`, real) -> buff creator `0x6F1FC190` (real) -> `CBuffSlow` slot `0x354`
+    (`0x6F0D6460`, real) -> the sink routines `0x6F0D59A0` / `0x6F0D59F0` (real). Rows as for Bloodlust."""
+    ret0 = A.stub_ret(0, 0)
+    s320 = slot_capture2()
+    s324 = A.stub_ret(4, 0)
+    A.patch_jump(0x6F1FA0E0, A.stub_ret(0, BUFF))
+    for _ in range(cases):
+        dur, hdur, da, db, dc = rbits(r), rbits(r), rbits(r), rbits(r), rbits(r)
+        extra = rbits(r) if r.random() < 0.3 else 0
+        hero = r.random() < 0.5
+        A.make_ability(VT_SLOW_ABIL, 0x41736C6F, 75)
+        level(A.LVL, dur, hdur, [da, db, dc])
+        wr(A.OBJ + 0x9C, extra)
+        make_target(hero)
+        make_buff(VT_SLOW_BUFF, (0xCC, 0xD4), (), {0x320: s320, 0x324: s324, 0x360: ret0})
+        clear_cap()
+        call(0x6F1FC2A0, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append([dur, hdur, da, db, dc, extra, int(hero), rd(CAP + 0x80), rd(CAP + 0x84),
+                     rd(CAP + 0x10), rd(CAP + 0x14), rd(CAP + 0x20), rd(CAP + 0x24)])
+
+
 CHECKS = {
     "bloodlust": check_bloodlust,
     "innerfire": check_innerfire,
     "cripple": check_cripple,
     "command_aura": check_command_aura,
     "avatar": check_avatar,
+    "slow": check_slow,
     "divine_shield": check_divine_shield,
 }
 # Checks that patch a function another check needs unpatched run in their own process (`--only NAME`): Unicorn keeps

@@ -2190,6 +2190,14 @@ pub fn cripple_weapon_change(fraction: F32, count: i32, sides: i32, bonus: i32) 
     amount.wrapping_neg()
 }
 
+/// What Slow's effect slot `0x6F1FC2A0` hands to its buff (CONFIRMED, **Unicorn 400/400**, `tools/emu/spell_buff_emu.py`
+/// check `slow`: the real effect, creator `0x6F1FC190`, `CBuffSlow` apply `0x6F0D6460` and the sink routines): the duration as
+/// for Bloodlust; the movement sink gets `-DataA` and the attack speed sink `-DataB` (sign bit flipped). Returns
+/// `(duration, movement, attack)`.
+pub fn slow_values(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    (effect_duration(l, hero, extra), arith::neg(l.data[0]), arith::neg(l.data[1]))
+}
+
 /// What Bloodlust's effect slot `0x6F1CB080` hands to its buff (CONFIRMED, **Unicorn 400/400**,
 /// `tools/emu/spell_buff_emu.py`: the real effect, the real buff creator `0x6F1CAF70`, the real `CBuffBloodlust` apply slot
 /// `0x35C` and the real sink routines `0x6F0D59A0` / `0x6F0D59F0` on a fake buff): the duration is `HeroDur` for a hero and

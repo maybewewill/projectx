@@ -1200,12 +1200,9 @@ fn slow(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
         return;
     }
     let hero = gm.target_hero(target);
-    let dur = effect_duration(&rec.level, hero, F32::ZERO);
-    // The effect slot hands the buff -DataA (move) and -DataB (attack speed), `0x6F1FC2A0`.
-    let effect = BuffEffect::Slow {
-        move_delta: arith::neg(rec.level.data[0]),
-        attack_delta: arith::neg(rec.level.data[1]),
-    };
+    // The effect slot hands the buff -DataA (move) and -DataB (attack speed), `0x6F1FC2A0` (Unicorn-checked).
+    let (dur, move_delta, attack_delta) = crate::unit_spells::slow_values(&rec.level, hero, F32::ZERO);
+    let effect = BuffEffect::Slow { move_delta, attack_delta };
     gm.add_spell_buff(target, BUFF_SLOW, effect, dur);
 }
 

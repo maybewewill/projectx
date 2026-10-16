@@ -219,3 +219,16 @@ fn divine_shield_apply_matches_the_original() {
     assert!(twice > 50 && once > 50, "{twice} {once}");
 }
 
+#[test]
+fn slow_values_match_the_original() {
+    let rows = hex_rows(include_str!("data/unit_spells/slow.txt"));
+    assert!(rows.len() >= 300);
+    for r in &rows {
+        let l = level(r[0], r[1], &[r[2], r[3], r[4]]);
+        let (dur, mv, atk) = slow_values(&l, r[6] != 0, f(r[5]));
+        assert_eq!(r[8], dur.to_bits(), "duration, row {:08x?}", r);
+        assert_eq!((r[9], r[10]), (mv.to_bits(), 1), "movement sink, row {:08x?}", r);
+        assert_eq!((r[11], r[12]), (atk.to_bits(), 1), "attack speed sink, row {:08x?}", r);
+    }
+}
+

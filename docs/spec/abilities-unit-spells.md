@@ -237,3 +237,24 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
 | Healing Ward `Ahwd`, Stasis Trap `Asta`, Serpent Ward `Aeye` | `CAbilityHealingWard` `0x6F8B0A44` (summon `ohwd`, buff `Bhwd`), `CAbilityWard` | summon spells with a unit type per level | the ward's own healing aura ability, placement |
 | Abolish Magic `Aadm` | `CAbilityAutoDispelMagic` `0x6F8C35AC` | autocast pair 852133/852134, cast 852132, A mana loss, B summoned damage 300, C 1 | the autocast filter `0x6F0E2B90` and the dispel worker |
 | Huntress Sentinel `Aesn`, Disease Cloud `Aap1`, Dryad immunity | `CAbilitySentinel` `0x6F91EE04` (summon-like with a tree target) | data rows | not read |
+
+## 12. V1 verification wave (Unicorn, `tools/emu/spell_buff_emu.py`)
+
+Harness: the real effect slot, buff creator, buff apply slot and holder-to-sink routines of the original on fake objects
+(stubs only for the buff allocator / lookup, the property holders and the final sinks, which record their arguments).
+400 random cases per check, 0 mismatches, vectors in `crates/sim/tests/data/unit_spells/`, test
+`crates/sim/tests/spell_buff_vectors.rs` (no game data needed to run it; the harness needs `GAME_DLL`; `--only divine_shield`
+runs in its own process).
+
+| Ability | Checked in this run | Found |
+|---|---|---|
+| Bloodlust | duration rule, `DataB` -> movement sink, `DataA` -> attack speed sink | model already right |
+| Inner Fire | duration, armor `DataB`, regeneration `DataD`/`DataE` (0.001 gate), damage `DataA` per weapon slot | **damage is an integer bonus** `F2I(DataA * average + 0.5)` with a sign rule, not a percentage; model fixed |
+| Cripple | duration, `-DataA` / `-DataB` sinks, damage cut `DataC` per weapon slot | **damage cut is an integer** (no sign rule), not a percentage; model fixed |
+| Slow (`Aslo`) | duration, `-DataA` movement, `-DataB` attack speed | model already right |
+| Command / Trueshot aura (orc spec section 18) | whole weapon-slot bonus | **sign rule and weapon filter were missing**; model fixed |
+| Avatar, Divine Shield (human spec) | see `abilities-human-heroes.md` sections 2 and 4 | `DataD` is not a switch; Divine Shield apply read and checked |
+
+Not covered by V1 (still as labelled above): the refresh paths of the buff slots, the autocast filters, weapon slot 2,
+the second dispel of Divine Shield being absent from the model (idempotent).
+
