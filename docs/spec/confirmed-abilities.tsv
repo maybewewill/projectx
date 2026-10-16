@@ -22,3 +22,4 @@ AIra	tools/emu/v3_cores_emu.py RT	300	Restoration area callback 0x6F1E6130 (mode
 AIrg	tools/emu/v3_cores_emu.py RG	300	Regeneration scroll area callback 0x6F108800 only; buff tick behaviour still LIKELY
 ANms	tools/emu/v3_cores_emu.py MS+RR	600	Mana Shield damage hook 0x6F126DD0 (300) and record reduce 0x6F255790 (300); model rewritten to the original's order and clamps
 Awar	tools/emu/v3_cores_emu.py PR+PE	600	Pulverize execute ring arguments 0x6F1775F0 (300) and effective chance 0x6F163160 (300); swing-start gates and ring membership not run
+Ahea	tools/emu/v4_spells_emu.py heal_effect/heal_target/heal_filter + unit_spells_emu.py comparator	1800	V4: effect (amount, ethereal, marker duration), target rule 0x6F0F0290, autocast filter 0x6F0F0370 (400 each), comparator 0x6F0DADD0 (600); model bugs fixed: foreign marker also refuses a manual cast, autocast refuses regenHP < 0 types

@@ -671,13 +671,6 @@ pub fn targs_ok(gm: &Game, caster: ObjKey, target: ObjKey, w: u32) -> bool {
     w & rel != 0
 }
 
-/// The deficit rule of Heal's slot `0x3F0`: `max life - life >= 1.0` (the error `0x1C` otherwise). A NaN deficit
-/// passes (the unordered compare).
-fn heal_needs(gm: &Game, target: ObjKey) -> bool {
-    let u = gm.unit(target);
-    let deficit = arith::sub(u.max_life, u.life);
-    !arith::lt(deficit, F32::ONE)
-}
 
 /// Errors of a cast without a target (the readiness error "no corpse" of Raise Dead).
 pub(crate) fn untargeted_error(gm: &Game, caster: ObjKey, base: u32, level: &crate::cast::SpellLevel) -> Option<CastError> {
@@ -716,10 +709,12 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             {
                 return Some(CastError::BadTarget);
             }
-            if t.illusion && !gm.spells.unit.illusions_can_restore_life {
-                return Some(CastError::BadTarget);
-            }
-            if !heal_needs(gm, target) {
+            let (life, max) = (t.life, t.max_life);
+            let marker = gm.heal_mark_source(target);
+            
+            // `0x6F0F0290`: illusion rule, `max - life >= 1.0`, a marker of another healer .
+            let code = heal_target_code(gm.spells.unit.illusions_can_restore_life, t.illusion, life, max, marker, caster);
+            if code != 0 {
                 return Some(CastError::BadTarget);
             }
             None
@@ -2433,16 +2428,56 @@ fn curse(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     gm.apply_mods_buff(target, BUFF_CURSE, preds, mods, dur);
 }
 
+/// The two values of Heal's effect slot `0x424` = `0x6F108280` (CONFIRMED by Unicorn, V4, 400 cases,
+/// `tests/v4_spell_vectors.rs`): the amount handed to the life adder (`DataA`, times Misc `EtherealHealBonus` when the
+/// target's ethereal count is above zero, a signed compare) and the `Bhea` marker duration `(Cool + 0.01) + 1.0`.
+pub fn heal_values(data_a: F32, cool: F32, ethereal: i32, bonus: F32) -> (F32, F32) {
+    let amount = if ethereal > 0 { arith::mul(data_a, bonus) } else { data_a };
+    let extra = arith::add(cool, F32::from_bits(MARK_EXTRA_BITS));
+    (amount, arith::add(extra, F32::ONE))
+}
+
+/// Heal's target rule, slot `0x3F0` = `0x6F0F0290` (CONFIRMED by Unicorn, V4): `0xA2` for an illusion unless Misc
+/// `IllusionsCanRestoreLife`; `0x1C` when `max - life` is ordered below 1.0 (NaN passes); `0xAE` when the target
+/// carries a `Bhea` marker whose maker is not the caster (`marker`: `None` = no marker, `Some(None)` = a null maker);
+/// `0` otherwise.
+pub fn heal_target_code<T: PartialEq>(can_restore: bool, illusion: bool, life: F32, max: F32, marker: Option<Option<T>>, caster: T) -> u32 {
+    if !can_restore && illusion {
+        return 0xA2;
+    }
+    if arith::lt(arith::sub(max, life), F32::ONE) {
+        return 0x1C;
+    }
+    match marker {
+        Some(maker) if maker != Some(caster) => 0xAE,
+        _ => 0,
+    }
+}
+
+/// Heal's autocast filter, slot `0x450` = `0x6F0F0370` (CONFIRMED by Unicorn, V4): the base filter, the illusion rule
+/// (Misc `IllusionsGetAutocast`), an ally candidate, a candidate type whose `regenHP` is not ordered below zero, and a
+/// `Bhea` marker made by the caster itself (or none).
+pub fn heal_filter_ok<T: PartialEq>(base_ok: bool, get_autocast: bool, illusion: bool, ally: bool, regen_hp: F32, marker: Option<Option<T>>, caster: T) -> bool {
+    if !base_ok || (!get_autocast && illusion) || !ally {
+        return false;
+    }
+    if arith::lt(regen_hp, F32::ZERO) {
+        return false;
+    }
+    match marker {
+        Some(maker) => maker == Some(caster),
+        None => true,
+    }
+}
+
 /// `0x6F108280`: heal, then the marker buff.
 fn heal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let mut gm = game.borrow_mut();
     if !gm.alive(target) {
         return;
     }
-    let mut amount = rec.level.data[0];
-    if gm.unit(target).ethereal > 0 {
-        amount = arith::mul(amount, gm.spells.unit.ethereal_heal_bonus);
-    }
+    let eth = gm.unit(target).ethereal;
+    let (amount, duration) = heal_values(rec.level.data[0], rec.level.cool, eth as i32, gm.spells.unit.ethereal_heal_bonus);
     let (life, max) = {
         let u = gm.unit(target);
         (u.life, u.max_life)
@@ -2450,9 +2485,7 @@ fn heal(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let sum = arith::add(amount, life);
     let next = if arith::lt(max, sum) { max } else { sum };
     set_life(&mut gm, target, next);
-    // The marker: duration 1.0 + (Cool + 0.01), the set-duration rule when the buff already exists.
-    let extra = arith::add(rec.level.cool, F32::from_bits(MARK_EXTRA_BITS));
-    let duration = arith::add(F32::ONE, extra);
+    // The marker: duration (Cool + 0.01) + 1.0, the set-duration rule when the buff already exists.
     gm.heal_mark(target, rec.caster, duration);
 }
 
@@ -2636,12 +2669,10 @@ fn class_filter(gm: &Game, unit: ObjKey, base: u32, k: ObjKey) -> bool {
     }
     match base {
         HEAL => {
-            if let Some(src) = gm.heal_mark_source(k) {
-                if src != Some(unit) {
-                    return false;
-                }
-            }
-            true
+            // `0x6F0F0370`: base filter and illusion rule above, ally by the target rule, the candidate type's regenHP
+            // not below zero, a marker only from this healer.
+            let regen = gm.unit_types().get(gm.unit(k).type_id).map_or(F32::ZERO, |t| t.regen_hp);
+            heal_filter_ok(true, true, false, true, regen, gm.heal_mark_source(k), unit)
         }
         ABOLISH_MAGIC => {
             // `0x6F0E2B90` (CONFIRMED structure). The first class-word rule (the caster's `+0x5C & 4`, the candidate's

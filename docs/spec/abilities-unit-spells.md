@@ -258,3 +258,17 @@ runs in its own process).
 Not covered by V1 (still as labelled above): the refresh paths of the buff slots, the autocast filters, weapon slot 2,
 the second dispel of Divine Shield being absent from the model (idempotent).
 
+
+## 13. V4 verification wave (Unicorn, `tools/emu/v4_spells_emu.py`, vectors `crates/sim/tests/data/unit_spells/`, test `crates/sim/tests/v4_spell_vectors.rs`)
+
+Method as V1: the original function runs on fake objects, world-dependent callees (buff lookup/allocator, Misc readers,
+relation tests, life adder) are stubs that read per-case switches or record their arguments. 400 random cases per check,
+0 mismatches. Each check runs in its own process (`--only NAME`).
+
+* **Heal (`Ahea`) CONFIRMED**: effect `0x6F108280` (amount `DataA`, times Misc `EtherealHealBonus` when the target's
+  ethereal count `+0x158` is above zero by a signed compare; marker duration `(Cool + 0.01) + 1.0`, existing marker through
+  buff slot `0x350`, new one through `0x354`); target rule `0x6F0F0290` (`0xA2` illusion, `0x1C` deficit below 1.0,
+  `0xAE` a `Bhea` marker whose maker is not the caster); autocast filter `0x6F0F0370`; comparator `0x6F0DADD0` (earlier
+  run, 600 cases). **Bugs fixed**: (1) the foreign-marker refusal (`0xAE`) applies to manual casts too, the model only had
+  it in the autocast filter; (2) the autocast filter refuses a candidate whose unit type `regenHP` (type record `+0x7C`)
+  is below zero (ordered compare; NaN passes), missing in the model.
