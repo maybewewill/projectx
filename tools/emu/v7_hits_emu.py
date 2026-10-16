@@ -91,7 +91,8 @@ on_norm.pop = 4
 def install():
     S.install()
     A.patch_seh()
-    STUBS.update({0: A.stub_ret(4, 0), 1: A.stub_ret(4, 1), "g": A.stub_ret(0, 7), "s": A.stub_ret(8, 0x1234)})
+    STUBS.update({0: A.stub_ret(4, 0), 1: A.stub_ret(4, 1), "g": A.stub_ret(0, 7), "s": A.stub_ret(8, 0x1234), "f": A.stub_ret(0, 0)})
+    H_install_frag()
     hook(F_AREA, on_area)
     hook(F_DELAYED, on_delayed)
     hook(F_NORM, on_norm)
@@ -192,6 +193,63 @@ def run_ad(r):
         a[5] == UNIT, a[6], a[7] if len(a) > 7 else 0)
 
 
+VT_FRAG, F_FRAG = 0x6F8F404C, 0x6F183B40
+FOBJ, FVT2 = M + 0x6C00, M + 0x6E00
+
+
+def H_install_frag():
+    hook(0x6F16C690, on_make)
+    hook(0x6F17D5E0, on_init)
+    hook(STUBS["f"], on_slot212)
+
+
+def on_make(esp, ecx, edx):
+    """0x6F16C690 (ecx = &local, one stack arg): stores the fake object pointer."""
+    wr(ecx, FOBJ)
+    return ecx
+
+
+on_make.pop = 4
+
+
+def on_init(esp, ecx, edx):
+    return ecx
+
+
+on_init.pop = 12
+
+
+def on_slot212(esp, ecx, edx):
+    cap["frag"] = [rd(esp + 4 + 4 * i) for i in range(8)]
+    cap["frag_ptrs"] = [rd(cap["frag"][i]) for i in range(2, 8)]
+    return 0
+
+
+on_slot212.pop = 0x20
+
+
+def run_fs(r):
+    """Frag Shards slot 0x140: the temporary object of 0x6F16C690 / 0x6F17D5E0 gets the area ring pointers through its slot 212."""
+    data = [S.rbits(r) for _ in range(5)]
+    area = S.rbits(r)
+    pause = r.choice([0, 0, 0, 1, 3, 0xFFFFFFFF])
+    enabled = int(r.random() < 0.85)
+    targs = r.getrandbits(32)
+    rec = r.getrandbits(32)
+    fresh(VT_FRAG, 0, targs, data, 0, area, pause, enabled)
+    mu.mem_write(FOBJ, b"\0" * 0x40)
+    mu.mem_write(FVT2, b"\0" * 0x400)
+    wr(FOBJ, FVT2)
+    wr(FVT2 + 212, STUBS["f"])
+    cap.clear()
+    S.call(F_FRAG, ecx=ABIL, stack_args=(TGTU, rec))
+    head = "FS %x %d %08x %08x %s %08x" % (pause, enabled, rec, targs, " ".join("%08x" % d for d in data), area)
+    if "frag" not in cap:
+        return head + " | 0"
+    f = cap["frag"]
+    return head + " | 1 %d %08x %s" % (f[0] == rec, f[1], " ".join("%08x" % v for v in cap["frag_ptrs"]))
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -206,6 +264,7 @@ def main():
         rows.append(run_fl(r))
         rows.append(run_af(r))
         rows.append(run_ad(r))
+        rows.append(run_fs(r))
     for row in rows[:6]:
         print(row)
     if dump:
