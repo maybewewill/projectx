@@ -52,11 +52,13 @@ struct DoomMark {
 pub struct State {
     doom: BTreeMap<ObjKey, DoomMark>,
     next: u32,
+    pub(crate) waves: crate::neutral_waves::State,
 }
 
 pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(ORDER_TRANSMUTE, TRANSMUTE);
     ids.insert(ORDER_DOOM, DOOM);
+    crate::neutral_waves::register_orders(ids);
 }
 
 /// Abilities of this batch that are cast without a target.
@@ -116,20 +118,31 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             }
             true
         }
+        b if crate::neutral_waves::is_wave_spell(b) => {
+            crate::neutral_waves::start(game, rec);
+            true
+        }
         _ => false,
     }
 }
 
-/// Timer dispatch for the kinds of this module.
-pub(crate) fn on_timer(_game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, _kind: u8, _unit: ObjKey, _base: u32, _aux: u32) {}
+/// Timer dispatch for the kinds of this module (`aux` is the effect id).
+pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, _unit: ObjKey, _base: u32, aux: u32) {
+    match kind {
+        crate::neutral_waves::KIND_WAVE => crate::neutral_waves::on_timer(game, rt, kind, aux),
+        _ => {}
+    }
+}
 
 /// The channel time of the classes of this batch that set one.
-pub(crate) fn channel_time_override(_base: u32, _level: &SpellLevel) -> Option<F32> {
-    None
+pub(crate) fn channel_time_override(base: u32, level: &SpellLevel) -> Option<F32> {
+    crate::neutral_waves::channel_time(base, level)
 }
 
 /// The cast `rec` ended (`completed` false when an order interrupted it): the effects tied to the channel stop.
-pub(crate) fn on_cast_end(_game: &RefCell<Game>, _rec: &CastRec, _completed: bool) {}
+pub(crate) fn on_cast_end(game: &RefCell<Game>, rec: &CastRec, completed: bool) {
+    crate::neutral_waves::on_cast_end(game, rec, completed);
+}
 
 /// A unit died (called by the death dispatch, after the unit is marked dead): the removal notifications of the buffs the
 /// batch owns.
