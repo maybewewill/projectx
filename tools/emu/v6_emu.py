@@ -10,6 +10,7 @@ Row kinds (hex unless noted, `|` separates input from output):
   CL  race tlevel buff blevel upper ill mhero munit max | refuses   creep level rule 0x6F1D2630 over the unit level 0x6F29DCA0
   CE  ill hasowner | kind    Charm effect 0x6F1B13E0: 1 = vtable 0x124(0.0) on an illusion target, 2 = owner change 0x6F1B0C80
   PA  srcill hero existing flag200 dur herodur a b c d | path dur a b c d8 dfull   poison attack apply 0x6F13F2F0 (Envenomed Spears); path 1 new buff, 2 refresh of the existing one, 3 stacking buff, 0 stacking skipped
+  PS  (same fields as PA)      poison attack apply 0x6F13F500 (Slow Poison)
   TM  e0 e8 flagD illusion goldcost woodcost bounty_g bounty_w bounty_flag | called gold wood ...  Transmute buff action 0x6F1B59B0 -> 0x6F1B58B0
 
 Usage: GAME_DLL=/path/Game.dll py tools/emu/v6_emu.py OUT.txt [CASES] [SEED] [KIND,KIND]
@@ -188,6 +189,14 @@ PA_S35C = D + 0xA060
 
 
 def case_pa(r):
+    return poison_case(r, 'PA', PA_VT, 0x6F13F2F0, 0x6F13ADC0, 0x6F13AE90)
+
+
+def case_ps(r):
+    return poison_case(r, 'PS', 0x6F8DA5AC, 0x6F13F500, 0x6F13AF60, 0x6F13B030)
+
+
+def poison_case(r, tag, vt_code, fn, new_creator, stack_creator):
     srcill = r.choice([0, 0, 1])
     hero = r.choice([0, 1])
     existing = r.choice([0, 0, 1])
@@ -196,7 +205,7 @@ def case_pa(r):
     a, b, c = rand_real(r), rand_real(r), rand_real(r)
     d = r.choice([0, fbits(1.0), fbits(2.0), fbits(8.0), fbits(9.0), fbits(3.0), fbits(7.0), fbits(15.0), fbits(0.5), fbits(-1.0),
                   rand_real(r, small=True)])
-    T.setup(PA_VT, flags=0x200 if flag200 else 0)
+    T.setup(vt_code, flags=0x200 if flag200 else 0)
     setrec(dur=dur, herodur=herodur, a=a, b=b, c=c, d=d)
     for obj in (PA_VICT, PA_SRC):
         mu.mem_write(obj, bytes(0x300))
@@ -228,13 +237,13 @@ def case_pa(r):
     sf = {
         0x6F1D2660: lambda *x: hero,
         0x6F0787D0: lambda *x: PA_BUFFA if existing else 0,
-        0x6F13ADC0: lambda *x: PA_BUFFB,
-        0x6F13AE90: lambda *x: PA_BUFFB,
+        new_creator: lambda *x: PA_BUFFB,
+        stack_creator: lambda *x: PA_BUFFB,
         PA_S380: cap('r', 7), PA_S378: cap('n', 7), PA_S324: lambda *x: 0, PA_S35C: cap('s', 8),
     }
-    T.trace_call(0x6F13F2F0, T.ABIL, (PA_VICT, PA_SRC), stub_fn=sf, span=0x300,
+    T.trace_call(fn, T.ABIL, (PA_VICT, PA_SRC), stub_fn=sf, span=0x300,
                  cleanup={PA_S380: 28, PA_S378: 28, PA_S324: 4, PA_S35C: 32, 0x6F042B20: 8, 0x6F076700: 8, 0x6F079CA0: 4})
-    out = 'PA %d %d %d %d %x %x %x %x %x %x |' % (srcill, hero, existing, flag200, dur, herodur, a, b, c, d)
+    out = tag + ' %d %d %d %d %x %x %x %x %x %x |' % (srcill, hero, existing, flag200, dur, herodur, a, b, c, d)
     if 'r' in got:
         path, v = 2, got['r'][1]
         out += ' 2 %x %x %x %x %x -' % (v[2], v[3], v[4], v[5], v[6])
@@ -319,7 +328,7 @@ def case_tm(r):
     return out
 
 
-GENS = [('TN', case_tn), ('TM', case_tm), ('CL', case_cl), ('CE', case_ce), ('PA', case_pa)]
+GENS = [('TN', case_tn), ('TM', case_tm), ('CL', case_cl), ('CE', case_ce), ('PA', case_pa), ('PS', case_ps)]
 
 
 def main():

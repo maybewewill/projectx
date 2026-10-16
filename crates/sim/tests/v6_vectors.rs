@@ -119,8 +119,14 @@ fn charm_effect_matches_the_original() {
 
 #[test]
 fn poison_attack_apply_matches_the_original() {
+    for kind in ["PA", "PS"] {
+        poison_kind(kind);
+    }
+}
+
+fn poison_kind(kind: &str) {
     use sim::neutral_spells::{poison_plan, PoisonPath};
-    let rs = rows("PA");
+    let rs = rows(kind);
     assert!(rs.len() >= 300);
     let mut seen = [0usize; 4];
     for r in &rs {
