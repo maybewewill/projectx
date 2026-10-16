@@ -8,6 +8,9 @@ by crates/sim/tests/v3_vectors.rs against the Rust model. Row kinds (hex, `|` se
                                                           I immediate flag set, R ramp (fade > 0), - nothing)
   ID  count flags fade       | count' flags' class     decrement 0x6F28D9C0 (flag cleared at once; class I/R/-)
   VG  flags arg owner mask det | pass                  viewer gate 0x6F3A15F0
+  DA  fl5c immune hero dur herodur extra A B C | lc L mc M bc armor dur
+                                                        Scroll of Protection (AIda) area callback 0x6F0B61D0: the life
+                                                        and mana adder calls and the buff apply (Bdef) arguments
 
 Usage: GAME_DLL=/path/Game.dll py tools/emu/v3_cores_emu.py OUT.txt [CASES] [SEED] [KINDS]
 """
@@ -113,7 +116,74 @@ def case_vg(r):
     return 'VG %x %x %x %x %x | %x' % (flags, arg, owner, mask, det, ret & 0xffffffff)
 
 
-GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg)]
+# ---------------------------------------------------------------- DA: AIda area callback
+import item_trace_emu as _tt  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_EBX  # noqa: E402
+T.ALLOW.append((0x6F02F800, 0x6F02F900))
+DA_VT = int(_tt.factory_row('AIda')['vtable'], 16)
+LIFE_ADD, MANA_ADD = 0x6F277C20, 0x6F279140
+
+
+def setrec(**kw):
+    rec = bytearray(bytes(mu.mem_read(T.REC, 0x68)))
+    offs = {'dur': 0x08, 'herodur': 0x0C, 'area': 0x18}
+    for i, n in enumerate('abcdefghi'):
+        offs[n] = 0x20 + 4 * i
+    for k, v in kw.items():
+        struct.pack_into('<I', rec, offs[k], v & 0xffffffff)
+    mu.mem_write(T.REC, bytes(rec))
+
+
+def case_da(r):
+    T.setup(DA_VT)
+    cand = T.D + 0x5000
+    mu.mem_write(cand, bytes(0x400))
+    w32(cand, T.UVT)
+    fl5c = r.choice([0, 0, 0x40000000, r.getrandbits(32)])
+    w32(cand + 0x5C, fl5c)
+    immune = r.choice([0, 0, 0, 1])
+    hero = r.choice([0, 1])
+    dur, herodur, extra, a, b, c = (rand_real(r) for _ in range(6))
+    if r.random() < 0.2:
+        b = r.choice([0, 0x80000000, 0x7FC00000, fbits(-5.0)])
+    if r.random() < 0.2:
+        c = r.choice([0, 0x80000000, 0x7FC00000, fbits(-5.0)])
+    setrec(dur=dur, herodur=herodur, a=a, b=b, c=c)
+    w32(T.ABIL + 0x9C, extra)
+    got = {}
+
+    def life(uc, ecx, edx, st):
+        got['lc'] = (ecx == cand, r32(st[1]))
+        return 0
+
+    def mana(uc, ecx, edx, st):
+        got['mc'] = (ecx == cand, r32(st[1]))
+        return 0
+
+    def apply(uc, ecx, edx, st):
+        ebx = uc.reg_read(UC_X86_REG_EBX)
+        got['bc'] = (r32(ebx), r32(st[1]))
+        return 0
+
+    T.trace_call(0x6F0B61D0, cand, (), edx=T.ABIL,
+                 stub_fn={LIFE_ADD: life, MANA_ADD: mana, 0x6F28D750: lambda *x: immune, 0x6F1D2660: lambda *x: hero,
+                          0x6F0B60F0: apply},
+                 span=0x200, cleanup={0x6F0B60F0: 8, 0x6F042B20: 8})
+    out = 'DA %x %x %x %x %x %x %x %x %x |' % (fl5c, immune, hero, dur, herodur, extra, a, b, c)
+    for k in ('lc', 'mc'):
+        if k in got:
+            assert got[k][0], 'adder target is the candidate'
+            out += ' 1 %x' % got[k][1]
+        else:
+            out += ' 0 0'
+    if 'bc' in got:
+        out += ' 1 %x %x' % got['bc']
+    else:
+        out += ' 0 0 0'
+    return out
+
+
+GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da)]
 
 
 def main():
