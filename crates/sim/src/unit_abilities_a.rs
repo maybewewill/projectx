@@ -163,6 +163,7 @@ fn aura_def(base: u32) -> Option<(u32, &'static str)> {
         AURA_REGEN_MANA => (BUFF_REGEN_MANA, "ground,air,organic,vuln,invu"),
         AURA_SLOW => (BUFF_AURA_SLOW, "air,ground,enemy,vuln,invu"),
         AURA_WAR_DRUMS => (BUFF_WAR_DRUMS, "air,ground,friend,self,vuln,invu"),
+        crate::unit_abilities_m::AURA_REGEN_LIFE => (crate::unit_abilities_m::BUFF_REGEN_LIFE, "ground,air,organic,vuln,invu,friend,neutral"),
         _ => return None,
     })
 }
@@ -197,7 +198,7 @@ impl Game {
             self.spells.unit_a.eth.remove(&unit);
             self.unit_mut(unit).ethereal -= 1;
         }
-        for base in [AURA_BLIGHT_REGEN, AURA_REGEN_MANA, AURA_SLOW, AURA_WAR_DRUMS] {
+        for base in [AURA_BLIGHT_REGEN, AURA_REGEN_MANA, AURA_SLOW, AURA_WAR_DRUMS, crate::unit_abilities_m::AURA_REGEN_LIFE] {
             let has = self.unit(unit).abilities.get(base).is_some_and(|a| !a.is_removed());
             let running = self.spells.unit_a.emitters.contains_key(&(unit, base));
             if has && !running {
@@ -214,6 +215,7 @@ impl Game {
                 }
             }
         }
+        self.sync_unit_abilities_m(unit);
         self.sync_cargo_and_detect(unit);
         self.sync_ghosts(unit);
     }
@@ -251,7 +253,7 @@ impl Game {
         let d = level.data;
         let mut preds = BuffPredicates { aura: true, ..buff_predicates(buff) };
         let mods = match base {
-            AURA_BLIGHT_REGEN => {
+            AURA_BLIGHT_REGEN | crate::unit_abilities_m::AURA_REGEN_LIFE => {
                 preds.positive = true;
                 let amount = if nonzero(d[1]) { arith::mul(d[0], self.unit(target).max_life) } else { d[0] };
                 UnitMods { life_regen: amount, ..UnitMods::default() }
@@ -384,7 +386,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
                 crate::natives::dispatch_unit_death_by(game, rt, victim, killer);
             }
         }
-        _ => {}
+        _ => crate::unit_abilities_m::on_timer(game, rt, kind, unit, base, aux),
     }
 }
 
@@ -921,12 +923,17 @@ pub const BURROW: u32 = code(b"Abur");
 /// `(ability, primary order, alternate order)`: the order getters of the classes (slots `0x308` and `0x318`, Unicorn
 /// verified by `tools/analysis/ability_orders.py`). The primary order transforms into the level's `UnitID`, the
 /// alternate order back into the earlier form.
-pub const MORPH_ORDERS: [(u32, u32, u32); 5] = [
+pub const MORPH_ORDERS: [(u32, u32, u32); 9] = [
     (AVENGER_FORM, 852_531, 852_532),
     (BEAR_FORM, 852_138, 852_139),
     (CORPOREAL_FORM, 852_493, 852_494),
     (ETHEREAL_FORM, 852_496, 852_497),
     (BURROW, 852_533, 852_534),
+    // Batch M (S52): the other `CAbilityMorph` classes. Phoenix has no alternate order (its alternate getter is unhandled).
+    (crate::unit_abilities_m::RAVEN_FORM, 852_155, 852_156),
+    (crate::unit_abilities_m::STONE_FORM, 852_206, 852_207),
+    (crate::unit_abilities_m::MOUNT, 852_469, 852_470),
+    (crate::unit_abilities_m::PHOENIX_MORPH, 852_482, 0),
 ];
 
 fn morph_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Option<bool> {

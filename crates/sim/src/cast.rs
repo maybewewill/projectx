@@ -850,6 +850,7 @@ fn stage1(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
     if waits(rec.level.cast)
         && !crate::undead_ne::cast_field_is_period(rec.base)
         && !crate::human_heroes::cast_field_is_wave_interval(rec.base)
+        && !crate::unit_abilities_m::cast_field_is_duration(rec.base)
     {
         game.borrow_mut().timers.start(
             rec.level.cast.to_f32(),

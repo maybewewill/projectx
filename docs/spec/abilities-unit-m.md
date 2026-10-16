@@ -24,7 +24,7 @@ Modelled (behaviour + test):
 Queries only (rules belong to S44 `invisibility.rs`): `Apiv` (`m_perm_invisible`), `Ashm` (`m_shadow_meld_active`,
 night and stationary, caller supplies "stationary"), `Atru` (`m_true_sight_reveals`, radius `Area`), `Ault`.
 
-Listed only (class and parent recorded, no behaviour): the other 61 codes. Cast order ids that exist are in
+Listed only (class and parent recorded, no behaviour): the other 61 codes (S52 below moved 14 of them to Modelled). Cast order ids that exist are in
 `ORDER_IDS_LISTED`. The ones with no cast id (passives, morph toggles `Amou`/`Aphx`/`Arav`/`Astn` use primary ids only,
 cargo, tornado, tank and spawn abilities) need their class slots read first. Not attempted because they need
 systems outside this module: repair family `Arep/Aren/Arst` (construction + economy), `Artn` return (the harvest
@@ -41,3 +41,43 @@ arms call this module), `unit_spells.rs` (`m_on_hit` after `neutral_on_hit`; `mo
 
 Unicorn runs for the numbers (poison, Spirit Link share fraction, Control Magic mana rule, militia duration), the
 `Amil` order id, autocast scans for `Asps`, and the item/neutral alias rows for these codes.
+
+## S52: melee-relevant Listed codes moved to Modelled
+
+Tests: `crates/sim/tests/unit_abilities_m_s52.rs`. **No Unicorn run**: the numbers below are the editor rows of
+`Units\AbilityData.slk` (War3Patch.mpq, the user's 1.26a files), and none of the effects reads a constant that was
+found in `Game.dll`. Every row is therefore LIKELY (class, targs and order ids read from the original) or UNSURE
+(the effect arithmetic is a model). Order ids: cast getters of `docs/research/ability-orders/getters.tsv` except
+`Artn`, which has no cast getter (`returnresources` 852020 comes from the original's order-name initializer,
+`orders/names.rs`).
+
+| Code | Class | Order | What the model does | Label |
+|---|---|---|---|---|
+| `Arav` Raven, `Astn` Stone, `Amou` Mount | `CAbilityMorph` children | 852155/6, 852206/7, 852469/70 | rows of `unit_abilities_a::MORPH_ORDERS`: the level's `UnitID` after `Dur`, the alternate order returns | LIKELY (same class as Bear Form) |
+| `Aphx` Phoenix morph | `CAbilityMorph` child | 852482 (alternate getter unhandled) | primary order only | LIKELY, no way back |
+| `Arep` Repair, `Aren` Renew, `Arst` Restoration | `CAbilityRepair` (+children) | 852024 / 852161 / 852202 | target order; the builder restores `max life / (bldtm * DataB)` per second in 0.5 s ticks and pays `DataA * cost * repaired / max life` of gold and lumber (x10 tenths, plain changer) as it goes; ends when whole, when the owner cannot pay, when the builder moves or is stunned, or when the target dies. targs from the level rows (`mechanical,friend,nonancient,...`; Renew has no `mechanical`); the target must be hurt | structure and the editor meaning of `DataA` (0.35) / `DataB` (1.5) LIKELY; the 0.5 s tick, paying as it goes, `bldtm` as the base time (UnitBalance has `goldRep`/`lumberRep` but no repair-time column), power build (`DataC/D`) UNSURE |
+| `Artn` Return | `CAbility` | 852020 (immediate) | `production::Game::force_return`: a carrying worker walks to the nearest hall and deposits; a lumber cutter mid trip brings the whole hits made so far (`floor(elapsed / hit seconds)`); a worker in a mine or without a load is left alone | LIKELY (effect), UNSURE (partial-load rule) |
+| `Arpb` Replenish, `Arpl` Replenish Life, `Arpm` Replenish Mana | `CAbilityReplenish*` (Moon Well) | 852542 / 852545 / 852548 | `Cast` is the channel length (cast.rs skips its stage-2 wait, `cast_field_is_duration`), `Dur` the tick, each tick gives the target `DataA` life (Arpb, Arpl) and `DataB` mana (Arpb, Arpm); the generic cast pays `Cost` once; first tick immediate; targs `ground,air,friend,self,organic,vuln,invu`, the target must lack life or mana | UNSURE (the reading of `Cast` / `Cost` / `Data*`) |
+| `Auns` Unsummon | `CAbilitySimpleSpell` | 852210 | removes an own structure (`structure,player`) and refunds `DataA` (0.5) of its gold and lumber cost | order id and targs LIKELY, refund rule UNSURE (`DataB` 50 unused) |
+| `Atau` Taunt | `CAbilitySimpleSpell` | 852520 (immediate) | every enemy within `Area` (450) is given an attack order on the caster (`air,ground,enemy,vuln,invu`) | UNSURE (the original probably holds the order for `DataA` = 10 s) |
+| `Aoar` Regeneration aura | `CAbilityAuraRegenLife < CAbilityAura` | passive | joins batch A's aura machinery: buff `Boar` (CONFIRMED: `CBuffAuraRegenLife` code getter `0x6F022D40`; `Bpig` of `CBuffPandaImmolation` `0x6F10E930` read the same way, not applied), `DataA` (0.02) of max life per second when `DataB != 0`, `Area` 500, targs `friend,neutral,...` | LIKELY (shape of `Aabr`) |
+| `Apig` Panda Immolation | `CAbilityPandaImmolation < CAbilityPermImmolation` | passive | a periodic timer (`Dur`) while the ability exists; enemies within `Area` (220) take `DataA` (10), damage type 9 like the toggled Immolation | LIKELY, damage type UNSURE |
+
+### Shared-file edits (kept to a few lines)
+
+`unit_abilities_a.rs` (rows of `MORPH_ORDERS`, `Aoar` in the aura lists, the timer fall-through to this module and
+one call of `sync_unit_abilities_m`), `cast.rs` (one condition: `cast_field_is_duration`), `production.rs`
+(`force_return`).
+
+### Checked against the data, not modelled (no behaviour added)
+
+* `Ambt` Mana Battery: `Rng` 99999, `Area` 400, `DataA..E` = 2, 0.5, 10, 30, 1: the fields cannot be assigned to an effect.
+* `Amfl` Mana Flare: `Cast` 0.75, `Dur` 30, `Cool` 20, `Cost` 50, `Area` 750, `DataA..F` = 3, 1, 90, 50, 12, 1; buffs `Bmfl,Bmfa`.
+* `Asds` Self Destruct (Sapper): `DataA..E` = 100, 250, 250, 100, 3; the damage split is unknown.
+* `Amin` Land Mine (`Rng` 200, `DataA` 10, `DataB` 2), `Atdg`/`Atsp`/`Atwa` tornado, `Awrp` warp (400/400), `Awha` Wisp harvest
+  (5, 5, 150), `Aste` Steal (`DataA` 50), `Assk` Stone Skin (100, 3, 12, 1, 1), `Amdf` Magic Defense (0.33), `Asal` Salvage (0.5, 1).
+* `Apit` Purchase Item, the shop and sell abilities: the stock lists (`shop.rs`) have no restock timer, no purchase and no
+  item cost table in the model; not started.
+* `Aroo` Root / Uproot (orders 852165 / 852166): the planted and uprooted forms are two unit types and the pairing is in
+  no table the model loads.
+* `Amgl` Moon Glaive: a bounce attack whose count and loss come from the weapon row, not the ability.

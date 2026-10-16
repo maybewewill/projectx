@@ -1428,6 +1428,56 @@ impl Game {
         }
     }
 
+    /// Return Resources (`Artn`, order `returnresources` 852020; S52, LIKELY): a harvesting worker that carries
+    /// something walks to the nearest hall and deposits through the ordinary `ToHall` step. A lumber cutter in the
+    /// middle of a trip brings the hits it has made so far (the model books a trip's wood at its end, so the partial
+    /// load is `floor(elapsed / hit seconds)` hits, UNSURE). A worker inside a mine, with an empty load, or without a
+    /// cycle is left alone. Returns whether it was redirected.
+    pub fn force_return(&mut self, unit: ObjKey) -> bool {
+        let owner = self.unit(unit).owner;
+        let pos = self.unit_xy(unit);
+        let now = self.production.now;
+        let Some(h) = self.production.harvesters.get(&unit).cloned() else {
+            return false;
+        };
+        if h.worker.mining {
+            return false;
+        }
+        let lumber = h.resource == Res::Lumber;
+        let mut worker = h.worker.clone();
+        match h.phase {
+            Phase::ToSource if worker.carry > 0 => {}
+            Phase::Working { until } if lumber => {
+                let spec = h.spec;
+                let hits_total = ((spec.wood_cap + spec.per_hit - 1) / spec.per_hit.max(1)).max(1);
+                let total = spec.hit_seconds * hits_total as f32;
+                let elapsed = total - (until - now);
+                let done = if spec.hit_seconds > 0.0 { (elapsed / spec.hit_seconds).floor() as i32 } else { 0 };
+                let mut take = done.clamp(0, hits_total) * spec.per_hit;
+                if let Some(i) = h.tree {
+                    if let Some(t) = self.production.trees.get_mut(i) {
+                        take = take.min(t.wood);
+                        t.wood -= take;
+                    }
+                }
+                if take <= 0 {
+                    return false;
+                }
+                worker.carry_add(&mut self.economy, take, true);
+            }
+            _ => return false,
+        }
+        let Some((_, hx, hy)) = self.nearest_hall(owner, pos, lumber) else {
+            return false;
+        };
+        let hh = self.production.harvesters.get_mut(&unit).unwrap();
+        hh.worker = worker;
+        hh.phase = Phase::ToHall;
+        hh.retries = 0;
+        self.order_move(unit, hx, hy);
+        true
+    }
+
     /// Whether the worker has a harvest cycle.
     pub fn is_harvesting(&self, unit: ObjKey) -> bool {
         self.production.harvesters.contains_key(&unit)
