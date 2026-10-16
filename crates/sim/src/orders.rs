@@ -539,6 +539,8 @@ impl Game {
             self.start_head(unit);
         } else {
             self.mover_halt(unit);
+            // The idle message (`0xD0148` / `0xD0178`): critters start their next wander delay.
+            crate::wander::on_idle(self, unit);
         }
     }
 

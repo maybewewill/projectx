@@ -103,6 +103,8 @@ pub struct State {
     infested: BTreeMap<ObjKey, Infest>,
     /// Running timers of Permanent Immolation: `unit -> timer`.
     immolating: BTreeMap<ObjKey, crate::timer::TimerId>,
+    /// Wander (`Awan`) state: `unit -> running timer` (see `wander.rs`).
+    pub(crate) wander: BTreeMap<ObjKey, Option<crate::timer::TimerId>>,
 }
 
 pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {

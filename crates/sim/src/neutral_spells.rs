@@ -257,6 +257,7 @@ impl Game {
     pub fn sync_neutral_spells(&mut self, unit: ObjKey) {
         crate::neutral_forms::sync_neutral2(self, unit);
         crate::invisibility::sync(self, unit);
+        crate::wander::sync(self, unit);
         let has = self.unit(unit).abilities.get(MAGIC_IMMUNITY).is_some_and(|a| !a.is_removed());
         let counted = self.spells.neutral.immune.contains(&unit);
         if has && !counted {

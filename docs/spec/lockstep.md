@@ -1639,3 +1639,49 @@ sim's pathing-tag churn visible (5,038 tag events against 1,180 recorded): exact
 Absolute exact records: 0 of 5,504, first mismatch slot 0 (unchanged). Pairs (no registration): 1,302 -> 2,146 after the seed and race fixes. Needed for slot 0:
 the static constant K (slots 5..9, 12..19), X0/Y0 after the load, n0, and the game hash. Next: placement shuffle draws, load-time draw consumers, per-leg
 registration (walking must not register), agent-id counter.
+
+## 20. Pass 17 (2026-10-17): the global-generator draws before slot 0 and in the first minute (R3)
+
+Replay `echoisles_ai_1.w3g`, `w3boot --sim-sync`. Tools used (not committed): a Python replica of the generator and the hidden-word chain
+(`rngpy`), matching every recorded hidden-word delta against `rol3(R_a ^ R_b)` of the fixed-seed sequence.
+
+### 20.1 The real draw timeline (CONFIRMED where an exact (a, b) window matches)
+Pure single-draw events (a delta equal to `rol3(h[n] ^ h[n+1])` with no other input) give the draw count at a slot: n(41) = 29 (slot 42: 29 to 30),
+and slot 32 carries 28 to 29 with a small tag residual (`0x2980`). Slots 1 to 31 contain **no** generator-only event, so the global generator had
+**28 draws at slot 0** (2 random races + about 26 not yet explained), against 2 in the sim. Later: n = 45 at slot 150, 63 at 384, 104 at 700, 207
+at 1500, 348 at 2094, 615 at 2969, 1170 at 4945, 1315 at 5497 (the sim before this pass: 244 at the end).
+
+### 20.2 The consumers of the global generator (pointer `0x6FAB73D8`; decompiled)
+Direct users: races `0x6F3A31A0` (one draw per random-race player), placement shuffles (`0x6F4ACF60` from `0x6F3A5090`, `0x6F3A51A0`, `0x6F3AA2A0`;
+a shuffle of n items draws n - 1; placement mode `settings+72`: 0 random, 1 fixed, 2 custom, 3 teams together, which falls back to the random
+path when `settings+56 & 0x40` is clear), the natives (`0x6F3B3560/35A0/36D0`), pool selectors (`0x6F3E0280`, `0x6F3E17B0`), the hero proper-name
+pick (`0x6F430DF0`: only a type with more than one proper name), the light flicker `0x6F011B60` (fog/lighting object `0x6F013EB0`, per frame: UNSURE
+whether it is simulation state), the unit scatter callback `0x6F2ADE80` and the order helper `0x6F2A50C0` (two real draws each), the push-apart
+`0x6F4961C0` (random direction `0x6F4B7FE0`), **Wander `0x6F170D60`**, and the **AI** hero pick (`common.ai` line 2568: three draws, then `Sleep(GetRandomInt(1,3))`
+loops in the race scripts). The presentation generator is a different object (`0x6FAB58CC`): `0x6F27A8B0`, `0x6F30AE20`, `0x6F30FE20`, `0x6F31FA50`
+do not touch the global one. Stream draws (`0x6F285320`, `0x6F2853D0`) are not global draws.
+
+### 20.3 Wander (`Awan`, `CAbilityWander`, vtable `0x6F8E4EC4`): new, in `crates/sim/src/wander.rs` (model, arm at creation UNSURE)
+Critters (pig, sheep, raccoon, ...; `UnitAbilities.slk` `abilList` `Awan`) walk at random. CONFIRMED from the machine code: delay `0x6F170D60` =
+`5.0 + (10.0 - 5.0) * U` with `U` one step of the global generator (constants `0x6FAB1D7C/80` = 5.0/10.0 after start-up; a dead unit takes 0.01 without a
+draw); arm `0x6F159420` starts a timer with message `0xD01BF` on the ability's own timer object, clamped to at least 0.01; the timer handler
+`0x6F162960` does nothing when the unit has a current order, otherwise the offsets of `0x6F170DF0` are `x + (500.0 * U1 - 250.0)`,
+`y + (500.0 * U2 - 250.0)` with U1, U2 two steps of **stream 8** (a flying or dead unit: 2000 and 1000), clamped to the playable area, then a move order
+`0xD0012`. The class re-arms on messages `0xD0148` and `0xD0178` (idle) when the move ability is not disabled (`0x6F1628F0`, `0x6F162930`).
+Effect on the replay metrics: the sim's global draws rise from 244 to 585 over the game (real 1,315) and stream 8 now moves the rand slot; pairs exact
+387 against 397 (not a score, as in 18.3). The draw slots of sim and file still agree only at chance level, because the AI cadence and the pre-load
+draws are unknown.
+
+### 20.4 Scatter callback (`0x6F2ADE80`), N/A for the load as far as read
+Creating a widget with a footprint (`0x6F2AE260`, called from the unit/item type setters `0x6F2A1F20`, `0x6F2B91D0`) runs a synchronous rect query
+(`0x6F47FA90`) over the units already inside the footprint; each unit that passes the checks takes two global draws and a move order out of the
+footprint. In the map's creation order the neutral buildings come first, so the load rarely has units inside a footprint; whether the melee start
+creates any is open. The loading flag `0x6FA73A90` (`0x6F2AB0E0`) is a debug draw switch, not a batch.
+
+### 20.5 What is still open (R3 items)
+1. About 26 draws before slot 0 (races 2, AI hero pick 3 if the AI thread runs inside `main`, placement 1 to 4, critter arms 6 if they arm at creation,
+   the rest unexplained). The sim has none of them; the static decode of the load path (`0x6F3B0750`) found no other direct user.
+2. Registry slots 5 to 9, 12 to 19: not decoded (slot 5 mixes a file hash `0x6F4C9050` of the ability database).
+3. X0, Y0 after the load: need the creation count of the whole load.
+4. Agent ids: a pair is `(table index, serial)` in the agent table `0x6FAB7788` (`0x6F03FA30` checks `[entry+4]+24 == serial`); both words are equal on the
+   replay, i.e. the index of a fresh agent. A peasant takes 22 table slots, the hall 53 before the first peasant; the counts per type are not decoded.
