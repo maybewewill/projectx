@@ -56,6 +56,7 @@ pub struct State {
     pub(crate) rain: crate::neutral_rain::State,
     pub(crate) forms: crate::neutral_forms::State,
     pub(crate) orbs: crate::neutral_orbs::State,
+    pub(crate) misc: crate::neutral_misc::State,
 }
 
 pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -65,11 +66,12 @@ pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     crate::neutral_rain::register_orders(ids);
     crate::neutral_forms::register_orders(ids);
     crate::neutral_orbs::register_orders(ids);
+    crate::neutral_misc::register_orders(ids);
 }
 
 /// Abilities of this batch that are cast without a target.
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    crate::neutral_forms::takes_no_target(base)
+    crate::neutral_forms::takes_no_target(base) || crate::neutral_misc::takes_no_target(base)
 }
 
 /// `0x6F1D2630(unit, level)`: the creep level rule of the Transmute and Doom target slots (CONFIRMED): true when the
@@ -105,7 +107,8 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let max = conv::f2i(gm.spell_level(caster, DOOM).data[3]);
             (creep_too_high(gm, target, max) || gm.neutral2_doomed(target)).then_some(BadTarget)
         }
-        _ => crate::neutral_orbs::target_error(gm, caster, base, target),
+        _ => crate::neutral_orbs::target_error(gm, caster, base, target)
+            .or_else(|| crate::neutral_misc::target_error(gm, caster, base, target)),
     }
 }
 
@@ -134,6 +137,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         }
         b if crate::neutral_forms::is_forms_spell(b) => crate::neutral_forms::run_effect(game, rec),
         crate::neutral_orbs::BLACK_ARROW_SPELL => crate::neutral_orbs::run_effect(game, rec),
+        b if crate::neutral_misc::is_misc_spell(b) => crate::neutral_misc::run_effect(game, rt, rec),
         _ => false,
     }
 }
@@ -144,6 +148,9 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
         crate::neutral_waves::KIND_WAVE => crate::neutral_waves::on_timer(game, rt, kind, aux),
         crate::neutral_rain::KIND_STAMPEDE..=crate::neutral_rain::KIND_VOLCANO => crate::neutral_rain::on_timer(game, rt, kind, aux),
         crate::neutral_orbs::KIND_INCINERATE => crate::neutral_orbs::on_timer(game, rt, kind, aux),
+        crate::neutral_misc::KIND_DRAIN..=crate::neutral_misc::KIND_PERM_IMMOLATION => {
+            crate::neutral_misc::on_timer(game, rt, kind, _unit, aux)
+        }
         crate::neutral_forms::KIND_SPLIT_END..=crate::neutral_forms::KIND_PASSIVE => {
             crate::neutral_forms::on_timer(game, rt, kind, _unit, _base, aux)
         }
@@ -151,9 +158,17 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     }
 }
 
+/// Whether the `Cast` field of the class is not a cast time: Parasite stores its summoned unit duration there (the
+/// editor's `NPA6`), so the cast core must not wait on it.
+pub(crate) fn cast_field_is_data(base: u32) -> bool {
+    base == crate::neutral_misc::PARASITE
+}
+
 /// The channel time of the classes of this batch that set one.
 pub(crate) fn channel_time_override(base: u32, level: &SpellLevel) -> Option<F32> {
-    crate::neutral_waves::channel_time(base, level).or_else(|| crate::neutral_rain::channel_time(base, level))
+    crate::neutral_waves::channel_time(base, level)
+        .or_else(|| crate::neutral_rain::channel_time(base, level))
+        .or_else(|| crate::neutral_misc::channel_time(base, level))
 }
 
 /// The cast `rec` ended (`completed` false when an order interrupted it): the effects tied to the channel stop.
@@ -168,6 +183,7 @@ pub(crate) fn on_unit_died(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, uni
     doom_death(game, unit);
     crate::neutral_forms::on_unit_died(game, rt, unit);
     crate::neutral_orbs::on_unit_died(game, unit);
+    crate::neutral_misc::on_unit_died(game, unit);
 }
 
 /// Transmute (`ANtm`; the effect `0x6F1C18B0` puts `BNtm` on the target and the buff's action slot `0x33C` =

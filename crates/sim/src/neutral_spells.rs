@@ -84,7 +84,9 @@ const PULVERIZE_DAMAGE_TYPE: u32 = 5;
 /// `(derived class code, modelled code it derives from, order id of the derived class)`. Parents are the RTTI
 /// parents of the atlas (`docs/research/ability-atlas/factory.tsv`); the order ids are the Unicorn-checked cast getters
 /// (`tools/analysis/ability_orders.py`, slot `0x348`).
-pub const STATIC_PARENTS: [(u32, u32, u32); 8] = [
+pub const STATIC_PARENTS: [(u32, u32, u32); 9] = [
+    // CAbilityInferno (neutral Pit Lord row) shares the layout of the Dreadlord's `AUin` (S50).
+    (code(b"ANin"), code(b"AUin"), 852_232),
     // CAbilityNeutralHeal < CAbilityHeal: only the order ids (slots 0x348 / 0x308 / 0x318) differ.
     (code(b"Anhe"), code(b"Ahea"), ORDER_NEUTRAL_HEAL),
     // CAbilityCreepThunderBolt < CAbilityThunderBolt, no override but the codes.
@@ -124,10 +126,15 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
     *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm", *b"ANsg", *b"ANsq", *b"ANsw", *b"ANdh", *b"ANdb", *b"ANlm", *b"ANso", *b"ANab", *b"ANfl",
     *b"ANtm", *b"ANdo", *b"ANcs", *b"ANhs", *b"ANst", *b"ANvc", *b"ANef", *b"ANcr", *b"ANrg", *b"ANeg", *b"ANsy", *b"ANto", *b"Atdg", *b"Atsp", *b"ANba", *b"ANbs", *b"ANic",
+    *b"ANbr", *b"ANmr", *b"ANde", *b"ANpi", *b"ANrc", *b"ANfd", *b"ANwm", *b"ANpa", *b"ANcl", *b"ANdp", *b"ANin", *b"ANmo", *b"ANia",
 ];
 
 fn is_modelled(c: u32) -> bool {
     MODELLED.iter().any(|m| u32::from_be_bytes(*m) == c)
+        || crate::unit_abilities_a::ABILITIES.iter().any(|i| i.code == c)
+        || crate::unit_abilities_m::CODES.iter().any(|(b, _, _, st)| {
+            u32::from_be_bytes(**b) == c && matches!(st, crate::unit_abilities_m::Status::Modelled | crate::unit_abilities_m::Status::Query)
+        })
 }
 
 /// The modelled ability the alias rows of one `code` group stand for, if any. `code_col` is the group's `code` column,

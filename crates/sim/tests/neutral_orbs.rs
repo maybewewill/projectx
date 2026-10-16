@@ -32,6 +32,8 @@ globals
     unit mid = null
     unit far = null
     unit v2 = null
+    unit iarrow = null
+    unit iv = null
     boolean accepted = false
 endglobals
 function setup takes nothing returns nothing
@@ -42,6 +44,8 @@ function setup takes nothing returns nothing
     set near = CreateUnit(Player(1), 'ndmy', 5130.0, 0.0, 0.0)
     set mid = CreateUnit(Player(1), 'ndmy', 5230.0, 0.0, 0.0)
     set far = CreateUnit(Player(1), 'ndmy', 5500.0, 0.0, 0.0)
+    set iarrow = CreateUnit(Player(0), 'nia0', 8000.0, 0.0, 0.0)
+    set iv = CreateUnit(Player(1), 'ndmy', 8080.0, 0.0, 180.0)
 endfunction
 function arrows_on takes nothing returns nothing
     set accepted = IssueImmediateOrderById(ranger, 852578)
@@ -51,6 +55,12 @@ function arrows_off takes nothing returns nothing
 endfunction
 function shoot takes nothing returns nothing
     call IssueTargetOrder(ranger, "attack", victim)
+endfunction
+function iarrows_on takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(iarrow, 852671)
+endfunction
+function ishoot takes nothing returns nothing
+    call IssueTargetOrder(iarrow, "attack", iv)
 endfunction
 function burn takes nothing returns nothing
     call IssueTargetOrder(burner, "attack", v2)
@@ -94,9 +104,10 @@ fn host() -> ScriptHost {
         let mut g = h.game_mut();
         g.unit_types_mut().insert(id(b"nrng"), ut(vec![BLACK_ARROW]));
         g.unit_types_mut().insert(id(b"nfl0"), ut(vec![INCINERATE]));
+        g.unit_types_mut().insert(id(b"nia0"), ut(vec![INCINERATE_ARROW]));
         g.unit_types_mut().insert(id(b"ndmy"), ut(vec![]));
         g.unit_types_mut().insert(id(b"ndr1"), ut(vec![]));
-        for t in [id(b"nrng"), id(b"nfl0")] {
+        for t in [id(b"nrng"), id(b"nfl0"), id(b"nia0")] {
             g.set_type_orders(t, TypeOrderData { abilities: vec![AbilityKind::Move, AbilityKind::Attack] });
             g.set_attack_type(
                 t,
@@ -120,7 +131,11 @@ fn host() -> ScriptHost {
             INCINERATE,
             vec![SpellLevel { dur: f(2.0), hero_dur: f(2.0), data: data(&[1.0, 30.0, 90.0, 15.0, 180.0, 0.2]), ..Default::default() }],
         );
-        for a in [BLACK_ARROW, INCINERATE] {
+        g.set_spell_levels(
+            INCINERATE_ARROW,
+            vec![SpellLevel { cost: 6, dur: f(2.0), hero_dur: f(2.0), rng: f(550.0), data: data(&[1.0, 30.0, 90.0, 15.0, 180.0, 0.2]), ..Default::default() }],
+        );
+        for a in [BLACK_ARROW, INCINERATE, INCINERATE_ARROW] {
             g.ability_types_mut().insert(a, AbilityType { max_level: Some(1) });
         }
     }
@@ -218,4 +233,18 @@ fn incinerate_stacks_the_burn_and_the_death_blast_has_two_rings() {
     assert_eq!(life(&h, near), 500.0 - 30.0, "within 90 of the corpse: the full amount");
     assert_eq!(life(&h, mid), 500.0 - 15.0, "within 180: the half amount");
     assert_eq!(life(&h, far), 500.0, "outside");
+}
+
+#[test]
+fn incinerate_arrow_needs_the_autocast_and_pays_mana_per_arrow() {
+    let mut h = started();
+    let (iarrow, iv) = (unit(&h, "iarrow"), unit(&h, "iv"));
+    h.start("ishoot", &[]).expect("shoot");
+    run(&mut h, 8);
+    assert_eq!(life(&h, iv), 500.0 - 10.0, "off: a plain hit");
+    assert_eq!(h.game().incinerate_stacks(iv), 0);
+    h.start("iarrows_on", &[]).expect("on");
+    run(&mut h, 12);
+    assert_eq!(h.game().incinerate_stacks(iv), 1, "on: the second arrow burns");
+    assert_eq!(h.game().unit(iarrow).mana.to_f32(), 494.0, "6 mana per arrow");
 }

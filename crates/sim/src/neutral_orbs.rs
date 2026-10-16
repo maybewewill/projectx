@@ -22,6 +22,11 @@ pub const BUFF_DARK_MINION: u32 = code(b"BNdm");
 /// Firelord: Incinerate (`CAbilityIncinerate < CAbilityCleavingAttack`, buff `CBuffIncinerate`).
 pub const INCINERATE: u32 = code(b"ANic");
 pub const BUFF_INCINERATE: u32 = code(b"BNic");
+/// Incinerate Arrow (`CAbilityIncinerateArrow < CAbilityRangerArrow`): the autocast orb form of Incinerate (mana `Cost` per
+/// arrow, same data layout, buff `BNic`). Orders: cast 852670, autocast on 852671, off 852672.
+pub const INCINERATE_ARROW: u32 = code(b"ANia");
+pub const ORDER_INCINERATE_ARROW_ON: u32 = 852_671;
+pub const ORDER_INCINERATE_ARROW_OFF: u32 = 852_672;
 
 /// Black Arrow orders: autocast on / off (slots `0x308` / `0x318`) and the cast (slot `0x348`, shared with the spell form).
 pub const ORDER_BLACK_ARROW_ON: u32 = 852_578;
@@ -57,6 +62,8 @@ struct Blast {
 pub struct State {
     /// Units whose Black Arrow autocast is on (default off).
     autocast: BTreeSet<ObjKey>,
+    /// Units whose Incinerate Arrow autocast is on (default off).
+    arrow_autocast: BTreeSet<ObjKey>,
     black: BTreeMap<ObjKey, Mark>,
     incinerate: BTreeMap<ObjKey, Mark>,
     blasts: BTreeMap<u32, Blast>,
@@ -68,6 +75,19 @@ pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// The Black Arrow autocast toggles. `None` when `id` is not one of them.
 pub(crate) fn toggle_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Option<bool> {
+    if id == ORDER_INCINERATE_ARROW_ON || id == ORDER_INCINERATE_ARROW_OFF {
+        let mut gm = game.borrow_mut();
+        if gm.unit(unit).abilities.get(INCINERATE_ARROW).is_none_or(|a| a.is_removed()) {
+            return Some(false);
+        }
+        let set = &mut gm.spells.neutral.h2.orbs.arrow_autocast;
+        if id == ORDER_INCINERATE_ARROW_ON {
+            set.insert(unit);
+        } else {
+            set.remove(&unit);
+        }
+        return Some(true);
+    }
     if id != ORDER_BLACK_ARROW_ON && id != ORDER_BLACK_ARROW_OFF {
         return None;
     }
@@ -117,9 +137,11 @@ impl Game {
                 died.push(d);
             }
         }
-        if self.alive(target) && self.unit(attacker).abilities.get(INCINERATE).is_some_and(|a| !a.is_removed()) {
-            if let Some(d) = self.incinerate_hit(attacker, target) {
-                died.push(d);
+        for base in [INCINERATE, INCINERATE_ARROW] {
+            if self.alive(target) && self.unit(attacker).abilities.get(base).is_some_and(|a| !a.is_removed()) {
+                if let Some(d) = self.incinerate_hit(attacker, target, base) {
+                    died.push(d);
+                }
             }
         }
         died
@@ -146,10 +168,22 @@ impl Game {
         None
     }
 
-    fn incinerate_hit(&mut self, attacker: ObjKey, target: ObjKey) -> Option<ObjKey> {
-        let level = self.ability_level_record(attacker, INCINERATE)?;
+    fn incinerate_hit(&mut self, attacker: ObjKey, target: ObjKey, base: u32) -> Option<ObjKey> {
+        let level = self.ability_level_record(attacker, base)?;
         if !targs_ok(self, attacker, target, targs_word("enemy,neutral,organic,nonancient")) {
             return None;
+        }
+        if base == INCINERATE_ARROW {
+            // The arrow form: autocast must be on and the mana `Cost` is paid per arrow.
+            if !self.spells.neutral.h2.orbs.arrow_autocast.contains(&attacker) {
+                return None;
+            }
+            let cost = conv::i2r(level.cost);
+            let mana = self.unit(attacker).mana;
+            if arith::lt(mana, cost) {
+                return None;
+            }
+            self.write_mana(attacker, arith::sub(mana, cost));
         }
         let live = self.unit(target).buffs.iter().any(|b| b.base == BUFF_INCINERATE);
         let prev = self.spells.neutral.h2.orbs.incinerate.get(&target).copied().filter(|m| live && m.source == attacker);

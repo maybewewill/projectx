@@ -24,6 +24,10 @@ pub const CLUSTER_ROCKETS: u32 = code(b"ANcs");
 pub const HEALING_SPRAY: u32 = code(b"ANhs");
 pub const BUFF_CLUSTER: u32 = code(b"BNcs");
 pub const BUFF_SPRAY: u32 = code(b"BNhs");
+/// Naga Sea Witch: Monsoon (`CAbilityMonsoon < CAbilitySimpleSpell`, effect `XNmo`): the Starfall field set (`ESF1..3`) on a
+/// target point.
+pub const MONSOON: u32 = code(b"ANmo");
+pub const ORDER_MONSOON: u32 = 852_591;
 
 /// Cluster Rockets and Healing Spray orders (slot `0x348`).
 pub const ORDER_CLUSTER_ROCKETS: u32 = 852_652;
@@ -60,10 +64,11 @@ pub struct State {
 pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(ORDER_CLUSTER_ROCKETS, CLUSTER_ROCKETS);
     ids.insert(ORDER_HEALING_SPRAY, HEALING_SPRAY);
+    ids.insert(ORDER_MONSOON, MONSOON);
 }
 
 pub(crate) fn is_wave_spell(base: u32) -> bool {
-    base == CLUSTER_ROCKETS || base == HEALING_SPRAY
+    base == CLUSTER_ROCKETS || base == HEALING_SPRAY || base == MONSOON
 }
 
 /// The wave count of the class (slot `0x430`): Cluster Rockets `0x6F161280` = `I2R(f2i(DataF / DataB))` (the effect
@@ -72,6 +77,13 @@ pub(crate) fn is_wave_spell(base: u32) -> bool {
 pub fn wave_count(gm: &Game, base: u32, level: &SpellLevel) -> i32 {
     if base == HEALING_SPRAY {
         return conv::f2i(level.data[5]);
+    }
+    if base == MONSOON {
+        // The storm lasts `HeroDur` (the caster is a hero) and strikes every `DataB` seconds.
+        if !arith::lt(F32::ZERO, level.data[1]) {
+            return 0;
+        }
+        return conv::f2i(gm.soft_div(level.hero_dur, level.data[1]));
     }
     if !arith::lt(F32::ZERO, level.data[1]) {
         return 0;
@@ -92,6 +104,7 @@ pub(crate) fn channel_time(base: u32, level: &SpellLevel) -> Option<F32> {
     match base {
         CLUSTER_ROCKETS => Some(level.data[5]),
         HEALING_SPRAY => Some(spray_duration(level)),
+        MONSOON => Some(level.hero_dur),
         _ => None,
     }
 }
@@ -146,10 +159,13 @@ fn wave(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, w: WaveFx) {
         return;
     }
     let heal = w.base == HEALING_SPRAY;
+    let monsoon = w.base == MONSOON;
     let (targets, tables) = {
         let gm = game.borrow();
         let word = if heal {
             targs_word("ground,air,friend,organic")
+        } else if monsoon {
+            targs_word("air,ground,structure,enemy,neutral")
         } else {
             targs_word("ground,enemy,neutral,structure")
         };
@@ -185,6 +201,15 @@ fn wave(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, w: WaveFx) {
             }
             (gm.unit_types().is_building(gm.unit(k).type_id), gm.target_hero(k))
         };
+        if monsoon {
+            // Monsoon: every enemy in the area takes `DataA` each strike (structures `DataC` times as much, the editor's
+            // "Building Reduction"); no marker and no stun.
+            let amount = if structure { arith::mul(w.level.data[0], w.level.data[2]) } else { w.level.data[0] };
+            if let Some(d) = game.borrow_mut().unit_damage_target(w.caster, k, amount, false, false, 0, WAVE_DAMAGE_TYPE) {
+                killed.push(d);
+            }
+            continue;
+        }
         let amount = crate::human_heroes::blizzard_unit_damage(&params, count, structure, heal, tables.as_ref());
         let magnitude = if heal { arith::neg(amount) } else { amount };
         if !wave_marker(game, k, marker_code, magnitude, w.interval) {

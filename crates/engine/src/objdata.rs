@@ -205,8 +205,9 @@ fn load_neutral_lists(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), Er
     let Ok(slk) = Slk::parse_bytes(&bytes) else {
         return Ok(());
     };
-    const FIELDS: [(&str, &[(&str, usize)]); 3] = [
+    const FIELDS: [(&str, &[(&str, usize)]); 4] = [
         ("ANef", &[("DataA", 0)]),
+        ("ANdp", &[("DataA", 0)]),
         ("ANsy", &[("DataB", 1)]),
         ("ANeg", &[("DataC", 2), ("DataD", 3), ("DataE", 4), ("DataF", 5)]),
     ];

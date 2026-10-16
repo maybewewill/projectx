@@ -231,6 +231,8 @@ pub struct UnitMods {
     pub morph: bool,
     /// One invulnerability count while the buff exists (the potion of invulnerability, `Bvul`).
     pub invuln: bool,
+    /// A flat attack damage bonus (added to the unit's attack bonus, Battle Roar).
+    pub damage_flat: F32,
 }
 
 impl Default for UnitMods {
@@ -246,6 +248,7 @@ impl Default for UnitMods {
             root: false,
             morph: false,
             invuln: false,
+            damage_flat: F32::ZERO,
         }
     }
 }
@@ -281,6 +284,10 @@ impl Game {
         if m.invuln {
             self.unit_mut(unit).invuln_count += 1;
         }
+        if nonzero(m.damage_flat) {
+            let u = self.unit_mut(unit);
+            u.hero_attack = arith::add(u.hero_attack, m.damage_flat);
+        }
     }
 
     /// Whether `unit` is rooted by a net (Ensnare, Web): its mover is halted while the count is above zero.
@@ -301,6 +308,7 @@ impl Game {
             root: false,
             morph: false,
             invuln: false,
+            damage_flat: arith::neg(m.damage_flat),
         };
         self.apply_mods(unit, &neg);
         if m.invuln {
@@ -1393,6 +1401,8 @@ impl Game {
     /// `DataD` for a hero and `DataB` otherwise. The burn happens even for an attack that the target later evades
     /// (the hook runs when the damage is built: UNSURE order against the miss gate).
     pub(crate) fn spell_attack_bonus(&mut self, attacker: ObjKey, target: ObjKey, damage: F32) -> F32 {
+        // Demolish (`neutral_misc.rs`): a damage multiplier against buildings.
+        let damage = self.neutral_attack_bonus(attacker, target, damage);
         if !self.unit(attacker).abilities.contains(FEEDBACK) {
             return damage;
         }

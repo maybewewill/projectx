@@ -77,7 +77,6 @@ struct FormRec {
 /// A running Pocket Factory.
 #[derive(Debug, Clone, Copy)]
 struct FactoryRec {
-    caster: ObjKey,
     level: SpellLevel,
     goblin: u32,
 }
@@ -126,7 +125,7 @@ impl Game {
 
     /// The code list of data field `data` of the ability `base` of `unit`: the row the ability reads (an upgraded or
     /// creep alias row has its own lists), at the ability's level, falling back to level 1 and to the base row.
-    fn neutral_list(&self, unit: ObjKey, base: u32, data: usize) -> Vec<u32> {
+    pub(crate) fn neutral_list(&self, unit: ObjKey, base: u32, data: usize) -> Vec<u32> {
         let (row, level) = self
             .unit(unit)
             .abilities
@@ -387,7 +386,7 @@ fn pocket_factory(game: &RefCell<Game>, rec: &CastRec) {
     };
     gm.unit_mut(k).summoned = true;
     gm.apply_timed_life(k, BUFF_FACTORY, rec.level.dur);
-    gm.spells.neutral.h2.forms.factories.insert(k, FactoryRec { caster: rec.caster, level: rec.level, goblin });
+    gm.spells.neutral.h2.forms.factories.insert(k, FactoryRec { level: rec.level, goblin });
     if arith::lt(F32::ZERO, rec.level.data[0]) {
         let serial = gm.forms_serial();
         start_timer(&mut gm, rec.level.data[0].to_f32(), k, POCKET_FACTORY, serial, KIND_FACTORY);
@@ -465,6 +464,7 @@ pub(crate) fn sync_neutral2(gm: &mut Game, unit: ObjKey) {
         }
     }
     sync_engineering(gm, unit);
+    crate::neutral_misc::sync(gm, unit);
 }
 
 /// Engineering Upgrade (`ANeg`, passive; labels `NEG1..6`): `DataA` is a movement speed bonus (a fraction: 0.1 = 10
