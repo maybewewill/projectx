@@ -266,6 +266,8 @@ pub struct Options {
     pub register_units: bool,
     /// Do not run `main` before the first slot (default: run it, as the game does while loading).
     pub defer_main: bool,
+    /// Generator hash -> number of draws since the game-start seed (for the trace; empty: unknown).
+    pub draw_index: std::collections::HashMap<u32, u32>,
 }
 
 /// The simulated inputs of one computed record.
@@ -278,6 +280,8 @@ pub struct Inputs {
     pub game: u32,
     pub t: u32,
     pub net: u32,
+    /// Draws the global generator has made since the seed (`u32::MAX`: not known).
+    pub n: u32,
     /// Bit k: stream k's state changed since the previous slot; bit 45: the global generator.
     pub changed: u64,
 }
@@ -432,6 +436,7 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                         game: reg[sim::sync::slot::GAME].unwrap_or(0),
                         t: t_now,
                         net: engine.sync().net().value(),
+                        n: opts.draw_index.get(&engine.sync().rng_hash).copied().unwrap_or(u32::MAX),
                         changed,
                     }
                 };
@@ -589,7 +594,7 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
                 (0, 0)
             };
             report.trace.push(format!(
-                "  slot {:5}  file {:08x} sim {:08x} delta {:08x} hfile {:08x} hsim {:08x} | real change {:08x} [{}] sim change {:08x} [{}] | X {:#x} Y {:#x} R {:08x} rand {:08x} streams {}",
+                "  slot {:5}  file {:08x} sim {:08x} delta {:08x} hfile {:08x} hsim {:08x} | real change {:08x} [{}] sim change {:08x} [{}] | X {:#x} Y {:#x} R {:08x} n {} rand {:08x} streams {}",
                 r.slot,
                 r.file,
                 r.sim,
@@ -603,6 +608,7 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
                 r.inputs.x,
                 r.inputs.y,
                 r.inputs.r,
+                r.inputs.n as i64,
                 r.inputs.rand,
                 (0..46).filter(|k| r.inputs.changed >> k & 1 != 0).map(|k| if k == 45 { "G".to_string() } else { k.to_string() }).collect::<Vec<_>>().join(","),
             ));

@@ -188,6 +188,37 @@ pub fn apply_slots(game: &mut Game, setup: &ReplaySetup) -> Option<u32> {
     local
 }
 
+/// The slot race bit of a random race (`0x20`; the replay's `0x60` is random plus the "selectable" bit `0x40`).
+pub const RACE_RANDOM_BIT: u8 = 0x20;
+
+/// Resolves the random races of the occupied slots with the global generator, as the game load does
+/// (`0x6F3A31A0`, called from the load routine `0x6F3B0750` before the placement and before any script):
+/// for player objects `0..11` in order, a player whose race preference has the random bit takes one draw `r` of the
+/// global generator and the race `(r >> 30) + 1` (1 human, 2 orc, 3 undead, 4 night elf: the JASS values).
+/// CONFIRMED structure (machine code); EVIDENCE for the order and the seed: EchoIsles (docs/spec/lockstep.md
+/// section 19) resolves the human to Human with seed `0x77617233`, where the record seed would give a night elf.
+/// Returns one note per resolved slot.
+pub fn resolve_random_races(game: &mut Game, setup: &ReplaySetup) -> Vec<String> {
+    let mut notes = Vec::new();
+    for n in 0..PLAYER_SLOTS.min(12) {
+        let Some(s) = setup.slots.get(n) else { continue };
+        if s.status != SLOT_USED || s.race & RACE_RANDOM_BIT == 0 {
+            continue;
+        }
+        let Some((table, streams)) = game.rng_parts() else {
+            notes.push("random races stay as the map gave them: no RNG table".to_string());
+            return notes;
+        };
+        let r = streams.global.next_u32(table);
+        let race = (r >> 30) + 1;
+        if let Some(p) = game.player_mut(n as u32) {
+            p.race = race;
+        }
+        notes.push(format!("player {n}: random race resolved to {race} (draw {r:#010x})"));
+    }
+    notes
+}
+
 impl Engine {
     /// Boots the map of `inputs` with the game setup of a replay (`replay` is the `.w3g` file).
     ///
@@ -207,7 +238,10 @@ impl Engine {
         let local = {
             let host = engine.host();
             let mut game = host.game_mut();
-            apply_slots(&mut game, &setup)
+            let local = apply_slots(&mut game, &setup);
+            let resolved = resolve_random_races(&mut game, &setup);
+            setup.notes.extend(resolved);
+            local
         };
         if let Some(local) = local.or(setup.local_player) {
             engine.host().game_mut().set_local_player(local);

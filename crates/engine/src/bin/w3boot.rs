@@ -219,6 +219,7 @@ fn run(argv: &[String]) -> Result<(), String> {
             constant: args.sync_constant,
             defer_main: args.sync_defer_main,
             register_units: args.sync_register,
+            draw_index: draw_index_for(&args, setup.seed),
         };
         engine.host().game_mut().set_pr_disabled(args.pr_off);
         engine.set_ai_cadence(args.ai_delay, args.ai_period);
@@ -380,4 +381,18 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Hash of the global generator after n draws from `seed`, for n below 400,000 (the trace shows n).
+fn draw_index_for(args: &Args, seed: u32) -> std::collections::HashMap<u32, u32> {
+    let mut map = std::collections::HashMap::new();
+    let Some(path) = args.boot.dll.as_deref() else { return map };
+    let Ok(bytes) = std::fs::read(path) else { return map };
+    let Ok(table) = sim::rng::RngTable::from_game_dll(&bytes) else { return map };
+    let mut rng = sim::rng::Rng::seeded(seed);
+    for n in 0..400_000u32 {
+        map.entry(sim::sync::rng_state_hash(&rng)).or_insert(n);
+        rng.next_u32(&table);
+    }
+    map
 }
