@@ -214,6 +214,8 @@ pub const FAR_SIGHT: u32 = code(b"AOfs");
 pub const FERAL_SPIRIT: u32 = code(b"AOsf");
 /// Serpent Ward: the ability id is `AOsw` (its base code in the factory is `AOwd`, class `CAbilityWard`).
 pub const SERPENT_WARD: u32 = code(b"AOsw");
+/// The factory base code of the Serpent Ward (`CAbilityWard`): a unit that carries the base row runs the same effect.
+pub const SERPENT_WARD_BASE: u32 = code(b"AOwd");
 pub const HEALING_WAVE: u32 = code(b"AOhw");
 pub const BLADESTORM: u32 = code(b"AOww");
 pub const BUFF_BLADESTORM: u32 = code(b"BOww");
@@ -256,7 +258,7 @@ pub fn takes_no_target(base: u32) -> bool {
 
 /// Abilities cast on a point.
 pub fn takes_point(base: u32) -> bool {
-    matches!(base, SHOCKWAVE | FAR_SIGHT | SERPENT_WARD | EARTHQUAKE)
+    matches!(base, SHOCKWAVE | FAR_SIGHT | SERPENT_WARD | SERPENT_WARD_BASE | EARTHQUAKE)
 }
 
 /// Per-game state of the orc abilities.
@@ -442,7 +444,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
         WIND_WALK => wind_walk(game, rec),
         MIRROR_IMAGE => mirror_image(game, rt, rec),
         FERAL_SPIRIT => feral_spirit(game, rec),
-        SERPENT_WARD => serpent_ward(game, rec),
+        SERPENT_WARD | SERPENT_WARD_BASE => serpent_ward(game, rec),
         HEX => hex_cast(game, rt, rec),
         VOODOO => voodoo(game, rec),
         EARTHQUAKE => earthquake(game, rec),
