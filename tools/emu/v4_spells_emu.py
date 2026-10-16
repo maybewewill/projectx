@@ -597,6 +597,113 @@ def check_rejuv_buff(cases, r, rows):
         rows.append([t, da, db, f1, f2, flags0, rd(CAP + 0x100), rd(BUFF + 0x20), rd(BUFF + 0xE4), rd(BUFF + 0xEC)])
 
 
+VT_TAUNT_ABIL, ABIL_TAUNT = 0x6F8F52A4, 0x41746175
+RECS = M + 0xD000          # taunt candidate records (20 bytes each)
+UNITS = M + 0xE000         # fake candidate units (0x200 each): +0x0C id, +0x100 hero, +0x104 owner index
+
+
+def check_taunt_compare(cases, r, rows):
+    """The three sort comparators of Taunt (cdecl, two record pointers): 0x6F160310, 0x6F16E390, 0x6F16E3B0. Rows: mode
+    (0, 1, 2) | A: f1 f2 f3 f4 id | B: f1 f2 f3 f4 id | result."""
+    S.install()
+    fns = (0x6F160310, 0x6F16E390, 0x6F16E3B0)
+    for _ in range(cases):
+        mode = r.randrange(3)
+        recs = []
+        for k in range(2):
+            f1 = rbits(r) if r.random() < 0.3 else f2u(float(r.randint(0, 4)) * 100.0)
+            f2 = rbits(r) if r.random() < 0.3 else f2u(float(r.choice([0, 0, -1, 5.0])))
+            f3, f4 = r.choice([0, 1, 1, 2, 3]), r.choice([0, 1, 1, 2])
+            uid = r.randint(1, 50)
+            recs.append((f1, f2, f3, f4, uid))
+        if r.random() < 0.4:      # force ties on the first key
+            recs[1] = (recs[0][0],) + recs[1][1:]
+        if r.random() < 0.2:
+            recs[1] = recs[0][:4] + (recs[1][4],)
+        for k, (f1, f2, f3, f4, uid) in enumerate(recs):
+            rec = RECS + 0x40 * k
+            u = UNITS + 0x200 * k
+            mu.mem_write(rec, b"\0" * 0x20)
+            mu.mem_write(u, b"\0" * 0x20)
+            wr(rec, u)
+            wr(rec + 4, f1)
+            wr(rec + 8, f2)
+            wr(rec + 12, f3)
+            wr(rec + 16, f4)
+            wr(u + 12, uid)
+        res = S.call(fns[mode], stack_args=(RECS, RECS + 0x40))
+        rows.append([mode] + list(recs[0]) + list(recs[1]) + [res & 0xFFFFFFFF])
+
+
+def check_taunt_effect(cases, r, rows):
+    """Taunt effect 0x6F17B5A0 with the group collector replaced by a prepared record array: the real qsort and comparators, the
+    count rule and the application loop (ability slot 0x42C recorded). Rows: n DataA DataB DataC dur herodur extra |
+    10 x (f1 f2 f3 f4 id hero) | applied count | 10 x (unit index, dur)."""
+    S.install()
+    unit_vtables()
+    wr(VTU + 0xB8, new_code(b"\x8B\x44\x24\x04\xC2\x04\x00"))
+    A.patch_jump(0x6F4743A0, A.stub_ret(0, 0))
+    A.patch_jump(0x6F2A3270, new_code(b"\x8B\x44\x24\x08\x8B\x0D" + a32(VARS + 0x40) + b"\x89\x48\x08\xC7\x40\x0C" + a32(RECS) + b"\xC3"))
+    A.patch_jump(0x6F29EF80, A.stub_ret(8, 0))
+    A.patch_jump(0x6F2A3EA0, A.stub_ret(0xC, 0))
+    A.patch_jump(0x6F6EB558, A.stub_ret(0x10, 0))
+    A.patch_jump(0x6F1D2660, new_code(b"\x8B\x81" + a32(0x100) + b"\xC3"))
+    mu.mem_write(VTT, b"\0" * 0x200)
+    wr(VTT + 0xEC, new_code(b"\x8B\x81" + a32(0x104) + b"\xC3"))
+    code = (b"\x8B\x0D" + a32(CAP + 0x1F0) + b"\x8B\x44\x24\x04\x89\x04\xCD" + a32(CAP + 0x200)
+            + b"\x8B\x44\x24\x0C\x8B\x00\x89\x04\xCD" + a32(CAP + 0x204) + b"\xFF\x05" + a32(CAP + 0x1F0) + b"\xC2\x0C\x00")
+    s42c = new_code(code)
+    patch_n = M + 0x7000
+    for _ in range(cases):
+        n = r.randint(0, 10)
+        da = f2u(float(r.choice([0, 1, 2, 3, 5, 12, -1]))) if r.random() < 0.85 else rbits(r)
+        db = r.choice([0, 0, 0, f2u(1.0), 0x80000000, rbits(r)])
+        dc = r.choice([0, 0, 0, f2u(1.0), 0x80000000, rbits(r)])
+        dur, hdur = rbits(r), rbits(r)
+        extra = rbits(r) if r.random() < 0.3 else 0
+        A.make_ability(VT_TAUNT_ABIL, ABIL_TAUNT, 75)
+        level(A.LVL, dur, hdur, [da, db, dc])
+        wr(A.OBJ + 0x9C, extra)
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT, VTU)
+        copy_vtable(VT_TAUNT_ABIL, {0x42C: s42c})
+        wr(VARS + 0x40, n)
+        recs = []
+        for k in range(n):
+            f1 = f2u(float(r.randint(0, 5)) * 128.0) if r.random() < 0.7 else rbits(r)
+            f2 = f2u(float(r.choice([0, 0, -1]))) if r.random() < 0.8 else rbits(r)
+            f3, f4 = r.choice([0, 1]), r.choice([0, 1])
+            hero = r.random() < 0.3
+            uid = r.randint(1, 4000)
+            while any(x[4] == uid for x in recs):
+                uid = r.randint(1, 4000)
+            recs.append((f1, f2, f3, f4, uid, int(hero)))
+            u = UNITS + 0x200 * k
+            mu.mem_write(u, b"\0" * 0x200)
+            wr(u, VTT)
+            wr(u + 12, uid)
+            wr(u + 0x100, int(hero))
+            wr(u + 0x104, r.randint(0, 15))
+            rec = RECS + 20 * k
+            wr(rec, u)
+            wr(rec + 4, f1)
+            wr(rec + 8, f2)
+            wr(rec + 12, f3)
+            wr(rec + 16, f4)
+        S.clear_cap()
+        wr(CAP + 0x1F0, 0)
+        S.call(0x6F17B5A0, ecx=A.OBJ)
+        k = rd(CAP + 0x1F0)
+        out = []
+        for i in range(10):
+            if i < k:
+                out += [(rd(CAP + 0x200 + 8 * i) - UNITS) // 0x200, rd(CAP + 0x204 + 8 * i)]
+            else:
+                out += [0xFFFF, 0]
+        flat = [x for rec in recs for x in rec] + [0] * (6 * (10 - n))
+        rows.append([n, da, db, dc, dur, hdur, extra] + flat + [k] + out)
+
+
 def _trace_install():
     from collections import deque
     from unicorn import UC_HOOK_CODE
@@ -617,6 +724,8 @@ CHECKS = {
     "faerie_apply": check_buff_apply("faerie", VT_FAERIE_ABIL, ABIL_FAERIE, 0x6F0B8750, 0x360, 0x35C, 0x6F0B5480, "faerie"),
     "curse_filter": check_filter_pair(VT_CURSE_ABIL, ABIL_CURSE, 0x6F09BF80, "curse"),
     "faerie_filter": check_filter_pair(VT_FAERIE_ABIL, ABIL_FAERIE, 0x6F09C240, "faerie"),
+    "taunt_compare": check_taunt_compare,
+    "taunt_effect": check_taunt_effect,
     "unholy_apply": check_unholy_apply,
     "rejuv_effect": check_rejuv_effect,
     "rejuv_buff": check_rejuv_buff,

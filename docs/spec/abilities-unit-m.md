@@ -81,3 +81,17 @@ one call of `sync_unit_abilities_m`), `cast.rs` (one condition: `cast_field_is_d
 * `Aroo` Root / Uproot (orders 852165 / 852166): the planted and uprooted forms are two unit types and the pairing is in
   no table the model loads.
 * `Amgl` Moon Glaive: a bounce attack whose count and loss come from the weapon row, not the ability.
+
+## V4: Taunt (`Atau`) corrected and CONFIRMED (Unicorn, `tools/emu/v4_spells_emu.py`)
+
+The earlier model ordered EVERY enemy in `Area` to attack. The original (`0x6F17B5A0`): the collector `0x6F17B490` fills 20-byte
+records `{unit, key1, key2, ally flag 0x6F285B80, not-ally flag 0x6F285B00}` for every candidate that passes the target
+legality slot `0x3EC` within `Area`; with `n = F2I(DataA)` nonzero they are sorted by the CRT `qsort` (`0x6F4C6210`, MSVC 2005
+layout, ported as `crt_qsort`) with `0x6F160310` (`DataB == 0` and `DataC == 0`: key1 then key2 by soft subtraction, `+1` for a
+positive difference and `-1` for a negative or NaN one, then `B.id - A.id`), `0x6F16E390` (`DataB == 0`, `DataC != 0`: `B.f3 - A.f3`
+first) or `0x6F16E3B0` (`DataB != 0`: `B.f4 - A.f4` first); `n` is limited to the number of records (0 or too large: all of them,
+unsorted); each of the first `n` gets the effect slot `0x42C` with `HeroDur` for a hero, else `Dur + ability +0x9C`. Model:
+`taunt_plan` (400 cases with the real sort and comparators, up to 10 records), `taunt_compare` (400). UNSURE: key1 (the distance
+from the caster in cell units; the model uses the squared world distance, same order), key2 (nonzero for a unit that already carries
+the Taunt buff; the model has no such buff: 0.0) and what slot `0x42C` does (the Taunt buff that forces the attack; modelled as an
+attack order).

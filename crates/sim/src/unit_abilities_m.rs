@@ -930,9 +930,175 @@ fn unsummon(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     gm.credit_resource(owner, crate::economy::Res::Lumber, share(wood), crate::economy::Flags::NONE);
 }
 
-/// Taunt (`CAbilityTaunt < CAbilitySimpleSpell`, immediate order 852520, targs `air,ground,enemy,vuln,invu`): every
-/// enemy within `Area` of the caster is ordered to attack it. UNSURE: the original may hold the order for `DataA` (10)
-/// seconds; here the order is an ordinary attack order that later orders replace.
+/// One candidate of Taunt's sort (a 20-byte record in the original): `f1` the distance key, `f2` the "already taunted"
+/// key (0.0 without the buff), `f3` / `f4` the relation flags `0x6F285B80` / `0x6F285B00`, `id` the unit's agent id
+/// (`unit +0x0C`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TauntRec {
+    pub f1: F32,
+    pub f2: F32,
+    pub f3: i32,
+    pub f4: i32,
+    pub id: i32,
+}
+
+fn taunt_sign(d: F32) -> i32 {
+    if 0.0f32 < d.to_f32() {
+        1
+    } else {
+        -1
+    }
+}
+
+fn taunt_nonzero(d: F32) -> bool {
+    // x87 `fucomp` against 0.0: equal only when ordered and equal
+    let x = d.to_f32();
+    x != 0.0 || x.is_nan()
+}
+
+/// The base comparator `0x6F160310` (CONFIRMED by Unicorn, V4): `A.f1 - B.f1` (soft subtract), a nonzero difference gives
+/// `+1` when positive and `-1` otherwise (NaN included); equal first keys fall to `A.f2 - B.f2` the same way, then to the
+/// agent ids `B.id - A.id`.
+pub fn taunt_compare_base(a: &TauntRec, b: &TauntRec) -> i32 {
+    let d1 = arith::sub(a.f1, b.f1);
+    if taunt_nonzero(d1) {
+        return taunt_sign(d1);
+    }
+    let d2 = arith::sub(a.f2, b.f2);
+    if taunt_nonzero(d2) {
+        return taunt_sign(d2);
+    }
+    b.id.wrapping_sub(a.id)
+}
+
+/// The three comparators: mode 0 = `0x6F160310`; mode 1 = `0x6F16E390` (`B.f3 - A.f3`, then the base); mode 2 =
+/// `0x6F16E3B0` (`B.f4 - A.f4`, then the base).
+pub fn taunt_compare(mode: u32, a: &TauntRec, b: &TauntRec) -> i32 {
+    let first = match mode {
+        1 => b.f3.wrapping_sub(a.f3),
+        2 => b.f4.wrapping_sub(a.f4),
+        _ => 0,
+    };
+    if first != 0 {
+        first
+    } else {
+        taunt_compare_base(a, b)
+    }
+}
+
+/// The CRT `qsort` of MSVC 2005 as the game links it (`0x6F4C6210`, CONFIRMED structure): pieces of at most 8 elements are
+/// sorted by repeatedly moving the maximum to the end, larger ones are partitioned around the middle element (swapped to the
+/// front) with the smaller side iterated and the larger pushed. Comparator results are tested as signed ints. `width` is the
+/// record size in bytes (20) for the "which side is larger" test.
+pub fn crt_qsort<T>(v: &mut [T], width: usize, cmp: &dyn Fn(&T, &T) -> i32) {
+    if v.len() < 2 {
+        return;
+    }
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    let (mut lo, mut hi) = (0usize, v.len() - 1);
+    loop {
+        let size = hi - lo + 1;
+        let mut again = false;
+        if size <= 8 {
+            let mut top = hi;
+            while top > lo {
+                let mut max = lo;
+                for p in lo + 1..=top {
+                    if cmp(&v[p], &v[max]) > 0 {
+                        max = p;
+                    }
+                }
+                v.swap(max, top);
+                top -= 1;
+            }
+        } else {
+            let mid = lo + size / 2;
+            v.swap(mid, lo);
+            let mut loguy = lo;
+            let mut higuy = hi + 1;
+            loop {
+                loop {
+                    loguy += 1;
+                    if !(loguy <= hi && cmp(&v[loguy], &v[lo]) <= 0) {
+                        break;
+                    }
+                }
+                loop {
+                    higuy -= 1;
+                    if !(higuy > lo && cmp(&v[higuy], &v[lo]) >= 0) {
+                        break;
+                    }
+                }
+                if higuy < loguy {
+                    break;
+                }
+                v.swap(loguy, higuy);
+            }
+            v.swap(lo, higuy);
+            // byte distances as in the original: `higuy - 1 - lo >= hi - loguy`
+            if (higuy as i64 - lo as i64) * width as i64 - 1 >= (hi as i64 - loguy as i64) * width as i64 {
+                if lo + 1 < higuy {
+                    stack.push((lo, higuy - 1));
+                }
+                if loguy < hi {
+                    lo = loguy;
+                    again = true;
+                }
+            } else {
+                if loguy < hi {
+                    stack.push((loguy, hi));
+                }
+                if lo + 1 < higuy {
+                    hi = higuy - 1;
+                    again = true;
+                }
+            }
+        }
+        if again {
+            continue;
+        }
+        match stack.pop() {
+            Some((l, h)) => {
+                lo = l;
+                hi = h;
+            }
+            None => break,
+        }
+    }
+}
+
+/// What Taunt's effect `0x6F17B5A0` does with the collected candidates (CONFIRMED by Unicorn, V4, with the real sort): with
+/// `n = F2I(DataA)` nonzero the records are sorted by the comparator chosen from `DataB` (nonzero: mode 2) and `DataC`
+/// (nonzero: mode 1, else mode 0); `n` is then limited to the number of candidates (0 or too large: all of them); the first
+/// `n` records each get the effect slot `0x42C` with `HeroDur` for a hero, else `Dur + 0x9C`. Without a limit the records
+/// keep the collection order. Returns `(index into the input, duration)` in application order.
+pub fn taunt_plan(l: &crate::cast::SpellLevel, extra: F32, recs: &[(TauntRec, bool)]) -> Vec<(usize, F32)> {
+    let limit = softfloat::conv::f2i(l.data[0]) as u32;
+    let mut order: Vec<(usize, TauntRec, bool)> = recs.iter().enumerate().map(|(i, (r, h))| (i, *r, *h)).collect();
+    if limit != 0 {
+        let mode = if taunt_nonzero(l.data[1]) {
+            2
+        } else if taunt_nonzero(l.data[2]) {
+            1
+        } else {
+            0
+        };
+        crt_qsort(&mut order, 20, &|a, b| taunt_compare(mode, &a.1, &b.1));
+    }
+    let count = order.len() as u32;
+    let n = if limit == 0 || limit > count { count } else { limit };
+    order[..n as usize]
+        .iter()
+        .map(|(i, _, hero)| (*i, effect_duration(l, *hero, extra)))
+        .collect()
+}
+
+/// Taunt (`CAbilityTaunt < CAbilitySimpleSpell`, immediate order 852520, targs `air,ground,enemy,vuln,invu`): the group
+/// around the caster within `Area` is collected into 20-byte records, sorted and limited by [`taunt_plan`] (`DataA` units
+/// at most: the nearest first for the default `DataB = DataC = 0`), and each chosen unit gets the effect slot `0x42C` (the
+/// Taunt buff, which makes it attack the caster: modelled as an attack order, UNSURE). The distance key is the squared world
+/// distance (the original compares cell units: same order), the "already taunted" key is 0.0 (no taunt buff in the model),
+/// the relation flags are 0 / 1 for enemies.
 fn taunt(game: &RefCell<Game>, rec: &CastRec) {
     let mut gm = game.borrow_mut();
     let (cx, cy) = (gm.unit(rec.caster).x, gm.unit(rec.caster).y);
@@ -941,16 +1107,27 @@ fn taunt(game: &RefCell<Game>, rec: &CastRec) {
         return;
     }
     let word = targs_word("air,ground,enemy,vuln,invu");
+    let mut cands: Vec<(ObjKey, TauntRec, bool)> = Vec::new();
     for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
         if k == rec.caster || !gm.alive(k) || !targs_ok(&gm, rec.caster, k, word) {
             continue;
         }
+        let u = gm.unit(k);
+        let (dx, dy) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
+        let f1 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
+        let ally = !gm.is_enemy(gm.unit(rec.caster).owner, u.owner);
+        let hero = gm.target_hero(k);
+        let id = gm.handle_of(k) as i32;
+        cands.push((k, TauntRec { f1, f2: F32::ZERO, f3: i32::from(ally), f4: i32::from(!ally), id }, hero));
+    }
+    let plan = taunt_plan(&rec.level, F32::ZERO, &cands.iter().map(|(_, r, h)| (*r, *h)).collect::<Vec<_>>());
+    for (i, _dur) in plan {
         let order = crate::orders::Order {
             id: crate::orders::ORDER_ATTACK,
             class: crate::orders::OrderClass::Target,
             point: None,
             target: handle,
         };
-        let _ = gm.issue_order(k, order, true);
+        let _ = gm.issue_order(cands[i].0, order, true);
     }
 }
