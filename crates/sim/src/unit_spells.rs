@@ -463,6 +463,10 @@ pub struct State {
     /// Misc `IllusionsCanRestoreLife` / `IllusionsGetAutocast` (missing = off).
     pub illusions_can_restore_life: bool,
     pub illusions_get_autocast: bool,
+    /// Misc `IllusionsGetAttackSpeedBonus` (Unholy Frenzy's attack speed part on an illusion) and `MagicImmunesResistDamage`
+    /// (the damage-over-time tick gate), missing = off.
+    pub illusions_attack_speed: bool,
+    pub magic_immunes_resist: bool,
 }
 
 impl Game {
@@ -963,8 +967,11 @@ fn unholy_frenzy(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
         dispellable: true,
         ..buff_predicates(BUFF_UNHOLY_FRENZY)
     };
+    // The attack speed part (`unholy_apply_plan`): an illusion gets it only under Misc `IllusionsGetAttackSpeedBonus`.
+    let illusion = gm.unit(target).illusion;
+    let (_, sink) = unholy_apply_plan(0, illusion, gm.spells.unit.illusions_attack_speed, true, d[0]);
     let mods = UnitMods {
-        attack_delta: d[0],
+        attack_delta: sink.unwrap_or(F32::ZERO),
         ..UnitMods::default()
     };
     let serial = gm.apply_mods_buff(target, BUFF_UNHOLY_FRENZY, preds, mods, dur);
@@ -2115,6 +2122,25 @@ pub fn unholy_frenzy_values(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32
     (effect_duration(l, hero, extra), l.data[0], l.data[1])
 }
 
+/// The new-buff apply of `CBuffUnholyFrenzy` (slot `0x378` = `0x6F177340` -> `CBuffDoT` apply `0x6F0D5390` / `0x6F0D5250` and the
+/// attack speed refresh `0x6F1707B0`; CONFIRMED, **Unicorn V8**, `tools/emu/v8_spells_emu.py` check `unholy_buff`). The buff stores
+/// `DataB` as the per-tick amount (`+0xEC`), `DataA` as the attack speed value (`+0x100`) and the caster's player index; the
+/// duration argument reaches slot `0x320` unchanged and the first-tick timer is armed with 0.01 s. Returns the buff flags after the
+/// apply (`pre | 0x0800_0100`, plus `0x200` when the attack speed part was set up) and the value handed to the attack speed sink
+/// `0x6F0C9090`: it is set up only when `0x200` was clear and the target has an attack ability; an illusion skips the sink unless Misc
+/// `IllusionsGetAttackSpeedBonus` is set (`0x6F170770`).
+pub fn unholy_apply_plan(pre_flags: u32, illusion: bool, illusions_get_speed: bool, has_attack: bool, data_a: F32) -> (u32, Option<F32>) {
+    let mut flags = pre_flags | 0x0800_0100;
+    let mut sink = None;
+    if flags & 0x200 == 0 && has_attack {
+        flags |= 0x200;
+        if !(illusion && !illusions_get_speed) {
+            sink = Some(data_a);
+        }
+    }
+    (flags, sink)
+}
+
 /// What Rejuvenation's effect `0x6F108530` hands to the buff (CONFIRMED by Unicorn, V4): the hero rule duration, `DataA`,
 /// `DataB`, and two flags from `F2I(DataC)`: bit 0 and bit 1 (the buff's `0x100` / `0x200` flags).
 pub fn rejuvenation_effect_args(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32, u32, u32) {
@@ -2304,6 +2330,53 @@ impl Game {
     }
 }
 
+/// What one tick of a `CBuffDoT` buff does (`0x6F0D54B0`, CONFIRMED, **Unicorn V8**, `tools/emu/v8_spells_emu.py` check `dot_tick`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DotPlan {
+    /// The target carries `BUsl`, or Misc `MagicImmunesResistDamage` is set and an immunity counter of the target blocks the
+    /// buff's damage class word: nothing happens (not even the post hook).
+    Skip,
+    /// An amount `>= 0` (an unordered one too) is damage: the record gets `class`, the creator unit (`has_source`: the buff's
+    /// creator smart reference is not all ones) and `flag_bits = (!(buff_flags >> 26)) & 2`; the buff flag `0x2000000` is set
+    /// during the target's damage call.
+    Damage { amount: F32, class: u32, has_source: bool, flag_bits: u32 },
+    /// A negative amount heals through the life adder `0x6F277C20`, times Misc `EtherealHealBonus` when slot `0x368` says so.
+    Heal { amount: F32 },
+}
+
+/// The decision of the `CBuffDoT` tick. `magic_immune` is the target's `+0x15C` counter (blocks the damage classes in
+/// [`crate::damage::CLASS_MASK_A`]), `ethereal` its `+0x158` counter (blocks [`crate::damage::CLASS_MASK_B`]); both are
+/// signed compares against zero and only apply when Misc `MagicImmunesResistDamage` is set.
+#[allow(clippy::too_many_arguments)]
+pub fn dot_tick_plan(
+    amount: F32,
+    class: u32,
+    misc_resist: bool,
+    magic_immune: i32,
+    ethereal: i32,
+    has_sleep: bool,
+    slot_368: bool,
+    heal_bonus: F32,
+    buff_flags: u32,
+    has_source: bool,
+) -> DotPlan {
+    if has_sleep {
+        return DotPlan::Skip;
+    }
+    if misc_resist
+        && ((magic_immune > 0 && class & crate::damage::CLASS_MASK_A != 0) || (ethereal > 0 && class & crate::damage::CLASS_MASK_B != 0))
+    {
+        return DotPlan::Skip;
+    }
+    // `fcompp` against zero: 0 <= amount, or unordered, is the damage branch.
+    if amount.to_f32() < 0.0 {
+        let amount = if slot_368 { arith::mul(amount, heal_bonus) } else { amount };
+        DotPlan::Heal { amount }
+    } else {
+        DotPlan::Damage { amount, class, has_source, flag_bits: (!(buff_flags >> 26)) & 2 }
+    }
+}
+
 /// One tick of buff `serial` on `unit`: damage (a kill runs the death dispatch with the source as the killer) or heal.
 fn run_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, serial: u32, first: bool) {
     let killed;
@@ -2350,7 +2423,29 @@ fn run_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, seri
             set_life(&mut gm, unit, next);
             killed = None;
         } else {
-            killed = gm.unit_damage_target(rec.source, unit, rec.amount, false, false, 0, rec.damage_type);
+            let (magic_immune, ethereal, has_sleep) = {
+                let u = gm.unit(unit);
+                (u.magic_immune, u.ethereal, u.buffs.iter().any(|b| b.base == crate::undead_ne::BUFF_SLEEP))
+            };
+            let plan = dot_tick_plan(
+                rec.amount,
+                1u32.checked_shl(rec.damage_type).unwrap_or(0),
+                gm.spells.unit.magic_immunes_resist,
+                magic_immune,
+                ethereal,
+                has_sleep,
+                ethereal > 0,
+                gm.spells.unit.ethereal_heal_bonus,
+                0,
+                true,
+            );
+            killed = match plan {
+                DotPlan::Skip => None,
+                DotPlan::Damage { amount, .. } => gm.unit_damage_target(rec.source, unit, amount, false, false, 0, rec.damage_type),
+                // A negative amount goes to the life adder `0x6F277C20` (UNSURE: its sign convention; no melee DoT buff has a
+                // negative amount, Unholy Frenzy's is `DataB` = 4).
+                DotPlan::Heal { .. } => None,
+            };
         }
     }
     if let Some(t) = killed {

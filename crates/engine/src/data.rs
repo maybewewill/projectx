@@ -664,6 +664,8 @@ pub fn install_sites(game: &mut Game, archives: &[&[u8]], data: &GameData, notes
         st.ethereal_heal_bonus = data.misc.ethereal_heal_bonus;
         st.illusions_can_restore_life = data.misc.hero.attr_bonus.illusions_can_restore_life;
         st.illusions_get_autocast = data.misc.illusions_get_autocast;
+        st.illusions_attack_speed = data.misc.illusions_get_attack_speed_bonus;
+        st.magic_immunes_resist = data.misc.magic_immunes_resist_damage;
     }
     game.production_mut().building_angle = sim::ai_site::building_angle(data.misc.building_angle);
 }
