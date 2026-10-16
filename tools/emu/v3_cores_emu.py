@@ -13,6 +13,8 @@ by crates/sim/tests/v3_vectors.rs against the Rust model. Row kinds (hex, `|` se
                                                         and mana adder calls and the buff apply (Bdef) arguments
 
   RR  amount x | amount'                              damage record reduce 0x6F255790 (first amount)
+  MT  fl5c miscL miscM immune A B maxmana | lc L mc M ret   Rune of Mana area callback 0x6F1269E0 (AImr)
+  RT  fl5c miscL miscM immune A B maxmana | lc L mc M ret   Restoration area callback 0x6F1E6130 (AIra)
   MS  recflags srcnull share per amount mana mana' | events
                                                         Mana Shield damage hook 0x6F126DD0 (events: R remove buff, Dx reduce
                                                         the record by x, Sx spend x mana; mana' = the mana after the spend)
@@ -263,7 +265,64 @@ def case_rr(r):
     return 'RR %x %x | %x' % (amount, x, r32(REC + 0x10))
 
 
-GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da), ('MS', case_ms), ('RR', case_rr)]
+# ---------------------------------------------------------------- MT / RT: the mana and restore area callbacks
+MISC_BOOL, IMMUNE, MAXGET = 0x6F009F90, 0x6F28D750, 0x6F4773E0
+VT_MR = int(_tt.factory_row('AImr')['vtable'], 16)
+VT_RA = int(_tt.factory_row('AIra')['vtable'], 16)
+
+
+def area_cb_case(r, vt, fn, kind):
+    T.setup(vt)
+    cand = C.ITEM
+    mu.mem_write(cand, bytes(0x400))
+    w32(cand, T.UVT)
+    fl5c = r.choice([0, 0x40000000, 0x40000000, r.getrandbits(32)])
+    w32(cand + 0x5C, fl5c)
+    w32(cand + 0x158, r.choice([0, 0, 1, 3]))
+    immune = r.choice([0, 0, 0, 1])
+    miscl, miscm = r.choice([0, 1]), r.choice([0, 1])
+    a = r.choice([0, 0x80000000, 0x7FC00000]) if r.random() < 0.25 else rand_real(r)
+    b = r.choice([0, 0x80000000, 0x7FC00000]) if r.random() < 0.25 else rand_real(r)
+    maxm = r.choice([0, 0x80000000, fbits(1e-8), fbits(2e-7), 0x3456BF96, 0x3456BF94, rand_real(r), fbits(75.0)])
+    setrec(a=a, b=b)
+    sinks = []
+
+    def life(uc, c, d, st):
+        sinks.append(('L', r32(st[1])))
+        return 0
+
+    def mana(uc, c, d, st):
+        sinks.append(('M', r32(st[1])))
+        return 0
+
+    def misc(uc, c, d, st):
+        return miscl if d == 0x6F876B18 else miscm
+
+    def getmax(uc, c, d, st):
+        w32(st[0], maxm)
+        return st[0]
+
+    slot42c = struct.unpack('<I', bytes(mu.mem_read(vt + 0x42C, 4)))[0]
+    r_, trace, cl = T.trace_call(fn, cand, (), edx=T.ABIL,
+                                 stub_fn={LIFE_ADD: life, MANA_ADD: mana, IMMUNE: lambda *x: immune, MISC_BOOL: misc,
+                                          MAXGET: getmax},
+                                 into=(slot42c,), span=0x200)
+    out = '%s %x %x %x %x %x %x %x |' % (kind, fl5c, miscl, miscm, immune, a, b, maxm)
+    for k in 'LM':
+        v = [x for (n, x) in sinks if n == k]
+        out += (' 1 %x' % v[0]) if v else ' 0 0'
+    return out + ' %x' % (r_ & 0xffffffff)
+
+
+def case_mt(r):
+    return area_cb_case(r, VT_MR, 0x6F1269E0, 'MT')
+
+
+def case_rt(r):
+    return area_cb_case(r, VT_RA, 0x6F1E6130, 'RT')
+
+
+GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da), ('MS', case_ms), ('RR', case_rr), ('MT', case_mt), ('RT', case_rt)]
 
 
 def main():

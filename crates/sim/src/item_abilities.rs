@@ -1290,6 +1290,48 @@ pub fn area_callback_amount(illusion: bool, misc: bool, immune: bool, a: F32) ->
     }
 }
 
+/// The Rune of Mana area callback `0x6F1269E0` (`AImr`): a candidate immune to the ability's order (`0x6F28D750`) or whose
+/// maximum mana is below `2e-7` in absolute value (x87 compare against `0x6FAAE614`: NaN passes) is skipped, an
+/// illusion is skipped unless Misc `IllusionsCanRestoreMana` is set, otherwise the mana adder gets `DataA`. Rows `MT`.
+pub fn mana_area_callback(illusion: bool, misc_mana: bool, immune: bool, max_mana: F32, a: F32) -> Option<F32> {
+    if immune {
+        return None;
+    }
+    let mag = f32::from_bits(arith::sub(max_mana, F32::ZERO).to_bits() & 0x7FFF_FFFF);
+    if f32::from_bits(0x3456_BF95) > mag {
+        return None;
+    }
+    if !misc_mana && illusion {
+        return None;
+    }
+    Some(a)
+}
+
+/// The Restoration area callback `0x6F1E6130` (`AIra`): an immune candidate is skipped; an illusion is skipped entirely
+/// when `DataA` is not zero and Misc `IllusionsCanRestoreLife` is off, or when `DataB` is not zero and
+/// `IllusionsCanRestoreMana` is off (a NaN amount counts as not zero); otherwise the life adder gets `DataA` and the
+/// mana adder `DataB`. Rows `RT`.
+pub fn restore_area_callback(
+    illusion: bool,
+    misc_life: bool,
+    misc_mana: bool,
+    immune: bool,
+    a: F32,
+    b: F32,
+) -> Option<(F32, F32)> {
+    if immune {
+        return None;
+    }
+    let nonzero = |v: F32| f32::from_bits(v.to_bits()) != 0.0;
+    if illusion && !misc_life && nonzero(a) {
+        return None;
+    }
+    if illusion && !misc_mana && nonzero(b) {
+        return None;
+    }
+    Some((a, b))
+}
+
 /// The three attribute values the attribute tome and the attribute bonus read (`0x6F0E5D50`, `0x6F0E57E0`): the
 /// integer parts (`F2I`) of `DataA`, `DataB` and `DataC`, handed to the agility, intelligence and strength adders.
 pub fn attribute_values(d: &[F32; 9]) -> (i32, i32, i32) {
@@ -1588,9 +1630,19 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
             }
         }
         Family::HealAoe | Family::ManaAoe | Family::RestoreAoe => {
-            let plan = restore_plan(fam, d);
-            for k in area_units(gm, caster, target, level) {
-                run_plan(gm, k, &plan);
+            // One callback per family (`0x6F0F0470`, `0x6F1269E0`, `0x6F1E6130`): each has its own illusion rule.
+            let (misc_life, misc_mana) = (gm.spells.item.illusions_heal, gm.spells.item.illusions_mana);
+            for k in area_friends(gm, caster, target, level) {
+                let (illusion, max_mana) = (gm.unit(k).illusion, gm.unit(k).max_mana);
+                let plan = match fam {
+                    Family::HealAoe => area_callback_amount(illusion, misc_life, false, d[0]).map(|a| vec![(Sink::Life, a)]),
+                    Family::ManaAoe => mana_area_callback(illusion, misc_mana, false, max_mana, d[0]).map(|a| vec![(Sink::Mana, a)]),
+                    _ => restore_area_callback(illusion, misc_life, misc_mana, false, d[0], d[1])
+                        .map(|(a, b)| vec![(Sink::Life, a), (Sink::Mana, b)]),
+                };
+                if let Some(plan) = plan {
+                    run_plan(gm, k, &plan);
+                }
             }
         }
         Family::TomeLife => {

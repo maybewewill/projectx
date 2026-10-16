@@ -160,6 +160,69 @@ fn mana_shield_hook_matches_the_original() {
     assert!(spent > 50 && removed > 20 && none > 20, "{spent} {removed} {none}");
 }
 
+fn sink_cols(r: &[&str]) -> ((Option<u32>, Option<u32>), u32) {
+    ((opt(r, 9), opt(r, 11)), h(r[13]))
+}
+
+#[test]
+fn mana_rune_area_callback_matches_the_original() {
+    let rs = rows("MT");
+    assert!(rs.len() >= 300);
+    let (mut gave, mut skipped) = (0, 0);
+    for r in &rs {
+        assert_eq!(r[8], "|");
+        let got = sim::item_abilities::mana_area_callback(
+            h(r[1]) & 0x4000_0000 != 0,
+            h(r[3]) != 0,
+            h(r[4]) != 0,
+            F32::from_bits(h(r[7])),
+            F32::from_bits(h(r[5])),
+        );
+        let (cols, ret) = sink_cols(r);
+        assert_eq!(ret, 1, "row {r:?}");
+        assert_eq!(cols.0, None, "row {r:?}");
+        assert_eq!(got.map(|v| v.to_bits()), cols.1, "row {r:?}");
+        if got.is_some() {
+            gave += 1
+        } else {
+            skipped += 1
+        }
+    }
+    assert!(gave > 30 && skipped > 30, "{gave}/{skipped}");
+}
+
+#[test]
+fn restoration_area_callback_matches_the_original() {
+    let rs = rows("RT");
+    assert!(rs.len() >= 300);
+    let (mut gave, mut skipped) = (0, 0);
+    for r in &rs {
+        assert_eq!(r[8], "|");
+        let got = sim::item_abilities::restore_area_callback(
+            h(r[1]) & 0x4000_0000 != 0,
+            h(r[2]) != 0,
+            h(r[3]) != 0,
+            h(r[4]) != 0,
+            F32::from_bits(h(r[5])),
+            F32::from_bits(h(r[6])),
+        );
+        let (cols, ret) = sink_cols(r);
+        assert_eq!(ret, 1, "row {r:?}");
+        let want = match cols {
+            (Some(l), Some(m)) => Some((l, m)),
+            (None, None) => None,
+            other => panic!("row {r:?}: one sink only {other:?}"),
+        };
+        assert_eq!(got.map(|(a, b)| (a.to_bits(), b.to_bits())), want, "row {r:?}");
+        if got.is_some() {
+            gave += 1
+        } else {
+            skipped += 1
+        }
+    }
+    assert!(gave > 30 && skipped > 30, "{gave}/{skipped}");
+}
+
 #[test]
 fn scroll_of_protection_callback_matches_the_original() {
     if !need_tables("AIda") {
