@@ -487,12 +487,54 @@ fn thunder_clap(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
     }
 }
 
+/// What Avatar's cast slot `0x6F1CA180` hands to its buff apply `0x6F1A03B0` and what the apply passes on (CONFIRMED,
+/// **Unicorn 400/400**, `tools/emu/spell_buff_emu.py` check `avatar`: the real cast slot, the real `CBuffAvatar` apply slot
+/// 214, the real stat helpers `0x6F196A40/60/80` and the real damage counter `0x6F0C6C10`; stubs: the timer start, the buff
+/// allocator, the holders, the armor and life sinks and the immunity counter, which record their arguments): the duration is
+/// `Dur` plus the ability's extra term (`+0x9C`, soft add) with NO hero test; the armor sink gets `DataA`, the life sink
+/// `0x6F2AC450` gets `DataB` with mode 3, both weapon slots' damage counters (mask -1) grow by `F2I(DataC)`, `DataD` is
+/// only stored in a holder (`+0xE8`, no sink reads it), and the magic immunity routine `0x6F07A3A0` is called once with 1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AvatarValues {
+    pub dur: F32,
+    pub armor: F32,
+    pub life: F32,
+    pub damage: i32,
+}
+
+pub fn avatar_values(l: &SpellLevel, extra: F32) -> AvatarValues {
+    AvatarValues {
+        dur: arith::add(l.dur, extra),
+        armor: l.data[0],
+        life: l.data[1],
+        damage: conv::f2i(l.data[2]),
+    }
+}
+
 fn avatar(game: &RefCell<Game>, rec: &CastRec) {
-    let l = rec.level;
-    // Avatar always takes `Dur` (+ the unknown extra `ability+0x9C`, 0.0 here): `0x6F1CA180` has no hero test.
-    let dur = arith::add(l.dur, F32::ZERO);
-    game.borrow_mut()
-        .apply_avatar(rec.caster, dur, l.data[0], l.data[1], conv::f2i(l.data[2]));
+    let v = avatar_values(&rec.level, F32::ZERO);
+    game.borrow_mut().apply_avatar(rec.caster, v.dur, v.armor, v.life, v.damage);
+}
+
+/// The counters one application of the Divine Shield buff changes on the unit (`CBuffDivineShield` slot `0x31C` =
+/// `0x6F07D180`, CONFIRMED, **Unicorn 400/400**, `tools/emu/spell_buff_emu.py` check `divine_shield`: the real cast slot
+/// `0x6F0B64C0`, the real apply, the real counters `0x6F0796F0` and `0x6F07A3A0` on a fake caster; stubbed: the buff
+/// lookup / allocator, the base apply, the purge removal, the dispel walker and the cancel test, which record their
+/// arguments). Order: the set-duration rule, the purge-debuff lookup and removal, the dispel walker with
+/// `(0,1,0,0,0,1,1,0,1)`, the invulnerability count (`+0xE8` plus one; the unit flag `0x8` is set when it becomes 1), then the
+/// magic immunity counters (`+0x15C` plus one and, for the flag argument 1, `+0x160` plus one); when either of those becomes
+/// exactly 1 the purge removal and the same dispel walker run once more. Returns the counters after and the number of dispel
+/// walker calls (each one preceded by a purge lookup).
+pub fn divine_shield_apply_counters(inv: i32, flags: u32, imm: i32, imm_flagged: i32) -> (i32, u32, i32, i32, u32) {
+    let mut dispels = 1;
+    let inv = inv.wrapping_add(1);
+    let flags = if inv == 1 { flags | 8 } else { flags };
+    let imm = imm.wrapping_add(1);
+    let imm_flagged = imm_flagged.wrapping_add(1);
+    if imm == 1 || imm_flagged == 1 {
+        dispels += 1;
+    }
+    (inv, flags, imm, imm_flagged, dispels)
 }
 
 fn divine_shield(game: &RefCell<Game>, rec: &CastRec) {

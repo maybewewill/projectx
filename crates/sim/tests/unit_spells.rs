@@ -596,14 +596,17 @@ fn inner_fire_adds_armor_and_a_damage_fraction_and_expires() {
         let g = h.game();
         let u = g.unit(grunt);
         assert_eq!(u.bonuses.armor.to_f32(), 5.0);
-        assert!((u.bonuses.damage_pct.to_f32() - 0.1).abs() < 1e-6);
+        // The test weapon has no dice, so the average damage is 0.0 and the fraction gives the sign rule's one point
+        // (`inner_fire_weapon_bonus`, Unicorn-checked); Inner Fire is an integer bonus, not a percentage.
+        assert_eq!(u.bonuses.damage, 1);
+        assert_eq!(u.bonuses.damage_pct.to_f32(), 0.0);
         assert_eq!(g.unit(shaman).mana.to_f32(), 265.0);
     }
     run(&mut h, 50);
     let g = h.game();
     assert!(!has_buff(&h, grunt, BUFF_INNER_FIRE));
     assert_eq!(g.unit(grunt).bonuses.armor.to_f32(), 0.0);
-    assert_eq!(g.unit(grunt).bonuses.damage_pct.to_f32(), 0.0);
+    assert_eq!(g.unit(grunt).bonuses.damage, 0);
 }
 
 #[test]
@@ -667,7 +670,10 @@ fn cripple_slows_movement_and_attacks_and_cuts_damage_then_wears_off() {
         let u = g.unit(foe2);
         assert_eq!(g.effective_move_speed(foe2).to_f32(), 270.0 * 0.25);
         assert!((u.bonuses.attack_mult.to_f32() - 0.5).abs() < 1e-6);
-        assert!((u.bonuses.damage_pct.to_f32() + 0.5).abs() < 1e-6);
+        // The damage cut is an integer change of the weapon's damage counter (`cripple_weapon_change`, Unicorn-checked);
+        // the test weapon has no dice, so its average damage is 0 and the change is 0 (no sign rule for Cripple).
+        assert_eq!(u.bonuses.damage, 0);
+        assert_eq!(u.bonuses.damage_pct.to_f32(), 0.0);
     }
     run(&mut h, 52);
     let g = h.game();

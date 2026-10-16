@@ -45,7 +45,7 @@
 
 use std::collections::BTreeMap;
 
-use softfloat::{arith, conv, F32};
+use softfloat::{arith, F32};
 
 use crate::abilities::{code, Buff, BuffPredicates};
 use crate::natives::circle_candidates;
@@ -564,21 +564,25 @@ impl Game {
         }
     }
 
-    /// The damage bonus a Command or Trueshot buff gives `unit` (`0x6F1ACC40`): flat `trunc(value)` when flag D is set,
-    /// otherwise `round(value times the base damage)` (`f2i(add(mul(v, base), 0.5))`). The base damage is the weapon's
-    /// AVERAGE `bonus + count * (sides + 1) / 2` (`0x6F0C6D00`, CONFIRMED by Unicorn, `orc::command_base_damage`).
+    /// The damage bonus a Command or Trueshot buff gives `unit` (`0x6F1ACC40`) for weapon slot 0:
+    /// [`crate::orc::command_aura_weapon_amount`] (CONFIRMED by Unicorn: flat `F2I(value)` when flag D is set, else
+    /// `F2I(value times the average damage + 0.5)`, the sign rule for a zero result, the weapon filter, the clamp).
     fn aura_damage_amount(&self, unit: ObjKey, a: &AuraBuff) -> i32 {
-        if a.flags[2] {
-            return conv::f2i(a.values[0]);
-        }
-        let ty = self.attack_type(self.unit(unit).type_id);
-        let base = crate::orc::command_base_damage(
+        let type_id = self.unit(unit).type_id;
+        let ty = self.attack_type(type_id);
+        let extra = self.weapon_extra(type_id, 0).unwrap_or_default();
+        // The flag word of the buff: bit 8 / 9 / 10 are `DataB` / `DataC` / `DataD` (`a.flags[0..3]`).
+        let flags = (u32::from(a.flags[0]) << 8) | (u32::from(a.flags[1]) << 9) | (u32::from(a.flags[2]) << 10);
+        crate::orc::command_aura_weapon_amount(
+            a.values[0],
+            flags,
             i32::try_from(ty.dice).unwrap_or(0),
             i32::try_from(ty.sides).unwrap_or(0),
             ty.dice_bonus,
-        );
-        let half = F32::from_bits(0x3F00_0000);
-        conv::f2i(arith::add(arith::mul(a.values[0], base), half))
+            extra.kind,
+            extra.targs,
+        )
+        .unwrap_or(0)
     }
 
     /// Puts the aura buff's effects on `unit` (idempotent per component: `0x6F1ACFD0`, `0x6F1AD240`, `0x6F1AD150`...).

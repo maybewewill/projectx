@@ -82,15 +82,29 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
   `0x6F1CB080` reads `DataB, DataA`; both pick `HeroDur` for a hero target (`0x6F1D2660`), `Dur + extra` otherwise,
   look for the buff by its code (`0x6F10F480` / the Bloodlust getter): found = the buff's apply slot `0x358` (runs the
   set-duration slot `0x6F0D4EF0` first, never shorten, then rebuilds the effects), not found = a new buff.
-* Buff effects (CONFIRMED sinks by scanning the buff classes' apply slots): `CBuffBloodlust` -> attack speed
-  (`0x6F0C9090`) and movement (`0x6F202FF0`) sinks; `CBuffInnerFire` -> the armor sink (`0x6F2769C0`) and the
-  attack-record modifiers (record `+4/+8` for the weapons, `+0x24`) plus two regeneration modifiers. Field meanings are
-  the editor's (LIKELY): Inner Fire `DataA` damage fraction, `DataB` armor, `DataD` life regeneration, `DataE` mana
-  regeneration, `DataC` the autocast range; Bloodlust `DataA` attack speed, `DataB` movement, `DataC` scale.
-* Model: `UnitMods` (armor, move/attack deltas, a new percentage damage modifier `bonuses.damage_pct` multiplying the
-  attack's raw damage by `1 + pct` in `damage.rs`, regeneration), `Game::apply_mods_buff` (replace on refresh), undone
-  exactly on removal (`BuffEffect::Mods`). UNSURE: the damage modifier is applied to the raw damage after the dice
-  (the original keeps it in the record modifiers, order against Critical Strike not read); the `Dur` extra term is 0.
+* Buff effects, **CONFIRMED by Unicorn, 400 cases each, 0 mismatches** (V1, `tools/emu/spell_buff_emu.py`, vectors
+  `crates/sim/tests/data/unit_spells/{bloodlust,innerfire}.txt`, test `crates/sim/tests/spell_buff_vectors.rs`; the real
+  effect slot, buff creator, buff apply slot and holder-to-sink routines on a fake buff; only the buff allocator, the
+  existing-buff lookup, the holder set-value objects and the final sinks are stubs):
+  * Bloodlust: duration = `HeroDur` for a hero target, else `Dur` plus the ability's `+0x9C` by soft add; the movement sink
+    `0x6F202FF0` gets `DataB` and the attack speed sink `0x6F0C9090` gets `DataA`, both unchanged (`bloodlust_values`).
+    `DataC` goes to the model-scale holder (presentation).
+  * Inner Fire: same duration rule; `DataB` is the armor sink `0x6F2769C0` value (always called); `DataD` / `DataE` are the
+    life / mana regeneration modifiers (`0x6F02DC60` / `0x6F02DD00`), created only when the `0.001` property test
+    (`prop_differs(value, 0)`) says the value differs from zero (`inner_fire_regen`); `DataA` is a damage **fraction**
+    that becomes an INTEGER bonus per weapon slot (`0x6F1236F0`, `inner_fire_weapon_bonus`): skipped when the slot's
+    `targs` is `1`, `0x40`, `0x80` or `0x100`; else `F2I(add(mul(DataA, X), 0.5))` with `X` the weapon's AVERAGE damage
+    (`orc::command_base_damage`, the same getter the Command Aura uses); when that is 0 the result is the sign of `DataA`
+    (+1, -1, or 0 for exactly zero; NaN gives -1), so a positive fraction always adds at least one point; a negative amount
+    is clamped from below by `-(bonus + count)`; the amount is added to the attack ability's damage counter (`0x6F0C6C10`)
+    and kept in the buff for the exact undo.
+* Model: `UnitMods` (armor, move/attack deltas, regeneration, `damage_int`), `Game::apply_mods_buff` (replace on refresh),
+  undone exactly on removal (`BuffEffect::Mods`). **Corrected in V1**: Inner Fire used a percentage multiplier
+  (`damage_pct`) on the rolled damage; it is now the integer `damage_int` computed from the target's attack record at
+  application time (weapon slot 0 only: the sim keeps one damage counter, so the second weapon's amount is not
+  represented). Still UNSURE: the refresh path (buff slot `0x358`, same argument mapping by reading only), a duration
+  of zero or less (the model applies nothing; the original passes the value to the set-duration slot), and the
+  `Dur` extra term (0 in the model).
 * Autocast filters (CONFIRMED, static): Bloodlust `0x6F1AFF10` and Inner Fire `0x6F123DC0` accept a candidate only if
   it has the attack ability and a current attack target that is hostile to its player (`0x6F285AC0` is the passive
   alliance mask test), does not have the buff, and has life fraction above 0.1 (`0x6FAAE4A0`); with the fraction below
@@ -108,12 +122,19 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
 * Data (first level): cost 175, range 600, Dur 60 / HeroDur 10, `DataA` 0.75, `DataB` 0.5, `DataC` 0.5, buff `Bcri`,
   targets air, ground, enemy, organic, neutral. Editor labels: `DataA` movement speed reduction, `DataB` attack speed
   reduction, `DataC` damage reduction.
-* Effect slot `0x424` = `0x6F1CC450` (CONFIRMED structure): hero test, `HeroDur` / `Dur`, the buff apply
-  `0x6F1CC320`. The buff (`CBuffCripple`, apply `0x6F1B7FD0`) negates its values (sign flips) and hands two to the
-  speed buff base `CBuffSpeed` (movement `0x6F202FF0` and attack speed `0x6F0C9090` sinks, CONFIRMED by scanning the
-  apply slots) and one to the attack-record damage modifiers (slot `0x2D4`, negated list at `+0xF8`).
-* Model: `UnitMods { move_delta = -A, attack_delta = -B, damage_pct = -C }` as a negative, magic, dispellable buff
-  `Bcri`; refresh replaces the values. UNSURE: the order of the percentage damage modifier against other modifiers.
+* Effect slot `0x424` = `0x6F1CC450`, **CONFIRMED by Unicorn, 400 cases, 0 mismatches** (V1,
+  `tools/emu/spell_buff_emu.py`, `crates/sim/tests/data/unit_spells/cripple.txt`, `spell_buff_vectors.rs`; the real effect,
+  creator `0x6F1CC320`, `CBuffCripple` apply `0x6F1B7FD0`, `0x6F0D6460`, sink routines and the damage routine `0x6F1B2BC0`):
+  duration as for Bloodlust (`HeroDur` for a hero, else `Dur` + `+0x9C`); the movement sink gets `-DataA`, the attack
+  speed sink `-DataB` (sign bit flipped), `DataC` reaches the damage holder (`+0xF0`) unchanged (`cripple_values`).
+  The damage cut is an INTEGER per weapon slot, not a percentage (`cripple_weapon_change`): `amount = F2I(add(mul(DataC, X),
+  0.5))`, `X` the weapon's average damage (`orc::command_base_damage`), a negative amount clamped from below by
+  `-(bonus + count)`, no `targs` filter and no "at least one" rule (a zero amount changes nothing); the weapon's damage
+  counter (`0x6F0C6C10`) changes by `-amount` and the amount is kept for the undo.
+* Model: `UnitMods { move_delta = -A, attack_delta = -B, damage_int = -amount of weapon slot 0 }` as a negative, magic,
+  dispellable buff `Bcri`; refresh replaces the values. **Corrected in V1**: the model had `damage_pct = -DataC`
+  (a percentage of the rolled damage). Still UNSURE: the refresh slot `0x360` path (same arguments by reading only), the
+  weapon-2 amount (the sim keeps one damage counter).
 
 ## 5. Faerie Fire (`Afae`, `CAbilityFaerieFire` vtable `0x6F8AA36C`, an AutoTargetSpell)
 
@@ -216,3 +237,24 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
 | Healing Ward `Ahwd`, Stasis Trap `Asta`, Serpent Ward `Aeye` | `CAbilityHealingWard` `0x6F8B0A44` (summon `ohwd`, buff `Bhwd`), `CAbilityWard` | summon spells with a unit type per level | the ward's own healing aura ability, placement |
 | Abolish Magic `Aadm` | `CAbilityAutoDispelMagic` `0x6F8C35AC` | autocast pair 852133/852134, cast 852132, A mana loss, B summoned damage 300, C 1 | the autocast filter `0x6F0E2B90` and the dispel worker |
 | Huntress Sentinel `Aesn`, Disease Cloud `Aap1`, Dryad immunity | `CAbilitySentinel` `0x6F91EE04` (summon-like with a tree target) | data rows | not read |
+
+## 12. V1 verification wave (Unicorn, `tools/emu/spell_buff_emu.py`)
+
+Harness: the real effect slot, buff creator, buff apply slot and holder-to-sink routines of the original on fake objects
+(stubs only for the buff allocator / lookup, the property holders and the final sinks, which record their arguments).
+400 random cases per check, 0 mismatches, vectors in `crates/sim/tests/data/unit_spells/`, test
+`crates/sim/tests/spell_buff_vectors.rs` (no game data needed to run it; the harness needs `GAME_DLL`; `--only divine_shield`
+runs in its own process).
+
+| Ability | Checked in this run | Found |
+|---|---|---|
+| Bloodlust | duration rule, `DataB` -> movement sink, `DataA` -> attack speed sink | model already right |
+| Inner Fire | duration, armor `DataB`, regeneration `DataD`/`DataE` (0.001 gate), damage `DataA` per weapon slot | **damage is an integer bonus** `F2I(DataA * average + 0.5)` with a sign rule, not a percentage; model fixed |
+| Cripple | duration, `-DataA` / `-DataB` sinks, damage cut `DataC` per weapon slot | **damage cut is an integer** (no sign rule), not a percentage; model fixed |
+| Slow (`Aslo`) | duration, `-DataA` movement, `-DataB` attack speed | model already right |
+| Command / Trueshot aura (orc spec section 18) | whole weapon-slot bonus | **sign rule and weapon filter were missing**; model fixed |
+| Avatar, Divine Shield (human spec) | see `abilities-human-heroes.md` sections 2 and 4 | `DataD` is not a switch; Divine Shield apply read and checked |
+
+Not covered by V1 (still as labelled above): the refresh paths of the buff slots, the autocast filters, weapon slot 2,
+the second dispel of Divine Shield being absent from the model (idempotent).
+
