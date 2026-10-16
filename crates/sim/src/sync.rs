@@ -354,6 +354,15 @@ pub struct SyncState {
     net: NetChecksum,
     elapsed_ms: u64,
     last: u32,
+    /// The tick clock `T` (`CNetData+0x1C70`) at the next slot: 25 ms units consumed so far (see [`SyncState::pause`]).
+    clock: u32,
+    /// Milliseconds received and not yet consumed (below 25 unless paused).
+    buffer: u64,
+    paused: bool,
+    /// A pause was commanded and takes effect after one more unit.
+    pause_armed: bool,
+    /// 25 ms units the last slot released to the tick loop.
+    last_units: u64,
 }
 
 impl Default for SyncState {
@@ -368,6 +377,11 @@ impl Default for SyncState {
             net: NetChecksum::new(),
             elapsed_ms: 0,
             last: 0,
+            clock: 0,
+            buffer: 0,
+            paused: false,
+            pause_armed: false,
+            last_units: 0,
         }
     }
 }
@@ -408,7 +422,7 @@ impl SyncState {
             .get(..2)
             .map_or(0, |b| u64::from(u16::from_le_bytes([b[0], b[1]])));
         if inc != 0 {
-            let t = tick_clock_at_slot(self.elapsed_ms);
+            let t = self.clock;
             let reg = self.registry_now();
             self.last = sync_value(
                 t,
@@ -419,7 +433,59 @@ impl SyncState {
             );
         }
         self.elapsed_ms += inc;
+        self.buffer += inc;
+        self.last_units = 0;
+        if self.pause_armed {
+            // The pause takes effect after one more unit (the first slot with time to spend gives exactly one).
+            if inc != 0 && self.buffer >= u64::from(TICK_UNIT_MS) {
+                self.buffer -= u64::from(TICK_UNIT_MS);
+                self.clock = self.clock.wrapping_add(TICK_UNIT_MS);
+                self.last_units = 1;
+                self.pause_armed = false;
+                self.paused = true;
+            }
+        } else if !self.paused {
+            self.last_units = self.buffer / u64::from(TICK_UNIT_MS);
+            self.buffer %= u64::from(TICK_UNIT_MS);
+            self.clock = self.clock.wrapping_add(self.last_units as u32 * TICK_UNIT_MS);
+        }
         self.last
+    }
+
+    /// The tick clock `T` the next slot's record will use.
+    pub fn clock(&self) -> u32 {
+        self.clock
+    }
+
+    /// 25 ms units the last slot released to the tick loop (zero while paused).
+    pub fn last_units(&self) -> u64 {
+        self.last_units
+    }
+
+    /// Whether the game is paused or about to pause.
+    pub fn paused(&self) -> bool {
+        self.paused || self.pause_armed
+    }
+
+    /// The pause action (0x01): the tick loop stops after one more 25 ms unit, which the next slot with time to
+    /// spend releases (CONFIRMED on the EchoIsles replay: every pair inside a pause has a zero residual, and this
+    /// one extra unit explains the records around each of the five pauses; fitted against delays of 0 to 3 slots).
+    /// Slots keep arriving while paused and their time piles up in the buffer.
+    pub fn pause(&mut self) {
+        if !self.paused && !self.pause_armed {
+            self.pause_armed = true;
+        }
+    }
+
+    /// The resume action (0x02): the whole units that piled up during the pause are dropped (only the remainder
+    /// below 25 ms is kept). Fitted on the EchoIsles replay (five pauses: 2,776 of 5,503 pairs exact, against 406
+    /// without the pause rules).
+    pub fn resume(&mut self) {
+        if self.paused || self.pause_armed {
+            self.paused = false;
+            self.pause_armed = false;
+            self.buffer %= u64::from(TICK_UNIT_MS);
+        }
     }
 
     /// Processes a leave-game block (folded into the net checksum; no record is computed).
@@ -872,5 +938,55 @@ mod tests {
         let mut changed = q;
         changed.value ^= 0x40;
         assert_eq!(residual(&p, &changed, rot), 0x40);
+    }
+
+    fn slot_payload(inc: u16) -> Vec<u8> {
+        inc.to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn the_clock_follows_25ms_units_with_a_carried_remainder() {
+        let mut s = SyncState::new();
+        s.time_slot(0x1F, &slot_payload(94));
+        assert_eq!((s.clock(), s.last_units()), (75, 3));
+        s.time_slot(0x1F, &slot_payload(94));
+        // 19 carried + 94 = 113 ms: four units, 13 left
+        assert_eq!((s.clock(), s.last_units()), (175, 4));
+    }
+
+    #[test]
+    fn a_pause_takes_one_more_unit_then_freezes_and_resume_drops_whole_units() {
+        // The rule fitted on the EchoIsles replay (docs/spec/lockstep.md section 18).
+        let mut s = SyncState::new();
+        s.time_slot(0x1F, &slot_payload(100));
+        assert_eq!(s.clock(), 100);
+        s.pause();
+        assert!(s.paused());
+        // The pause command's own slot has no time: nothing is consumed and the pause stays armed.
+        s.time_slot(0x1F, &slot_payload(0));
+        assert_eq!((s.clock(), s.last_units()), (100, 0));
+        // The next slot with time releases exactly one unit, then the clock freezes.
+        s.time_slot(0x1F, &slot_payload(100));
+        assert_eq!((s.clock(), s.last_units()), (125, 1));
+        for _ in 0..3 {
+            s.time_slot(0x1F, &slot_payload(100));
+            assert_eq!((s.clock(), s.last_units()), (125, 0));
+        }
+        // 75 left over from the armed slot plus 300 piled up: resume keeps only the remainder (0).
+        s.resume();
+        assert!(!s.paused());
+        s.time_slot(0x1F, &slot_payload(100));
+        assert_eq!((s.clock(), s.last_units()), (225, 4));
+    }
+
+    #[test]
+    fn resume_without_a_pause_changes_nothing() {
+        let mut s = SyncState::new();
+        s.time_slot(0x1F, &slot_payload(60));
+        let before = (s.clock(), s.last_units());
+        s.resume();
+        s.time_slot(0x1F, &slot_payload(40));
+        assert_eq!(before, (50, 2));
+        assert_eq!((s.clock(), s.last_units()), (100, 2));
     }
 }

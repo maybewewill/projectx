@@ -5,11 +5,17 @@
 //!        [--ai-common common.ai] [--ai-script NAME=PATH]... [--computer SLOT[:RACE]]... [--ai-log N]
 //!        [--seed S] [--steps N] [--buildings] [--check-natives] map.w3x
 //! w3boot --replay FILE.w3g --check-sync
+//! w3boot --replay FILE.w3g --sim-sync [--sync-trace] [--sync-slots N] [--sync-after] [--sync-defer-main]
+//!        [--sync-constant K] [--pr-off MASK] [--ai-delay N] [--ai-period N] --dll Game.dll --mpq ... MAP.w3x
 //! ```
 //!
 //! `--check-sync` needs no map or archives: it walks the replay's time slots and compares the stored 0x22 sync
 //! records with the model of `sim::sync` (net checksum, tick clock, record rule) and prints the first mismatch
 //! and the number of record pairs predicted exactly (`engine::sync_check`, `docs/spec/lockstep.md` section 15).
+//!
+//! `--sim-sync` boots the map from the replay, runs the whole simulation slot by slot and compares the 0x22 record computed from
+//! the simulated state with every record of the file: absolute and constant-calibrated matches, matching pairs, and the
+//! hidden-word event timelines (`engine::sim_sync`, `docs/spec/lockstep.md` section 18). `--sync-trace` prints one line per slot.
 //!
 //! `--mpq` reads `Scripts\common.j` and `Scripts\Blizzard.j` from the archives (later ones override),
 //! and the AI scripts `Scripts\common.ai`, `human.ai`, `orc.ai`, `undead.ai` and `elf.ai` when they are there.
@@ -38,6 +44,17 @@ struct Args {
     buildings: bool,
     /// `--check-sync`: with `--replay`, compare the replay's 0x22 sync records with the model (no map needed).
     check_sync: bool,
+    /// `--sim-sync`: with `--replay` and a map, run the full engine and compare every 0x22 record.
+    sim_sync: bool,
+    sync_trace: bool,
+    sync_after: bool,
+    sync_slots: usize,
+    sync_constant: u32,
+    sync_defer_main: bool,
+    pr_off: u32,
+    sync_register: bool,
+    ai_delay: u64,
+    ai_period: u64,
     steps: u64,
     /// `--wipe SLOT@STEP`: at STEP set the life of every structure of SLOT to zero (test aid for the melee defeat check).
     wipe: Vec<(u32, u64)>,
@@ -103,6 +120,25 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .push(parse_ai_script(&value("--ai-script")?)?),
             "--check-natives" => args.boot.check_natives = true,
             "--check-sync" => args.check_sync = true,
+            "--sim-sync" => args.sim_sync = true,
+            "--sync-trace" => args.sync_trace = true,
+            "--sync-after" => args.sync_after = true,
+            "--sync-defer-main" => args.sync_defer_main = true,
+            "--sync-register" => args.sync_register = true,
+            "--pr-off" => args.pr_off = parse_seed(&value("--pr-off")?)?,
+            "--ai-delay" => {
+                let v = value("--ai-delay")?;
+                args.ai_delay = v.parse().map_err(|_| format!("--ai-delay: not a number: {v}"))?;
+            }
+            "--ai-period" => {
+                let v = value("--ai-period")?;
+                args.ai_period = v.parse().map_err(|_| format!("--ai-period: not a number: {v}"))?;
+            }
+            "--sync-slots" => {
+                let v = value("--sync-slots")?;
+                args.sync_slots = v.parse().map_err(|_| format!("--sync-slots: not a number: {v}"))?;
+            }
+            "--sync-constant" => args.sync_constant = parse_seed(&value("--sync-constant")?)?,
             "--buildings" => args.buildings = true,
             "--seed" => args.boot.seed = Some(parse_seed(&value("--seed")?)?),
             "--replay" => args.boot.replay = Some(value("--replay")?),
@@ -145,6 +181,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         }
         return Ok(args);
     }
+    if args.sim_sync && args.boot.replay.is_none() {
+        return Err("--sim-sync needs --replay FILE.w3g".to_string());
+    }
     if args.boot.map.is_none() {
         return Err("no map file given".to_string());
     }
@@ -165,6 +204,54 @@ fn run(argv: &[String]) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let replay = w3g::Replay::parse(&bytes).map_err(|e| format!("--replay {path}: {e}"))?;
         print!("{}", engine::sync_check::check_replay(&replay).render());
+        return Ok(());
+    }
+    if args.sim_sync {
+        let path = args.boot.replay.as_deref().unwrap_or_default();
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let parsed = w3g::Replay::parse(&bytes).map_err(|e| format!("--replay {path}: {e}"))?;
+        let inputs = cli::inputs(&args.boot)?;
+        let (mut engine, setup) = engine::Engine::boot_from_replay(&bytes, inputs).map_err(|e| e.to_string())?;
+        let opts = engine::sim_sync::Options {
+            after_commands: args.sync_after,
+            max_slots: args.sync_slots,
+            trace: args.sync_trace,
+            constant: args.sync_constant,
+            defer_main: args.sync_defer_main,
+            register_units: args.sync_register,
+        };
+        engine.host().game_mut().set_pr_disabled(args.pr_off);
+        engine.set_ai_cadence(args.ai_delay, args.ai_period);
+        let mut report = engine::sim_sync::run(&mut engine, &parsed, &opts);
+        report.notes.extend(setup.notes.iter().cloned());
+        print!("{}", report.render());
+        {
+            let game = engine.host().game();
+            let st = game.pr_stats();
+            println!(
+                "pr hooks: unit created {}  mover start {}  leg restart {}  idle {}  walk release {}  missile launch {}  unit removed {}",
+                st[0], st[1], st[2], st[3], st[4], st[5], st[6]
+            );
+            for p in 0..2u32 {
+                println!("player {p}: {}", game.player_report(p));
+            }
+            let mut table: std::collections::BTreeMap<(u32, u32), u32> = std::collections::BTreeMap::new();
+            for &(k, v, _) in &game.kill_log {
+                *table.entry((k, v)).or_default() += 1;
+            }
+            for ((k, v), n) in table {
+                println!("kills: {k} -> {v}: {n}");
+            }
+            let mut by_owner: std::collections::BTreeMap<(u32, String), u32> = std::collections::BTreeMap::new();
+            for (_, u) in game.unit_objects() {
+                if !u.dead && !u.removed {
+                    *by_owner.entry((u.owner, format!("{:08x}", u.type_id))).or_default() += 1;
+                }
+            }
+            for ((o, t), n) in by_owner {
+                println!("units: p{o} {t} x{n}");
+            }
+        }
         return Ok(());
     }
     let mut engine = cli::boot(&args.boot)?;

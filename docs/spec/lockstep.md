@@ -1500,3 +1500,104 @@ The window attribution is coarse (a pair spans one computed record, the births o
 3. Group moves (`0x6F47B270` with up to 12 members, `0x6F203520`) and `CPrClusterGroup` creation (missile formations?).
 4. Absolute Y after the map script (units, regions, relations at load): needs the map and the full creation order.
 5. `SetUnitFacingTimed` and stop starts are not hooked.
+
+## 18. Pass 15 (2026-10-17): the full-engine 0x22 oracle on a second real replay (`--sim-sync`), the pause rule, event classes
+
+Labels as in section 13. Replay: `tools/replays/echoisles_ai_1.w3g` (not committed): 1.26a build 6059, `Maps\FrozenThrone\(2)EchoIsles.w3x`, seed
+`0x030b2473`, flags `0x00800002` (speed bits 2 = fast), one human (the host) against one computer, both slots with the random race (`0x60`); the first
+orders show the human is Human (`hpea` is trained) and the sim's melee start gives the AI Orc. 5,543 time slots, 5,543 records, 5,504 of them computed
+(the zero-increment slots repeat the previous value), 524 s of game time, five pauses (`0x01` at slots 57, 262, 280, 430, 798; `0x02` at 97, 275, 361,
+480, 932; the command slots carry increment 0).
+
+### 18.1 The tool
+
+`w3boot --replay FILE.w3g --sim-sync [--sync-trace] [--sync-slots N] [--sync-after] [--sync-defer-main] [--pr-off MASK] --dll Game.dll --mpq ... MAP.w3x`
+boots the map with the replay's seed and slots (`Engine::boot_from_replay`), runs `main` (as the game does while loading; before this pass the first step
+did), and then per time slot: decodes the pause/resume actions into `SyncState`, folds the slot into the net checksum, computes the record from the
+simulated state (`Engine::sync_time_slot`: clock `T`, net checksum, X and Y from `Game::pr`, `R` and the rand sum from the host's generators), applies the
+commands, runs the 25 ms units the sync tracker released (5 ticks each at fast speed) and compares the record with the file (`engine::sim_sync`).
+The report gives, per run:
+
+* **absolute** exact records and the first mismatching slot, with the difference `D = file ^ sim` explained by shape (`explain`);
+* **calibrated**: the same with the modal difference taken as the static constant `K` (the registry slots 5 to 9 and 12 to 19 and the cheat word are
+  not simulated; `K` absorbs them), with the exact prefix and the first mismatch;
+* **pairs** (no constant needed): consecutive computed records whose differences `D` agree, i.e. the simulated hidden-word changes equal the recorded
+  ones; the first mismatching pair; and the confusion matrix real quiet/active against sim quiet/active;
+* **event timelines**: every recorded hidden-word change is classified by its rotation signature (`EventClass`) and compared with the simulated input
+  that changed, matched within one slot. Signatures (CONFIRMED structure, thresholds empirical): a generator change is `rol3` of a hash difference
+  below `2^26`, so its low three bits are zero and it is below `2^29` (691 events); a tag change is `rol6(dY) ^ rol9(dX)` with small differences,
+  at most 22 bits (1,180); a rand-sum change has bits 20 to 23 clear and a full-width top byte (210); the rest is the game-hash slot, a participant that
+  appears, or several inputs at once (646).
+
+`--sync-trace` prints one line per computed slot (file, sim, `D`, the hidden words of both sides, the change classes, the simulated X, Y, R, rand and which
+generators changed). `--pr-off MASK` switches the pathing-object hooks of the sim off one by one (`sim::unit_position::pr_off`).
+
+### 18.2 What was fixed, with numbers (EchoIsles, 5,503 consecutive computed pairs)
+
+| step | stream-only exact pairs | sim-vs-file exact pairs |
+|---|---|---|
+| start of this pass (`--check-sync`, clock `25*floor(E/25)`) | 127, longest run 6, first exact pair 3 | n/a |
+| pause stops the clock (frozen `T`, increments of the paused slots not added) | 406 | n/a |
+| + the first run of the engine (`--sim-sync`, `main` deferred to the first step) | | 1,199 |
+| + pause with a buffer: increments pile up, whole units dropped at the resume, one extra unit at the resume | 2,766 | |
+| + the extra unit belongs to the pause (taken by the first slot with time to spend after the command, then the clock freezes) | 2,776, longest run 134 | |
+| + `main` runs before slot 0; creep camps no longer attack the neutral-passive units | | 1,302 |
+
+* **Pause (CONFIRMED on five pauses).** Every pair of records inside a pause has a zero residual with `T` frozen. The records around the pauses fit this
+  rule: the pause command arms a pause; the next slot with time to spend releases exactly one 25 ms unit (`T += 25`) and the clock freezes; slots keep
+  arriving and their increments pile up in the buffer; the resume drops the whole 25 ms units and keeps the remainder (`buffer %= 25`). It was found by
+  fitting the leftover `T` anomalies, which are `rol12(T ^ (T + 25))` at the first slot after each pause and after each resume (`0xf9 = 5775 ^ 5750` at
+  both ends of the first pause). Alternatives fitted on the same file: the extra unit at the resume gives 2,766 exact pairs (10 fewer), an extra unit after zero to three further slots is worse than after one in each of the five pauses, and without the drop at the resume the count falls to 127 to 406.
+  `sim::sync::SyncState::{pause, resume, clock, last_units}`; `sync_check` and `sim_sync` decode the actions.
+* **Neutral players.** The sim treated players 12 to 15 as enemies of each other; the creep camps attacked the neutral-passive units from the first second
+  and drew the reaction delay (stream 9) and the combat stream every slot. The recorded game has no stream activity there. `Game::is_enemy` now returns
+  false between the neutral players (the real rule is probably an alliance default of the neutral players, UNSURE).
+
+### 18.3 Where the first mismatch is, and why it cannot move yet
+
+* Absolute: 0 of 5,504 records match; the first mismatch is slot 0. The first record needs the static registry slots (5 to 9, 12 to 19), the presence and
+  birth tags after the map's load, the generator and rand sums after the game start (including the random-race draws of the two slots, not modelled) and
+  the game-hash slot. None of them is known; `K` cannot be derived from the sim.
+* Calibrated: the modal difference is carried by the 133 records of the long pause (slots 800 to 933), where both sides are frozen. Prefix 0.
+* Pairs: the first mismatching pair is slot 1. The file has a tag-sized change at 0 to 1 (`0x000b7c00`) and a generator-sized change at 1 to 2
+  (`0x07de1e40`); the sim draws the AI's first three `GetRandomInt` calls ((1,4), (1,3), (1,2)) during slot 0's ticks (so the change is visible at 1), the
+  recorded game one slot later. The AI cadence (when the dispatcher first runs a thread) is the cause (11.5 is UNSURE).
+* Timelines (final run, `real matched` against the number expected if the simulated events were spread at random): generator events real 691 / sim 257,
+  matched 98 (chance 92); tag events real 1,180 slots / sim 3,094, matched 1,037 (chance 1,081); rand-sum events real 210 / sim 580, matched 81 (chance 60).
+  **The simulated hidden-word events are uncorrelated with the recorded ones** (the sim registers about 2.6 times too often: 5,221 mover starts, 1,678 of
+  them leg restarts, 132 unit creations; switching the hook classes off one by one moves the exact-pair count between 1,302 and 2,461 without ever
+  predicting an event, so the pair count alone is not a score; the AI cadence knobs `--ai-delay/--ai-period` move the generator matches between 4 and 24
+  of 103 in the first 150 s, against about 8 by chance: a 1.0 s period with phase 0 or 1 is the best of the ones tried, not proof).
+* Facts from the file worth keeping: (a) ~600 of the recorded changes are pure generator draws by signature but none matches the generator sequence of the
+  record seed within 40 draws at any start (searched n < 300,000 for every event; the false-positive rate is high because hash differences are not
+  uniform, so this is "not confirmed", not "refuted"; the seed link and the start state stay unchecked); (b) a human train order shows up as a change of
+  `0x20000000` and then `0x60000000` (a counter 0 to 1 to 2 in a high rotation) plus a tag change, i.e. the game-hash slot's player data; the player
+  hash `0x6F40FEB0` folds two float fields (+0x29c, +0x2a4, both 0.0 at construction), a list hash of +0x2d0, the dead-hero list and a hash of the object at
+  +0x34 (strings at 0x6F94D488: "Dead hero %d: age[%d] tags[%u %u]"); the game-hash slot is `acc = rol(acc ^ H(player), 3)` over the 12 players
+  (0x6F3A1690), so human orders and AI production change it; (c) the first tag changes of the real game are in the thousands of bits (`dY` 1861 at slot 11),
+  so the birth tag after the map load is in the thousands (trees and other map objects register), against 107 in the sim.
+
+### 18.3b Replay object ids and the human's orders (new data, UNSURE meaning)
+
+`cargo run -p engine --example objids -- FILE.w3g` prints the object pairs of the selection and order actions. On EchoIsles every unit pair has two equal
+words: the hall of the human is `0x3a3c` (14908; the train orders at slots 137 and 140 follow its selection), the peasants are `0x3a71`, `0x3a9d`,
+`0x3ab3` (14961, 15005, 15027; selected for the move orders), a harvest target (`0xD0032` at slot 243) is `0x1929` (6441). The peasants are 22 apart
+(`0x3a71 + 22k`, k = 0..4: 22 agents per peasant) and the hall is 53 below the first peasant. So the ids are **agent ids from one counter that every agent
+draws from** (trees and doodads first, about 15,000 of them, then the start units with their abilities), not the handle ids (`0x100000` up) and not the
+sim's `(handle, 0)` model: without help **no order of the replay reaches a unit in the simulation**. `sim_sync::register_start_units` (`--sync-register`)
+registers the human's pairs by a heuristic (ids in ascending order are the player's start units in creation order, spaced by the smallest gap); it is
+off by default because it makes the comparison worse (exact pairs 1,302 to 373): with the human's peasants moving, the sim registers pathing objects in
+nearly every slot (8,608 mover starts, `Game::chase_route` replans a point order every batch), while the recorded game shows a tag change only in the
+one or two pairs after each human order (slots 122, 166, 174, 189, 212, 230, 243, 254: tag-only changes in two consecutive pairs, then quiet) and none
+while the peasant walks. That is direct evidence for the registration model: **a mover start and a stop register; walking does not**, and a point order
+must not replan every batch. The per-order Y step looks small (the first change after the order at slot 122, `0x2040`, can be read as `rol6(1) ^ rol9(16)`, a single birth plus a
+free-list head change, not three; the other reading is a 12-bit Y step); the agent-id counter and the first-order step are the two numbers to decode next.
+
+### 18.4 Open
+
+1. The static constant `K`: hashes of the registry slots 5, 7, 8, 9 and 12 to 19 from the game data (ability database `0x6F005D60`, custom data kinds).
+2. Birth and presence tags after the map load (destructables, regions, relations): needs the creation/registration counts of a whole map load.
+3. The AI cadence in the first slots (first draw one slot later than the sim), and the production events (the game-hash slot's player data).
+4. The generator link: verify the seed with an isolated draw (a quiet pair whose only change is a draw count), or decode the random-race draw at the game start.
+5. The agent-id counter (14,908 for the human's hall): per-type agent counts of a unit (22 for a peasant) and the order of map-load creation, to resolve the replay's object pairs and let the human's orders act.
+6. Why the pause takes exactly one extra unit (probably the frame driver finishes the unit in progress); the rule is fitted on one replay.
