@@ -182,13 +182,14 @@ fn flak_cannon_splashes_air_units_in_three_tiers_and_spares_ground() {
 
 #[test]
 fn frag_shards_splash_ground_units_and_sort_the_radii() {
-    // The stock row lists the medium radius 275 and the small radius 250; the tiers are nested by radius.
+    // The stock row lists the medium radius 275 (DataA, amount DataD) and the small radius 250 (DataB, amount DataE). V7: the original
+    // collector (0x6F2C2E80) gives a unit the amount of the SMALLEST ring that contains it, so 120 away takes DataE (the 250 ring).
     let level = SpellLevel { area: f(100.0), data: data(&[275.0, 250.0, 25.0, 18.0, 12.0]), ..Default::default() };
     let mut h = host(b"Afsh", level, "setup_ground");
     hit(&mut h, 1);
     let hits = (1000.0 - life(&h, "prey")) / 10.0;
     assert_eq!(1000.0 - life(&h, "full"), 25.0 * hits, "60 away: inside the full radius 100");
-    assert_eq!(1000.0 - life(&h, "mid"), 18.0 * hits, "120 away: inside 250");
+    assert_eq!(1000.0 - life(&h, "mid"), 12.0 * hits, "120 away: the smallest containing ring is DataB 250, amount DataE");
     assert_eq!(1000.0 - life(&h, "small"), 0.0, "300 away: outside 275");
     assert_eq!(life(&h, "grounded"), 1000.0, "air units are not ground targets");
 }

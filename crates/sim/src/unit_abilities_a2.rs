@@ -406,6 +406,138 @@ const DT_ACID: u32 = 16;
 const DT_ENHANCED: u32 = 5;
 const DT_DEMOLITION: u32 = 22;
 
+/// The three `{radius, amount}` rings Flak Cannon hands to the area body `0x6F2C31D0` (`CAbilityFlakCannon` slot `0x154`,
+/// `0x6F177D00`): `(Area, DataC)`, `(DataA, DataD)`, `(DataB, DataE)`, in that order. Frag Shards uses the same triples
+/// (`0x6F183B40`). CONFIRMED (V7, Unicorn `tools/emu/v7_hits_emu.py`, 300 cases). The body picks, for each unit, the amount of the
+/// smallest ring that contains it (ring order only breaks ties).
+pub fn tier_rings(area: F32, data: [F32; 5]) -> [(F32, F32); 3] {
+    [(area, data[2]), (data[0], data[3]), (data[1], data[4])]
+}
+
+/// Whether the Flak Cannon hit handler calls the area body at all: the ability is enabled (`vf616`) and its pause counter
+/// (`+0x3C`) is not positive (a signed compare). CONFIRMED (V7).
+pub fn tier_hit_runs(enabled: bool, pause: u32) -> bool {
+    enabled && (pause as i32) <= 0
+}
+
+/// The splash fields Flaming Attack writes into the launch record (`0x6F09DE00`): `Hfact` (`+0x80`) = `DataB`, `Qfact` (`+0x84`) =
+/// `DataC`, `Farea` (`+0x88`) = `DataD`, `Harea` (`+0x8C`) = `DataE`, `Qarea` (`+0x90`) = `Area`. The handler runs only when the
+/// ability flag `0x400000` is set and clears it. CONFIRMED (V7).
+pub fn flaming_splash_fields(area: F32, data: [F32; 5]) -> [F32; 5] {
+    [data[1], data[2], data[3], data[4], area]
+}
+
+/// The rings of the Death Damage explosion (`0x6F1E7200`): `(DataA, DataB)`, `(DataC, DataD)`; the delayed object gets the level's
+/// `Dur`, count 2 and damage class `0x10`. CONFIRMED (V7).
+pub fn death_damage_rings(data: [F32; 4]) -> [(F32, F32); 2] {
+    [(data[0], data[1]), (data[2], data[3])]
+}
+
+/// Whether the Death Damage handler creates the explosion: the ability is enabled (`vf616`), its flag byte `+0x20` has bit 7
+/// clear, the dying unit is no illusion (`+0x5C` bit `0x40000000`) and its flag byte `+0x20` has bit 0 clear. CONFIRMED (V7).
+pub fn death_damage_runs(enabled: bool, ability_flags: u32, unit_flags: u32, unit_byte: u8) -> bool {
+    enabled && ability_flags & 0x80 == 0 && unit_flags & 0x4000_0000 == 0 && unit_byte & 1 == 0
+}
+
+/// The damage-class masks the collector reads (`0x6FA6F2CC`, `0x6FA6F2D0`; set at start-up, runtime values).
+pub const CLASS_MASK_A: u32 = 0x033E_E700;
+pub const CLASS_MASK_B: u32 = 0x00C1_1830;
+
+/// What the area body's per-candidate collector `0x6F2C2E80` sees about one candidate unit and the context it was built for.
+#[derive(Debug, Clone, Copy)]
+pub struct RingProbe {
+    /// The context's damage class word (`ctx[20]`) and attack-type row (`ctx[22]`).
+    pub class: u32,
+    pub row: u32,
+    /// Misc `MagicImmunesResistDamage`.
+    pub misc_resist: bool,
+    /// `ctx[24] != 0 && 0x6F26F2B0(ctx[23], unit)`: the max-amount mode instead of the ring lookup.
+    pub max_mode: bool,
+    /// The candidate's vtable slot `0x11C` (invulnerable), magic-immunity counter (`+0x15C`), ethereal counter (`+0x158`);
+    /// `unit_known` = the owner object `0x6F282F60` resolved.
+    pub invulnerable: bool,
+    pub magic_immune: i32,
+    pub ethereal: i32,
+    pub unit_known: bool,
+    /// The context's player filter (`ctx[25]`, -1 = none) and the relation answers for the unit's owner
+    /// (`0x6F3A3400`, `0x6F3A36D0`).
+    pub owner_filter: i32,
+    pub rel_a: bool,
+    pub rel_b: bool,
+}
+
+/// What the collector stores for a candidate: the amount and the bucket (0 = `rel_a` false, 1 = `rel_b`, 2 = the rest).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RingEntry {
+    pub amount: F32,
+    pub bucket: u32,
+}
+
+/// The ring collector `0x6F2C2E80`. In ring mode it keeps the amount of the ring with the SMALLEST radius that contains the unit
+/// (`member(radius)`; the scan starts from twice the largest radius, a ring replaces the kept one only when strictly smaller,
+/// so equal radii keep the first); in max mode it takes the largest amount (an ordered compare, so NaN never wins; the start is
+/// 0.0). A zero amount (the x87 `!=`, NaN counts as non-zero) stores nothing. The immunity gates follow: with the Misc rule on,
+/// a Magic row (4) or a class in mask A is stopped by invulnerability or magic immunity (counter > 0), a row in 1, 2, 3, 5, 6
+/// or a class in mask B by the ethereal counter (> 0); with it off every class but 16, 32, 0x4000000, 0x400000 is stopped by
+/// invulnerability or magic immunity. CONFIRMED (V7, Unicorn `tools/emu/v7_ring_emu.py`, 600 cases, membership stubbed).
+pub fn ring_collect(
+    rings: &[(F32, F32)],
+    max_radius: F32,
+    p: &RingProbe,
+    member: impl Fn(F32) -> bool,
+) -> Option<RingEntry> {
+    let amount = if p.max_mode {
+        let mut best = F32::ZERO;
+        for (_, a) in rings {
+            if best.to_f32() < a.to_f32() {
+                best = *a;
+            }
+        }
+        best
+    } else {
+        let mut kept = arith::mul(max_radius, F32::from_bits(0x4000_0000));
+        let mut amount = F32::ZERO;
+        for (r, a) in rings {
+            if kept.to_f32() > r.to_f32() && member(*r) {
+                kept = *r;
+                amount = *a;
+            }
+        }
+        amount
+    };
+    // the x87 `0.0 != amount`: only an equal pair is "zero"
+    if amount.to_f32() == 0.0 {
+        return None;
+    }
+    let (check_a, check_b) = if p.misc_resist {
+        let a = p.row == 4 || p.class & CLASS_MASK_A != 0;
+        let b = matches!(p.row, 1 | 2 | 3 | 5 | 6) || p.class & CLASS_MASK_B != 0;
+        (a, b)
+    } else if matches!(p.class, 16 | 32 | 0x400_0000 | 0x40_0000) {
+        (false, false)
+    } else {
+        (true, false)
+    };
+    if check_a {
+        if p.invulnerable {
+            return None;
+        }
+        if p.unit_known && p.magic_immune > 0 {
+            return None;
+        }
+    } else if check_b && p.unit_known && p.ethereal > 0 {
+        return None;
+    }
+    let bucket = if p.owner_filter != -1 && p.unit_known && !p.rel_a {
+        0
+    } else if p.owner_filter != -1 && p.unit_known && p.rel_b {
+        1
+    } else {
+        2
+    };
+    Some(RingEntry { amount, bucket })
+}
+
 fn dist2(gm: &Game, a: (F32, F32), k: ObjKey) -> F32 {
     let u = gm.unit(k);
     let (dx, dy) = (arith::sub(u.x, a.0), arith::sub(u.y, a.1));
@@ -479,9 +611,13 @@ impl Game {
         if !arith::lt(F32::ZERO, level.data[0]) {
             return;
         }
-        let rings = [(level.data[3], F32::ONE), (level.data[4], level.data[1]), (level.area, level.data[2])];
+        // V7 (CONFIRMED): the handler `0x6F09DE00` fills the launch record's splash fields (`flaming_splash_fields`), which the
+        // verified splash engine reads (`splash::ring_factor`, `splash::query_radius`, `bounce::launch_factors`).
+        let [hfact, qfact, farea, harea, qarea] = flaming_splash_fields(level.area, [level.data[0], level.data[1], level.data[2], level.data[3], level.data[4]]);
+        let (hfact, qfact) = crate::bounce::launch_factors(hfact, qfact);
+        let query = crate::splash::query_radius(farea, harea, qarea);
         let mut victims = vec![target];
-        for k in crate::natives::group::circle_candidates(self, at.0, at.1, level.area) {
+        for k in crate::natives::group::circle_candidates(self, at.0, at.1, query) {
             if k != target && self.alive(k) && !self.unit(k).hidden && crate::orc::area_predicate(self, attacker, k, word) {
                 victims.push(k);
             }
@@ -491,8 +627,8 @@ impl Game {
             let factor = if k == target {
                 F32::ONE
             } else {
-                match rings.iter().find(|(r, _)| within(d2, *r)) {
-                    Some((_, f)) => *f,
+                match crate::splash::ring_factor(farea, harea, qarea, hfact, qfact, |r| within(d2, r)) {
+                    Some(f) => f,
                     None => continue,
                 }
             };
@@ -514,24 +650,49 @@ impl Game {
         if !targs_ok(self, attacker, target, word) {
             return;
         }
-        let mut r = radii;
-        r.sort_by(|a, b| a.to_f32().total_cmp(&b.to_f32()));
-        let mut a = amounts;
-        a.sort_by(|x, y| y.to_f32().total_cmp(&x.to_f32()));
+        // V7 (CONFIRMED, `0x6F177D00`, `0x6F2C2E80`): the rings are (Area, DataC), (DataA, DataD), (DataB, DataE); a unit takes
+        // the amount of the smallest ring that contains it, subject to the collector's immunity gates. `radii` / `amounts`
+        // are kept for the callers' signature; they are the same data in the editor's order.
+        let _ = (radii, amounts);
+        let rings = tier_rings(level.area, [level.data[0], level.data[1], level.data[2], level.data[3], level.data[4]]);
+        let mut max_radius = F32::ZERO;
+        for (r, _) in &rings {
+            if max_radius.to_f32() < r.to_f32() {
+                max_radius = *r;
+            }
+        }
         let at = (self.unit(target).x, self.unit(target).y);
-        let _ = level;
-        for k in crate::natives::group::circle_candidates(self, at.0, at.1, r[2]) {
+        for k in crate::natives::group::circle_candidates(self, at.0, at.1, max_radius) {
             if k == target || !self.alive(k) || self.unit(k).hidden || !crate::orc::area_predicate(self, attacker, k, word) {
                 continue;
             }
             let d2 = dist2(self, at, k);
-            let Some(i) = (0..3).find(|&i| within(d2, r[i])) else { continue };
-            if !arith::lt(F32::ZERO, a[i]) {
+            let probe = self.ring_probe(k, 0x10, 1);
+            let Some(e) = ring_collect(&rings, max_radius, &probe, |r| within(d2, r)) else { continue };
+            if !arith::lt(F32::ZERO, e.amount) {
                 continue;
             }
-            if let Some(d) = self.unit_damage_target(attacker, k, a[i], true, true, 0, DT_ENHANCED) {
+            if let Some(d) = self.unit_damage_target(attacker, k, e.amount, true, true, 0, DT_ENHANCED) {
                 died.push(d);
             }
+        }
+    }
+
+    /// The collector's view of candidate `k` for a record of damage class `class` and attack row `row` (`ring_collect`).
+    fn ring_probe(&self, k: ObjKey, class: u32, row: u32) -> RingProbe {
+        let u = self.unit(k);
+        RingProbe {
+            class,
+            row,
+            misc_resist: self.misc_magic_immunes_resist(),
+            max_mode: false,
+            invulnerable: self.unit_is_invulnerable(k),
+            magic_immune: u.magic_immune,
+            ethereal: u.ethereal,
+            unit_known: true,
+            owner_filter: -1,
+            rel_a: true,
+            rel_b: false,
         }
     }
 
@@ -598,6 +759,11 @@ impl Game {
         if !has(self, unit, DEATH_DAMAGE) {
             return;
         }
+        // V7: the handler `0x6F1E7200` does nothing for an illusion or a removed unit (`death_damage_runs`).
+        let (illusion, removed) = (self.unit(unit).illusion, self.unit(unit).removed);
+        if !death_damage_runs(true, 0, if illusion { 0x4000_0000 } else { 0 }, u8::from(removed)) {
+            return;
+        }
         let delay = self.ability_level_record(unit, DEATH_DAMAGE).map_or(0.0, |l| l.dur.to_f32().max(0.0));
         self.timers.start(
             delay,
@@ -613,20 +779,23 @@ impl Game {
         };
         let word = targs_word("ground,structure,debris,enemy,ward");
         let at = (self.unit(unit).x, self.unit(unit).y);
-        let outer = if arith::lt(level.data[0], level.data[2]) { level.data[2] } else { level.data[0] };
+        // V7 (CONFIRMED, `0x6F1E7200`, `0x6F2C2E80`): rings (DataA, DataB), (DataC, DataD); the smallest containing ring wins.
+        let rings = death_damage_rings([level.data[0], level.data[1], level.data[2], level.data[3]]);
+        let mut outer = F32::ZERO;
+        for (r, _) in &rings {
+            if outer.to_f32() < r.to_f32() {
+                outer = *r;
+            }
+        }
         let mut died = Vec::new();
         for k in crate::natives::group::circle_candidates(self, at.0, at.1, outer) {
             if k == unit || !self.alive(k) || self.unit(k).hidden || !crate::orc::area_predicate(self, unit, k, word) {
                 continue;
             }
             let d2 = dist2(self, at, k);
-            let amount = if within(d2, level.data[0]) {
-                level.data[1]
-            } else if within(d2, level.data[2]) {
-                level.data[3]
-            } else {
-                continue;
-            };
+            let probe = self.ring_probe(k, 1 << DT_DEMOLITION, 0);
+            let Some(e) = ring_collect(&rings, outer, &probe, |r| within(d2, r)) else { continue };
+            let amount = e.amount;
             if let Some(d) = self.unit_damage_target(unit, k, amount, false, false, 0, DT_DEMOLITION) {
                 died.push(d);
             }
