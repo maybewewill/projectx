@@ -1290,6 +1290,67 @@ pub fn area_callback_amount(illusion: bool, misc: bool, immune: bool, a: F32) ->
     }
 }
 
+/// The Rune of Mana area callback `0x6F1269E0` (`AImr`): a candidate immune to the ability's order (`0x6F28D750`) or whose
+/// maximum mana is below `2e-7` in absolute value (x87 compare against `0x6FAAE614`: NaN passes) is skipped, an
+/// illusion is skipped unless Misc `IllusionsCanRestoreMana` is set, otherwise the mana adder gets `DataA`. Rows `MT`.
+pub fn mana_area_callback(illusion: bool, misc_mana: bool, immune: bool, max_mana: F32, a: F32) -> Option<F32> {
+    if immune {
+        return None;
+    }
+    let mag = f32::from_bits(arith::sub(max_mana, F32::ZERO).to_bits() & 0x7FFF_FFFF);
+    if f32::from_bits(0x3456_BF95) > mag {
+        return None;
+    }
+    if !misc_mana && illusion {
+        return None;
+    }
+    Some(a)
+}
+
+/// The Restoration area callback `0x6F1E6130` (`AIra`): an immune candidate is skipped; an illusion is skipped entirely
+/// when `DataA` is not zero and Misc `IllusionsCanRestoreLife` is off, or when `DataB` is not zero and
+/// `IllusionsCanRestoreMana` is off (a NaN amount counts as not zero); otherwise the life adder gets `DataA` and the
+/// mana adder `DataB`. Rows `RT`.
+pub fn restore_area_callback(
+    illusion: bool,
+    misc_life: bool,
+    misc_mana: bool,
+    immune: bool,
+    a: F32,
+    b: F32,
+) -> Option<(F32, F32)> {
+    if immune {
+        return None;
+    }
+    let nonzero = |v: F32| f32::from_bits(v.to_bits()) != 0.0;
+    if illusion && !misc_life && nonzero(a) {
+        return None;
+    }
+    if illusion && !misc_mana && nonzero(b) {
+        return None;
+    }
+    Some((a, b))
+}
+
+/// The Regeneration area callback `0x6F108800` (`AIrg` scrolls): the same candidate rules as [`restore_area_callback`]
+/// (the immunity answer is slot `0x3F0` of the ability; the life amount is `DataA`, the mana amount `DataB`), then the
+/// regeneration apply `0x6F108620` is called with the duration the context carries for the candidate: `HeroDur` for a hero
+/// (`0x6F1D2660`), else `Dur`. Returns that duration, or `None` when the candidate is skipped. Rows `RG`.
+#[allow(clippy::too_many_arguments)]
+pub fn regen_area_callback(
+    illusion: bool,
+    misc_life: bool,
+    misc_mana: bool,
+    immune: bool,
+    hero: bool,
+    dur: F32,
+    hero_dur: F32,
+    a: F32,
+    b: F32,
+) -> Option<F32> {
+    restore_area_callback(illusion, misc_life, misc_mana, immune, a, b).map(|_| if hero { hero_dur } else { dur })
+}
+
 /// The three attribute values the attribute tome and the attribute bonus read (`0x6F0E5D50`, `0x6F0E57E0`): the
 /// integer parts (`F2I`) of `DataA`, `DataB` and `DataC`, handed to the agility, intelligence and strength adders.
 pub fn attribute_values(d: &[F32; 9]) -> (i32, i32, i32) {
@@ -1554,6 +1615,15 @@ fn area_center(gm: &Game, caster: ObjKey, target: CastTarget) -> (F32, F32) {
 /// The area callbacks (`0x6F0F0470` and the mana and restore twins): immune units are skipped (not modelled), an
 /// illusion is skipped unless the Misc switch allows it (CONFIRMED structure, UNSURE key), the amount is `DataA`.
 fn area_units(gm: &Game, caster: ObjKey, target: CastTarget, level: &SpellLevel) -> Vec<ObjKey> {
+    area_friends(gm, caster, target, level)
+        .into_iter()
+        .filter(|&k| area_callback_amount(gm.unit(k).illusion, gm.spells.item.illusions_heal, false, F32::ZERO).is_some())
+        .collect()
+}
+
+/// The friendly candidates of an area effect around its center (UNSURE: the group builder's relation flags `0x1D` / `0x1F`
+/// are not decoded; friends and the caster). `AIda` uses these as they are: its callback handles illusions itself.
+fn area_friends(gm: &Game, caster: ObjKey, target: CastTarget, level: &SpellLevel) -> Vec<ObjKey> {
     let (cx, cy) = area_center(gm, caster, target);
     let owner = gm.unit(caster).owner;
     crate::natives::circle_candidates(gm, cx, cy, level.area)
@@ -1563,9 +1633,7 @@ fn area_units(gm: &Game, caster: ObjKey, target: CastTarget, level: &SpellLevel)
                 return false;
             }
             let u = gm.unit(k);
-            // UNSURE: the group builder's relation flags (`0x1D` / `0x1F`) are not decoded; friends and the caster.
-            let friend = k == caster || u.owner == owner || !gm.is_enemy(owner, u.owner);
-            friend && area_callback_amount(u.illusion, gm.spells.item.illusions_heal, false, F32::ZERO).is_some()
+            k == caster || u.owner == owner || !gm.is_enemy(owner, u.owner)
         })
         .collect()
 }
@@ -1581,9 +1649,19 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
             }
         }
         Family::HealAoe | Family::ManaAoe | Family::RestoreAoe => {
-            let plan = restore_plan(fam, d);
-            for k in area_units(gm, caster, target, level) {
-                run_plan(gm, k, &plan);
+            // One callback per family (`0x6F0F0470`, `0x6F1269E0`, `0x6F1E6130`): each has its own illusion rule.
+            let (misc_life, misc_mana) = (gm.spells.item.illusions_heal, gm.spells.item.illusions_mana);
+            for k in area_friends(gm, caster, target, level) {
+                let (illusion, max_mana) = (gm.unit(k).illusion, gm.unit(k).max_mana);
+                let plan = match fam {
+                    Family::HealAoe => area_callback_amount(illusion, misc_life, false, d[0]).map(|a| vec![(Sink::Life, a)]),
+                    Family::ManaAoe => mana_area_callback(illusion, misc_mana, false, max_mana, d[0]).map(|a| vec![(Sink::Mana, a)]),
+                    _ => restore_area_callback(illusion, misc_life, misc_mana, false, d[0], d[1])
+                        .map(|(a, b)| vec![(Sink::Life, a), (Sink::Mana, b)]),
+                };
+                if let Some(plan) = plan {
+                    run_plan(gm, k, &plan);
+                }
             }
         }
         Family::TomeLife => {
@@ -1634,7 +1712,16 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
             // The scroll forms (`Area` above 0) act on the units around the target or owner (`0x6F1088D0`), the potions on
             // the target or the owner (`0x6F108AC0`).
             let units = if arith::lt(F32::ZERO, level.area) {
-                area_units(gm, caster, target, level)
+                let (misc_life, misc_mana) = (gm.spells.item.illusions_heal, gm.spells.item.illusions_mana);
+                area_friends(gm, caster, target, level)
+                    .into_iter()
+                    .filter(|&k| {
+                        let illusion = gm.unit(k).illusion;
+                        let hero = gm.target_hero(k);
+                        regen_area_callback(illusion, misc_life, misc_mana, false, hero, level.dur, level.hero_dur, d[0], d[1])
+                            .is_some()
+                    })
+                    .collect()
             } else {
                 vec![effect_target(caster, target)]
             };
@@ -1643,7 +1730,7 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
             }
         }
         Family::DefenseAoe => {
-            for k in area_units(gm, caster, target, level) {
+            for k in area_friends(gm, caster, target, level) {
                 apply_defense(gm, k, level);
             }
         }
@@ -1709,14 +1796,44 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
 
 // ---- S45 effects (spec section 16; UNSURE models unless the spec says otherwise) ----
 
-/// `AIda`: the hero-rule duration, the buff `Bdef` with `+DataA` armor (UNSURE: the stock `AIdb` row also has `DataB` 150
-/// and `DataC` 100, not used).
+/// What the Scroll of Protection (`AIda`) area callback `0x6F0B61D0` does to one candidate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DefenseOutcome {
+    /// The amount handed to the life adder `0x6F277C20` (`DataB`), when the heal block runs.
+    pub life: Option<F32>,
+    /// The amount handed to the mana adder `0x6F279140` (`DataC`).
+    pub mana: Option<F32>,
+    /// The buff `Bdef` apply (`0x6F0B60F0`): `(armor = DataA, duration)`.
+    pub buff: Option<(F32, F32)>,
+}
+
+/// The `AIda` callback (Unicorn `DA` rows): a candidate that is not an illusion (`+0x5C & 0x40000000`) gets the life adder
+/// with `DataB` and the mana adder with `DataC` when `0 < DataB` or `0 < DataC` (x87 compares, so NaN fails them; the
+/// ethereal branch is dead: slot `0x42C` of the class answers 0); a candidate that is not immune to the ability's order
+/// (`0x6F28D750`) gets `Bdef` with `DataA` and the hero-rule duration ([`potion_buff_duration`]). Illusions get the buff.
+pub fn defense_callback(illusion: bool, immune: bool, hero: bool, level: &SpellLevel, extra: F32) -> DefenseOutcome {
+    let (b, c) = (level.data[1], level.data[2]);
+    let positive = |v: F32| f32::from_bits(v.to_bits()) > 0.0;
+    let heals = !illusion && (positive(b) || positive(c));
+    DefenseOutcome {
+        life: heals.then_some(b),
+        mana: heals.then_some(c),
+        buff: (!immune).then(|| (level.data[0], potion_buff_duration(level, hero, extra))),
+    }
+}
+
+/// `AIda` on one unit ([`defense_callback`]). The immunity answer of `0x6F28D750` is not modelled (false). The buff is
+/// skipped for a duration that is not above zero (a stand-in: the original hands any duration to the apply).
 fn apply_defense(gm: &mut Game, k: ObjKey, level: &SpellLevel) {
     if !gm.alive(k) {
         return;
     }
     let hero = gm.target_hero(k);
-    let dur = potion_buff_duration(level, hero, F32::ZERO);
+    let out = defense_callback(gm.unit(k).illusion, false, hero, level, F32::ZERO);
+    if let (Some(l), Some(m)) = (out.life, out.mana) {
+        run_plan(gm, k, &[(Sink::Life, l), (Sink::Mana, m)]);
+    }
+    let Some((armor, dur)) = out.buff else { return };
     if !arith::lt(F32::ZERO, dur) {
         return;
     }
@@ -1727,7 +1844,7 @@ fn apply_defense(gm: &mut Game, k: ObjKey, level: &SpellLevel) {
         ..crate::abilities::buff_predicates(BUFF_DEFENSE)
     };
     let mods = crate::unit_spells::UnitMods {
-        armor: level.data[0],
+        armor,
         ..Default::default()
     };
     gm.apply_mods_buff(k, BUFF_DEFENSE, preds, mods, dur);

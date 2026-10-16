@@ -53,6 +53,76 @@ use crate::orders::{Order, OrderClass};
 use crate::timer::TimerId;
 use crate::unit_spells::{targs_ok, targs_word, UnitMods};
 
+/// The invisibility flag of a unit (`+0x5C`, bit `0x1000000`).
+pub const INVIS_FLAG: u32 = 0x100_0000;
+
+/// What the counter step did besides changing the count (classification of the original's calls).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CounterClass {
+    /// Nothing else happened (a decrement that left the counter positive).
+    Nothing,
+    /// An increment that did not start from zero: only the notification `0x6F26F970`.
+    Notify,
+    /// The fade is zero: `0x6F284950` ran at once (flag and alpha changed now).
+    Immediate,
+    /// The fade is above zero (or NaN, negative): the alpha ramp starts; the flag follows with the ramp.
+    Ramp,
+}
+
+fn fade_is_zero(fade: F32) -> bool {
+    // `fucompp` against 0.0, "equal" only: +0 and -0; NaN, negatives and positives take the ramp.
+    fade.to_bits() & 0x7FFF_FFFF == 0
+}
+
+/// The increment `0x6F28D7D0(unit, &fade)`: `(count', flags', class)`. Rows `IC` of `v3_vectors.txt`.
+pub fn counter_increment(count: i32, flags: u32, fade: F32) -> (i32, u32, CounterClass) {
+    let n = count.wrapping_add(1);
+    if n != 1 {
+        return (n, flags, CounterClass::Notify);
+    }
+    if fade_is_zero(fade) {
+        // 0x6F284950 with a non-zero counter: the flag is set now.
+        (n, flags | INVIS_FLAG, CounterClass::Immediate)
+    } else {
+        (n, flags, CounterClass::Ramp)
+    }
+}
+
+/// The decrement `0x6F28D9C0(unit, &fade)`: while the counter stays positive nothing happens; otherwise the flag is
+/// cleared at once and the fade-out is either immediate (`0x6F284950`, which sets the flag again for a counter below
+/// zero: a quirk) or a ramp. Rows `ID`.
+pub fn counter_decrement(count: i32, flags: u32, fade: F32) -> (i32, u32, CounterClass) {
+    let n = count.wrapping_add(-1);
+    if n > 0 {
+        return (n, flags, CounterClass::Nothing);
+    }
+    let cleared = flags & !INVIS_FLAG;
+    if fade_is_zero(fade) {
+        let f = if n != 0 { cleared | INVIS_FLAG } else { cleared };
+        (n, f, CounterClass::Immediate)
+    } else {
+        (n, cleared, CounterClass::Ramp)
+    }
+}
+
+/// The viewer gate `0x6F3A15F0(unit, viewerMask, flag)` on the values it reads: the unit's flag word, the third argument,
+/// the unit's owner index (slot `0xEC`), the viewer mask (a 16-bit word) and the unit's detection mask. Rows `VG`; what
+/// goes INTO the masks is the model's ([`Game::invisibility_gate`]).
+pub fn viewer_gate_core(flags: u32, arg: u32, owner: u32, mask: u32, detection: u32) -> bool {
+    let invisible = flags & INVIS_FLAG != 0;
+    if arg == 0 && !invisible {
+        return true;
+    }
+    let m = mask & 0xFFFF;
+    if m & (1u32 << (owner & 31)) != 0 {
+        return true;
+    }
+    if !invisible {
+        return true;
+    }
+    m & detection != 0
+}
+
 /// Sorceress Invisibility (`CAbilityInvisibility < CAbilitySimpleSpell`, order `invisibility`, 852069).
 pub const INVISIBILITY: u32 = code(b"Aivs");
 /// Permanent Invisibility (`CAbilityPermInvis`, `CBonusBase` family) and Ghost (`CAbilityGhost < CAbilityPermInvis`).
@@ -225,8 +295,7 @@ impl Game {
     pub fn invisibility_note(&mut self, unit: ObjKey) {
         if self.invisibility_count(unit) > 0 {
             if !self.spells.neutral.inv.since.contains_key(&unit) {
-                let fade = self.invisibility_fade(unit);
-                let now = self.game_time();
+                let fade = self.invisibility_fade(unit);                let now = self.game_time();
                 self.spells.neutral.inv.since.insert(unit, (now, fade));
             }
             self.invisibility_ensure_scan();
@@ -356,15 +425,14 @@ impl Game {
     /// The gate `0x6F3A15F0`: whether `viewer` passes the invisibility test of `unit` (true for a unit that is not
     /// invisible, for the viewer's own and allied units, and for units a player of the viewer's mask detects).
     pub fn invisibility_gate(&self, unit: ObjKey, viewer: u32) -> bool {
-        if !self.is_invisible(unit) {
-            return true;
-        }
         let owner = self.unit(unit).owner;
-        if owner == viewer || !self.is_enemy(viewer, owner) {
-            return true;
+        let mut mask = u32::from(self.owner_vision_mask(viewer)) | (1 << viewer);
+        if !self.is_enemy(viewer, owner) {
+            mask |= 1 << owner;
         }
-        let mask = u32::from(self.owner_vision_mask(viewer)) | (1 << viewer);
-        mask & (1 << owner) != 0 || self.detecting_players(unit) & mask != 0
+        let flags = if self.is_invisible(unit) { INVIS_FLAG } else { 0 };
+        let detection = if flags != 0 { self.detecting_players(unit) } else { 0 };
+        viewer_gate_core(flags, 0, owner, mask, detection)
     }
 
     /// `IsUnitInvisible(unit, player)`: the unit is invisible and the player does not pass the gate.

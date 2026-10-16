@@ -38,3 +38,6 @@ __pycache__/
 tools/emu/jasscomp/out/
 site/
 tools/replays/
+docs/research/ability-atlas/atlas.json
+docs/research/ability-atlas/vtable-xrefs.json
+docs/research/pools/pool-selection.patch

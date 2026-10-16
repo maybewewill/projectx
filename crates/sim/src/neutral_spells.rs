@@ -366,11 +366,15 @@ impl Game {
             (u.x, u.y)
         };
         let word = crate::unit_spells::targs_word("ground,enemy,neutral");
-        let (full, damage, half_radius) = (level.data[2], level.data[1], level.data[3]);
-        let half_damage = arith::mul(F32::from_bits(0x3F00_0000), damage);
-        let inner: BTreeSet<ObjKey> = crate::natives::group::circle_candidates(self, cx, cy, full).into_iter().collect();
+        let rings = pulverize_rings(level.data[1], level.data[2], level.data[3]);
+        // The collector gives a unit the amount of the smallest ring that contains it; the query reaches the largest ring.
+        let sets: Vec<BTreeSet<ObjKey>> = rings
+            .iter()
+            .map(|&(radius, _)| crate::natives::group::circle_candidates(self, cx, cy, radius).into_iter().collect())
+            .collect();
+        let reach = rings.iter().fold(F32::ZERO, |m, &(r, _)| if arith::lt(m, r) { r } else { m });
         let mut killed = Vec::new();
-        for k in crate::natives::group::circle_candidates(self, cx, cy, half_radius) {
+        for k in crate::natives::group::circle_candidates(self, cx, cy, reach) {
             {
                 let u = self.unit(k);
                 if u.removed || u.hidden {
@@ -380,7 +384,13 @@ impl Game {
             if !crate::orc::area_predicate(self, unit, k, word) {
                 continue;
             }
-            let amount = if inner.contains(&k) { damage } else { half_damage };
+            let mut best: Option<(F32, F32)> = None;
+            for (i, &(radius, amount)) in rings.iter().enumerate() {
+                if sets[i].contains(&k) && best.is_none_or(|(r, _)| arith::lt(radius, r)) {
+                    best = Some((radius, amount));
+                }
+            }
+            let Some((_, amount)) = best else { continue };
             if let Some(t) = self.unit_damage_target(unit, k, amount, false, false, 0, PULVERIZE_DAMAGE_TYPE) {
                 killed.push(t);
             }
@@ -517,6 +527,97 @@ fn mana_shield(game: &RefCell<Game>, rec: &CastRec) {
     };
     gm.apply_mods_buff(rec.caster, BUFF_MANA_SHIELD, preds, UnitMods::default(), F32::ZERO);
     gm.spells.neutral.shield.insert(rec.caster, (rec.level.data[0], rec.level.data[1]));
+}
+
+/// The rings the Pulverize execute slot `0x6F1775F0` hands to the area body `0x6F2C31D0` (two rings, damage class
+/// `0x20`, the ability's `targs` word, the callback `0x6F171180`): `(DataC, DataB)` and `(DataD, 0.5 * DataB)`
+/// (the constant at `0x6FAAE4D0`). Rows `PR` of `v3_vectors.txt`.
+pub fn pulverize_rings(data_b: F32, data_c: F32, data_d: F32) -> [(F32, F32); 2] {
+    [(data_c, data_b), (data_d, arith::mul(data_b, F32::from_bits(0x3F00_0000)))]
+}
+
+/// What the Mana Shield damage hook `0x6F126DD0` does, in the order the original does it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShieldEvent {
+    /// The buff is destroyed (`0x6F079CC0`).
+    Remove,
+    /// The damage record's amount is reduced by this many points (`0x6F255790`, bits of the float).
+    Reduce(u32),
+    /// This much mana is spent (`0x6F283DB0`, bits of the float).
+    Spend(u32),
+}
+
+fn nf(v: F32) -> f32 {
+    f32::from_bits(v.to_bits())
+}
+
+/// `0x6F022530`: `x / p` where `p` is a property cell's value; a zero `p` (x87 equal) answers 1.0 for `x == 0`, else
+/// plus or minus the largest float (`0x6FAAE624` / `0x6FAAE628`).
+pub fn shield_safe_div(x: F32, p: F32, div: &dyn Fn(F32, F32) -> F32) -> F32 {
+    if nf(p) == 0.0 {
+        if nf(x) == 0.0 {
+            F32::from_bits(0x3F80_0000)
+        } else if nf(x) > 0.0 {
+            F32::from_bits(0x7F7F_FFFF)
+        } else {
+            F32::from_bits(0xFF7F_FFFF)
+        }
+    } else {
+        div(x, p)
+    }
+}
+
+/// The Mana Shield damage hook (`CBuffManaShield` slot `0x6F126DD0`): `share` is the buff's `+0xD8` value (`DataB`), `per`
+/// the value of the cell at `+0xCC` (`DataA`, damage absorbed per mana point), `amount` the record's amount, `mana` the
+/// unit's mana, `mana_after(spent)` the mana once the spend is done. `flags` is the record's flag word (`0x10` skips the
+/// shield), `source` whether the record's source resolves. Rows `MS` of `v3_vectors.txt`.
+#[allow(clippy::too_many_arguments)]
+pub fn mana_shield_hit(
+    flags: u32,
+    source: bool,
+    share: F32,
+    per: F32,
+    amount: F32,
+    mana: F32,
+    mana_after: &dyn Fn(F32) -> F32,
+    div: &dyn Fn(F32, F32) -> F32,
+) -> Vec<ShieldEvent> {
+    if !source || flags & 0x10 != 0 {
+        return Vec::new();
+    }
+    let mut covered = arith::mul(amount, share);
+    let check = arith::sub(covered, F32::ZERO);
+    let eps = f32::from_bits(0x3A83_126F);
+    if eps > f32::from_bits(check.to_bits() & 0x7FFF_FFFF) {
+        return Vec::new();
+    }
+    // The mana the whole share would cost; when the mana cannot pay it the covered part is what the mana buys.
+    let need = shield_safe_div(covered, per, div);
+    if nf(mana) < nf(need) {
+        covered = arith::mul(mana, per);
+    }
+    let spent = shield_safe_div(covered, per, div);
+    let mut events = Vec::new();
+    if nf(covered) == 0.0 {
+        events.push(ShieldEvent::Remove);
+    }
+    events.push(ShieldEvent::Reduce(covered.to_bits()));
+    events.push(ShieldEvent::Spend(spent.to_bits()));
+    let after = nf(mana_after(spent));
+    if after <= 0.0 {
+        events.push(ShieldEvent::Remove);
+    }
+    events
+}
+
+/// `0x6F255790(record, &x, &0.0)` on the record's first amount: when the amount is not above `x` (x87 compare; NaN takes
+/// the other path) the amount becomes exactly 0.0, otherwise it is `amount - x` (soft subtraction). Rows `RR`.
+pub fn record_reduce(amount: F32, x: F32) -> F32 {
+    if nf(amount) <= nf(x) {
+        F32::ZERO
+    } else {
+        arith::sub(amount, x)
+    }
 }
 
 /// Cyclone (`Acyc`, `CAbilityCyclone`; buffs `Bcyc` / `Bcy2`, `CBuffCycloneTwo < CBuffCyclone`): the target is lifted for
@@ -811,22 +912,28 @@ impl Game {
             self.spells.neutral.shield.remove(&target);
             return amount;
         }
-        if !arith::lt(F32::ZERO, amount) || !arith::lt(F32::ZERO, per_mana) {
-            return amount;
-        }
-        let absorbed = arith::mul(share, amount);
-        let need = self.soft_div(absorbed, per_mana);
         let mana = self.unit(target).mana;
-        if arith::le(need, mana) {
-            self.write_mana(target, arith::sub(mana, need));
-            arith::sub(amount, absorbed)
-        } else {
-            let covered = arith::mul(mana, per_mana);
-            self.write_mana(target, F32::ZERO);
-            self.remove_buff_code(target, BUFF_MANA_SHIELD);
-            self.spells.neutral.shield.remove(&target);
-            arith::sub(amount, covered)
+        // The mana after the spend (the sink `0x6F283DB0` is a plain subtraction here: no mana modifiers in the model).
+        let after = |spent: F32| arith::sub(mana, spent);
+        let events = {
+            let this = &*self;
+            mana_shield_hit(0, true, share, per_mana, amount, mana, &after, &|a, b| this.soft_div(a, b))
+        };
+        let mut amount = amount;
+        for e in events {
+            match e {
+                ShieldEvent::Reduce(x) => amount = record_reduce(amount, F32::from_bits(x)),
+                ShieldEvent::Spend(x) => {
+                    let m = self.unit(target).mana;
+                    self.write_mana(target, arith::sub(m, F32::from_bits(x)));
+                }
+                ShieldEvent::Remove => {
+                    self.remove_buff_code(target, BUFF_MANA_SHIELD);
+                    self.spells.neutral.shield.remove(&target);
+                }
+            }
         }
+        amount
     }
 
     /// Cleaving Attack (`ANca`, `CAbilityCleavingAttack < CAbilityPassive`; swing start `0x6F1B1440` arms it when the

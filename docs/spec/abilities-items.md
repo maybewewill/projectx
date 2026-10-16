@@ -126,7 +126,7 @@ Sinks: `heroes::life_sink` / `mana_sink` (Unicorn-checked earlier) and the attri
 then slot `0x424` on the candidate). The model applies `UnitMods { move_delta: DataA, attack_delta: DataB }` through
 `apply_mods_buff` for the duration; the buff flags (positive, magic, dispellable) are UNSURE.
 
-### Regeneration (`AIrg`, LIKELY)
+### Regeneration (`AIrg`, area callback CONFIRMED, buff behaviour LIKELY)
 
 `CAbilityRegeneration` (a `CAbilityRejuvination` child; unit effect `0x424` = `0x6F108AC0`, area `0x428` = `0x6F1088D0`
 with the callback `0x6F108800`). The real data (potions and scrolls of rejuvenation and regeneration, `BuffID`
@@ -135,6 +135,15 @@ the Rejuvenation mechanics of `unit_spells.rs` (decoded in `abilities-unit-spell
 for the duration + 0.01 s, a repeating 1.0 s tick (first after 1.0 s) of `DataA / dur` life and `DataB / dur` mana by soft
 division, added through the life and mana adders; a refresh replaces the amounts. LIKELY from the class parentage and
 the data meaning, not Unicorn-checked.
+
+**V3 (Unicorn `RG`, 300 rows, `regeneration_area_callback_matches_the_original`): CONFIRMED** the scroll form's area callback `0x6F108800`:
+a candidate is skipped when the ability's slot `0x3F0` answers non-zero (immunity), or when it is an illusion and `DataA`
+is not zero while Misc `IllusionsCanRestoreLife` is off, or `DataB` is not zero while `IllusionsCanRestoreMana` is off (a NaN amount
+counts as not zero); otherwise the apply `0x6F108620` gets the duration `HeroDur` for a hero else `Dur`, and `DataA` / `DataB` untouched
+(`item_abilities::regen_area_callback`). The earlier model skipped every illusion when the life key was off. Decoded, not run: the
+effect `0x424` passes `DataC & 1`, `DataC & 2`, `DataD != 0` and the `BuffID` entries 0..2 (`0x6F02EE20`) to `0x6F108620`, which picks the
+buff `BIrm` / `BIrl` / `BIrg` (`0x6F0DAD00` / `0x6F0DAC80` / `0x6F0DAC00`) and its apply slot `0x36C` / `0x368` / `0x364`;
+the per-tick amounts of those three buff classes are still the Rejuvenation stand-in above (LIKELY, stock rows have `DataD` = `DataE` = 1).
 
 ## 5. Town portal (`AItp`, UNSURE model)
 
@@ -285,7 +294,7 @@ nothing is CONFIRMED beyond what earlier sections covered. Model: `crates/sim/sr
 | `AIcb` `AIpb` `AIlb` `AIzb` (`CAbility*DamageBonus < CAbilityDamageBonusBase`; post-hit slots `0x14C`/`0x150`/`0x154` differ) | `ocor`, `oven`, `olig`, none | after a basic hit on an enemy: `AIcb` buff `BIcb` armor `-DataA` for `HeroDur`/`Dur` (5 s); `AIpb` poison buff `Bpoi` (`DataA` per second, class 23, **5.0 s stand-in, the row has no duration**); `AIlb` `DataA` Spells-row damage; `AIzb` the Frost buff of `AIob` (no stock `Dur`, so nothing happens) | UNSURE |
 | `AIlp` (`CAbilityLightningPurge < CAbilityPurge`), `AIsb` (`CAbilitySpellEffectBonus`, casts the spell named by `UnitID` on a hit with chance `DataB`) | `olig`, `odef`/`oli2`/`oslo`/`shcw` | **done in S53 (section 17)**: `AIlp` is the Purge effect, `AIsb` a pseudo-random proc on stream 36 | CONFIRMED |
 | `AIdd` (`CAbilityPassiveDefense`, damage handlers `0xFC`/`0x134`/`0x160`; `DataA` 0.7 in `arsh`, 0.65 in `Aegr`) | `arsh` | **done in S53 (section 17)**: Pierce row times `DataA`, Spells and Magic rows times `DataE` | CONFIRMED |
-| `AIda` (`CAbilityItemDefenseAoe`, area `0x428` = `0x6F0B6320`) | `spro`, `arsc`: `Area` 600, `Dur` 30, `DataA` 2 | buff `Bdef` with `+DataA` armor on allies in `Area` (the caster included); `AIdb` extras `DataB` 150 / `DataC` 100 unused | UNSURE |
+| `AIda` (`CAbilityItemDefenseAoe`, area `0x428` = `0x6F0B6320`, callback `0x6F0B61D0`) | `spro` (`DataA` 2) and the `AIdb` row of `arsc` (`DataA` 2, `DataB` 150, `DataC` 100); `Area` 600, `Dur` 30 | **V3 correction, CONFIRMED (`DA`, 300 Unicorn rows, `tools/emu/v3_cores_emu.py`, test `scroll_of_protection_callback_matches_the_original`)**: the callback heals as well: a candidate that is not an illusion gets the life adder with `DataB` and the mana adder with `DataC` when `0 < DataB` or `0 < DataC` (x87 compares); a candidate not immune to the order gets the buff `Bdef` with `DataA` armor and the hero-rule duration (`HeroDur` for a hero, else `Dur` + the ability's `+0x9C`). Illusions get the buff but no heal. The old model ignored `DataB` / `DataC` and skipped illusions; `item_abilities::defense_callback`. Not modelled: the immunity answer `0x6F28D750`; the group builder's relation / `targs` filter (UNSURE, friends and the caster) | CONFIRMED (callback); area membership UNSURE |
 | `AIdm` (`CAbilityItemDamageAoe`, `0x418`), `AIca` (`CAbilityItemCureAoe`, `0x418`) | none | `AIdm`: `DataA` damage to enemies in `Area`; `AIca`: negative dispellable buffs end on allies in `Area` | UNSURE |
 | `AIta` `AItb` (detect aoe / by buff) | `crys`, `dust` | marker buff `Bdet` on the enemies in `Area` for the hero-rule duration (no detection model exists to read it) | UNSURE |
 | `AIfa` (`CAbilityItemFlare`), `AIrv` (`CAbilityItemRevealMap`) | `fgun`, `pomn`/`gomn` | a visible fog modifier over `Area` around the target point (`AIrv`: a huge circle) for `Dur`, stopped by a one-shot timer | UNSURE |
@@ -348,3 +357,22 @@ item of the same level through `ChooseRandomItemEx(any)` on stream 35 and `0x6F2
 (`CAbilityRebirth < CAbilityTome`, `0x428` = `0x6F0F4EA0` creates a unit of the type held at `+0xCC` of the carrier at its position;
 `rreb`), `AIso` (`CAbilitySoulTrap`, `gsou`: adds `CAbilitySoulTrapped` to the target hero, its effect lives in the revive path),
 `AIdc`, the `AIdd` arming slot `0x160`, the Orb of Darkness child (`ANbs`).
+
+## 18. V3 verification wave (Unicorn, `tools/emu/v3_cores_emu.py`, vectors `crates/sim/tests/v3_vectors.txt`)
+
+Every row is the ORIGINAL code on fake objects (callees that need the object model stubbed and recorded). 300 rows per kind,
+0 mismatches after the fixes listed. Tests: `crates/sim/tests/v3_vectors.rs` (the soft-division ones need `GAME_DLL`).
+
+| Kind | Original | Model | Result |
+|---|---|---|---|
+| `DA` | Scroll of Protection callback `0x6F0B61D0` | `item_abilities::defense_callback` | CONFIRMED; **bug fixed**: `DataB` life and `DataC` mana were ignored, illusions were skipped from the buff |
+| `MT` | Rune of Mana area callback `0x6F1269E0` (`AImr`) | `mana_area_callback` | CONFIRMED; **bug fixed**: the mana families use `IllusionsCanRestoreMana`, skip units with `|max mana| < 2e-7`; the heal rule was used for all three |
+| `RT` | Restoration area callback `0x6F1E6130` (`AIra`) | `restore_area_callback` | CONFIRMED; **bug fixed**: an illusion is skipped only when a non-zero amount meets its Misc key off (life with `IllusionsCanRestoreLife`, mana with `IllusionsCanRestoreMana`) |
+| `RG` | Regeneration area callback `0x6F108800` (`AIrg`) | `regen_area_callback` | CONFIRMED (callback only, see the Regeneration section) |
+| `CB` (S36) | Heal area callback `0x6F0F0470` (`AIha`) | `area_callback_amount` | unchanged, CONFIRMED earlier |
+
+The slot `0x42C` the three restore callbacks call answers 0 for all three classes (`xor eax,eax`), so the ethereal branch
+(`+0x158 > 0` times a Misc factor) is dead for items. Stock data (`ItemData.slk` / `AbilityData.slk` of the 1.26a patch): `AIda` rows
+`AIda` (`spro`: `DataB` = `DataC` = 0) and `AIdb` (`arsc`: 150 / 100); `AIdm` (damage aoe) has **no stock row** (`item` 1, all data `-`).
+Stock coverage of the item base codes (count of items): `AIab` 36, `AIde` 21, `AIat` 20, `AIfb` 13, `AIrg` 11, `AIfs` 8, `AIbl` 8, `AImm` 7,
+`AIml` 6, `Arel` 6, `AIhe` 5, `AIha` 5, `AIsb` 4, then single-digit counts.

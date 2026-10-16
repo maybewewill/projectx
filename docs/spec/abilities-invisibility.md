@@ -63,3 +63,29 @@ Code: `crates/sim/src/invisibility.rs`; tests `crates/sim/tests/invisibility.rs`
 
 Tests: `crates/sim/tests/invisibility.rs` (fade of Permanent Invisibility, Shadow Meld with the action duration and the
 fade, Ghost vs Aeth, detection type, dropped attack order, Ultravision).
+
+## V3: verification against the original (Unicorn, `tools/emu/v3_cores_emu.py`, 300 rows per kind, 0 mismatches)
+
+Vectors `crates/sim/tests/v3_vectors.txt`, tests `crates/sim/tests/v3_vectors.rs`. The original code runs on a fake unit; the
+callees that need the object model (`0x6F26F970` notification, `0x6F4E8700` message, `0x6F477350` alpha property, `0x6F477550`
+ramp modifier, `0x6F2AC3A0`, ...) are stubbed and recorded, `0x6F284950` runs for real.
+
+* **Counter increment `0x6F28D7D0` (`IC`): CONFIRMED.** The counter always rises by one (32-bit wrap). A step that does not
+  start from zero only notifies; the 0 -> 1 step sets the flag `0x1000000` at once exactly when the fade compares equal to
+  0.0 (x87 equal: +0 and -0; NaN, negatives, positives and infinities take the ramp), otherwise the alpha ramp starts and the
+  flag is not touched there. `invisibility::counter_increment`.
+* **Counter decrement `0x6F28D9C0` (`ID`): CONFIRMED.** While the counter stays above zero nothing happens (not even the
+  notification). At zero or below the flag is cleared **at once**, then the fade-out is immediate (fade equal to 0.0) or a ramp.
+  A quirk: with a fade of 0.0 and a counter below zero (a decrement without a matching increment) the immediate path
+  `0x6F284950` sees a non-zero counter and **sets the flag again**. `invisibility::counter_decrement`. The model derives the counter
+  on query, so this only matters for a source that is removed without having been added.
+* **Viewer gate `0x6F3A15F0(unit, viewerMask, flag)` (`VG`): CONFIRMED** on its inputs (`invisibility::viewer_gate_core`): the unit's
+  flag word, the third argument, the unit's owner index (slot `0xEC`), the viewer mask (a **16-bit** word, `movzx`) and the unit's
+  detection mask (`0x6F27A380(1)`). A unit without the flag always passes unless the third argument is non-zero; the owner's bit
+  `1 << (owner & 31)` in the 16-bit mask passes; a unit without the flag passes; else it passes when the mask and the detection mask
+  share a bit. `Game::invisibility_gate` now calls it. What goes INTO the masks stays the model's: the player's vision mask word, the
+  allies' bits (the model puts every non-enemy of the viewer into the mask: LIKELY), and the detection mask built from the detectors.
+* **Still UNSURE** (no run): the length of the fade (the original ramps an agile alpha property at rate `1 / fade` and a callback
+  `0x6F27A200` ends the ramp; the model sets the flag `fade` seconds after the step, a timer-free equivalent), the detector radius
+  and `DataA` detection type bits, Shadow Meld's idle rule, what breaks invisibility, the `UnitInvis` AI native.
+
