@@ -801,7 +801,7 @@ impl Game {
                 rt.next = next;
             }
             // a new leg starts the mover again (UNSURE: that the original does this per leg, section 17.4)
-            self.pr_mover_start(unit);
+            self.pr_mover_leg(unit);
         }
         let goal = self.cells_of(route.points[last]);
         let waypoint = self.cells_of(route.points[next]);

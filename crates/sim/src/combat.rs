@@ -1023,6 +1023,12 @@ impl Game {
     /// `IsPlayerEnemy(p, q)` (LIKELY: the passive relation bit of `p` for `q` is clear, and a player is never the
     /// enemy of itself). Neutral players are enemies by default (UNSURE).
     pub(crate) fn is_enemy(&self, p: u32, q: u32) -> bool {
+        // The neutral players (12 hostile, 13 victim, 14 extra, 15 passive) do not fight each other: on the EchoIsles
+        // replay the creep camps attacked the mercenary camps' units in the first seconds of the sim (reaction draws
+        // on stream 9 every slot) while the recorded game shows no generator activity there (docs/spec/lockstep.md 18).
+        if (12..16).contains(&p) && (12..16).contains(&q) {
+            return false;
+        }
         p != q && self.player(p).alliances[ALLIANCE_PASSIVE] & (1 << q) == 0
     }
 

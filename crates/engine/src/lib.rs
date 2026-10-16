@@ -490,6 +490,12 @@ impl Engine {
         result
     }
 
+    /// Runs `main` now, as the game does while loading, and cancels the deferred start of the first step.
+    pub fn begin(&mut self) -> Result<ThreadId, RunStatus> {
+        self.main_pending = false;
+        self.start_main()
+    }
+
     /// Starts `main` as a thread and runs it at once, until its first stop (lockstep.md section 12.1;
     /// UNSURE: the real game starts `main` at game start). Calling it twice runs `main` twice.
     pub fn start_main(&mut self) -> Result<ThreadId, RunStatus> {

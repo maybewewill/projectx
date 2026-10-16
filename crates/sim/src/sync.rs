@@ -359,6 +359,8 @@ pub struct SyncState {
     /// Milliseconds received and not yet consumed (below 25 unless paused).
     buffer: u64,
     paused: bool,
+    /// A pause was commanded and takes effect after one more unit.
+    pause_armed: bool,
     /// 25 ms units the last slot released to the tick loop.
     last_units: u64,
 }
@@ -378,6 +380,7 @@ impl Default for SyncState {
             clock: 0,
             buffer: 0,
             paused: false,
+            pause_armed: false,
             last_units: 0,
         }
     }
@@ -432,7 +435,16 @@ impl SyncState {
         self.elapsed_ms += inc;
         self.buffer += inc;
         self.last_units = 0;
-        if !self.paused {
+        if self.pause_armed {
+            // The pause takes effect after one more unit (the first slot with time to spend gives exactly one).
+            if inc != 0 && self.buffer >= u64::from(TICK_UNIT_MS) {
+                self.buffer -= u64::from(TICK_UNIT_MS);
+                self.clock = self.clock.wrapping_add(TICK_UNIT_MS);
+                self.last_units = 1;
+                self.pause_armed = false;
+                self.paused = true;
+            }
+        } else if !self.paused {
             self.last_units = self.buffer / u64::from(TICK_UNIT_MS);
             self.buffer %= u64::from(TICK_UNIT_MS);
             self.clock = self.clock.wrapping_add(self.last_units as u32 * TICK_UNIT_MS);
@@ -450,25 +462,29 @@ impl SyncState {
         self.last_units
     }
 
-    /// Whether the game is paused.
+    /// Whether the game is paused or about to pause.
     pub fn paused(&self) -> bool {
-        self.paused
+        self.paused || self.pause_armed
     }
 
-    /// The pause action (0x01): the tick loop stops. Slots keep arriving and their time piles up in the buffer, the
-    /// clock stays (CONFIRMED on the EchoIsles replay: every pair inside a pause has a zero residual with `T` frozen).
+    /// The pause action (0x01): the tick loop stops after one more 25 ms unit, which the next slot with time to
+    /// spend releases (CONFIRMED on the EchoIsles replay: every pair inside a pause has a zero residual, and this
+    /// one extra unit explains the records around each of the five pauses; fitted against delays of 0 to 3 slots).
+    /// Slots keep arriving while paused and their time piles up in the buffer.
     pub fn pause(&mut self) {
-        self.paused = true;
+        if !self.paused && !self.pause_armed {
+            self.pause_armed = true;
+        }
     }
 
-    /// The resume action (0x02): the whole units that piled up during the pause are dropped (only the remainder below
-    /// 25 ms is kept) and the clock advances one unit at once. Fitted on the EchoIsles replay (five pauses, 2,766 of
-    /// 5,503 pairs exact, against 406 without the rule); the one extra unit is the least understood part.
+    /// The resume action (0x02): the whole units that piled up during the pause are dropped (only the remainder
+    /// below 25 ms is kept). Fitted on the EchoIsles replay (five pauses: 2,776 of 5,503 pairs exact, against 406
+    /// without the pause rules).
     pub fn resume(&mut self) {
-        if self.paused {
+        if self.paused || self.pause_armed {
             self.paused = false;
+            self.pause_armed = false;
             self.buffer %= u64::from(TICK_UNIT_MS);
-            self.clock = self.clock.wrapping_add(TICK_UNIT_MS);
         }
     }
 

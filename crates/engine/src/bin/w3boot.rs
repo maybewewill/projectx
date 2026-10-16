@@ -44,6 +44,8 @@ struct Args {
     sync_after: bool,
     sync_slots: usize,
     sync_constant: u32,
+    sync_defer_main: bool,
+    pr_off: u32,
     steps: u64,
     /// `--wipe SLOT@STEP`: at STEP set the life of every structure of SLOT to zero (test aid for the melee defeat check).
     wipe: Vec<(u32, u64)>,
@@ -112,6 +114,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--sim-sync" => args.sim_sync = true,
             "--sync-trace" => args.sync_trace = true,
             "--sync-after" => args.sync_after = true,
+            "--sync-defer-main" => args.sync_defer_main = true,
+            "--pr-off" => args.pr_off = parse_seed(&value("--pr-off")?)?,
             "--sync-slots" => {
                 let v = value("--sync-slots")?;
                 args.sync_slots = v.parse().map_err(|_| format!("--sync-slots: not a number: {v}"))?;
@@ -195,10 +199,34 @@ fn run(argv: &[String]) -> Result<(), String> {
             max_slots: args.sync_slots,
             trace: args.sync_trace,
             constant: args.sync_constant,
+            defer_main: args.sync_defer_main,
         };
+        engine.host().game_mut().set_pr_disabled(args.pr_off);
         let mut report = engine::sim_sync::run(&mut engine, &parsed, &opts);
         report.notes.extend(setup.notes.iter().cloned());
         print!("{}", report.render());
+        {
+            let game = engine.host().game();
+            for p in 0..2u32 {
+                println!("player {p}: {}", game.player_report(p));
+            }
+            let mut table: std::collections::BTreeMap<(u32, u32), u32> = std::collections::BTreeMap::new();
+            for &(k, v, _) in &game.kill_log {
+                *table.entry((k, v)).or_default() += 1;
+            }
+            for ((k, v), n) in table {
+                println!("kills: {k} -> {v}: {n}");
+            }
+            let mut by_owner: std::collections::BTreeMap<(u32, String), u32> = std::collections::BTreeMap::new();
+            for (_, u) in game.unit_objects() {
+                if !u.dead && !u.removed {
+                    *by_owner.entry((u.owner, format!("{:08x}", u.type_id))).or_default() += 1;
+                }
+            }
+            for ((o, t), n) in by_owner {
+                println!("units: p{o} {t} x{n}");
+            }
+        }
         return Ok(());
     }
     let mut engine = cli::boot(&args.boot)?;

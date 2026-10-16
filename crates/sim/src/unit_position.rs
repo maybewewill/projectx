@@ -97,6 +97,20 @@ pub struct PrObjects {
     pub(crate) release: Vec<(crate::sync::PrHandle, crate::sync::PrHandle)>,
     /// Pairs of the missiles in flight, oldest first.
     pub(crate) missiles: std::collections::VecDeque<(crate::sync::PrHandle, crate::sync::PrHandle)>,
+    /// Debug switches of the model (`w3boot --pr-off MASK`): bit 0 unit creation, 1 mover start, 2 leg restarts,
+    /// 3 idle release, 4 walk release, 5 missiles, 6 unit removal.
+    pub disabled: u32,
+}
+
+/// Bits of [`PrObjects::disabled`].
+pub mod pr_off {
+    pub const UNIT_CREATED: u32 = 1;
+    pub const MOVER_START: u32 = 2;
+    pub const LEG: u32 = 4;
+    pub const IDLE: u32 = 8;
+    pub const WALK_RELEASE: u32 = 16;
+    pub const MISSILES: u32 = 32;
+    pub const UNIT_REMOVED: u32 = 64;
 }
 
 impl Game {
@@ -104,6 +118,9 @@ impl Game {
     /// `0x6F474C10` on the unit's mover (unit+0x164) with a clear flag; that creates the mover's own `CLrPath` (one
     /// registration) because unit+0xA8 is still empty. CONFIRMED structure and count (Unicorn, `births_emu.py` C6).
     pub(crate) fn pr_unit_created(&mut self, k: ObjKey) {
+        if self.pr_objs.disabled & pr_off::UNIT_CREATED != 0 {
+            return;
+        }
         if self.pr_objs.unit_path.contains_key(&k) {
             return;
         }
@@ -117,7 +134,16 @@ impl Game {
     /// releases the generator. Net: three registrations (Y + 3), the generator's slot is the first free one again.
     /// CONFIRMED counts (Unicorn C1, C2, C5); that a unit's previous cluster pair is released at the next walk is
     /// UNSURE (`pr_walk_release`).
+    pub(crate) fn pr_mover_leg(&mut self, k: ObjKey) {
+        if self.pr_objs.disabled & pr_off::LEG == 0 {
+            self.pr_mover_start(k);
+        }
+    }
+
     pub(crate) fn pr_mover_start(&mut self, k: ObjKey) {
+        if self.pr_objs.disabled & pr_off::MOVER_START != 0 {
+            return;
+        }
         let generator = self.pr.register();
         let cluster = self.pr.register();
         let path = self.pr.register();
@@ -131,6 +157,9 @@ impl Game {
     /// released by the next walk (`0x6F493410` -> slot 4 `0x6F493130`, which unregisters the path and then the
     /// cluster, CONFIRMED count 2 by Unicorn C7). UNSURE: the trigger (the walk releases a cluster without a live member).
     pub(crate) fn pr_mover_idle(&mut self, k: ObjKey) {
+        if self.pr_objs.disabled & pr_off::IDLE != 0 {
+            return;
+        }
         if let Some(old) = self.pr_objs.cluster.remove(&k) {
             self.pr_objs.release.push(old);
         }
@@ -139,6 +168,9 @@ impl Game {
     /// Sync-registry hook, a missile launch: the missile's mover starts like a unit's (three registrations); the pair
     /// is released at the impact. UNSURE: the missile object's own registrations (behaviour object) are not modelled.
     pub(crate) fn pr_missile_launch(&mut self) {
+        if self.pr_objs.disabled & pr_off::MISSILES != 0 {
+            return;
+        }
         let generator = self.pr.register();
         let cluster = self.pr.register();
         let path = self.pr.register();
@@ -148,6 +180,9 @@ impl Game {
 
     /// Sync-registry hook, a missile impact: the oldest launched missile's pair is released at the next walk.
     pub(crate) fn pr_missile_impact(&mut self) {
+        if self.pr_objs.disabled & pr_off::MISSILES != 0 {
+            return;
+        }
         if let Some(old) = self.pr_objs.missiles.pop_front() {
             self.pr_objs.release.push(old);
         }
@@ -155,6 +190,9 @@ impl Game {
 
     /// Sync-registry hook, a unit removal: the mover path goes with the unit; the cluster pair is released by the walk.
     pub(crate) fn pr_unit_removed(&mut self, k: ObjKey) {
+        if self.pr_objs.disabled & pr_off::UNIT_REMOVED != 0 {
+            return;
+        }
         self.pr_mover_idle(k);
         if let Some(h) = self.pr_objs.unit_path.remove(&k) {
             self.pr.unregister(h);
@@ -163,10 +201,18 @@ impl Game {
 
     /// The movement walk (`0x6F483300`) releases the clusters that lost their members: path first, then the cluster.
     pub(crate) fn pr_walk_release(&mut self) {
+        if self.pr_objs.disabled & pr_off::WALK_RELEASE != 0 {
+            return;
+        }
         for (cluster, path) in std::mem::take(&mut self.pr_objs.release) {
             self.pr.unregister(path);
             self.pr.unregister(cluster);
         }
+    }
+
+    /// Sets the debug switches of the pathing-object model ([`pr_off`] bits).
+    pub fn set_pr_disabled(&mut self, mask: u32) {
+        self.pr_objs.disabled = mask;
     }
 
     /// The world origin of the cell storage: `(min x, min y)` of the playable area, or zero before a host sets one

@@ -184,6 +184,8 @@ pub struct Options {
     pub trace: bool,
     /// A constant to XOR into every computed value (the static slots), if known.
     pub constant: u32,
+    /// Do not run `main` before the first slot (default: run it, as the game does while loading).
+    pub defer_main: bool,
 }
 
 /// The simulated inputs of one computed record.
@@ -196,6 +198,8 @@ pub struct Inputs {
     pub game: u32,
     pub t: u32,
     pub net: u32,
+    /// Bit k: stream k's state changed since the previous slot; bit 45: the global generator.
+    pub changed: u64,
 }
 
 /// One computed record: slot, file value, simulated value and the simulated inputs.
@@ -213,10 +217,13 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
     let mut sched = TurnScheduler::new(speed);
     let mut report = SimSyncReport::default();
     let mut recs: Vec<Rec> = Vec::new();
+    if !opts.defer_main {
+        let _ = engine.begin();
+    }
     // (slot, increment, predicted value, inputs) of the slot whose record is the next 0x22 block.
     let mut pending: Option<(usize, u16, u32, Inputs)> = None;
     let mut slot_index = 0usize;
-    let mut extra_units = 0u64;
+    let mut prev_states: Vec<sim::rng::Rng> = Vec::new();
     for block in &replay_file.blocks {
         match block {
             Block::TimeSlot { id, increment_ms, commands } => {
@@ -228,12 +235,7 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                     for a in c.decode().unwrap_or_default() {
                         match a {
                             w3g::Action::PauseGame => engine.sync_mut().pause(),
-                            w3g::Action::ResumeGame => {
-                                if engine.sync().paused() {
-                                    extra_units += 1;
-                                }
-                                engine.sync_mut().resume();
-                            }
+                            w3g::Action::ResumeGame => engine.sync_mut().resume(),
                             _ => {}
                         }
                     }
@@ -255,6 +257,21 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                     predicted = engine.sync_time_slot(*id, &payload);
                     engine.apply_commands(&turn.actions);
                 }
+                let changed = {
+                    let streams = engine.host().rng();
+                    let mut now: Vec<sim::rng::Rng> = (0..sim::rng::STREAM_COUNT).map(|k| streams.stream(k)).collect();
+                    now.push(streams.global);
+                    let mut m = 0u64;
+                    if prev_states.len() == now.len() {
+                        for (k, (a, b)) in prev_states.iter().zip(&now).enumerate() {
+                            if a != b {
+                                m |= 1 << k;
+                            }
+                        }
+                    }
+                    prev_states = now;
+                    m
+                };
                 let inputs = {
                     let w = engine.sync().world;
                     let reg = engine.sync().registry_now();
@@ -266,10 +283,11 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                         game: reg[sim::sync::slot::GAME].unwrap_or(0),
                         t: t_now,
                         net: engine.sync().net().value(),
+                        changed,
                     }
                 };
-                // Units released by this slot (zero while paused); the resume unit is released with the next slot.
-                let units = engine.sync().last_units() + std::mem::take(&mut extra_units);
+                // Units released by this slot (zero while paused).
+                let units = engine.sync().last_units();
                 engine.step_ticks(units * speed.ticks_per_unit());
                 pending = Some((slot_index, *increment_ms, predicted ^ opts.constant, inputs));
                 slot_index += 1;
@@ -387,11 +405,13 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
                 (0, 0)
             };
             report.trace.push(format!(
-                "  slot {:5}  file {:08x} sim {:08x} delta {:08x} | real change {:08x} [{}] sim change {:08x} [{}] | X {:#x} Y {:#x} R {:08x} rand {:08x}",
+                "  slot {:5}  file {:08x} sim {:08x} delta {:08x} hfile {:08x} hsim {:08x} | real change {:08x} [{}] sim change {:08x} [{}] | X {:#x} Y {:#x} R {:08x} rand {:08x} streams {}",
                 r.slot,
                 r.file,
                 r.sim,
                 d,
+                hidden(r.file, &r.inputs),
+                hidden(r.sim, &r.inputs),
                 real_ch,
                 if real_ch != 0 { explain(real_ch, rand_rot, game_rot) } else { String::new() },
                 sim_ch,
@@ -400,6 +420,7 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
                 r.inputs.y,
                 r.inputs.r,
                 r.inputs.rand,
+                (0..46).filter(|k| r.inputs.changed >> k & 1 != 0).map(|k| if k == 45 { "G".to_string() } else { k.to_string() }).collect::<Vec<_>>().join(","),
             ));
         }
     }
