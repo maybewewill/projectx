@@ -1336,6 +1336,7 @@ pub fn restore_area_callback(
 /// (the immunity answer is slot `0x3F0` of the ability; the life amount is `DataA`, the mana amount `DataB`), then the
 /// regeneration apply `0x6F108620` is called with the duration the context carries for the candidate: `HeroDur` for a hero
 /// (`0x6F1D2660`), else `Dur`. Returns that duration, or `None` when the candidate is skipped. Rows `RG`.
+#[allow(clippy::too_many_arguments)]
 pub fn regen_area_callback(
     illusion: bool,
     misc_life: bool,

@@ -70,8 +70,7 @@ are in `neutral_spells::toggle_order`.
     amount of the **smallest ring that contains it** (CONFIRMED by reading the loop).
   * Rust: `neutral_swing_start` (called after `orc_swing_start`), `neutral_execute` (before the normal execute; order against the
     attack's own damage UNSURE). Ring membership is the plain circle (the collision-adjusted `0x6F476C40` is UNSURE as for all
-    area spells). Needs `GAME_DLL` for the RNG in its tests. Confidence: LIKELY (no Unicorn run; the chance chain re-uses the
-    verified Critical Strike functions).
+    area spells). Needs `GAME_DLL` for the RNG in its tests. **V3: CONFIRMED (Unicorn, 300 rows each, `v3_cores_emu.py` `PR` and `PE`)**: the execute slot `0x6F1775F0` hands the area body exactly two rings `(DataC, DataB)` and `(DataD, 0.5 * DataB)`, class `0x20`, the ability's `targs` word, the caster as source and the callback `0x6F171180` (`neutral_spells::pulverize_rings`; the model now takes the largest ring as query radius and the smallest containing ring per unit); the effective chance `0x6F163160` (count at `+0x88` times the PRD table value of DataA) equals `orc::effective_chance`. Swing-start gates (cooldown counter `+0x3C`, slot `0x268`, target test `0x6F26D590`, immunity) and the stream-40 draw are decoded, not run: the arm test is `!(chance < draw)` as an x87 compare.
 
 ## 4. Measured use on the melee creeps (UnitData race `creeps`, resolved through `code`)
 

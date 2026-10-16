@@ -17,6 +17,9 @@ by crates/sim/tests/v3_vectors.rs against the Rust model. Row kinds (hex, `|` se
   RT  fl5c miscL miscM immune A B maxmana | lc L mc M ret   Restoration area callback 0x6F1E6130 (AIra)
   RG  fl5c miscL miscM immune hero dur herodur A B | called dur A B ctx4 ctx18 ctx1c ctx20
                                                         Regeneration area callback 0x6F108800 (AIrg)
+  PR  DataC DataB DataD targsword | called count class targsword caster_is_unit callback r0 a0 r1 a1
+                                                        Pulverize execute 0x6F1775F0: the arguments of the area body 0x6F2C31D0
+  PE  DataA count | chance                           Pulverize effective chance 0x6F163160 (count at +0x88)
   MS  recflags srcnull share per amount mana mana' | events
                                                         Mana Shield damage hook 0x6F126DD0 (events: R remove buff, Dx reduce
                                                         the record by x, Sx spend x mana; mana' = the mana after the spend)
@@ -369,7 +372,56 @@ def case_rg(r):
     return out
 
 
-GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da), ('MS', case_ms), ('RR', case_rr), ('MT', case_mt), ('RT', case_rt), ('RG', case_rg)]
+# ---------------------------------------------------------------- PR: Pulverize execute (area body arguments)
+VT_PV = int(_tt.factory_row('Awar')['vtable'], 16)
+AREA_BODY = 0x6F2C31D0
+
+
+def case_pr(r):
+    T.setup(VT_PV, flags=0x200)
+    c, b, d = nice(r), nice(r), nice(r)
+    setrec(c=c, b=b, d=d)
+    word = r.getrandbits(32)
+    w32(T.ABIL + 0x4C, word)
+    got = []
+
+    def body(uc, ecx, edx, st):
+        from unicorn.x86_const import UC_X86_REG_ESP
+        sp = struct.unpack('<12I', bytes(uc.mem_read(uc.reg_read(UC_X86_REG_ESP), 48)))
+        n = sp[1]
+        rings = [r32(sp[0] + 4 * i) for i in range(2 * min(n, 4))]
+        got.append((n, sp[2], sp[5], int(sp[6] == T.UNIT), sp[8], rings))
+        return 0
+
+    T.trace_call(0x6F1775F0, T.ABIL, (), stub_fn={AREA_BODY: body}, span=0x200, cleanup={AREA_BODY: 0x30})
+    out = 'PR %x %x %x %x |' % (c, b, d, word)
+    if got:
+        g = got[0]
+        out += ' 1 %x %x %x %x %x %s' % (g[0], g[1], g[2], g[3], g[4], ' '.join('%x' % x for x in g[5]))
+    else:
+        out += ' 0'
+    return out
+
+
+# ---------------------------------------------------------------- PE: Pulverize effective chance
+w32(0x6FAB314C, 0)   # the static guard of the PRD table builder
+
+
+def case_pe(r):
+    T.setup(VT_PV)
+    a = r.choice([0, 0x80000000, 0x7FC00000, fbits(5.0), fbits(10.0), fbits(15.0), fbits(25.0), fbits(20.0), fbits(100.0)]) if r.random() < 0.5 else nice(r)
+    count = r.choice([0, 1, 1, 2, 3, 5, 10, 25, 100, -1, r.randint(-5, 400)])
+    setrec(a=a)
+    w32(T.ABIL + 0x88, count & 0xffffffff)
+    OUTP = T.D + 0x4000
+    mu.mem_write(OUTP, bytes(16))
+    emu = C.emu
+    mu.msr_write(0xC0000100, T.D + 0xC000)  # a mapped TIB for the SEH prologue of the table builder
+    emu.call(0x6F163160, ecx=T.ABIL, stack_args=(OUTP,))
+    return 'PE %x %x | %x' % (a, count & 0xffffffff, r32(OUTP))
+
+
+GENS = [('IC', case_ic), ('ID', case_id), ('VG', case_vg), ('DA', case_da), ('MS', case_ms), ('RR', case_rr), ('MT', case_mt), ('RT', case_rt), ('RG', case_rg), ('PR', case_pr), ('PE', case_pe)]
 
 
 def main():

@@ -256,6 +256,35 @@ fn regeneration_area_callback_matches_the_original() {
 }
 
 #[test]
+fn pulverize_effective_chance_matches_the_original() {
+    let rs = rows("PE");
+    assert!(rs.len() >= 300);
+    for r in &rs {
+        assert_eq!(r[3], "|");
+        let got = sim::orc::effective_chance(F32::from_bits(h(r[1])), h(r[2]) as i32);
+        assert_eq!(got.to_bits(), h(r[4]), "row {r:?}");
+    }
+}
+
+#[test]
+fn pulverize_rings_match_the_original() {
+    let rs = rows("PR");
+    assert!(rs.len() >= 300);
+    for r in &rs {
+        assert_eq!(r[5], "|");
+        assert_eq!(r[6], "1", "row {r:?}");
+        // two rings, damage class 0x20, the ability's targs word, the caster as the source, the illusion-refusing callback
+        assert_eq!((r[7], r[8], r[10], r[11]), ("2", "20", "1", "6f171180"), "row {r:?}");
+        assert_eq!(r[9], r[4], "the targs word is the ability's, row {r:?}");
+        let (c, b, d) = (h(r[1]), h(r[2]), h(r[3]));
+        let rings = sim::neutral_spells::pulverize_rings(F32::from_bits(b), F32::from_bits(c), F32::from_bits(d));
+        let got: Vec<u32> = rings.iter().flat_map(|&(rad, amount)| [rad.to_bits(), amount.to_bits()]).collect();
+        let want: Vec<u32> = r[12..16].iter().map(|x| h(x)).collect();
+        assert_eq!(got, want, "row {r:?}");
+    }
+}
+
+#[test]
 fn scroll_of_protection_callback_matches_the_original() {
     if !need_tables("AIda") {
         return;
@@ -273,8 +302,8 @@ fn scroll_of_protection_callback_matches_the_original() {
             &lv,
             F32::from_bits(h(r[6])),
         );
-        assert_eq!(out.life.map(|v| v.to_bits()), opt(&r, 11), "life, row {r:?}");
-        assert_eq!(out.mana.map(|v| v.to_bits()), opt(&r, 13), "mana, row {r:?}");
+        assert_eq!(out.life.map(|v| v.to_bits()), opt(r, 11), "life, row {r:?}");
+        assert_eq!(out.mana.map(|v| v.to_bits()), opt(r, 13), "mana, row {r:?}");
         let buff = (r[15] == "1").then(|| (h(r[16]), h(r[17])));
         assert_eq!(out.buff.map(|(a, d)| (a.to_bits(), d.to_bits())), buff, "buff, row {r:?}");
         healed += u32::from(out.life.is_some());

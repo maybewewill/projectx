@@ -366,11 +366,15 @@ impl Game {
             (u.x, u.y)
         };
         let word = crate::unit_spells::targs_word("ground,enemy,neutral");
-        let (full, damage, half_radius) = (level.data[2], level.data[1], level.data[3]);
-        let half_damage = arith::mul(F32::from_bits(0x3F00_0000), damage);
-        let inner: BTreeSet<ObjKey> = crate::natives::group::circle_candidates(self, cx, cy, full).into_iter().collect();
+        let rings = pulverize_rings(level.data[1], level.data[2], level.data[3]);
+        // The collector gives a unit the amount of the smallest ring that contains it; the query reaches the largest ring.
+        let sets: Vec<BTreeSet<ObjKey>> = rings
+            .iter()
+            .map(|&(radius, _)| crate::natives::group::circle_candidates(self, cx, cy, radius).into_iter().collect())
+            .collect();
+        let reach = rings.iter().fold(F32::ZERO, |m, &(r, _)| if arith::lt(m, r) { r } else { m });
         let mut killed = Vec::new();
-        for k in crate::natives::group::circle_candidates(self, cx, cy, half_radius) {
+        for k in crate::natives::group::circle_candidates(self, cx, cy, reach) {
             {
                 let u = self.unit(k);
                 if u.removed || u.hidden {
@@ -380,7 +384,13 @@ impl Game {
             if !crate::orc::area_predicate(self, unit, k, word) {
                 continue;
             }
-            let amount = if inner.contains(&k) { damage } else { half_damage };
+            let mut best: Option<(F32, F32)> = None;
+            for (i, &(radius, amount)) in rings.iter().enumerate() {
+                if sets[i].contains(&k) && best.is_none_or(|(r, _)| arith::lt(radius, r)) {
+                    best = Some((radius, amount));
+                }
+            }
+            let Some((_, amount)) = best else { continue };
             if let Some(t) = self.unit_damage_target(unit, k, amount, false, false, 0, PULVERIZE_DAMAGE_TYPE) {
                 killed.push(t);
             }
@@ -519,6 +529,13 @@ fn mana_shield(game: &RefCell<Game>, rec: &CastRec) {
     gm.spells.neutral.shield.insert(rec.caster, (rec.level.data[0], rec.level.data[1]));
 }
 
+/// The rings the Pulverize execute slot `0x6F1775F0` hands to the area body `0x6F2C31D0` (two rings, damage class
+/// `0x20`, the ability's `targs` word, the callback `0x6F171180`): `(DataC, DataB)` and `(DataD, 0.5 * DataB)`
+/// (the constant at `0x6FAAE4D0`). Rows `PR` of `v3_vectors.txt`.
+pub fn pulverize_rings(data_b: F32, data_c: F32, data_d: F32) -> [(F32, F32); 2] {
+    [(data_c, data_b), (data_d, arith::mul(data_b, F32::from_bits(0x3F00_0000)))]
+}
+
 /// What the Mana Shield damage hook `0x6F126DD0` does, in the order the original does it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShieldEvent {
@@ -554,6 +571,7 @@ pub fn shield_safe_div(x: F32, p: F32, div: &dyn Fn(F32, F32) -> F32) -> F32 {
 /// the value of the cell at `+0xCC` (`DataA`, damage absorbed per mana point), `amount` the record's amount, `mana` the
 /// unit's mana, `mana_after(spent)` the mana once the spend is done. `flags` is the record's flag word (`0x10` skips the
 /// shield), `source` whether the record's source resolves. Rows `MS` of `v3_vectors.txt`.
+#[allow(clippy::too_many_arguments)]
 pub fn mana_shield_hit(
     flags: u32,
     source: bool,
@@ -586,7 +604,7 @@ pub fn mana_shield_hit(
     events.push(ShieldEvent::Reduce(covered.to_bits()));
     events.push(ShieldEvent::Spend(spent.to_bits()));
     let after = nf(mana_after(spent));
-    if !(after > 0.0) && !after.is_nan() {
+    if after <= 0.0 {
         events.push(ShieldEvent::Remove);
     }
     events

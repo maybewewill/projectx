@@ -1,0 +1,10 @@
+# Abilities confirmed against the original Game.dll 1.26a: Unicorn run, >= 300 random cases, 0 mismatches.
+# Format: code<TAB>harness<TAB>cases<TAB>note
+Aivs	tools/emu/v3_cores_emu.py IC/ID/VG	900	invisibility counter increment 0x6F28D7D0, decrement 0x6F28D9C0, viewer gate 0x6F3A15F0 (300 each; also covers Apiv/Agho/Binv/BOwk users of the counter)
+AIda	tools/emu/v3_cores_emu.py DA	300	Scroll of Protection area callback 0x6F0B61D0 (model bug fixed: DataB life / DataC mana, illusions get the buff)
+AIdb	tools/emu/v3_cores_emu.py DA	300	same class and callback as AIda (stock row of arsc)
+AImr	tools/emu/v3_cores_emu.py MT	300	Rune of Mana area callback 0x6F1269E0 (model bug fixed: own illusion key, max-mana skip)
+AIra	tools/emu/v3_cores_emu.py RT	300	Restoration area callback 0x6F1E6130 (model bug fixed: per-amount illusion rule)
+AIrg	tools/emu/v3_cores_emu.py RG	300	Regeneration scroll area callback 0x6F108800 only; buff tick behaviour still LIKELY
+ANms	tools/emu/v3_cores_emu.py MS+RR	600	Mana Shield damage hook 0x6F126DD0 (300) and record reduce 0x6F255790 (300); model rewritten to the original's order and clamps
+Awar	tools/emu/v3_cores_emu.py PR+PE	600	Pulverize execute ring arguments 0x6F1775F0 (300) and effective chance 0x6F163160 (300); swing-start gates and ring membership not run
