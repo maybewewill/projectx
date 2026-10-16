@@ -205,3 +205,26 @@ Not done (reasons):
 * `ANto` Tornado (14 overrides, a summoned moving unit), `ANvc` Volcano (13 overrides, a building-like effect): each needs its own effect.
 * Hurl Boulder: no factory class carries that name (it is an attack / unit weapon, not a spell class).
 * Neutral heroes: Naga Sea Witch has Mana Shield (here), Tornado, Forked Lightning (`ANfl`, 2 overrides, not decoded) and Frost Arrows; Dark Ranger has Silence and Charm (here), Black Arrow (`ANba < FlamingArrows`) and Life Drain; Pit Lord has Rain of Fire, Howl of Terror, Cleaving Attack (here) and Doom (`ANdo`); Brewmaster, Beastmaster (summons `ANsg`/`ANsq`/`ANsw`, Stampede), Firelord (Incinerate `ANic < CleavingAttack`, Soul Burn, Lava Spawn, Volcano), Alchemist (Acid Bomb, Chemical Rage, Healing Spray, Transmute) and Tinker (Cluster Rockets, Robo-Goblin, Engineering Upgrade, Pocket Factory) remain NOT DONE.
+
+## 7. S44: neutral heroes and the invisibility model (no Unicorn run; structure and numbers from IDA + the editor data)
+
+Invisibility is in `docs/spec/abilities-invisibility.md` (`invisibility.rs`: Sorceress Invisibility `Aivs`, Permanent
+Invisibility / Ghost, Shadow Meld, the detectors, `IsUnitInvisible` / `IsUnitDetected` / `IsUnitVisible`).
+Order ids from `docs/research/ability-orders/getters.tsv` (slot `0x348`). Tests: `crates/sim/tests/neutral_heroes.rs`.
+
+| code | class (parent) | what is modelled | confidence |
+|---|---|---|---|
+| `ANsg` / `ANsq` / `ANsw` (852594 / 5 / 6) | `CAbilitySummon{Grizzly,Quillbeast,WarEagle} < CAbilityWaterElemental` (one override each: the code) | the Water Elemental summon loop: `f2i(DataA)` units of the level's `UnitID`, timed life `Dur` with buffs `BNsg` / `BNsq` / `BNsw` | LIKELY (same flags word `0x300001` and slot layout as `AHwe`) |
+| `ANlm` (852667) | `CAbilityLavaMonster < CAbilityWaterElemental` | same summon with `BNlm`; the splitting of the Lava Spawn (`DataB..F`) is not modelled | LIKELY / the split NOT DONE |
+| `ANdh` (852585) | `CAbilityDrunkenHaze < CAbilitySilence` | enemy air / ground organic units within `Area` of the target get `BNdh`: miss chance `DataB` (the attacker-side miss walk shared with Curse, `attacker_miss_scores`) and movement `-DataC`; the walk sharing is CONFIRMED by the doc of `0x6F2BEAC0` (Haze, Silence, Cloud of Fog are listed), the roles of `DataB` / `DataC` follow the tooltip order | LIKELY / roles UNSURE |
+| `ANdb` | `CAbilityDrunkenBrawler < CAbilityCriticalStrike` (0 overrides) | the Critical Strike arming and damage with `DataA` chance and `DataB` multiplier (`Game::crit_base`), evasion `DataD` scored with the `AEev` entries in the miss gate | crit LIKELY (0 overrides), evasion UNSURE |
+| `ANso` (852668) | `CAbilitySoulBurn < CAbilitySimpleSpell` | `BNso` for the hero-rule duration: `DataA` damage per second (first tick 0.01 s) and silence | structure LIKELY, `DataB` / `DataC` and the silence UNSURE |
+| `ANab` (852662) | `CAbilityAcidBomb < CAbilitySimpleSpell` | `BNab`: armor `-DataC`, `DataD` damage per second for 15 s | UNSURE (field roles from the value shapes) |
+| `ANfl` (852587) | `CAbilityForkedLightning < CAbilitySimpleSpell` | the target and the nearest other enemies within `Area` of it, `DataB` units in all, take `DataA` | UNSURE (the original forks along a line `DataC` x `DataD`) |
+| `ANbf` Breath of Fire | alias of Carrion Swarm (S42) | unchanged | LIKELY |
+
+Not done (reason): Stampede `ANst` (17 overrides, a herd of moving units), Storm Earth and Fire `ANef` (14 overrides, three
+summoned elementals with their own abilities), Chemical Rage `ANcr` and Robo-Goblin `ANrg` (`CAbilityMorph`, 8 / 18 overrides),
+Healing Spray `ANhs` and Cluster Rockets `ANcs` (a channelled `CAbilityClusterRockets` with 7 / 16 overrides),
+Transmute `ANtm`, Incinerate `ANic` (an orb-like cleave, 8 overrides), Volcano `ANvc`, Tornado `ANto`, Engineering Upgrade
+`ANeg`, Pocket Factory `ANsy` (factory units), Black Arrow `ANba`, Doom `ANdo`, Dark Ranger Life Drain.
