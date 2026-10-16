@@ -496,6 +496,107 @@ def check_filter_pair(vt, code, filt, kind):
     return run
 
 
+VT_UF_ABIL, ABIL_UF = 0x6F8F8984, 0x41756866
+VT_REJ_ABIL, ABIL_REJ = 0x6F8CA7D4, 0x4172656A
+
+
+def check_unholy_apply(cases, r, rows):
+    """Unholy Frenzy effect 0x6F18C070 -> 0x6F18BF60: existing buff slot 0x37C (smart, &dur, owner, &DataB, &DataA), created
+    buff slot 0x378 (target, &dur, owner, &DataB, &DataA). Rows: dur herodur DataA DataB extra hero existing | calls e, n |
+    5 words."""
+    S.install()
+    ret_var(0x6F1D2660, 0, 4)
+    A.patch_jump(0x6F0787D0, new_code(b"\xA1" + a32(VARS + 8) + b"\xC2\x14\x00"))
+    A.patch_jump(0x6F1895C0, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+    s_e = recorder(0x140, [(1, True), (2, False), (3, True), (4, True)], 0x14, counter=0x1E4)
+    s_n = recorder(0x160, [(0, False), (1, True), (2, False), (3, True), (4, True)], 0x14, counter=0x1E8)
+    s324 = A.stub_ret(4, 0)
+    for _ in range(cases):
+        dur, hdur, da, db = (rbits(r) for _ in range(4))
+        extra = rbits(r) if r.random() < 0.4 else 0
+        hero = r.random() < 0.5
+        existing = r.random() < 0.4
+        A.make_ability(VT_UF_ABIL, ABIL_UF, 75)
+        level(A.LVL, dur, hdur, [da, db])
+        wr(A.OBJ + 0x9C, extra)
+        wr(A.OBJ + 0x30, A.UNIT)
+        S.make_target(False)
+        mu.mem_write(S.FVT, b"\0" * 0x400)
+        wr(S.FVT + 0x324, s324)
+        wr(S.FVT + 0x37C, s_e)
+        wr(S.FVT + 0x378, s_n)
+        mu.mem_write(BUFF, b"\0" * 0x200)
+        wr(BUFF, S.FVT)
+        S.clear_cap()
+        wr(VARS + 4, int(hero))
+        wr(VARS + 8, BUFF if existing else 0)
+        S.call(0x6F18C070, ecx=A.OBJ, stack_args=(TGT,))
+        base = 0x140 if existing else 0x160
+        rows.append([dur, hdur, da, db, extra, int(hero), int(existing), rd(CAP + 0x1E4), rd(CAP + 0x1E8)]
+                    + [rd(CAP + base + 4 * i) for i in range(5)])
+
+
+def check_rejuv_effect(cases, r, rows):
+    """Rejuvenation effect 0x6F108530 -> 0x6F1083D0: existing slot 0x358 (smart, &dur, &A, &B, f1, f2), created slot 0x354
+    (target, &dur, &A, &B, f1, f2). Rows: dur herodur DataA DataB DataC extra hero existing | calls | 6 words."""
+    S.install()
+    ret_var(0x6F1D2660, 0, 4)
+    A.patch_jump(0x6F0787D0, new_code(b"\xA1" + a32(VARS + 8) + b"\xC2\x14\x00"))
+    A.patch_jump(0x6F106CD0, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+    s_e = recorder(0x140, [(1, True), (2, True), (3, True), (4, False), (5, False)], 0x18, counter=0x1E4)
+    s_n = recorder(0x160, [(0, False), (1, True), (2, True), (3, True), (4, False), (5, False)], 0x18, counter=0x1E8)
+    s324 = A.stub_ret(4, 0)
+    for _ in range(cases):
+        dur, hdur, da, db = (rbits(r) for _ in range(4))
+        dc = f2u(float(r.choice([0, 1, 2, 3, 4, -1, 7]))) if r.random() < 0.8 else rbits(r)
+        extra = rbits(r) if r.random() < 0.4 else 0
+        hero = r.random() < 0.5
+        existing = r.random() < 0.4
+        A.make_ability(VT_REJ_ABIL, ABIL_REJ, 75)
+        level(A.LVL, dur, hdur, [da, db, dc])
+        wr(A.OBJ + 0x9C, extra)
+        S.make_target(False)
+        mu.mem_write(S.FVT, b"\0" * 0x400)
+        wr(S.FVT + 0x324, s324)
+        wr(S.FVT + 0x358, s_e)
+        wr(S.FVT + 0x354, s_n)
+        mu.mem_write(BUFF, b"\0" * 0x200)
+        wr(BUFF, S.FVT)
+        S.clear_cap()
+        wr(VARS + 4, int(hero))
+        wr(VARS + 8, BUFF if existing else 0)
+        S.call(0x6F108530, ecx=A.OBJ, stack_args=(TGT,))
+        base = 0x140 if existing else 0x160
+        rows.append([dur, hdur, da, db, dc, extra, int(hero), int(existing), rd(CAP + 0x1E4), rd(CAP + 0x1E8)]
+                    + [rd(CAP + base + 4 * i) for i in range(6)])
+
+
+def check_rejuv_buff(cases, r, rows):
+    """The Rejuvenation buff apply 0x6F0F0650 (ecx = buff; target, &T, &DataA, &DataB, flag1, flag2). Rows: T DataA DataB f1 f2 |
+    set-duration value | flags & 0x300 | life per tick | mana per tick."""
+    S.install()
+    A.patch_jump(0x6F0D4EF0, recorder(0x100, [(1, True)], 8, counter=0x1E4))
+    for _ in range(cases):
+        t = rbits(r) if r.random() < 0.6 else f2u(r.choice([12.0, 1.0, 0.0, -1.0, 6.5]))
+        da, db = rbits(r), rbits(r)
+        f1, f2 = r.randint(0, 2), r.randint(0, 2)
+        mu.mem_write(BUFF, b"\0" * 0x400)
+        wr(BUFF + 0x20, r.getrandbits(32))
+        wr(BUFF + 0xE0, S.HVT_A)
+        wr(BUFF + 0xE8, S.HVT_A)
+        wr(S.HVT_A + 0x20, 0)
+        buf = M + 0xD000
+        wr(buf, t)
+        wr(buf + 4, da)
+        wr(buf + 8, db)
+        S.clear_cap()
+        flags0 = rd(BUFF + 0x20)
+        S.call(0x6F0F0650, ecx=BUFF, stack_args=(TGT, buf, buf + 4, buf + 8, f1, f2))
+        rows.append([t, da, db, f1, f2, flags0, rd(CAP + 0x100), rd(BUFF + 0x20), rd(BUFF + 0xE4), rd(BUFF + 0xEC)])
+
+
 def _trace_install():
     from collections import deque
     from unicorn import UC_HOOK_CODE
@@ -516,6 +617,9 @@ CHECKS = {
     "faerie_apply": check_buff_apply("faerie", VT_FAERIE_ABIL, ABIL_FAERIE, 0x6F0B8750, 0x360, 0x35C, 0x6F0B5480, "faerie"),
     "curse_filter": check_filter_pair(VT_CURSE_ABIL, ABIL_CURSE, 0x6F09BF80, "curse"),
     "faerie_filter": check_filter_pair(VT_FAERIE_ABIL, ABIL_FAERIE, 0x6F09C240, "faerie"),
+    "unholy_apply": check_unholy_apply,
+    "rejuv_effect": check_rejuv_effect,
+    "rejuv_buff": check_rejuv_buff,
     "polymorph_target": check_polymorph_target,
     "polymorph_effect": check_polymorph_effect,
 }

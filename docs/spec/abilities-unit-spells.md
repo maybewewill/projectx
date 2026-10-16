@@ -303,3 +303,11 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   toggle ids 852150/852151): base filter, candidate life fraction > 0.1, then `DataB != 0` needs only no `Bfae`, otherwise
   the candidate must be attacking a unit whose owner passes the relation, and no `Bfae`. Curse's evade decision was
   confirmed earlier (1,800 cases, `curse_vectors.rs`). The 400-case rows for each check are in `v4_spell_vectors.rs`.
+* **Rejuvenation (`Arej`) CONFIRMED**: effect `0x6F108530` hands the buff the hero-rule duration, `DataA`, `DataB` and two flags
+  `F2I(DataC) & 1`, `F2I(DataC) & 2` (slot `0x358` for an existing buff, `0x354` with the target first for a new one);
+  the apply `0x6F0F0650` makes the buff last `T + 0.01` for `T > 0` (else `T`), sets buff flags `0x100` / `0x200` from the
+  two flags, and stores `DataA / T` (life) and `DataB / T` (mana) per tick (soft divisions, `DataA` first). The model now
+  takes duration and life per tick from `rejuv_buff_values`; the mana half (`DataB`) and the tick handler are not modelled.
+* **Unholy Frenzy (`Auhf`) PARTLY verified (no row)**: effect `0x6F18C070` -> `0x6F18BF60` hands `(smart ref or target, &dur,
+  owner, &DataB, &DataA)` to the buff (existing: slot `0x37C`; new: slot `0x378` with the target first), duration by the hero
+  rule; 400 cases, 0 mismatches. The `CBuffDoT` internals (attack speed sink, damage per tick, tick period) are not run.

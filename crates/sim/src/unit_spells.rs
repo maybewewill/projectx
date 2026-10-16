@@ -2043,6 +2043,27 @@ pub fn faerie_filter_ok(base_ok: bool, life_fraction: F32, data_b: F32, attacks_
     (always || (attacks_target && rel)) && !has_buff
 }
 
+/// The values Unholy Frenzy's effect `0x6F18C070` hands to the buff (CONFIRMED by Unicorn, V4): the hero rule duration
+/// (`HeroDur`, else `Dur + 0x9C` by soft add), `DataA` (attack speed) and `DataB` (damage per second).
+pub fn unholy_frenzy_values(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    (effect_duration(l, hero, extra), l.data[0], l.data[1])
+}
+
+/// What Rejuvenation's effect `0x6F108530` hands to the buff (CONFIRMED by Unicorn, V4): the hero rule duration, `DataA`,
+/// `DataB`, and two flags from `F2I(DataC)`: bit 0 and bit 1 (the buff's `0x100` / `0x200` flags).
+pub fn rejuvenation_effect_args(l: &SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32, u32, u32) {
+    let c = conv::f2i(l.data[2]);
+    (effect_duration(l, hero, extra), l.data[0], l.data[1], (c & 1) as u32, (c & 2) as u32)
+}
+
+/// The Rejuvenation buff apply `0x6F0F0650` (CONFIRMED by Unicorn, V4): the buff lasts `T + 0.01` when `T > 0` (else
+/// `T`; a NaN counts as not above zero) and heals `DataA / T` life and `DataB / T` mana per tick (soft divisions). Returns
+/// `(buff duration, life per tick, mana per tick)`.
+pub fn rejuv_buff_values(t: F32, data_a: F32, data_b: F32, div: &dyn Fn(F32, F32) -> F32) -> (F32, F32, F32) {
+    let dur = if 0.0f32 < t.to_f32() { arith::add(t, F32::from_bits(TICK_FIRST_DELAY_BITS)) } else { t };
+    (dur, div(data_a, t), div(data_b, t))
+}
+
 /// Whether Purge slows the target: not when the target is dead (`+0x5C & 0x100`) or the caster's player is passively
 /// allied with it (`0x6F285AC0`). `0x6F107E10`, CONFIRMED by Unicorn (V4).
 pub fn purge_slows(target_dead: bool, allied: bool) -> bool {
@@ -2148,7 +2169,7 @@ fn rejuvenation(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     }
     let total = rec.level.data[0];
     let amount = match gm.order_tables() {
-        Some(t) => arith::div(total, dur, t),
+        Some(t) => rejuv_buff_values(dur, total, rec.level.data[1], &|a, b| arith::div(a, b, t)).1,
         None => F32::from_bits((total.to_f32() / dur.to_f32()).to_bits()),
     };
     let preds = crate::abilities::BuffPredicates {
@@ -2157,7 +2178,7 @@ fn rejuvenation(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
         dispellable: true,
         ..buff_predicates(BUFF_REJUVENATION)
     };
-    let buff_dur = arith::add(dur, F32::from_bits(TICK_FIRST_DELAY_BITS));
+    let buff_dur = rejuv_buff_values(dur, total, F32::ZERO, &|a, _| a).0;
     let serial = gm.apply_mods_buff(target, BUFF_REJUVENATION, preds, UnitMods::default(), buff_dur);
     gm.register_tick(target, serial, rec.caster, amount, true, 0, false);
 }

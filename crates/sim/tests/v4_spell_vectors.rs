@@ -212,6 +212,77 @@ fn faerie_fire_autocast_filter_matches_the_original() {
     assert!(yes > 15 && no > 100, "{yes} {no}");
 }
 
+fn game_tables() -> Option<softfloat::Tables> {
+    let path = std::env::var("GAME_DLL").ok()?;
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("reading GAME_DLL={path}: {e}"));
+    Some(softfloat::Tables::from_game_dll(&bytes).expect("lookup tables in GAME_DLL"))
+}
+
+#[test]
+fn unholy_frenzy_effect_matches_the_original() {
+    // dur herodur DataA DataB extra hero existing | calls e n | existing: dur owner B A / new: target dur owner B A
+    let rows = hex_rows(include_str!("data/unit_spells/unholy_apply.txt"));
+    assert!(rows.len() >= 300);
+    let (mut ex, mut cr) = (0, 0);
+    for r in &rows {
+        let l = level_of(&[r[2], r[3]], r[0], r[1]);
+        let (dur, a, b) = unholy_frenzy_values(&l, r[5] != 0, f(r[4]));
+        let w = &r[9..];
+        if r[6] != 0 {
+            ex += 1;
+            assert_eq!((r[7], r[8]), (1, 0), "row {:08x?}", r);
+            assert_eq!((w[0], w[1], w[2], w[3]), (dur.to_bits(), 0x202000, b.to_bits(), a.to_bits()), "existing, row {:08x?}", r);
+        } else {
+            cr += 1;
+            assert_eq!((r[7], r[8]), (0, 1), "row {:08x?}", r);
+            assert_eq!((w[0], w[1], w[2], w[3], w[4]), (0x402000, dur.to_bits(), 0x202000, b.to_bits(), a.to_bits()), "created, row {:08x?}", r);
+        }
+    }
+    assert!(ex > 60 && cr > 100);
+}
+
+#[test]
+fn rejuvenation_effect_matches_the_original() {
+    // dur herodur A B C extra hero existing | calls e n | existing: dur A B f1 f2 / new: target dur A B f1 f2
+    let rows = hex_rows(include_str!("data/unit_spells/rejuv_effect.txt"));
+    assert!(rows.len() >= 300);
+    let (mut ex, mut cr, mut bits) = (0, 0, [0u32; 4]);
+    for r in &rows {
+        let l = level_of(&[r[2], r[3], r[4]], r[0], r[1]);
+        let (dur, a, b, f1, f2) = rejuvenation_effect_args(&l, r[6] != 0, f(r[5]));
+        let w = &r[10..];
+        if r[7] != 0 {
+            ex += 1;
+            assert_eq!((r[8], r[9]), (1, 0), "row {:08x?}", r);
+            assert_eq!((w[0], w[1], w[2], w[3], w[4]), (dur.to_bits(), a.to_bits(), b.to_bits(), f1, f2), "existing, row {:08x?}", r);
+        } else {
+            cr += 1;
+            assert_eq!((r[8], r[9]), (0, 1), "row {:08x?}", r);
+            assert_eq!((w[0], w[1], w[2], w[3], w[4], w[5]), (0x402000, dur.to_bits(), a.to_bits(), b.to_bits(), f1, f2), "created, row {:08x?}", r);
+        }
+        bits[(f1 + f2 / 2 * 2) as usize] += 1;
+    }
+    assert!(ex > 60 && cr > 100 && bits.iter().all(|n| *n > 5), "{bits:?}");
+}
+
+#[test]
+fn rejuvenation_buff_apply_matches_the_original() {
+    // T A B f1 f2 flags0 | set-duration value | flags1 | life per tick | mana per tick
+    let Some(t) = game_tables() else {
+        return;
+    };
+    let div = |a: F32, b: F32| softfloat::arith::div(a, b, &t);
+    let rows = hex_rows(include_str!("data/unit_spells/rejuv_buff.txt"));
+    assert!(rows.len() >= 300);
+    for r in &rows {
+        let (dur, life, mana) = rejuv_buff_values(f(r[0]), f(r[1]), f(r[2]), &div);
+        assert_eq!(r[6], dur.to_bits(), "duration, row {:08x?}", r);
+        assert_eq!((r[8], r[9]), (life.to_bits(), mana.to_bits()), "per tick, row {:08x?}", r);
+        let want = (r[5] & !0x300) | if r[3] != 0 { 0x100 } else { 0 } | if r[4] != 0 { 0x200 } else { 0 };
+        assert_eq!(r[7], want, "flags, row {:08x?}", r);
+    }
+}
+
 #[test]
 fn polymorph_target_rule_matches_the_original() {
     // DataA creep_over summoned | code
