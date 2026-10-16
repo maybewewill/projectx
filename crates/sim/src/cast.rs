@@ -1037,7 +1037,7 @@ fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, item_rec: &CastR
     if crate::neutral_spells::run_effect(game, rt, rec) {
         return;
     }
-    if crate::item_abilities::run_effect(game, item_rec) {
+    if crate::item_abilities::run_effect(game, rt, item_rec) {
         return;
     }
     let CastTarget::Unit(target) = rec.target else {

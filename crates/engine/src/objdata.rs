@@ -476,6 +476,18 @@ fn load_item_abilities(archives: &[&[u8]], out: &mut ObjectText) -> Result<(), E
                     .filter(|t| t.len() == 4 && !t.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-'))
                     .map_or(0, gamedata::abilitytype::raw_code)
             };
+            // The build scrolls (`AIbl`) list one unit per race in `UnitID`.
+            if let Some(list) = abilities.raw(&name, "UnitID1").map(|t| t.trim().trim_matches('"')) {
+                let parts: Vec<u32> = list
+                    .split(',')
+                    .map(|c| c.trim())
+                    .filter(|c| c.len() == 4)
+                    .map(gamedata::abilitytype::raw_code)
+                    .collect();
+                if parts.len() > 1 {
+                    out.item_abilities.unit_lists.insert(alias, parts);
+                }
+            }
             let codes = [unit_code("DataC1"), unit_code("DataD1")];
             if codes != [0, 0] {
                 out.item_abilities.unit_codes.insert(alias, codes);

@@ -1853,3 +1853,11 @@ pub(crate) fn on_buff_dropped(game: &mut Game, serial: u32) {
         game.fog_stop(key);
     }
 }
+
+impl Game {
+    /// Registers `unit` as an illusion with damage factors (dealt, taken), the way Mirror Image does; used by the item
+    /// ability `AIil` (S45).
+    pub(crate) fn register_illusion(&mut self, unit: ObjKey, dealt: F32, taken: F32) {
+        self.orc.illusions.insert(unit, (dealt, taken));
+    }
+}
