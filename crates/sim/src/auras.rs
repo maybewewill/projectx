@@ -366,6 +366,27 @@ fn snap_to_one(x: F32) -> F32 {
     }
 }
 
+/// The amount an aura stat component hands to its sink (V5, CONFIRMED: the real applies `0x6F1ACFD0` Devotion, `0x6F1AD810`
+/// Unholy life regeneration and `0x6F1AC990` Brilliance mana regeneration ran in Unicorn, 600 cases over six routines, 0
+/// mismatches, `tools/emu/v5_aura_emu.py`): the strength as it is, or with the percent flag the soft product of the
+/// strength and a unit stat (Devotion: the type record's armor `0x6F29BF60`; Unholy: unit slot `0x130`, the max life;
+/// Brilliance: the agile max-mana property `0x6F4773E0`). The strength is the first factor.
+pub fn aura_stat_amount(percent: bool, strength: F32, stat: F32) -> F32 {
+    if percent {
+        arith::mul(strength, stat)
+    } else {
+        strength
+    }
+}
+
+/// The illusion gate of the aura applies (`0x6F1ACF90` Devotion with Misc `IllusionsGetDefenseBonus`, `0x6F1AD6C0` Unholy
+/// movement with `IllusionsGetMoveSpeedBonus`, `0x6F1AD7D0` Unholy regeneration with `IllusionsCanRestoreLife`, `0x6F1AC950`
+/// Brilliance with `IllusionsCanRestoreMana`; Endurance has the equivalent gates in its callers, `0x6F1AD110` and
+/// `0x6F1AD200`): an illusion owner is suspended unless the Misc key is non-zero. The applied flag is set before the gate.
+pub fn aura_gate_suspends(owner_illusion: bool, misc_key: bool) -> bool {
+    owner_illusion && !misc_key
+}
+
 /// An aura buff on a unit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuraBuff {
@@ -543,23 +564,15 @@ impl Game {
     fn aura_amount(&self, unit: ObjKey, a: &AuraBuff, i: usize) -> Option<F32> {
         let v = a.values[i];
         match (a.kind, i) {
-            (AuraKind::Devotion, 0) => Some(if a.flags[0] {
-                // 0x6F29BF60: the type record's armor (+0x90).
-                arith::mul(v, self.defense_of_type(self.unit(unit).type_id).armor)
-            } else {
-                v
-            }),
+            // 0x6F29BF60: the type record's armor (+0x90).
+            (AuraKind::Devotion, 0) => {
+                Some(aura_stat_amount(a.flags[0], v, self.defense_of_type(self.unit(unit).type_id).armor))
+            }
             (AuraKind::Endurance, 0 | 1) | (AuraKind::Unholy, 0) => Some(v),
-            (AuraKind::Unholy, 1) => Some(if a.flags[1] {
-                arith::mul(v, self.unit(unit).max_life)
-            } else {
-                v
-            }),
-            (AuraKind::Brilliance, 0) => Some(if a.flags[0] {
-                arith::mul(v, self.unit(unit).max_mana)
-            } else {
-                v
-            }),
+            // Unit slot 0x130 = max life.
+            (AuraKind::Unholy, 1) => Some(aura_stat_amount(a.flags[1], v, self.unit(unit).max_life)),
+            // 0x6F4773E0: the max of the agile mana property.
+            (AuraKind::Brilliance, 0) => Some(aura_stat_amount(a.flags[0], v, self.unit(unit).max_mana)),
             _ => None,
         }
     }

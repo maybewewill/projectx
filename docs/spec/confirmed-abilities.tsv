@@ -56,3 +56,7 @@ AHtc	tools/emu/stomp_emu.py (THUNDER_VT=1) + human_heroes3_emu.py	800	V5: per-un
 AHwe	tools/emu/v5_summon_emu.py	150	V5: summon loop 0x6F163390 (count, Dur+0x9C duration, 0x502/2 flag, creator arguments, link, slot 0x3E4 duration); placement shares feral_emu P; bug fixed: units were put on the caster
 AEst	tools/emu/v5_summon_emu.py	150	V5: same loop 0x6F163390 on the CAbilityScout vtable; class slot 0x3E4 stubbed
 AEsv	tools/emu/v5_summon_emu.py	150	V5: same loop 0x6F163390 on the CAbilitySpiritOfVengeance vtable; class slot 0x3E4 stubbed
+AHad	tools/emu/v5_aura_emu.py	100	V5: Devotion armor apply 0x6F1ACFD0 (flat/percent of type armor, applied bit, illusion gate); emitter not run
+AOae	tools/emu/v5_aura_emu.py	200	V5: Endurance attack speed 0x6F1AD150 (100) + movement 0x6F1AD240 (100) applies; illusion gates are in callers
+AUau	tools/emu/v5_aura_emu.py	200	V5: Unholy movement 0x6F1AD700 (100) + life regeneration 0x6F1AD810 (100, percent = max life via unit slot 0x130)
+AHab	tools/emu/v5_aura_emu.py	100	V5: Brilliance mana regeneration apply 0x6F1AC990 (flat/percent of max mana); target filter not run
