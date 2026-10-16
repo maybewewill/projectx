@@ -52,3 +52,4 @@ AEsh	tools/emu/undead_ne4_emu.py (CHECK=decay,apply)	800	V5 from spec S37: slow 
 AUin	tools/emu/undead_ne4_emu.py (CHECK=inferno)	320	V5 from spec S37: landing context roles 0x6F117B40
 AUdd	tools/emu/undead_ne4_emu.py (CHECK=dnd)	320	V5 from spec S37: victim pulse amount 0x6F098180
 AUim	tools/emu/undead_ne4_emu.py (CHECK=impale)	400	V5: Impale spike-line plan, slot 0x418 = 0x6F144810 (tests/undead_ne_s37_impale.rs)
+AHtc	tools/emu/stomp_emu.py (THUNDER_VT=1) + human_heroes3_emu.py	800	V5: per-unit body 0x6F1607B0 on the Thunder Clap vtable (400) + slow 0x6F18A930 values (400); bug fixed: hand-made area filter and immune handling replaced by the stomp word/predicate

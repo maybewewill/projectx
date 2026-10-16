@@ -233,3 +233,31 @@ fn channel_property_compares_match_the_original() {
     assert!(n >= 300);
     assert!(above > 20 && above < n && differs > 20 && differs < n + 1);
 }
+
+/// V5: Thunder Clap's per-unit body `0x6F1607B0` (shared with War Stomp; only slot `0x430` differs) run for real with the
+/// Thunder Clap vtable (`THUNDER_VT=1 tools/emu/stomp_emu.py`, 400 cases, 0 mismatches).
+#[test]
+fn thunder_clap_per_unit_body_matches_the_original() {
+    use sim::orc::{stomp_record_flags, stomp_unit, stomp_word, THUNDER_CLAP_TARGS_DEFAULT};
+    let h = |s: &str| u32::from_str_radix(s, 16).unwrap();
+    let (mut n, mut zero_rows, mut stuns) = (0, 0, 0);
+    for line in include_str!("data/human_heroes/thunder_unit.txt").lines() {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(w[0], "U");
+        let data_a = h(w[1]);
+        let zero = w[2] != "0" || w[3] != "0";
+        let (targ, resolved, owner): (u32, u32, u32) = (w[4].parse().unwrap(), w[5].parse().unwrap(), w[6].parse().unwrap());
+        let out = stomp_unit(zero, resolved != 0, targ, owner);
+        assert_eq!((w[8], w[12]), ("1", "1"), "{line}");
+        assert_eq!(h(w[9]), if zero { 0 } else { data_a }, "{line}");
+        assert_eq!(h(w[10]), 0x8000, "{line}");
+        assert_eq!(h(w[11]), stomp_record_flags(zero), "{line}");
+        assert_eq!(w[14] == "1", out.hit_slot.is_some(), "{line}");
+        assert_eq!(w[15] == "1", out.stun, "{line}");
+        n += 1;
+        zero_rows += zero as u32;
+        stuns += out.stun as u32;
+    }
+    assert!(n >= 400 && zero_rows > 50 && stuns > 50, "{n} {zero_rows} {stuns}");
+    assert_eq!(stomp_word(THUNDER_CLAP_TARGS_DEFAULT), 0x0401_8002);
+}

@@ -323,6 +323,7 @@ impl Game {
             Some(v) if !v.is_empty() => v[level_index.min(v.len() - 1)],
             _ => match base {
                 WAR_STOMP => STOMP_TARGS_DEFAULT,
+                crate::human_heroes::THUNDER_CLAP => THUNDER_CLAP_TARGS_DEFAULT,
                 VOODOO => VOODOO_TARGS_DEFAULT,
                 BLADESTORM => BLADESTORM_TARGS_DEFAULT,
                 EARTHQUAKE => QUAKE_TARGS_DEFAULT,
@@ -473,6 +474,11 @@ pub fn stomp_word(targs: u32) -> u32 {
 /// The `targs` text of War Stomp in the 1.26a AbilityData (`ground,organic`) as a word (`ground` 0x2, `organic`
 /// `0x4000000`), used when the host gives none (`Game::set_orc_targs`).
 pub const STOMP_TARGS_DEFAULT: u32 = 0x0400_0002;
+
+/// The `targs` text of Thunder Clap in the 1.26a AbilityData (`ground,neutral,organic`) as a word; Thunder Clap shares
+/// the area slot `0x434` and the per-unit body `0x6F1607B0` with War Stomp, so `stomp_word` turns it into the same
+/// `0x4018002` (the relation bits are replaced anyway).
+pub const THUNDER_CLAP_TARGS_DEFAULT: u32 = 0x0400_8002;
 
 /// What the per-unit body of War Stomp (`0x6F1607B0`) does with one unit that the area builder let through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

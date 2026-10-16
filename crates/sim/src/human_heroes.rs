@@ -33,7 +33,6 @@ use crate::abilities::{buff_predicates, code, Buff, BuffPredicates};
 use crate::auras::BuffEffect;
 use crate::cast::{begin_cast, effect_duration, CastRec, CastTarget, SpellLevel};
 use crate::heroes::life_sink;
-use crate::missiles::MOVE_FLY;
 use crate::natives::game::{Game, ObjKey, Object, ScriptRuntime};
 use crate::natives::{circle_candidates, dispatch_unit_death_by};
 use crate::rng::{Rng, RngTable};
@@ -444,46 +443,55 @@ pub fn thunder_clap_slow(l: &SpellLevel, hero: bool, extra: F32) -> Option<(F32,
     })
 }
 
-fn thunder_clap_targets(gm: &Game, caster: ObjKey, level: &SpellLevel) -> Vec<ObjKey> {
-    let c = gm.unit(caster);
-    let owner = c.owner;
-    circle_candidates(gm, c.x, c.y, level.area)
-        .into_iter()
-        .filter(|&k| k != caster && gm.alive(k))
-        .filter(|&k| {
-            let t = gm.unit(k);
-            let flying = gm
-                .unit_types()
-                .get(t.type_id)
-                .is_some_and(|ty| ty.movement & MOVE_FLY != 0);
-            gm.is_enemy(owner, t.owner) && !gm.unit_types().is_building(t.type_id) && !flying
-        })
-        .collect()
-}
-
+/// Thunder Clap (`0x6F1608B0` instant slot, per-unit body `0x6F1607B0`): **the same class slots as War Stomp** except the
+/// slot `0x430` (here the slow `0x6F18A930`, Stomp: the stun `0x6F18ABF0`) and the order id (`tools/analysis`/V5: the two
+/// vtables were compared slot by slot, `0x428`, `0x42C`, `0x434` are equal). So the area filter is War Stomp's
+/// (`orc::stomp_word`, `orc::area_predicate`: enemy and neutral relations, `targs` kind bits), the damage record is
+/// `DataA`, class `0x8000`, flags `0x40` (`0x50` and amount 0.0 for an invulnerable or spell-immune unit) and the slow
+/// runs only for a resolved, non-structure unit on the normal path. CONFIRMED: `tools/emu/stomp_emu.py` with the Thunder
+/// Clap vtable (`THUNDER_VT=1`, V5, 400 cases, 0 mismatches, `tests/data/human_heroes/thunder_unit.txt`) plus the slow's own
+/// run (`thunder_slow.txt`). The earlier model filtered "enemy, no building, no flyer" by hand.
 fn thunder_clap(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    use crate::orc::{area_predicate, stomp_unit, stomp_word};
     let level = rec.level;
-    let targets = thunder_clap_targets(&game.borrow(), rec.caster, &level);
-    for t in targets {
-        let died = {
-            let mut gm = game.borrow_mut();
-            if !gm.alive(t) {
+    let mut killed = Vec::new();
+    {
+        let mut gm = game.borrow_mut();
+        let (cx, cy) = {
+            let u = gm.unit(rec.caster);
+            (u.x, u.y)
+        };
+        let level_index =
+            usize::try_from(gm.unit(rec.caster).abilities.get(THUNDER_CLAP).map_or(0, |a| a.level_index)).unwrap_or(0);
+        let word = stomp_word(gm.orc_targs(THUNDER_CLAP, level_index));
+        for k in circle_candidates(&gm, cx, cy, level.area) {
+            {
+                let u = gm.unit(k);
+                if u.removed || u.hidden {
+                    continue;
+                }
+            }
+            if !area_predicate(&gm, rec.caster, k, word) {
                 continue;
             }
-            gm.unit_damage_target(rec.caster, t, level.data[0], false, false, 0, THUNDER_CLAP_DAMAGE_TYPE)
-        };
-        if let Some(k) = died {
-            dispatch_unit_death_by(game, rt, k, Some(rec.caster));
-            continue;
+            let zero_record = gm.unit_is_invulnerable(k)
+                || crate::natives::unit_attr::is_unit_type(&gm, gm.unit(k), crate::unitclass::ty::MAGIC_IMMUNE);
+            let amount = if zero_record { F32::ZERO } else { level.data[0] };
+            if let Some(t) = gm.unit_damage_target(rec.caster, k, amount, false, false, 0, THUNDER_CLAP_DAMAGE_TYPE) {
+                killed.push(t);
+            }
+            let target_type = gm.target_flag_word(k) & 0x1E;
+            let resolved = gm.alive(k);
+            if stomp_unit(zero_record, resolved, target_type, gm.unit(k).owner).stun {
+                let hero = gm.target_hero(k);
+                if let Some((dur, move_factor, attack_factor)) = thunder_clap_slow(&level, hero, F32::ZERO) {
+                    gm.apply_slow_as(BUFF_THUNDER_CLAP, k, dur, move_factor, attack_factor);
+                }
+            }
         }
-        let mut gm = game.borrow_mut();
-        if !gm.alive(t) {
-            continue;
-        }
-        let hero = gm.target_hero(t);
-        if let Some((dur, move_factor, attack_factor)) = thunder_clap_slow(&level, hero, F32::ZERO) {
-            gm.apply_slow_as(BUFF_THUNDER_CLAP, t, dur, move_factor, attack_factor);
-        }
+    }
+    for t in killed {
+        dispatch_unit_death_by(game, rt, t, Some(rec.caster));
     }
 }
 
