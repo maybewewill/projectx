@@ -1998,6 +1998,31 @@ pub fn abolish_filter_scan(base_ok: bool, owner_flags: u32, cand_flags248: u32, 
     Some([0, 1, 0, 0, 1, a7, a8, owner, u32::from(req_level != 0)])
 }
 
+/// Polymorph's target rule, slot `0x3F0` = `0x6F11C230` (CONFIRMED by Unicorn, V4): `0x33` when `F2I(DataA)` (the highest
+/// creep level) is above zero and the target is a creep above it (`creep_over`, the host's `0x6F1D2630`), else `0x9F` for a
+/// summoned unit (`+0x248 & 4`), else `0`.
+pub fn polymorph_target_code(data_a: F32, creep_over: bool, summoned: bool) -> u32 {
+    if conv::f2i(data_a) > 0 && creep_over {
+        0x33
+    } else if summoned {
+        0x9F
+    } else {
+        0
+    }
+}
+
+/// What Polymorph's effect `0x6F12F560` does with a target (CONFIRMED by Unicorn, V4): an illusion is killed through
+/// the target's slot `0x124` with a zero amount and nothing else happens (`None`); any other target goes to the
+/// ability's slot `0x43C` with the hero-rule duration (`Dur + 0x9C` by soft add, `HeroDur` for a hero) and the type picked
+/// by `0x6F12DAA0(level index, target movement class)`. The original does not test the duration here.
+pub fn polymorph_effect_duration(l: &SpellLevel, hero: bool, illusion: bool) -> Option<F32> {
+    if illusion {
+        None
+    } else {
+        Some(effect_duration(l, hero, F32::ZERO))
+    }
+}
+
 /// Whether Purge slows the target: not when the target is dead (`+0x5C & 0x100`) or the caster's player is passively
 /// allied with it (`0x6F285AC0`). `0x6F107E10`, CONFIRMED by Unicorn (V4).
 pub fn purge_slows(target_dead: bool, allied: bool) -> bool {

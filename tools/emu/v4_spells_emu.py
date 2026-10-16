@@ -340,6 +340,66 @@ def check_abolish_filter(cases, r, rows):
                     + [rd(CAP + 0x100 + 4 * i) for i in range(11)])
 
 
+VT_POLY_ABIL = 0x6F8A922C
+ABIL_POLY = 0x41706C79
+AVT = M + 0x8000         # a writable copy of an ability vtable
+
+
+def copy_vtable(vt, overrides):
+    mu.mem_write(AVT, bytes(mu.mem_read(vt, 0x600)))
+    for off, target in overrides.items():
+        wr(AVT + off, target)
+    wr(A.OBJ, AVT)
+
+
+def check_polymorph_target(cases, r, rows):
+    """Polymorph slot 0x3F0 = 0x6F11C230. Rows: DataA creep_over summoned | code."""
+    S.install()
+    ret_var(0x6F1D2630, 0, 0)
+    for _ in range(cases):
+        da = rbits(r) if r.random() < 0.4 else f2u(float(r.choice([0, 1, 5, 5, 6, -1, 3])))
+        over = r.random() < 0.5
+        summ = r.random() < 0.5
+        A.make_ability(VT_POLY_ABIL, ABIL_POLY, 75)
+        level(A.LVL, 0, 0, [da])
+        S.make_target(False)
+        wr(TGT + 0x248, 4 if summ else r.choice([0, 0x200, 8]))
+        wr(VARS + 0, int(over))
+        res = S.call(0x6F11C230, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append([da, int(over), int(summ), res & 0xFFFFFFFF])
+
+
+def check_polymorph_effect(cases, r, rows):
+    """Polymorph effect 0x6F12F560. Rows: dur herodur illusion hero movement | slot 0x124 calls, amount | pick args (level, movement)
+    calls | slot 0x43C: target, &dur value, type, calls."""
+    S.install()
+    A.patch_jump(0x6F2835A0, A.stub_ret(0x10, 0))
+    A.patch_jump(0x6F0405D0, A.stub_ret(0xC, 0))
+    ret_var(0x6F1D2660, 0, 4)
+    A.patch_jump(0x6F12DAA0, recorder(0x120, [(0, False), (1, False)], 8, eax=0x7777, counter=0x1E0))
+    s43c = recorder(0x140, [(0, False), (1, True), (2, False)], 0x10, counter=0x1E4)
+    s124 = recorder(0x160, [(0, True)], 4, counter=0x1E8)
+    for _ in range(cases):
+        dur, hdur = rbits(r), rbits(r)
+        ill = r.random() < 0.3
+        hero = r.random() < 0.5
+        mv = r.choice([1, 2, 4, 8, 0x10, 0x20, 0])
+        A.make_ability(VT_POLY_ABIL, ABIL_POLY, 75)
+        level(A.LVL, dur, hdur, [rbits(r)])
+        copy_vtable(VT_POLY_ABIL, {0x43C: s43c})
+        S.make_target(False)
+        wr(TGT + 0x5C, 0x40000000 if ill else 0)
+        wr(TGT + 0x1FC, mv)
+        mu.mem_write(S.FVT, b"\0" * 0x400)
+        wr(TGT, S.FVT)
+        wr(S.FVT + 0x124, s124)
+        S.clear_cap()
+        wr(VARS + 4, int(hero))
+        S.call(0x6F12F560, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append([dur, hdur, int(ill), int(hero), mv, rd(CAP + 0x1E8), rd(CAP + 0x160), rd(CAP + 0x1E0), rd(CAP + 0x120),
+                     rd(CAP + 0x124), rd(CAP + 0x1E4), rd(CAP + 0x140), rd(CAP + 0x144), rd(CAP + 0x148)])
+
+
 def _trace_install():
     from collections import deque
     from unicorn import UC_HOOK_CODE
@@ -356,6 +416,8 @@ CHECKS = {
     "purge_args": check_purge_args,
     "abolish_args": check_abolish_args,
     "abolish_filter": check_abolish_filter,
+    "polymorph_target": check_polymorph_target,
+    "polymorph_effect": check_polymorph_effect,
 }
 
 

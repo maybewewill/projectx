@@ -287,3 +287,9 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   flag word lacks bit 2 and the candidate's `+0x248` has `0x200`, then the buff scan `0x6F076D00` with
   `[0, 1, 0, 0, 1, a7, a8, owner, reqLevel != 0]`, `(a7, a8) = (0, 1)` for an ally, `(1, 0)` otherwise. Not modelled: the
   buff-scan exclusion of buffs whose `+0x20` has `0x20000000` unless `reqLevel != 0`, and the two unit flag words.
+* **Polymorph (`Aply`) PARTLY verified (no confirmed-abilities row)**: target rule `0x6F11C230` (`0x33` when `F2I(DataA) > 0`
+  and the target is a creep above that level (`0x6F1D2630(target, level)`), else `0x9F` for a summoned unit) and effect
+  `0x6F12F560` (illusion: target slot `0x124` with a zero amount and nothing else; otherwise the hero-rule duration and
+  `0x6F12DAA0(level index, target +0x1FC)` feed the ability's slot `0x43C` = `0x6F13F790`; no duration test in the effect)
+  run in Unicorn, 400 cases each, 0 mismatches. The morph itself (buff apply `0x6F12A0B0`/`0x6F13F710`) and the type pick's
+  random die are NOT verified, so no row yet. The creep-level rule is not modelled (no creep levels in the sim).

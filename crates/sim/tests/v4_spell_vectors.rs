@@ -140,6 +140,45 @@ fn abolish_magic_worker_arguments_match_the_original() {
 }
 
 #[test]
+fn polymorph_target_rule_matches_the_original() {
+    // DataA creep_over summoned | code
+    let rows = hex_rows(include_str!("data/unit_spells/polymorph_target.txt"));
+    assert!(rows.len() >= 300);
+    let mut seen = std::collections::BTreeMap::new();
+    for r in &rows {
+        let code = polymorph_target_code(f(r[0]), r[1] != 0, r[2] != 0);
+        assert_eq!(r[3], code, "row {:08x?}", r);
+        *seen.entry(code).or_insert(0) += 1;
+    }
+    for c in [0u32, 0x33, 0x9F] {
+        assert!(seen.get(&c).copied().unwrap_or(0) > 20, "{seen:?}");
+    }
+}
+
+#[test]
+fn polymorph_effect_matches_the_original() {
+    // dur herodur illusion hero movement | slot124 calls, amount | pick calls, level, movement | slot43C calls, target, dur, type
+    let rows = hex_rows(include_str!("data/unit_spells/polymorph_effect.txt"));
+    assert!(rows.len() >= 300);
+    let (mut ill, mut morph) = (0, 0);
+    for r in &rows {
+        let l = level_of(&[], r[0], r[1]);
+        match polymorph_effect_duration(&l, r[3] != 0, r[2] != 0) {
+            None => {
+                ill += 1;
+                assert_eq!((r[5], r[6], r[7], r[10]), (1, 0, 0, 0), "illusion killed only, row {:08x?}", r);
+            }
+            Some(d) => {
+                morph += 1;
+                assert_eq!((r[5], r[7], r[9], r[10]), (0, 1, r[4], 1), "row {:08x?}", r);
+                assert_eq!(r[12], d.to_bits(), "duration, row {:08x?}", r);
+            }
+        }
+    }
+    assert!(ill > 60 && morph > 200);
+}
+
+#[test]
 fn abolish_magic_autocast_filter_matches_the_original() {
     // base ownerflags cand248 ally req | result calls | ecx edx a2..a10
     let rows = hex_rows(include_str!("data/unit_spells/abolish_filter.txt"));
