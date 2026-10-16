@@ -38,6 +38,17 @@ pub const CYCLONE: u32 = code(b"Acyc");
 pub const SILENCE: u32 = code(b"ANsi");
 pub const CHARM: u32 = code(b"ANch");
 pub const HOWL: u32 = code(b"ANht");
+/// S44 neutral heroes: Beastmaster summons (`CAbilitySummon* < CAbilityWaterElemental`), Brewmaster Drunken Haze
+/// (`CAbilityDrunkenHaze < CAbilitySilence`) and Drunken Brawler (`CAbilityDrunkenBrawler < CAbilityCriticalStrike`).
+pub const SUMMON_GRIZZLY: u32 = code(b"ANsg");
+pub const SUMMON_QUILBEAST: u32 = code(b"ANsq");
+pub const SUMMON_EAGLE: u32 = code(b"ANsw");
+pub const BUFF_GRIZZLY: u32 = code(b"BNsg");
+pub const BUFF_QUILBEAST: u32 = code(b"BNsq");
+pub const BUFF_EAGLE: u32 = code(b"BNsw");
+pub const HAZE: u32 = code(b"ANdh");
+pub const BUFF_HAZE: u32 = code(b"BNdh");
+pub const BRAWLER: u32 = code(b"ANdb");
 pub const BUFF_MANA_SHIELD: u32 = code(b"BNms");
 pub const BUFF_CYCLONE: u32 = code(b"Bcyc");
 /// The second Cyclone buff (`CBuffCycloneTwo < CBuffCyclone`, the invulnerability half in this model).
@@ -100,7 +111,7 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"Arej", *b"Aroa", *b"Aslo", *b"Aspo", *b"Asta", *b"AUau", *b"AUav", *b"AUcs", *b"AUdc", *b"AUdd", *b"AUdp",
     *b"AUdr", *b"AUfa", *b"AUfn", *b"AUfu", *b"Auhf", *b"AUim", *b"AUin", *b"AUsl", *b"AUts", *b"Aweb", *b"Ablo",
     *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
-    *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm",
+    *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm", *b"ANsg", *b"ANsq", *b"ANsw", *b"ANdh", *b"ANdb",
 ];
 
 fn is_modelled(c: u32) -> bool {
@@ -152,6 +163,10 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
         (852_144, CYCLONE),
         (852_592, SILENCE),
         (852_588, HOWL),
+        (852_585, HAZE),
+        (852_594, SUMMON_GRIZZLY),
+        (852_595, SUMMON_QUILBEAST),
+        (852_596, SUMMON_EAGLE),
     ] {
         ids.insert(id, base);
     }
@@ -159,7 +174,11 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// Abilities of this module cast without a target (Mana Shield, Howl of Terror).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    base == MANA_SHIELD || base == HOWL
+    base == MANA_SHIELD || base == HOWL || is_summon(base)
+}
+
+fn is_summon(base: u32) -> bool {
+    base == SUMMON_GRIZZLY || base == SUMMON_QUILBEAST || base == SUMMON_EAGLE
 }
 
 /// The autocast toggle orders of Neutral Heal (`healon` / `healoff` of the neutral class). `None` for any other id.
@@ -356,6 +375,10 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let w = targs_word("ground,enemy,neutral,organic");
             (gm.unit(target).removed || !targs_ok(gm, caster, target, w)).then_some(BadTarget)
         }
+        HAZE => {
+            let w = targs_word("air,ground,enemy,organic,neutral");
+            (gm.unit(target).removed || !targs_ok(gm, caster, target, w)).then_some(BadTarget)
+        }
         CHARM => {
             let w = targs_word("air,ground,nonhero,enemy,neutral,organic");
             if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
@@ -395,6 +418,21 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             if let CastTarget::Unit(t) = rec.target {
                 charm(game, rt, rec, t);
             }
+            true
+        }
+        HAZE => {
+            haze(game, rec);
+            true
+        }
+        SUMMON_GRIZZLY | SUMMON_QUILBEAST | SUMMON_EAGLE => {
+            // `CAbilitySummon* < CAbilityWaterElemental` (one override each, the class code): the summon loop
+            // `0x6F163390` creates `f2i(DataA)` units of the level's `UnitID` with a timed life of `Dur`.
+            let buff = match rec.base {
+                SUMMON_GRIZZLY => BUFF_GRIZZLY,
+                SUMMON_QUILBEAST => BUFF_QUILBEAST,
+                _ => BUFF_EAGLE,
+            };
+            crate::human_heroes::summon(game, rec, buff);
             true
         }
         _ => false,
@@ -480,6 +518,48 @@ fn silence(game: &RefCell<Game>, rec: &CastRec) {
         let dur = duration_for(&gm, &rec.level, k);
         if arith::lt(F32::ZERO, dur) {
             gm.apply_mods_buff(k, BUFF_SILENCE, preds, UnitMods::default(), dur);
+        }
+    }
+}
+
+/// Drunken Haze (`ANdh`, `CAbilityDrunkenHaze < CAbilitySilence`, buff `BNdh`; order 852585): the Silence area shape
+/// around the target (a unit in the data: `Rng` 550, `Area` 200): every enemy air / ground organic or neutral unit in
+/// the area gets `BNdh` for the hero-rule duration. The buff makes the unit miss with chance `DataB` (the Curse miss
+/// walk, [`UnitMods::miss_chance`]) and slows its movement by `DataC` (`move_delta = -DataC`). The role of the two
+/// numbers (miss `DataB` 0.45..0.8, slow `DataC` 0.15..0.5) is read from the tooltip order, not from a run: LIKELY /
+/// UNSURE. Spell-immune units are skipped.
+fn haze(game: &RefCell<Game>, rec: &CastRec) {
+    let mut gm = game.borrow_mut();
+    let (cx, cy) = match rec.target {
+        CastTarget::Point(x, y) => (x, y),
+        CastTarget::Unit(t) => (gm.unit(t).x, gm.unit(t).y),
+        CastTarget::None => return,
+    };
+    let word = targs_word("air,ground,enemy,organic,neutral");
+    let preds = crate::abilities::BuffPredicates {
+        negative: true,
+        magic: true,
+        dispellable: true,
+        ..buff_predicates(BUFF_HAZE)
+    };
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        {
+            let u = gm.unit(k);
+            if u.removed || u.hidden || u.dead || u.magic_immune > 0 {
+                continue;
+            }
+        }
+        if !targs_ok(&gm, rec.caster, k, word) {
+            continue;
+        }
+        let dur = duration_for(&gm, &rec.level, k);
+        if arith::lt(F32::ZERO, dur) {
+            let mods = UnitMods {
+                miss_chance: rec.level.data[1],
+                move_delta: arith::neg(rec.level.data[2]),
+                ..UnitMods::default()
+            };
+            gm.apply_mods_buff(k, BUFF_HAZE, preds, mods, dur);
         }
     }
 }

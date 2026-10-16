@@ -334,6 +334,14 @@ impl Game {
         self.orc.summon_units.insert(base, units);
     }
 
+    /// The critical-strike ability a unit has: `AOcr`, or the Drunken Brawler (`ANdb`, a `CAbilityCriticalStrike` with the
+    /// same `DataA` chance and `DataB` multiplier, S44).
+    pub(crate) fn crit_base(&self, unit: ObjKey) -> Option<u32> {
+        [CRITICAL_STRIKE, crate::neutral_spells::BRAWLER]
+            .into_iter()
+            .find(|&c| self.unit(unit).abilities.get(c).is_some_and(|a| !a.is_removed()))
+    }
+
     /// Swing start: the Critical Strike arming roll (see the module notes). One stream-3 draw per ability.
     pub fn orc_swing_start(&mut self, unit: ObjKey) {
         // The Wind Walk buff arms itself on the same broadcast (target filter assumed to accept, UNSURE).
@@ -346,10 +354,10 @@ impl Game {
             let u = self.unit(unit);
             !u.dead && !u.removed
         };
-        if !alive || self.unit(unit).abilities.get(CRITICAL_STRIKE).is_none_or(|a| a.is_removed()) {
+        let Some(crit) = self.crit_base(unit).filter(|_| alive) else {
             return;
-        }
-        let Some(record) = self.ability_level_record(unit, CRITICAL_STRIKE) else {
+        };
+        let Some(record) = self.ability_level_record(unit, crit) else {
             return;
         };
         let count = *self.orc.crit_count.get(&unit).unwrap_or(&1);
@@ -387,7 +395,7 @@ impl Game {
             }
         }
         if self.orc.crit_armed.contains(&attacker) {
-            if let Some(record) = self.ability_level_record(attacker, CRITICAL_STRIKE) {
+            if let Some(record) = self.crit_base(attacker).and_then(|c| self.ability_level_record(attacker, c)) {
                 let mult = record.data[1];
                 // The x87 equality test skips only an exact zero; NaN goes on.
                 if mult.to_f32() != 0.0 {

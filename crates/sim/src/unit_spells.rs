@@ -2221,7 +2221,7 @@ impl Game {
         self.unit(attacker)
             .buffs
             .iter()
-            .filter(|b| b.base == BUFF_CURSE)
+            .filter(|b| b.base == BUFF_CURSE || b.base == crate::neutral_spells::BUFF_HAZE)
             .filter_map(|b| match b.effect {
                 Some(crate::auras::BuffEffect::Mods(m)) => Some(m.miss_chance),
                 _ => None,

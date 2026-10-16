@@ -612,7 +612,7 @@ fn phoenix(game: &RefCell<Game>, rec: &CastRec) {
     summon(game, rec, BUFF_WATER_ELEMENTAL);
 }
 
-fn summon(game: &RefCell<Game>, rec: &CastRec, timed_life: u32) {
+pub(crate) fn summon(game: &RefCell<Game>, rec: &CastRec, timed_life: u32) {
     let mut gm = game.borrow_mut();
     let n = conv::f2i(rec.level.data[0]);
     let dur = arith::add(rec.level.dur, F32::ZERO);
