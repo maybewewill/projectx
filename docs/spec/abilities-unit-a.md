@@ -41,3 +41,28 @@ the codes above need `AbilityData.slk` rows (area, rng, dur, data, unit_id) adde
 - Tree and mine targets (cast infrastructure takes unit and point targets only): Aeat, Agra, Aent, Aesn.
 - Unit merge / split and unit conversion: Acoa, Acoh, Acoi, Adec, Abtl, Acha, Achl, Alam, Aexh, Agyd.
 - Area / reveal effects: Aclf, Afla, Adta, Advm, Adda, Aabr's Statue graphics, Ablp, Abli (blight grid), Aast (corpse revive), Acan (corpse channel), Abar (modal), Adef (toggle), Ahid (S44).
+
+## V7: verification against the original (Unicorn, 0 mismatches)
+
+Harnesses `tools/emu/v7_*_emu.py`, vectors `crates/sim/tests/data/v7/`, tests `crates/sim/tests/v7_*_vectors.rs`; rows in
+`confirmed-abilities.tsv`. The level getters are mapped by `tools/emu/v7_getters.py` (`0x6F02E6F0` Cast, `E760` Dur, `E7D0` HeroDur,
+`E890` Cool, `E900` Area, `E9E0..EBA0` DataA..DataE). The name-based getters `0x6F01F7D0 / 01FA50 / 01FAD0 / 01FB50` read "Area1",
+"DataA1", "DataB1", "DataC1" from the ability's data row (`0x6F262760`).
+
+* **Aabr / Aoar / Aarm CONFIRMED (300 each):** the ability apply (`0x6F06F430`, `0x6F06F310`, `0x6F06F3A0`) hands the buff the flag
+  `0.0 == DataB` (x87, so `-0.0` true, NaN false); the buff apply (`0x6F043FA0` Babr, `0x6F043A20` Boar, `0x6F043CE0` Barm) treats the
+  rate as a fraction of the owner's max life / mana (soft `mul(strength, max)`, that operand order) exactly when the flag is CLEAR, else
+  as an absolute amount; an illusion owner is skipped unless the Misc key is on. `unit_abilities_a::regen_aura_*`. The scan, targs and
+  4.0 s duration were checked in earlier lanes (`buffs.md`).
+* **Aasl CONFIRMED (600), model bug fixed:** `CBuffAuraSlow` slot `0x370` (`0x6F1AD2F0`): nothing happens (not even the duration) when
+  BOTH new strengths are weaker than the stored ones by the tolerance; otherwise each component whose stored strength exceeds the new one
+  by the tolerance is undone (negated sink, only if applied), replaced and re-applied, and the other component keeps its value. The model
+  used to replace both on every refresh. `unit_abilities_a::slow_aura_update`.
+* **Aetl CONFIRMED (400):** init `0x6F07A340` / removal `0x6F0796A0` count unit `+0x158`; the first count and reaching zero run the enter /
+  leave side effects (`+0x1C0` attack-block counter via `0x6F0767F0`, refresh `0x6F284830`); an unbalanced removal goes negative and runs
+  nothing. `ethereal_step`. The ability-cancel walk `0x6F079FE0` ran on an empty list only.
+* **Found, not modelled:** the cargo family reads its capacity per unit "cargo size" (`0x6F079520` -> type record `+100`, 0 -> -1) into the
+  holder's used count (`+0x74`), and the hold's `Cool` field drives an attack-speed effect (`0x6F166090`); load range uses
+  `Rng`^2 against the pair distance (`0x6F173BB0`). Detector init reads `Rng1` (`0x6F01F9D0`). The morph timer is
+  `add(add(ability+0x9C, Dur), flag 0x40000 ? DataC : 0)` (message `0xD01C4`, `0x6F0FD3D0`), the type swap is `0x6F0F9CD0`. Not run: cargo,
+  detectors, absorb (the `Mabs` missile), morph family.

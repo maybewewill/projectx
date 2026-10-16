@@ -37,3 +37,24 @@ Open: Unicorn runs of the effect bodies (`0x6F08C100` launcher call, `0x6F135220
 ## Not done
 
 `AAns` (`CAbilityNeutralSpell`, a `CAbilityButton`: no effect body found, not proven a no-op) and `ARal` (`CAbilityRally`: needs the rally order and spawn use, `GetUnitRallyPoint` natives) have no model and no code constants.
+
+## V7: verification against the original (Unicorn, 0 mismatches)
+
+* **Locust Swarm CONFIRMED (300), model bug fixed:** effect `0x6F134EA0` + spawn step `0x6F12CE70`: the count is `clamp(f2i(DataA), 1, 40)` (stock
+  20, not `DataC` 7); ONE locust per step (creator ECX = owner index, EDX = `UnitID`), the next step `DataB` seconds later (stock 0.2 s,
+  message `0xD01C1`) while made < count; the end timer is `add(Dur, ability+0x9C)` (message `0xD01C4`, `0x6F12F1B0(1)` releases the
+  locusts); the locust ability `Aloc` gets `(Area, f2i(DataC), DataD, DataE)` (`0x6F124EF0`). `hero_extra::locust_plan`. The model now makes
+  them one by one on a timer. Not modelled: the `Aloc` life steal and the release.
+* **Metamorphosis CONFIRMED (600), model fixed:** morph-in hook `0x6F13D5C0`: an earlier `BEme` is removed; the buff lasts `HeroDur + 0.01`
+  and exists only if the effective `HeroDur` (0.0 for an illusion) is above zero; the `DataE` bonus goes through the life sink in mode 3
+  (maximum and life rise together) whether or not the buff exists; the revert hook `0x6F111D20` removes `BEme` and sinks `-DataE`
+  (mode 3: only the maximum drops, the life clamps), clearing the holder. `meta_in_plan`, `meta_out_value`. The type swap itself
+  (`0x6F1027F0`, `0x6F0F9CD0`) was not run.
+* **Summon loop (Scout, Spirit of Vengeance):** already CONFIRMED by V5 (`v5_summon_emu.py`); Phoenix added (see human-heroes V7).
+* **Found, not run:** Animate Dead (`0x6F1D1FA0`): count `f2i(DataA)`; the candidates come from the group builder with callback
+  `0x6F1D1720` (alliance test `0x6F3A3530`, corpse flag `0x400000`, the `Acar` marker), sorted with `0x6F19E970` (Resurrection uses
+  `0x6F19EA20`, both CONFIRMED comparators); the per-corpse revive `0x6F1B5A60` **revives the corpse unit itself** (`0x6F2A64A0`) under the
+  caster's player with timed life, it does not create a new unit (the model creates one); Carrion Scarabs inherits the Raise Dead effect
+  `0x6F0E6AA0`: `f2i(DataA)` units of the type named by `DataC<level>` and `f2i(DataB)` of `DataD<level>`, one corpse, permanent when
+  `Dur` is 0; Starfall / Tranquility create effect objects (`XEsf` / `XEtq`) with `(Area, DataA, DataB, Dur total)`; Dark Summoning
+  `0x6F070210` clamps the count to 20 and sorts with `0x6F026120`; Cold / Searing / Poison Arrows have orb handlers `0x14C / 0x150`.
