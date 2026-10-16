@@ -404,7 +404,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let level = gm.unit_types().get(gm.unit(target).type_id).map_or(0, |t| t.level);
             (level as f32 > max).then_some(BadTarget)
         }
-        _ => None,
+        _ => crate::unit_abilities_m::target_error(gm, caster, base, target),
     }
 }
 
@@ -469,7 +469,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             crate::human_heroes::summon(game, rec, buff);
             true
         }
-        _ => false,
+        _ => crate::unit_abilities_m::run_effect(game, rt, rec),
     }
 }
 

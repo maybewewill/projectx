@@ -260,6 +260,8 @@ pub struct SpellSystem {
     pub item: crate::item_abilities::State,
     /// Creep / neutral alias abilities (`neutral_spells.rs`).
     pub neutral: crate::neutral_spells::State,
+    /// Unit abilities batch M (`unit_abilities_m.rs`).
+    pub m: crate::unit_abilities_m::State,
 }
 
 // ---- pure rules (Unicorn-checked) ----
@@ -349,6 +351,7 @@ impl SpellSystem {
         crate::unit_spells::register_orders(&mut s.order_ids);
         crate::neutral_spells::register_orders(&mut s.order_ids);
         crate::invisibility::register_orders(&mut s.order_ids);
+        crate::unit_abilities_m::register_orders(&mut s.order_ids);
         for (id, base) in crate::human_heroes::SPELL_ORDERS {
             s.order_ids.insert(id, base);
         }
@@ -769,6 +772,7 @@ pub fn begin_cast(
                     && !crate::undead_ne::is_immediate(class)
                     && !crate::item_abilities::takes_no_target(&gm, base)
                     && !crate::neutral_spells::takes_no_target(class)
+                    && !crate::unit_abilities_m::takes_no_target(class)
                 {
                     return Err(CastError::BadTarget);
                 }

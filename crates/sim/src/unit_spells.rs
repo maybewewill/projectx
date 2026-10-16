@@ -1427,6 +1427,7 @@ impl Game {
             self.poison_hit(attacker, target);
         }
         self.neutral_on_hit(attacker, target);
+        self.m_on_hit(attacker, target);
     }
 
     /// Frost Attack (CONFIRMED structure: `0x6F1837C0` creates the effect from the ability's `Dur` / `HeroDur`; the buff
@@ -1610,7 +1611,7 @@ impl Game {
         self.spells.unit.morphs.contains_key(&unit)
     }
 
-    fn morph_unit(&mut self, unit: ObjKey, to: u32) {
+    pub(crate) fn morph_unit(&mut self, unit: ObjKey, to: u32) {
         let (orig_type, orig_class) = {
             let u = self.unit(unit);
             (u.type_id, u.class_flags)
@@ -1644,7 +1645,7 @@ impl Game {
         );
     }
 
-    fn restore_morph(&mut self, unit: ObjKey) {
+    pub(crate) fn restore_morph(&mut self, unit: ObjKey) {
         let Some(rec) = self.spells.unit.morphs.remove(&unit) else {
             return;
         };

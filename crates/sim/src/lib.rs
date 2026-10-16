@@ -61,6 +61,7 @@ pub mod terrain;
 pub mod timer;
 pub mod unit_counts;
 pub mod undead_ne;
+pub mod unit_abilities_m;
 pub mod unit_spells;
 pub mod unitclass;
 pub mod unit_position;

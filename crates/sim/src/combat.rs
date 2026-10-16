@@ -1178,6 +1178,7 @@ impl Game {
         self.combat.damage = Some(model);
         // Mana Shield (`neutral_spells.rs`) takes its share before the life.
         let amount = self.neutral_absorb(target, amount);
+        let amount = self.m_link_share(target, amount);
         if arith::eq(amount, F32::ZERO) {
             return None;
         }
@@ -1270,6 +1271,7 @@ impl Game {
             return None;
         }
         let amount = self.neutral_absorb(target, amount);
+        let amount = self.m_link_share(target, amount);
         if arith::gt(amount, F32::ZERO) {
             self.wake_sleeping(target);
         }

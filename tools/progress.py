@@ -147,7 +147,21 @@ def short_name(name):
 
 def behaviour():
     """Behaviour metrics: how much already acts like the original, computed from the repository."""
-    sim = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "crates" / "sim" / "src").rglob("*.rs"))
+    def code_lines(text):
+        # A code only listed without behaviour (status `Listed`, or a table of listed-only order ids) does not count.
+        out, skip = [], False
+        for line in text.splitlines():
+            if "_LISTED" in line and "&[" in line:
+                skip = True
+            if skip:
+                skip = not line.strip().startswith("];")
+                continue
+            if line.rstrip().endswith("Listed),"):
+                continue
+            out.append(line)
+        return "\n".join(out)
+    sim = "\n".join(code_lines(p.read_text(encoding="utf-8", errors="replace"))
+                    for p in (ROOT / "crates" / "sim" / "src").rglob("*.rs"))
     codes = [l.split("\t")[0] for l in (ROOT / "docs" / "spec" / "ability_factory_1.26a.tsv").read_text(encoding="utf-8").splitlines()
              if l.strip() and not l.startswith("#")]
     abilities = sum(1 for c in codes if re.search("[\"']" + re.escape(c) + "[\"']", sim))
