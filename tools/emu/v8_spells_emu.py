@@ -179,6 +179,74 @@ def check_dot_tick(cases, r, rows):
                        rd(CAP + 0x1CC), rd(CAP + 0x100)])
 
 
+VT_POLY_BUFF = 0x6F89C374
+
+
+def check_polymorph_morph(cases, r, rows):
+    """Polymorph effect 0x6F12F560 (real) -> slot 0x43C 0x6F13F790 -> 0x6F13F710 (real) -> new CBuffPolymorph apply slot 0x358
+    0x6F12A0B0 (real). Stubs: pick 0x6F12DAA0 (returns a case value), the buff lookup, the factory 0x6F13B100, the type swap request
+    0x6F2AB3E0, the duration setter 0x6F0D28F0, timers, registration, the illusion removal 0x6F2A4B80, 0x6F0767F0 and the target
+    readers 0x6F2A0210 / 0x6F079520. Rows: dur herodur data_x illusion hero movement existing type unit_flags | pick calls |
+    existing refresh calls | new apply: target, type stored (+0xE0), flags (+0x20), +0xE4, +0xE8, +0x114 | duration setter args |
+    timer delay | morph request calls, arg."""
+    S.install()
+    A.patch_jump(0x6F2835A0, A.stub_ret(0x10, 0))
+    A.patch_jump(0x6F0405D0, A.stub_ret(0xC, 0))
+    V4.ret_var(0x6F1D2660, 0, 4)
+    V4.ret_var(0x6F12DAA0, 8, 0x28)
+    A.patch_jump(0x6F0787D0, new_code(b"\xA1" + a32(VARS + 8) + b"\xC2\x14\x00"))
+    A.patch_jump(0x6F113D80, A.stub_ret(0, 0))
+    A.patch_jump(0x6F0419C0, A.stub_ret(4, 0))
+    A.patch_jump(0x6F079CA0, recorder(0x140, [], 4, counter=0x1E4))
+    A.patch_jump(0x6F2A0210, A.stub_ret(0, 0x1234))
+    A.patch_jump(0x6F079520, A.stub_ret(4, 0x4321))
+    A.patch_jump(0x6F0D28F0, recorder(0x150, [(0, False), (1, True)], 8, counter=0x1E8))
+    A.patch_jump(0x6F2A4B80, A.stub_ret(4, 0))
+    A.patch_jump(0x6F0767F0, A.stub_ret(0x10, 0))
+    A.patch_jump(0x6F4778F0, recorder(0x160, [(0, True)], 0x14, counter=0x1EC))
+    A.patch_jump(0x6F2AB3E0, recorder(0x170, [(0, False)], 8, regs=True, counter=0x1F0))
+    A.patch_jump(0x6F13B100, A.stub_ret(0, BUFF))
+    # the refresh slot 0x350 of an existing buff and the base setters (slot 0x324)
+    ex_vt = S.M + 0x5C00
+    mu.mem_write(ex_vt, b"\0" * 0x400)
+    wr(ex_vt + 0x350, recorder(0x1A0, [(0, False), (1, False)], 8, counter=0x1F4))
+    ex_buff = S.M + 0x5A00
+    s124 = recorder(0x1B0, [(0, True)], 4, counter=0x1F8)
+    s324p = A.stub_ret(4, 0)
+    for _ in range(cases):
+        dur, hdur, dx = rbits(r), rbits(r), rbits(r)
+        ill = r.random() < 0.2
+        hero = r.random() < 0.5
+        mv = r.choice([1, 2, 4, 8, 0x10, 0x20, 0, 3, 0x30])
+        existing = r.random() < 0.3
+        typ = r.getrandbits(32) | 1
+        uflags = r.choice([0, 2, 8, 0x20, 0x2A, r.getrandbits(8)])
+        V4.A.make_ability(V4.VT_POLY_ABIL, V4.ABIL_POLY, 75)
+        level(A.LVL, dur, hdur, [dx])
+        for off in (0x04, 0x10, 0x14, 0x18, 0x1C, 0x44):
+            wr(A.LVL + off, rbits(r))
+        S.make_target(False)
+        wr(TGT + 0x5C, 0x40000000 if ill else 0)
+        wr(TGT + 0x1FC, mv)
+        wr(TGT + 0x248, uflags)
+        mu.mem_write(V4.VTT, b"\0" * 0x200)
+        wr(TGT, V4.VTT)
+        wr(V4.VTT + 0x124, s124)
+        mu.mem_write(ex_buff, b"\0" * 0x100)
+        wr(ex_buff, ex_vt)
+        S.make_buff(VT_POLY_BUFF, (), (), {0x324: s324p})
+        wr(VARS + 4, int(hero))
+        wr(VARS + 8, ex_buff if existing else 0)
+        wr(VARS + 0x28, typ)
+        S.clear_cap()
+        S.call(0x6F12F560, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append([dur, hdur, dx, int(ill), int(hero), mv, int(existing), typ, uflags, rd(CAP + 0x1F8), rd(CAP + 0x1B0),
+                     rd(CAP + 0x1F4), rd(CAP + 0x1A0), rd(CAP + 0x1A4), rd(CAP + 0x1E4), rd(BUFF + 0xE0), rd(BUFF + 0x20),
+                     rd(BUFF + 0xE4), rd(BUFF + 0xE8), rd(BUFF + 0x114), rd(CAP + 0x1E8), rd(CAP + 0x150), rd(CAP + 0x154),
+                     rd(CAP + 0x1EC), rd(CAP + 0x160), rd(CAP + 0x1F0), rd(CAP + 0x170), rd(CAP + 0x174), rd(CAP + 0x178)]
+                    + [rd(A.LVL + o) for o in (0x04, 0x10, 0x14, 0x18, 0x1C, 0x44)])
+
+
 VT_SHIELD_BUFF = 0x6F8CF344
 
 
@@ -242,6 +310,7 @@ def check_shield_victim(cases, r, rows):
 
 
 CHECKS = {
+    "polymorph_morph": check_polymorph_morph,
     "shield_victim": check_shield_victim,
     "roar_unit": check_roar_unit,
     "unholy_buff": check_unholy_buff,
@@ -265,7 +334,13 @@ def main():
             continue
         r = random.Random(seed)
         rows = []
-        fn(cases, r, rows)
+        ring = V4._trace_install() if os.environ.get("V4_TRACE") else None
+        try:
+            fn(cases, r, rows)
+        except Exception:
+            if ring:
+                sys.stderr.write("last: %s\n" % " ".join("%x" % a for a in ring))
+            raise
         print("%s rows %d" % (name, len(rows)))
         for row in rows[:5]:
             print(" ".join("%08x" % x for x in row))

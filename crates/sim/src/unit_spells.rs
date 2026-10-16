@@ -1667,7 +1667,9 @@ fn polymorph(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, ta
             }
         } else {
             let hero = gm.target_hero(target);
-            let dur = effect_duration(&rec.level, hero, F32::ZERO);
+            // The buff lasts `Dur + Cast` (`polymorph_apply_plan`); the original swaps the type `Cast` seconds (0.01 s when 0)
+            // after the apply, the model swaps at once (UNSURE: nothing observable differs for Cast = 0).
+            let (dur, _delay, _flags) = polymorph_apply_plan(effect_duration(&rec.level, hero, F32::ZERO), rec.level.cast, 0);
             if !arith::lt(F32::ZERO, dur) {
                 return;
             }
@@ -1681,12 +1683,27 @@ fn polymorph(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, ta
                 0x20 => 2,
                 _ => 0,
             };
-            let sheep = if gm.spells.unit.sheep[class] != 0 { gm.spells.unit.sheep[class] } else { SHEEP[class] };
-            // The type pick draws one die of one side (index 0) on stream 24 whatever the list length.
-            if let Some((table, streams)) = gm.rng_parts() {
-                let _ = crate::damage::roll_total(streams.stream_mut(POLYMORPH_STREAM), table, 1, 1, -1);
-            }
-            gm.morph_unit(target, sheep);
+            let fallback = if gm.spells.unit.sheep[class] != 0 { gm.spells.unit.sheep[class] } else { SHEEP[class] };
+            // The type pick is the routine Hex shares (`0x6F12DAA0`, CONFIRMED by Unicorn): one die of n sides on stream 24 over
+            // the known types of the ability's list for the target's movement class (`DataB`..`DataE`, or the class default).
+            let level_index = usize::try_from(gm.unit(rec.caster).abilities.get(POLYMORPH).map_or(0, |a| a.level_index)).unwrap_or(0);
+            let list = gm.orc_list(POLYMORPH, level_index, crate::orc::polymorph_data_column(movement));
+            let known: std::collections::BTreeSet<u32> = crate::orc::polymorph_tokens(list.as_deref().unwrap_or(""))
+                .into_iter()
+                .chain(crate::orc::polymorph_tokens(crate::orc::polymorph_default_list(movement)))
+                .filter(|&c| gm.unit_types().get(c).is_some())
+                .collect();
+            let picked = match gm.rng_parts() {
+                Some((table, streams)) => crate::orc::hex_pick(
+                    streams.stream_mut(POLYMORPH_STREAM),
+                    table,
+                    movement,
+                    list.as_deref(),
+                    |c| known.contains(&c),
+                ),
+                None => None,
+            };
+            gm.morph_unit(target, picked.unwrap_or(fallback));
             let preds = crate::abilities::BuffPredicates {
                 negative: true,
                 magic: true,
@@ -2112,6 +2129,28 @@ pub fn polymorph_target_code(data_a: F32, creep_over: bool, summoned: bool) -> u
     } else {
         0
     }
+}
+
+/// The new-buff apply of `CBuffPolymorph` (slot `0x358` = `0x6F12A0B0`, reached through the ability's slot `0x43C` = `0x6F13F790` ->
+/// `0x6F13F710`; CONFIRMED, **Unicorn V8**, `tools/emu/v8_spells_emu.py` check `polymorph_morph`, the whole chain from the effect
+/// `0x6F12F560` with stubs only for the world). Returns `(buff duration, delay of the morph timer, buff flags)`: the duration handed to
+/// the set-duration routine `0x6F0D28F0` is `add(effect duration, Cast)`; the one-shot timer `0xD01C1` (which swaps the type) is armed with
+/// `Cast`, or 0.01 s when `Cast` equals zero (an unordered value keeps itself); the buff flags are `0x10400` plus `0x800` / `0x1000` /
+/// `0x4000` for the target's `+0x248` bits `0x20` / `0x2` / `0x8`. The type pick is the shared `0x6F12DAA0` (see [`crate::orc::hex_pick`]).
+pub fn polymorph_apply_plan(dur: F32, cast: F32, unit_flags: u32) -> (F32, F32, u32) {
+    let total = arith::add(dur, cast);
+    let delay = if cast.to_f32() == 0.0 { F32::from_bits(TICK_FIRST_DELAY_BITS) } else { cast };
+    let mut flags = 0x10400;
+    if unit_flags & 0x20 != 0 {
+        flags |= 0x800;
+    }
+    if unit_flags & 0x2 != 0 {
+        flags |= 0x1000;
+    }
+    if unit_flags & 0x8 != 0 {
+        flags |= 0x4000;
+    }
+    (total, delay, flags)
 }
 
 /// What Polymorph's effect `0x6F12F560` does with a target (CONFIRMED by Unicorn, V4): an illusion is killed through

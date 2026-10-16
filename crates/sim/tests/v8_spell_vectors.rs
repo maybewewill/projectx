@@ -127,6 +127,43 @@ fn lightning_shield_victim_matches_the_original() {
 }
 
 #[test]
+fn polymorph_morph_matches_the_original() {
+    // 0..9: dur herodur DataA illusion hero movement existing type unit_flags | 9 slot-0x124 calls | 11 refresh calls |
+    // 14 registrations | 15 stored type, 16 buff flags | 20 duration setter calls, 22 duration | 23 timer calls, 24 delay |
+    // 25 morph request calls | 29 Cast
+    let rows = hex_rows(include_str!("data/unit_spells/polymorph_morph.txt"));
+    assert!(rows.len() >= 300);
+    let (mut illusions, mut refreshed, mut morphed, mut zero_cast) = (0, 0, 0, 0);
+    for r in &rows {
+        let l = level(r[0], r[1], &[r[2]]);
+        match polymorph_effect_duration(&l, r[4] != 0, r[3] != 0) {
+            None => {
+                illusions += 1;
+                assert_eq!((r[9], r[11], r[14], r[20], r[25]), (1, 0, 0, 0, 0), "illusion, row {:08x?}", r);
+            }
+            Some(d) if r[6] != 0 => {
+                refreshed += 1;
+                assert_eq!((r[9], r[11], r[14], r[20], r[25]), (0, 1, 0, 0, 0), "refresh, row {:08x?}", r);
+                let _ = d;
+            }
+            Some(d) => {
+                morphed += 1;
+                let (total, delay, flags) = polymorph_apply_plan(d, f(r[29]), r[8]);
+                assert_eq!((r[9], r[11], r[14], r[20], r[23], r[25]), (0, 0, 1, 1, 1, 1), "new buff, row {:08x?}", r);
+                assert_eq!(r[15], r[7], "stored type, row {:08x?}", r);
+                assert_eq!(r[22], total.to_bits(), "duration, row {:08x?}", r);
+                assert_eq!(r[24], delay.to_bits(), "morph delay, row {:08x?}", r);
+                assert_eq!(r[16], flags, "buff flags, row {:08x?}", r);
+                if r[29] & 0x7FFF_FFFF == 0 {
+                    zero_cast += 1;
+                }
+            }
+        }
+    }
+    assert!(illusions > 30 && refreshed > 30 && morphed > 150 && zero_cast > 0, "{illusions} {refreshed} {morphed} {zero_cast}");
+}
+
+#[test]
 fn dot_tick_matches_the_original() {
     // 0..13: amount class misc imm_magic imm_phys busl s368 bonus buff_flags f4 f0 life0 life1 | 13 damage calls (slot 0x120),
     // 14 builder calls | 15, 16 builder ecx edx | 17 amount, 18 class, 19 source, 20 flag bits, 21 zero | 22 buff flags at the damage
