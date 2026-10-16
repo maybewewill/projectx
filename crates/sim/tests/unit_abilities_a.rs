@@ -219,3 +219,163 @@ fn war_drums_raise_the_damage_of_friends() {
     assert!(!has_buff(&h, foe, BUFF_WAR_DRUMS));
     assert!((h.game().unit(near).bonuses.damage_pct.to_f32() - 0.1).abs() < 1e-6);
 }
+
+// ---- cargo ----
+
+const CARGO_SRC: &str = r#"
+function give_cargo takes nothing returns nothing
+    call UnitAddAbility(src, 'Acar')
+    call UnitAddAbility(src, 'Aloa')
+    call UnitAddAbility(src, 'Adri')
+    call UnitAddAbility(src, 'Adro')
+endfunction
+function load_near takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852046, near)
+endfunction
+function load_mate takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852046, mate)
+endfunction
+function load_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852046, foe)
+endfunction
+function unload_all takes nothing returns nothing
+    set accepted = IssueImmediateOrderById(src, 852049)
+endfunction
+function kill_src takes nothing returns nothing
+    call SetWidgetLife(src, 0.0)
+endfunction
+function give_death_hold takes nothing returns nothing
+    call UnitAddAbility(src, 'Achd')
+endfunction
+function give_devour takes nothing returns nothing
+    call UnitAddAbility(src, 'Adev')
+    call UnitAddAbility(src, 'Advc')
+endfunction
+function devour_foe takes nothing returns nothing
+    set accepted = IssueTargetOrderById(src, 852104, foe)
+endfunction
+"#;
+
+fn cargo_host() -> ScriptHost {
+    let full = format!("{PRELUDE}\n{SRC}\n{CARGO_SRC}");
+    let prog = jass::parse(&full).expect("parse");
+    let module = compile(&[prog]).expect("compile");
+    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), None).expect("vm");
+    {
+        let mut g = h.game_mut();
+        g.unit_types_mut().insert(
+            FOOT,
+            UnitType {
+                name: "Footman".to_string(),
+                max_life: f(1000.0),
+                max_mana: f(200.0),
+                move_speed: f(270.0),
+                ..Default::default()
+            },
+        );
+        for (c, l) in [
+            (code(b"Acar"), level(0.0, &[2.0])),
+            (code(b"Achd"), level(0.0, &[10.0])),
+            (code(b"Advc"), level(0.0, &[2.0, 5.0, 5.0])),
+            (code(b"Aloa"), SpellLevel { rng: f(400.0), ..level(0.0, &[]) }),
+            (code(b"Adev"), SpellLevel { rng: f(400.0), ..level(0.0, &[5.0]) }),
+            (code(b"Adri"), level(0.0, &[])),
+            (code(b"Adro"), level(0.0, &[])),
+        ] {
+            g.ability_types_mut().insert(c, AbilityType { max_level: Some(1) });
+            g.set_spell_levels(c, vec![l]);
+        }
+    }
+    h
+}
+
+fn cargo_started() -> ScriptHost {
+    let mut h = cargo_host();
+    call(&mut h, "setup");
+    run(&mut h, 1);
+    call(&mut h, "give_cargo");
+    run(&mut h, 1);
+    h
+}
+
+fn accepted(h: &ScriptHost) -> bool {
+    h.vm().global("accepted").and_then(|v| v.as_boolean()).expect("boolean global")
+}
+
+#[test]
+fn load_fills_the_hold_up_to_its_capacity_and_unload_all_empties_it() {
+    let mut h = cargo_started();
+    let (src, near, mate, foe) = (unit(&h, "src"), unit(&h, "near"), unit(&h, "mate"), unit(&h, "foe"));
+    assert_eq!(h.game().cargo_capacity(src), 2);
+    call(&mut h, "load_near");
+    run(&mut h, 2);
+    assert!(accepted(&h));
+    assert_eq!(h.game().carrier_of(near), Some(src));
+    assert!(h.game().unit(near).loaded);
+    call(&mut h, "load_mate");
+    run(&mut h, 2);
+    assert_eq!(h.game().cargo_of(src), &[near, mate]);
+    // an enemy is no friend; a full hold refuses
+    call(&mut h, "load_foe");
+    run(&mut h, 2);
+    assert!(!accepted(&h));
+    call(&mut h, "unload_all");
+    run(&mut h, 2);
+    assert!(h.game().cargo_of(src).is_empty());
+    assert!(!h.game().unit(near).loaded && !h.game().unit(mate).loaded);
+    assert_eq!(h.game().carrier_of(near), None);
+    // the two come out on the first two ring slots, 96 units from the holder
+    let g = h.game();
+    let (sx, sy) = (g.unit(src).x.to_f32(), g.unit(src).y.to_f32());
+    let n = g.unit(near);
+    assert!(((n.x.to_f32() - sx) - 96.0).abs() < 0.01 && (n.y.to_f32() - sy).abs() < 0.01);
+    let m = g.unit(mate);
+    assert!((m.x.to_f32() - sx).abs() < 0.01 && ((m.y.to_f32() - sy) - 96.0).abs() < 0.01);
+}
+
+#[test]
+fn a_dying_death_hold_takes_the_cargo_with_it_and_a_plain_hold_lets_it_out() {
+    let mut h = cargo_started();
+    let (src, near) = (unit(&h, "src"), unit(&h, "near"));
+    call(&mut h, "load_near");
+    run(&mut h, 2);
+    call(&mut h, "kill_src");
+    run(&mut h, 8);
+    assert!(h.game().cargo_of(src).is_empty());
+    assert!(!h.game().unit(near).dead, "a plain hold frees its cargo");
+    assert!(!h.game().unit(near).loaded);
+
+    let mut h = cargo_started();
+    let (src, near) = (unit(&h, "src"), unit(&h, "near"));
+    call(&mut h, "give_death_hold");
+    run(&mut h, 1);
+    call(&mut h, "load_near");
+    run(&mut h, 2);
+    call(&mut h, "kill_src");
+    run(&mut h, 8);
+    assert!(h.game().cargo_of(src).is_empty());
+    assert!(h.game().unit(near).dead, "the death hold kills its cargo");
+}
+
+#[test]
+fn devour_digests_the_target_until_it_dies() {
+    let mut h = cargo_host();
+    call(&mut h, "setup");
+    run(&mut h, 1);
+    call(&mut h, "give_devour");
+    run(&mut h, 1);
+    let (src, foe) = (unit(&h, "src"), unit(&h, "foe"));
+    h.game_mut().write_life(foe, f(20.0));
+    call(&mut h, "devour_foe");
+    run(&mut h, 2);
+    assert!(accepted(&h));
+    assert_eq!(h.game().carrier_of(foe), Some(src));
+    assert!(has_buff(&h, foe, BUFF_DEVOURED) && has_buff(&h, src, BUFF_DIGEST));
+    // 5 per second: three ticks leave 5 life, the fourth kills.
+    run(&mut h, 35);
+    assert!(!h.game().unit(foe).dead);
+    assert!((h.game().unit(foe).life.to_f32() - 5.0).abs() < 0.01);
+    run(&mut h, 10);
+    assert!(h.game().unit(foe).dead);
+    assert!(h.game().cargo_of(src).is_empty());
+}

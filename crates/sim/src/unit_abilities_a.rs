@@ -201,6 +201,10 @@ pub struct State {
     morphing: BTreeMap<ObjKey, (u32, u32)>,
     /// Digestion records of devoured units: passenger -> (devourer, damage per second).
     digest: BTreeMap<ObjKey, (ObjKey, F32)>,
+    /// Running cargo upkeep timers (death and cleanup check), by holder.
+    cargo_timers: BTreeMap<ObjKey, TimerId>,
+    /// Running digestion timers, by devourer.
+    digesters: BTreeMap<ObjKey, TimerId>,
 }
 
 fn aura_def(base: u32) -> Option<(u32, &'static str)> {
@@ -339,27 +343,73 @@ impl Game {
     }
 }
 
+
 /// Order ids this batch adds: `(order id, ability)`.
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
-    let _ = ids;
+    for (id, base) in [
+        (ORDER_LOAD, LOAD),
+        (ORDER_DROP, DROP),
+        (ORDER_DROP_INSTANT, DROP_INSTANT),
+        (ORDER_DEVOUR, DEVOUR),
+    ] {
+        ids.insert(id, base);
+    }
 }
 
 /// Abilities of this batch cast without a target.
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    let _ = base;
-    false
+    matches!(base, DROP | DROP_INSTANT)
 }
 
 /// Extra target rules (called after the earlier modules' rules).
 pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
-    let _ = (gm, caster, base, target);
-    None
+    match base {
+        LOAD => {
+            // targs: ground,friend,invu,vuln (`Aloa` row).
+            let w = targs_word("ground,friend,invu,vuln");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            (!gm.can_load(caster, target)).then_some(CastError::BadTarget)
+        }
+        DEVOUR => {
+            let w = targs_word("ground,nonhero,enemy,organic,neutral");
+            if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
+                return Some(CastError::BadTarget);
+            }
+            (!gm.can_load(caster, target)).then_some(CastError::BadTarget)
+        }
+        _ => None,
+    }
 }
 
 /// The class effects of this batch. Returns false for any other ability.
 pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
-    let _ = (game, rt, rec);
-    false
+    match rec.base {
+        LOAD | DEVOUR => {
+            if let CastTarget::Unit(t) = rec.target {
+                let mut gm = game.borrow_mut();
+                if gm.load_unit(rec.caster, t) && rec.base == DEVOUR {
+                    gm.start_digestion(rec.caster, t);
+                }
+            }
+            true
+        }
+        DROP | DROP_INSTANT => {
+            let mut gm = game.borrow_mut();
+            match (rec.base, rec.target) {
+                (DROP, CastTarget::Unit(t)) => {
+                    gm.unload_unit(rec.caster, t);
+                }
+                _ => gm.unload_all(rec.caster),
+            }
+            true
+        }
+        _ => {
+            let _ = rt;
+            false
+        }
+    }
 }
 
 /// Immediate orders of this batch (toggles, unloading). `None` when `id` is not one of them.
@@ -370,19 +420,244 @@ pub(crate) fn immediate_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Op
 
 /// Timer dispatch for `kind >= 0x40`.
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, aux: u32) {
-    let _ = (rt, aux);
-    let mut gm = game.borrow_mut();
-    if kind == KIND_AURA_SCAN {
-        gm.a_aura_scan(unit, base);
+    let _ = aux;
+    match kind {
+        KIND_AURA_SCAN => game.borrow_mut().a_aura_scan(unit, base),
+        KIND_CARGO => {
+            let dead = game.borrow_mut().cargo_upkeep(unit);
+            for (victim, killer) in dead {
+                crate::natives::dispatch_unit_death_by(game, rt, victim, killer);
+            }
+        }
+        KIND_DIGEST => {
+            let dead = game.borrow_mut().digest_tick(unit);
+            for (victim, killer) in dead {
+                crate::natives::dispatch_unit_death_by(game, rt, victim, killer);
+            }
+        }
+        _ => {}
     }
 }
 
-impl Game {
-    fn sync_cargo_and_detect(&mut self, _unit: ObjKey) {}
-    fn sync_ghosts(&mut self, _unit: ObjKey) {}
-}
+// ---- cargo (Acar, Abun, Aenc, Advc, Achd, Aloa, Adro, Adri, Adev) ----
 
-#[allow(dead_code)]
-fn unused(_: CastTarget, _: i32) -> i32 {
-    conv::f2i(F32::ZERO)
+pub const CARGO_HOLD: u32 = code(b"Acar");
+pub const BUNKER: u32 = code(b"Abun");
+pub const ENTANGLE_CARGO: u32 = code(b"Aenc");
+pub const DEVOUR_CARGO: u32 = code(b"Advc");
+pub const CARGO_DEATH: u32 = code(b"Achd");
+pub const LOAD: u32 = code(b"Aloa");
+pub const DROP: u32 = code(b"Adro");
+pub const DROP_INSTANT: u32 = code(b"Adri");
+pub const DEVOUR: u32 = code(b"Adev");
+pub const BUFF_DIGEST: u32 = code(b"Bdig");
+pub const BUFF_DEVOURED: u32 = code(b"Bdvv");
+pub const KIND_CARGO: u8 = 0x44;
+const HOLDS: [u32; 5] = [CARGO_HOLD, BUNKER, ENTANGLE_CARGO, DEVOUR_CARGO, CARGO_DEATH];
+/// The upkeep period of the cargo list (dead holders and passengers are noticed within it; a model choice).
+const CARGO_PERIOD: f32 = 0.5;
+/// The digestion tick of a devour hold (1 s, the period of `CBuffDoT` in `unit_spells.rs`).
+const DIGEST_PERIOD: f32 = 1.0;
+/// The ring the unloaded units are put on, in unit directions (UNSURE: the original searches free spots).
+const RING: [(f32, f32); 8] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)];
+
+impl Game {
+    /// The cargo capacity of `holder`: the `DataA` (number of units) of its hold abilities (LIKELY: editor labels
+    /// "Cargo Hold: capacity"; the rows give 4 for the burrow, 5 for the entangled mine, 2 for the devour stomach).
+    pub fn cargo_capacity(&self, holder: ObjKey) -> i32 {
+        HOLDS
+            .iter()
+            .filter(|&&c| self.unit(holder).abilities.get(c).is_some_and(|a| !a.is_removed()))
+            .map(|&c| conv::f2i(self.spell_level(holder, c).data[0]).max(0))
+            .sum()
+    }
+
+    /// The units carried by `holder`, in load order.
+    pub fn cargo_of(&self, holder: ObjKey) -> &[ObjKey] {
+        self.spells.unit_a.cargo.get(&holder).map_or(&[], |v| v.as_slice())
+    }
+
+    /// The holder `unit` is inside.
+    pub fn carrier_of(&self, unit: ObjKey) -> Option<ObjKey> {
+        self.spells.unit_a.carried.get(&unit).copied()
+    }
+
+    /// Whether `holder` can take `unit` now.
+    pub fn can_load(&self, holder: ObjKey, unit: ObjKey) -> bool {
+        if holder == unit || !self.alive(holder) || !self.alive(unit) {
+            return false;
+        }
+        if self.spells.unit_a.carried.contains_key(&unit) || self.unit(unit).loaded {
+            return false;
+        }
+        let u = self.unit(unit);
+        if crate::natives::unit_attr::is_unit_type(self, u, crate::unitclass::ty::STRUCTURE) {
+            return false;
+        }
+        (self.cargo_of(holder).len() as i32) < self.cargo_capacity(holder)
+    }
+
+    /// Puts `unit` into `holder`. The passenger takes the holder's position and carries the loaded flag
+    /// (`IsUnitLoaded`); it is not simulated while inside (the aura emitters stop on a loaded source, CONFIRMED in
+    /// `auras.rs`). Returns whether the load happened.
+    pub fn load_unit(&mut self, holder: ObjKey, unit: ObjKey) -> bool {
+        if !self.can_load(holder, unit) {
+            return false;
+        }
+        self.spells.unit_a.cargo.entry(holder).or_default().push(unit);
+        self.spells.unit_a.carried.insert(unit, holder);
+        let (x, y) = (self.unit(holder).x, self.unit(holder).y);
+        self.store_unit_position(unit, x, y);
+        self.unit_mut(unit).loaded = true;
+        if !self.spells.unit_a.cargo_timers.contains_key(&holder) {
+            let id = self.timers.start(
+                CARGO_PERIOD,
+                true,
+                Payload::Spell(SpellMsg::UnitSpell { kind: KIND_CARGO, unit: holder, base: 0, aux: 0 }),
+            );
+            self.spells.unit_a.cargo_timers.insert(holder, id);
+        }
+        true
+    }
+
+    fn drop_record(&mut self, holder: ObjKey, unit: ObjKey) {
+        if let Some(v) = self.spells.unit_a.cargo.get_mut(&holder) {
+            v.retain(|&k| k != unit);
+        }
+        self.spells.unit_a.carried.remove(&unit);
+        self.spells.unit_a.digest.remove(&unit);
+        if self.unit(unit).loaded {
+            self.unit_mut(unit).loaded = false;
+        }
+        self.remove_buff_code(unit, BUFF_DEVOURED);
+        if self.spells.unit_a.cargo.get(&holder).is_some_and(|v| v.is_empty()) {
+            self.spells.unit_a.cargo.remove(&holder);
+            if let Some(id) = self.spells.unit_a.cargo_timers.remove(&holder) {
+                self.timers.cancel(id);
+            }
+            if let Some(id) = self.spells.unit_a.digesters.remove(&holder) {
+                self.timers.cancel(id);
+            }
+            self.remove_buff_code(holder, BUFF_DIGEST);
+        }
+    }
+
+    /// Takes `unit` out of `holder` and puts it on the ring around the holder, `n` slots in.
+    fn unload_at(&mut self, holder: ObjKey, unit: ObjKey, n: usize) {
+        let (hx, hy) = (self.unit(holder).x, self.unit(holder).y);
+        self.drop_record(holder, unit);
+        let (dx, dy) = RING[n % 8];
+        let radius = 96.0 + 48.0 * (n / 8) as f32;
+        let x = arith::add(hx, F32::from_bits((dx * radius).to_bits()));
+        let y = arith::add(hy, F32::from_bits((dy * radius).to_bits()));
+        self.store_unit_position(unit, x, y);
+    }
+
+    /// Unloads one passenger. Returns whether it was inside.
+    pub fn unload_unit(&mut self, holder: ObjKey, unit: ObjKey) -> bool {
+        if self.carrier_of(unit) != Some(holder) {
+            return false;
+        }
+        self.unload_at(holder, unit, 0);
+        true
+    }
+
+    /// Unloads every passenger (`Adri`).
+    pub fn unload_all(&mut self, holder: ObjKey) {
+        let all: Vec<ObjKey> = self.cargo_of(holder).to_vec();
+        for (n, k) in all.into_iter().enumerate() {
+            self.unload_at(holder, k, n);
+        }
+    }
+
+    /// The periodic check of a cargo list: passengers that died or were removed leave it; when the holder died or
+    /// vanished the cargo is freed (`Achd`, the death hold: the passengers die with it; UNSURE) or unloaded around the
+    /// holder's last position. Returns the units to run the death dispatch for.
+    fn cargo_upkeep(&mut self, holder: ObjKey) -> Vec<(ObjKey, Option<ObjKey>)> {
+        let mut dead = Vec::new();
+        let list: Vec<ObjKey> = self.cargo_of(holder).to_vec();
+        for &p in &list {
+            if !self.alive(p) {
+                self.drop_record(holder, p);
+            }
+        }
+        if !self.alive(holder) {
+            let kills = self.unit(holder).abilities.get(CARGO_DEATH).is_some();
+            let rest: Vec<ObjKey> = self.cargo_of(holder).to_vec();
+            if kills {
+                for p in rest {
+                    self.drop_record(holder, p);
+                    if crate::natives::set_life(self, p, F32::ZERO) {
+                        dead.push((p, None));
+                    }
+                }
+            } else {
+                for (n, p) in rest.into_iter().enumerate() {
+                    self.unload_at(holder, p, n);
+                }
+            }
+        }
+        if self.cargo_of(holder).is_empty() {
+            if let Some(id) = self.spells.unit_a.cargo_timers.remove(&holder) {
+                self.timers.cancel(id);
+            }
+        }
+        dead
+    }
+
+    /// Starts the digestion of a devoured unit: the buffs `Bdvv` (devoured) and `Bdig` (digesting) and the 1 s damage
+    /// tick of the devourer (`Advc` `DataB`, taken as the damage per second; UNSURE).
+    fn start_digestion(&mut self, devourer: ObjKey, victim: ObjKey) {
+        let per_second = self.spell_level(devourer, DEVOUR_CARGO).data[1];
+        self.spells.unit_a.digest.insert(victim, (devourer, per_second));
+        let neg = BuffPredicates { negative: true, ..buff_predicates(BUFF_DEVOURED) };
+        self.apply_mods_buff(victim, BUFF_DEVOURED, neg, UnitMods::default(), F32::ZERO);
+        let pos = buff_predicates(BUFF_DIGEST);
+        self.apply_mods_buff(devourer, BUFF_DIGEST, pos, UnitMods::default(), F32::ZERO);
+        if !self.spells.unit_a.digesters.contains_key(&devourer) {
+            let id = self.timers.start(
+                DIGEST_PERIOD,
+                true,
+                Payload::Spell(SpellMsg::UnitSpell { kind: KIND_DIGEST, unit: devourer, base: 0, aux: 0 }),
+            );
+            self.spells.unit_a.digesters.insert(devourer, id);
+        }
+    }
+
+    fn digest_tick(&mut self, devourer: ObjKey) -> Vec<(ObjKey, Option<ObjKey>)> {
+        let mut dead = Vec::new();
+        let victims: Vec<(ObjKey, F32)> = self
+            .spells
+            .unit_a
+            .digest
+            .iter()
+            .filter(|(_, (d, _))| *d == devourer)
+            .map(|(&k, &(_, a))| (k, a))
+            .collect();
+        for (v, amount) in victims {
+            if !self.alive(v) {
+                continue;
+            }
+            let life = self.unit(v).life;
+            let left = arith::sub(life, amount);
+            if !arith::lt(F32::ZERO, left) {
+                self.drop_record(devourer, v);
+                if crate::natives::set_life(self, v, F32::ZERO) {
+                    dead.push((v, Some(devourer)));
+                }
+            } else {
+                self.write_life(v, left);
+            }
+        }
+        dead
+    }
+
+    fn sync_cargo_and_detect(&mut self, unit: ObjKey) {
+        // A holder that lost its last hold ability lets its passengers out.
+        if !self.cargo_of(unit).is_empty() && self.cargo_capacity(unit) == 0 {
+            self.unload_all(unit);
+        }
+    }
+
+    fn sync_ghosts(&mut self, _unit: ObjKey) {}
 }
