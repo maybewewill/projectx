@@ -123,7 +123,7 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"AUdr", *b"AUfa", *b"AUfn", *b"AUfu", *b"Auhf", *b"AUim", *b"AUin", *b"AUsl", *b"AUts", *b"Aweb", *b"Ablo",
     *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
     *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm", *b"ANsg", *b"ANsq", *b"ANsw", *b"ANdh", *b"ANdb", *b"ANlm", *b"ANso", *b"ANab", *b"ANfl",
-    *b"ANtm", *b"ANdo", *b"ANcs", *b"ANhs",
+    *b"ANtm", *b"ANdo", *b"ANcs", *b"ANhs", *b"ANst", *b"ANvc",
 ];
 
 fn is_modelled(c: u32) -> bool {

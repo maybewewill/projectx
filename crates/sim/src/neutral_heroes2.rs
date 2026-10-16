@@ -53,12 +53,14 @@ pub struct State {
     doom: BTreeMap<ObjKey, DoomMark>,
     next: u32,
     pub(crate) waves: crate::neutral_waves::State,
+    pub(crate) rain: crate::neutral_rain::State,
 }
 
 pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ids.insert(ORDER_TRANSMUTE, TRANSMUTE);
     ids.insert(ORDER_DOOM, DOOM);
     crate::neutral_waves::register_orders(ids);
+    crate::neutral_rain::register_orders(ids);
 }
 
 /// Abilities of this batch that are cast without a target.
@@ -122,6 +124,10 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             crate::neutral_waves::start(game, rec);
             true
         }
+        b if crate::neutral_rain::is_rain_spell(b) => {
+            crate::neutral_rain::start(game, rec);
+            true
+        }
         _ => false,
     }
 }
@@ -130,18 +136,20 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, _unit: ObjKey, _base: u32, aux: u32) {
     match kind {
         crate::neutral_waves::KIND_WAVE => crate::neutral_waves::on_timer(game, rt, kind, aux),
+        crate::neutral_rain::KIND_STAMPEDE..=crate::neutral_rain::KIND_VOLCANO => crate::neutral_rain::on_timer(game, rt, kind, aux),
         _ => {}
     }
 }
 
 /// The channel time of the classes of this batch that set one.
 pub(crate) fn channel_time_override(base: u32, level: &SpellLevel) -> Option<F32> {
-    crate::neutral_waves::channel_time(base, level)
+    crate::neutral_waves::channel_time(base, level).or_else(|| crate::neutral_rain::channel_time(base, level))
 }
 
 /// The cast `rec` ended (`completed` false when an order interrupted it): the effects tied to the channel stop.
 pub(crate) fn on_cast_end(game: &RefCell<Game>, rec: &CastRec, completed: bool) {
     crate::neutral_waves::on_cast_end(game, rec, completed);
+    crate::neutral_rain::on_cast_end(game, rec);
 }
 
 /// A unit died (called by the death dispatch, after the unit is marked dead): the removal notifications of the buffs the

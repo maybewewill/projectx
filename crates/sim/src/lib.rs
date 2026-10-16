@@ -43,6 +43,7 @@ pub mod missiles;
 pub mod mover;
 pub mod movement;
 pub mod neutral_heroes2;
+pub mod neutral_rain;
 pub mod neutral_spells;
 pub mod neutral_waves;
 pub mod natives;

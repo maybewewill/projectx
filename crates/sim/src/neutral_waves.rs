@@ -34,7 +34,7 @@ pub const KIND_WAVE: u8 = 0x60;
 
 /// The damage type of the wave damage of Cluster Rockets (the neutral spell type; the effect's class word was not read,
 /// UNSURE).
-const WAVE_DAMAGE_TYPE: u32 = 15;
+pub(crate) const WAVE_DAMAGE_TYPE: u32 = 15;
 
 /// A wave effect of Cluster Rockets or Healing Spray (the effect objects `XNcs` / `XNhs`).
 #[derive(Debug, Clone, Copy)]
@@ -233,7 +233,7 @@ pub(crate) fn heal_unit(gm: &mut Game, unit: ObjKey, amount: F32) {
 /// The marker rule of `0x6F1AF950` / `0x6F1CADD0` (shared by the `CBuffAoe` family, as for Blizzard): a unit without the
 /// marker gets one that lasts `interval - 0.01` and takes the wave; a unit that has it takes none, and a larger value
 /// only replaces the stored one and refreshes the duration. Returns whether the unit takes this wave.
-fn wave_marker(game: &RefCell<Game>, unit: ObjKey, buff: u32, value: F32, interval: F32) -> bool {
+pub(crate) fn wave_marker(game: &RefCell<Game>, unit: ObjKey, buff: u32, value: F32, interval: F32) -> bool {
     let mut gm = game.borrow_mut();
     let dur = if arith::lt(F32::ZERO, interval) {
         arith::sub(interval, F32::from_bits(0x3C23_D70A))
