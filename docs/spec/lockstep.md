@@ -1562,9 +1562,12 @@ generators changed). `--pr-off MASK` switches the pathing-object hooks of the si
 * Pairs: the first mismatching pair is slot 1. The file has a tag-sized change at 0 to 1 (`0x000b7c00`) and a generator-sized change at 1 to 2
   (`0x07de1e40`); the sim draws the AI's first three `GetRandomInt` calls ((1,4), (1,3), (1,2)) during slot 0's ticks (so the change is visible at 1), the
   recorded game one slot later. The AI cadence (when the dispatcher first runs a thread) is the cause (11.5 is UNSURE).
-* Timelines (final run): generator events real 691 / sim 257; tag events real 1,180 slots / sim 3,094 (the sim registers about 2.6 times too often:
-  5,221 mover starts, 1,678 of them leg restarts, 132 unit creations; switching the hook classes off one by one moves the exact-pair count between
-  1,302 and 2,461 without ever predicting an event, so the pair count is not a score by itself); rand-sum events real 210 / sim 580.
+* Timelines (final run, `real matched` against the number expected if the simulated events were spread at random): generator events real 691 / sim 257,
+  matched 98 (chance 92); tag events real 1,180 slots / sim 3,094, matched 1,037 (chance 1,081); rand-sum events real 210 / sim 580, matched 81 (chance 60).
+  **The simulated hidden-word events are uncorrelated with the recorded ones** (the sim registers about 2.6 times too often: 5,221 mover starts, 1,678 of
+  them leg restarts, 132 unit creations; switching the hook classes off one by one moves the exact-pair count between 1,302 and 2,461 without ever
+  predicting an event, so the pair count alone is not a score; the AI cadence knobs `--ai-delay/--ai-period` move the generator matches between 4 and 24
+  of 103 in the first 150 s, against about 8 by chance: a 1.0 s period with phase 0 or 1 is the best of the ones tried, not proof).
 * Facts from the file worth keeping: (a) ~600 of the recorded changes are pure generator draws by signature but none matches the generator sequence of the
   record seed within 40 draws at any start (searched n < 300,000 for every event; the false-positive rate is high because hash differences are not
   uniform, so this is "not confirmed", not "refuted"; the seed link and the start state stay unchecked); (b) a human train order shows up as a change of

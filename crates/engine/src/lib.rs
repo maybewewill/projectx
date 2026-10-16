@@ -169,6 +169,10 @@ pub struct Engine {
     commands: CommandState,
     /// The 0x22 sync tracker (docs/spec/lockstep.md section 15): net checksum, tick clock and record rule.
     sync: sim::sync::SyncState,
+    /// The AI hosts run at every `ai_period`-th batch from batch `ai_delay` on (default 0 and 1: every batch, the model
+    /// of lockstep.md 11.5; `w3boot --ai-delay/--ai-period` for the replay oracle, section 18).
+    ai_delay: u64,
+    ai_period: u64,
 }
 
 /// What the AI host did, as the report shows it (see [`sim::ai::AiShared`] for the full logs).
@@ -472,6 +476,8 @@ impl Engine {
             economy,
             commands: CommandState::new(),
             sync: sim::sync::SyncState::new(),
+            ai_delay: 0,
+            ai_period: 1,
         };
         // Failures are kept in the status lines of the report, so the boot itself succeeds.
         let _ = engine.run_config();
@@ -488,6 +494,12 @@ impl Engine {
         let result = self.host.vm_mut().call("config", &[]).map(|_| ());
         self.config_status = describe(&result);
         result
+    }
+
+    /// Sets the AI cadence: the AI VMs run at batch `delay` and then every `period` batches (a period of 0 is read as 1).
+    pub fn set_ai_cadence(&mut self, delay: u64, period: u64) {
+        self.ai_delay = delay;
+        self.ai_period = period.max(1);
     }
 
     /// Runs `main` now, as the game does while loading, and cancels the deferred start of the first step.
@@ -536,7 +548,9 @@ impl Engine {
                     self.ai_row += 1;
                 }
                 let now = F32::from_bits(self.host.clock().now().to_bits());
-                self.ai.step(now);
+                if self.steps >= self.ai_delay && (self.steps - self.ai_delay) % self.ai_period == 0 {
+                    self.ai.step(now);
+                }
                 self.steps += 1;
             }
         }

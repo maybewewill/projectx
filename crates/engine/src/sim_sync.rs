@@ -132,8 +132,8 @@ impl SimSyncReport {
         for t in &self.timeline {
             let _ = writeln!(
                 s,
-                "    {:<15} real {:5}  sim {:5}  real matched {:5}  sim matched {:5}",
-                t.class, t.real, t.sim, t.real_matched, t.sim_matched
+                "    {:<15} real {:5}  sim {:5}  real matched {:5} (chance {:6.1})  sim matched {:5}",
+                t.class, t.real, t.sim, t.real_matched, t.chance, t.sim_matched
             );
         }
         let _ = writeln!(
@@ -205,7 +205,7 @@ pub fn classify(r: u32) -> Option<EventClass> {
 }
 
 /// One row of the event timeline comparison.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TimelineRow {
     pub class: &'static str,
     /// Events of this class in the file.
@@ -216,6 +216,9 @@ pub struct TimelineRow {
     pub real_matched: usize,
     /// Simulated events with a real event of this class nearby.
     pub sim_matched: usize,
+    /// Real events one would expect to match by chance if the simulated events were spread at random over the same
+    /// number of slots (so a match count near this value means no information).
+    pub chance: f64,
 }
 
 /// Which input a difference `d` looks like (see the module docs). `rand_rot` and `game_rot` are the rotations of
@@ -496,7 +499,9 @@ pub fn analyse(report: &mut SimSyncReport, recs: &[Rec], rand_rot: u32, game_rot
             } else {
                 (0, 0, 0)
             };
-            report.timeline.push(TimelineRow { class: class.name(), real, sim, real_matched, sim_matched });
+            let p = sim as f64 / n.max(1) as f64;
+            let chance = real as f64 * (1.0 - (1.0 - p).powi(3));
+            report.timeline.push(TimelineRow { class: class.name(), real, sim, real_matched, sim_matched, chance });
         }
     }
     if trace {

@@ -6,7 +6,7 @@
 //!        [--seed S] [--steps N] [--buildings] [--check-natives] map.w3x
 //! w3boot --replay FILE.w3g --check-sync
 //! w3boot --replay FILE.w3g --sim-sync [--sync-trace] [--sync-slots N] [--sync-after] [--sync-defer-main]
-//!        [--sync-constant K] [--pr-off MASK] --dll Game.dll --mpq ... MAP.w3x
+//!        [--sync-constant K] [--pr-off MASK] [--ai-delay N] [--ai-period N] --dll Game.dll --mpq ... MAP.w3x
 //! ```
 //!
 //! `--check-sync` needs no map or archives: it walks the replay's time slots and compares the stored 0x22 sync
@@ -52,6 +52,8 @@ struct Args {
     sync_constant: u32,
     sync_defer_main: bool,
     pr_off: u32,
+    ai_delay: u64,
+    ai_period: u64,
     steps: u64,
     /// `--wipe SLOT@STEP`: at STEP set the life of every structure of SLOT to zero (test aid for the melee defeat check).
     wipe: Vec<(u32, u64)>,
@@ -122,6 +124,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--sync-after" => args.sync_after = true,
             "--sync-defer-main" => args.sync_defer_main = true,
             "--pr-off" => args.pr_off = parse_seed(&value("--pr-off")?)?,
+            "--ai-delay" => {
+                let v = value("--ai-delay")?;
+                args.ai_delay = v.parse().map_err(|_| format!("--ai-delay: not a number: {v}"))?;
+            }
+            "--ai-period" => {
+                let v = value("--ai-period")?;
+                args.ai_period = v.parse().map_err(|_| format!("--ai-period: not a number: {v}"))?;
+            }
             "--sync-slots" => {
                 let v = value("--sync-slots")?;
                 args.sync_slots = v.parse().map_err(|_| format!("--sync-slots: not a number: {v}"))?;
@@ -208,6 +218,7 @@ fn run(argv: &[String]) -> Result<(), String> {
             defer_main: args.sync_defer_main,
         };
         engine.host().game_mut().set_pr_disabled(args.pr_off);
+        engine.set_ai_cadence(args.ai_delay, args.ai_period);
         let mut report = engine::sim_sync::run(&mut engine, &parsed, &opts);
         report.notes.extend(setup.notes.iter().cloned());
         print!("{}", report.render());
