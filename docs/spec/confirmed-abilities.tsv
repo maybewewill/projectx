@@ -22,3 +22,33 @@ AIra	tools/emu/v3_cores_emu.py RT	300	Restoration area callback 0x6F1E6130 (mode
 AIrg	tools/emu/v3_cores_emu.py RG	300	Regeneration scroll area callback 0x6F108800 only; buff tick behaviour still LIKELY
 ANms	tools/emu/v3_cores_emu.py MS+RR	600	Mana Shield damage hook 0x6F126DD0 (300) and record reduce 0x6F255790 (300); model rewritten to the original's order and clamps
 Awar	tools/emu/v3_cores_emu.py PR+PE	600	Pulverize execute ring arguments 0x6F1775F0 (300) and effective chance 0x6F163160 (300); swing-start gates and ring membership not run
+AHbh	tools/emu/human_heroes_emu.py	1200	V5 from spec abilities-human-heroes.md s9: Bash PRD effective chance 0x6F1A3470 (400), proc compare 0x6F01FD60 (400), stream-3 draw 0x6F2853D0 (400); attack-cycle call points not run
+AHbz	tools/emu/human_heroes2_emu.py + human_heroes3_emu.py	1600	V5 from spec s9/s14/s15: parameter hand-over 0x6F1B9E90 (400), shard placement 0x6F1AF6E0 (400), channel time (400), per-unit callback 0x6F1AF950 (400)
+AHmt	tools/emu/human_heroes2_emu.py + human_heroes3_emu.py	1200	V5 from spec s9/s16: sort comparator 0x6F026120 (400), channel delay level init 0x6F060AE0 (400), targs normaliser 0x6F2552F0 (400); placement not run
+AHre	tools/emu/human_heroes2_emu.py + human_heroes3_emu.py	800	V5 from spec s9/s17: sort comparator 0x6F19EA20 (400), corpse distance (400); hero corpse path not modelled
+AHbn	tools/emu/human_heroes3_emu.py	400	V5 from spec s17: Banish unit effect 0x6F1CA2B0 values (duration, move, attack)
+AHhb	tools/emu/undead_ne_emu.py	396	V5 from spec: heal/damage/nothing relation selector 0x6F08EAC0 with the Holy Light table 0x6F88E1D4 (relation.txt rows)
+AUdc	tools/emu/undead_ne_emu.py	404	V5 from spec: same selector with the Death Coil table 0x6F88E1F4 (relation.txt rows); amounts not run
+AOcr	tools/emu/crit_emu.py	800	V5 from spec abilities-orc-heroes.md s1.1: PRD lookup + effective chance (crit.txt rows)
+AOcl	tools/emu/chain_emu.py	800	V5 from spec s3.1: hop body 0x6F1C2F50 (400) + gate 0x6F1C3200 (400)
+AOmi	tools/emu/mirror_emu.py	1600	V5 from spec s5: slot pick stream 12, polygon offset, rotation, transform (4x400)
+AOhw	tools/emu/heal_emu.py	1600	V5 from spec: hop (400), gate (400), collector (800); Healing Wave = Chain Lightning class with heal flag
+AOwk	tools/emu/ww_emu.py + ww_ctor_emu.py	800	V5 from spec: first-strike handler (400) + arming (400); buff constructor traced in ww_ctor_emu
+AOww	tools/emu/bladetick_emu.py + bs_emu.py	800	V5 from spec: Bladestorm tick 0x6F1912A0 (400) + set-up (400); target filter by reading only
+AOws	tools/emu/stomp_emu.py	400	V5 from spec s13: per-unit body 0x6F1607B0 (shared with Thunder Clap) + area filter word
+AOsf	tools/emu/feral_emu.py	800	V5 from spec s14: effect 0x6F1DF330 (400) + placement (400)
+AOwd	tools/emu/ward_emu.py	400	V5 from spec s15: Serpent Ward point cast slot 0x418 (base code AOwd, hero row AOsw)
+AOhx	tools/emu/hex_emu.py	400	V5 from spec s16: Hex cast + creature pick incl. stream state
+AOeq	tools/emu/quake_emu.py	400	V5 from spec s20: Earthquake effect start 0x6F0C4420
+AOfs	tools/emu/farsight_emu.py	400	V5 from spec s21: Far Sight point slot 0x418 arguments
+AUfn	tools/emu/undead_ne3_emu.py (CHECK=frost)	400	V5 from spec: Frost Nova slow strengths and sign
+AEer	tools/emu/undead_ne3_emu.py (CHECK=pulse)	600	V5 from spec: Entangling Roots pulse period, amount, class, skip rules
+AUdp	tools/emu/undead_ne2_emu.py	500	V5 from spec: Death Pact effect 0x6F09FD50 (mana, heal, kill credit order)
+AEbl	tools/emu/undead_ne2_emu.py	500	V5 from spec: Blink validation 0x6F1AEB10 (placement query stubbed)
+AUav	tools/emu/undead_ne2_emu.py	500	V5 from spec: Vampiric Aura handler 0x6F1AD980
+AUcs	tools/emu/undead_ne4_emu.py (CHECK=launch,tick)	1000	V5 from spec S37: swath launch 0x6F1DD4F0 (400) + tick 0x6F1EF6D0 numerics (600); shared with AOsh
+AOsh	tools/emu/undead_ne4_emu.py (CHECK=launch,tick)	1000	V5 from spec S37: Shockwave = CMissileShockwave < CMissileCarrionSwarm, same swath engine runs
+AEsh	tools/emu/undead_ne4_emu.py (CHECK=decay,apply)	800	V5 from spec S37: slow decay slot 0x390 (400) + slow amounts 0x6F11BBF0 (400)
+AUin	tools/emu/undead_ne4_emu.py (CHECK=inferno)	320	V5 from spec S37: landing context roles 0x6F117B40
+AUdd	tools/emu/undead_ne4_emu.py (CHECK=dnd)	320	V5 from spec S37: victim pulse amount 0x6F098180
+AUim	tools/emu/undead_ne4_emu.py (CHECK=impale)	400	V5: Impale spike-line plan, slot 0x418 = 0x6F144810 (tests/undead_ne_s37_impale.rs)
