@@ -78,3 +78,41 @@ fn transmute_buff_amounts_match_the_original() {
     }
     assert!(gave > 150 && skipped > 20 && bountied > 20, "paths ({gave}, {skipped}, {bountied})");
 }
+
+#[test]
+fn creep_level_rule_matches_the_original() {
+    let rs = rows("CL");
+    assert!(rs.len() >= 300);
+    let (mut refused, mut kept, mut buffed) = (0, 0, 0);
+    for r in &rs {
+        // CL race tlevel buffcode blevel upper ill mhero munit max | refuses
+        let n = |i: usize| r[i].parse::<i32>().unwrap();
+        let (race, tlevel, buffcode, blevel) = (n(1), n(2), n(3), n(4));
+        let (upper, ill, mhero, munit, max) = (n(5) == 1, n(6) == 1, n(7), n(8), n(9));
+        assert_eq!(r[10], "|");
+        // buffcode 2 = a level buff whose slot 0x36C answers yes
+        let buff = (buffcode == 2).then_some(blevel);
+        let level = sim::neutral_heroes2::unit_level_value(tlevel, buff, upper, ill, mhero, munit);
+        let got = sim::neutral_heroes2::creep_level_refuses(race, level, max);
+        assert_eq!(got, r[11] == "1", "row {r:?}");
+        refused += usize::from(got);
+        kept += usize::from(!got);
+        buffed += usize::from(buff.is_some());
+    }
+    assert!(refused > 30 && kept > 100 && buffed > 30, "paths ({refused}, {kept}, {buffed})");
+}
+
+#[test]
+fn charm_effect_matches_the_original() {
+    let rs = rows("CE");
+    assert!(rs.len() >= 300);
+    for r in &rs {
+        // CE ill hasowner | kind arg
+        assert_eq!(r[3], "|");
+        let kills = sim::neutral_spells::charm_kills(r[1] == "1");
+        assert_eq!(if kills { "1" } else { "2" }, r[4], "row {r:?}");
+        if kills {
+            assert_eq!(r[5], "6faae470", "the life setter gets the constant 0.0, row {r:?}");
+        }
+    }
+}

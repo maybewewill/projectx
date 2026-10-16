@@ -430,10 +430,10 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
                 return Some(BadTarget);
             }
-            // `DataA` is the highest creep level that can be charmed (editor `NCH1`, LIKELY).
-            let max = gm.spell_level(caster, CHARM).data[0].to_f32();
-            let level = gm.unit_types().get(gm.unit(target).type_id).map_or(0, |t| t.level);
-            (level as f32 > max).then_some(BadTarget)
+            // `0x6F1A2600` (CONFIRMED, V6): `f2i(DataA)` is the highest creep level that can be charmed; only a unit of the
+            // `creeps` race is refused above it (`neutral_heroes2::creep_level_refuses`, Unicorn `CL` rows).
+            let max = softfloat::conv::f2i(gm.spell_level(caster, CHARM).data[0]);
+            crate::neutral_heroes2::creep_too_high(gm, target, max).then_some(BadTarget)
         }
         _ => crate::neutral_heroes2::target_error(gm, caster, base, target)
             .or_else(|| crate::unit_abilities_m::target_error(gm, caster, base, target)),
@@ -864,6 +864,12 @@ fn howl(game: &RefCell<Game>, rec: &CastRec) {
     }
 }
 
+/// What the Charm effect `0x6F1B13E0` does to a target (Unicorn `CE` rows of `tools/emu/v6_emu.py`): an illusion is killed
+/// (its life setter, vtable `0x124`, gets 0.0), any other unit changes owner.
+pub fn charm_kills(illusion: bool) -> bool {
+    illusion
+}
+
 /// Charm (`ANch`, `CAbilityCharm`; the only extra overrides are the target rule and the effect spawn): the target
 /// changes owner to the caster's owner for good (the owner change of `SetUnitOwner`), its orders are cleared. The
 /// target rule (`DataA` = highest creep level) is in [`target_error`]. LIKELY.
@@ -871,6 +877,16 @@ fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     let changed = {
         let mut gm = game.borrow_mut();
         if !gm.alive(target) {
+            return;
+        }
+        // `0x6F1B13E0` (CONFIRMED, V6 `CE` rows): an illusion target is killed (its life setter gets 0.0), every other
+        // target changes owner.
+        if charm_kills(gm.unit(target).illusion) {
+            let died = crate::natives::unit::set_life(&mut gm, target, F32::ZERO);
+            drop(gm);
+            if died {
+                dispatch_unit_death_by(game, rt, target, None);
+            }
             return;
         }
         let to = gm.unit(rec.caster).owner;

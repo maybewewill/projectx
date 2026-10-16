@@ -74,13 +74,41 @@ pub(crate) fn takes_no_target(base: u32) -> bool {
     crate::neutral_forms::takes_no_target(base) || crate::neutral_misc::takes_no_target(base)
 }
 
-/// `0x6F1D2630(unit, level)`: the creep level rule of the Transmute and Doom target slots (CONFIRMED): true when the
-/// unit's race is `creeps` (8) and its level is above `max`. The sim has no race field; a unit of a neutral player
-/// slot (12 and up) stands for a creep (UNSURE).
-fn creep_too_high(gm: &Game, target: ObjKey, max: i32) -> bool {
+/// The race enum value of creeps (record `+0x1C0`).
+pub const RACE_CREEPS: i32 = 8;
+
+/// The unit level `0x6F29DCA0` answers (Unicorn `CL` rows of `tools/emu/v6_emu.py`): the type's `level`, replaced by the
+/// level field of a level-changing buff when one answers yes to its slot `0x36C`; not positive gives 0; otherwise at
+/// most Misc `MaxHeroLevel` for an unit whose type code starts with an uppercase letter and that is not an illusion, at
+/// most `MaxUnitLevel` for every other unit.
+pub fn unit_level_value(type_level: i32, buff_level: Option<i32>, upper: bool, illusion: bool, max_hero: i32, max_unit: i32) -> i32 {
+    let level = buff_level.unwrap_or(type_level);
+    if level <= 0 {
+        return 0;
+    }
+    let cap = if upper && !illusion { max_hero } else { max_unit };
+    level.min(cap)
+}
+
+/// `0x6F1D2630(unit, max)`, the creep level rule of the Transmute, Doom and Charm target slots (CONFIRMED, `CL` rows): the
+/// target is refused when its type's race is `creeps` (8) and its unit level is above `max`. Units of any other race are
+/// never refused.
+pub fn creep_level_refuses(race: i32, level: i32, max: i32) -> bool {
+    race == RACE_CREEPS && level > max
+}
+
+/// [`creep_level_refuses`] on a live unit. The race comes from the type's pick record when the host registered one; a sim
+/// without it falls back to the old stand-in (a unit of a neutral player slot, 12 and up, is a creep).
+pub(crate) fn creep_too_high(gm: &Game, target: ObjKey, max: i32) -> bool {
     let u = gm.unit(target);
     let level = gm.unit_types().get(u.type_id).map_or(0, |t| t.level);
-    u.owner >= 12 && level > max
+    let cfg = gm.kill_xp_config();
+    let upper = (u.type_id >> 24) as u8 >= b'A' && (u.type_id >> 24) as u8 <= b'Z';
+    let level = unit_level_value(level, None, upper, u.illusion, cfg.max_unit_level, cfg.max_unit_level);
+    match gm.unit_types().pick_records().iter().find(|(i, _)| *i == u.type_id) {
+        Some((_, rec)) => creep_level_refuses(rec.race, level, max),
+        None => u.owner >= 12 && level > max,
+    }
 }
 
 /// Extra target rules (`target_error` slot `0x3F0` of the classes).

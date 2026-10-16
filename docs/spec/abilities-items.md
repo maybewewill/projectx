@@ -376,3 +376,19 @@ The slot `0x42C` the three restore callbacks call answers 0 for all three classe
 `AIda` (`spro`: `DataB` = `DataC` = 0) and `AIdb` (`arsc`: 150 / 100); `AIdm` (damage aoe) has **no stock row** (`item` 1, all data `-`).
 Stock coverage of the item base codes (count of items): `AIab` 36, `AIde` 21, `AIat` 20, `AIfb` 13, `AIrg` 11, `AIfs` 8, `AIbl` 8, `AImm` 7,
 `AIml` 6, `Arel` 6, `AIhe` 5, `AIha` 5, `AIsb` 4, then single-digit counts.
+
+## 19. V6 verification wave (Unicorn, `tools/emu/v6_emu.py`, vectors `crates/sim/tests/v6_vectors.txt`)
+
+* **Confirmed rows added** for every item core of S36 / S41 / S53 that already carried a 0-mismatch run (`docs/spec/confirmed-abilities.tsv`):
+  `AIhe AIma AIre AIha AImi AImn AIem AIaa AIlm AIxm AIam AIim AIsm AIab AIat AIde AIas AIml AImm AIsp AIvi AIvu Arel AIrm AIva AIsr AIob AIfs
+  AIct AIpv AIdd AIlb AIfb AIzb AIcb AIms AIsb AIil` (plus the earlier `AIda AIdb AImr AIra AIrg`). Each row cites its harness kind and the
+  case count of the vector file.
+* **`AItp` Town Portal destination step** (`TN`, 350 rows, 0 mismatches): callback `0x6F0264B0` = `item_abilities::town_portal_step`: a candidate
+  the ability's slot `0x3EC` refuses changes nothing and the search goes on; otherwise the squared distance to the clicked point (soft subtract,
+  two soft multiplies, soft add) replaces the kept one when none is kept or when it is strictly smaller (a NaN never replaces); with the `first`
+  flag the search stops after the first candidate that passed the refusal test. The refusal predicate, the gathering of the teleported group
+  and the cluster direction are not covered; the cast model still teleports to the clicked unit (UNSURE).
+* Dagger of Escape, Staff of Teleportation, item auras: the item rows are alias rows of the confirmed base classes (`AEbl`, `AHmt`, and `AIae
+  AIba AIcd AIad AIau AIav AIar` -> `AOae AHab AOac AHad AUau AUav AEar`), so they run the confirmed code with their own level data.
+* Not verifiable in this wave (decoded, see `abilities-neutral.md` s9): Ankh `AIrc`, Cloak of Flames `AIcf`, the wands `AIdc` (separate
+  area function `0x6F102490`, not Dispel Magic) and `AIwb`.

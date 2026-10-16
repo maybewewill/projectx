@@ -100,7 +100,7 @@ effect (see the table; the "extra overrides" column counts class overrides beyon
 | `ANbr` | CAbilityBattleRoar | CAbilitySimpleSpell | 5 | NOT DONE |
 | `ANbs` | CAbilityBlackArrowSpell | CAbilitySimpleSpell | 2 | NOT DONE |
 | `ANca` | CAbilityCleavingAttack | CAbilityPassive | 9 | Cleaving Attack (S43) |
-| `ANch` | CAbilityCharm | CAbilitySimpleSpell | 3 | Charm (S43) |
+| `ANch` | CAbilityCharm | CAbilitySimpleSpell | 3 | Charm (S43; target rule and effect CONFIRMED in V6) |
 | `ANcl` | CAbilityChannel | CAbilitySimpleSpell | 21 | NOT DONE |
 | `ANcr` | CAbilityChemicalRage | CAbilityMorph | 8 | NOT DONE |
 | `ANcs` | CAbilityClusterRockets | CAbilitySimpleSpell | 16 | NOT DONE |
@@ -147,7 +147,7 @@ effect (see the table; the "extra overrides" column counts class overrides beyon
 | `ANsw` | CAbilitySummonWarEagle | CAbilityWaterElemental | 1 | NOT DONE |
 | `ANsy` | CAbilitySummonFactory | CAbilitySimpleSpell | 4 | NOT DONE |
 | `ANth` | CAbilityThorns | CAbilityPassive | 4 | NOT DONE |
-| `ANtm` | CAbilityTransmute | CAbilitySimpleSpell | 4 | NOT DONE |
+| `ANtm` | CAbilityTransmute | CAbilitySimpleSpell | 4 | Transmute (S50; amounts CONFIRMED in V6) |
 | `ANto` | CAbilityTornado | CAbilitySimpleSpell | 14 | NOT DONE |
 | `ANvc` | CAbilityVolcano | CAbilitySimpleSpell | 13 | NOT DONE |
 | `ANwm` | CAbilityWateryMinion | CAbilityWaterElemental | 2 | NOT DONE |
@@ -292,3 +292,46 @@ via `0x6F25D830`, `0x1F` end) and delivers through `0x6F2BFED0`. Stock `Silence`
 unread roles of `DataB` / `DataC` do not matter for stock data. Stock `Cyclone` `DataA` 1, `Charm` `DataA` 5 (the level rule
 `0x6F1A2600`), `Howl of Terror` `DataA` 0.3.
 
+## 9. V6 verification wave (Unicorn, `tools/emu/v6_emu.py`, vectors `crates/sim/tests/v6_vectors.txt`, tests `v6_vectors.rs`)
+
+Every row is the ORIGINAL code on fake objects (callees that need the object model stubbed and recorded), 350 rows per kind,
+0 mismatches after the fixes listed.
+
+| Kind | Original | Model | Result |
+|---|---|---|---|
+| `TM` | Transmute buff body `0x6F1B58B0` (via `0x6F1B59B0`) | `neutral_heroes2::transmute_amounts` | **CONFIRMED**: gold = `f2i(round(A * goldcost))`, lumber = `f2i(round(B * woodcost))` with the factor of the gold the float behind `eax` (the buff's `+0xE0`) and the lumber one behind the third argument (`+0xE8`); the target's own bounty (`0x6F29DD30`, `0x6F29DDD0`) is added when the buff flag bit 10 (`DataD`) is set and `0x6F473170` answers yes; an illusion target gives nothing; the life setter (`0x6F2829D0`) and the flag set run in every case. Saturating `f2i` covered. The map of `DataA/DataB` into `+0xE0/+0xE8` (effect `0x6F1C18B0`, buff apply) and the creep-level test are not part of the rows |
+| `CL` | creep level rule `0x6F1D2630` over the unit level `0x6F29DCA0` | `neutral_heroes2::{creep_level_refuses, unit_level_value}` | **CONFIRMED**; **bug fixed**: the Transmute, Doom and Charm target slots refuse a unit only when its type's **race is creeps (8)** and its unit level is above the limit; the unit level is the type `level` (0 when not positive), replaced by the level field of a level-changing buff when one answers yes to its slot `0x36C`, at most Misc `MaxHeroLevel` for an uppercase-first type code that is not an illusion, else at most `MaxUnitLevel`. The old model refused any unit of any race whose raw `level` was above the limit (Charm) or used the owner slot as the race (Transmute, Doom); it now reads the race from the type's pick record and falls back to the owner stand-in only without one |
+| `CE` | Charm effect `0x6F1B13E0` | `neutral_spells::charm_kills` | **CONFIRMED**; **bug fixed**: an **illusion** target is killed (its life setter, vtable `0x124`, gets the constant 0.0; no owner change), every other target changes owner (`0x6F1B0C80`). The old model changed the owner of an illusion. The Charm limit is `f2i(DataA)` (the old model compared with the real) |
+
+### Decoded in V6 but NOT verified (leads for later waves)
+
+* **Cleaving Attack `ANca`** (execute `0x6F1B7310`): the area body `0x6F2C31D0` gets `{Area, DataA * record amount (+0x10)}`, count 1, flags
+  `0x20`, class from the record, `targs`, callback `0x6F1B14F0`; but the **centre is not the target**: the code takes the attacker's position
+  object (`vtable 0xB8`, then its `vtable 0x1C` with the `Area` and `0x6F10E370` / two soft adds), i.e. the area is built from the attacker's
+  position and the swing direction (a cone or a shifted circle), not a circle around the target as `neutral_cleave` models. UNSURE until the
+  geometry is decoded.
+* **Cyclone `Acyc` / `ACcy`** (effect `0x6F1CCC70` -> `0x6F1CCB50`): duration = `HeroDur` for a hero target, else `Dur + [ability+0x9C]`
+  (soft add); the buff class is **chosen by `DataA == 0 and Misc CycloneStasis == 0`** (`CBuffCycloneTwo` vs `CBuffCyclone`, creators `0x6F1C9160`
+  / `0x6F1C9230`), not a stun plus invulnerability pair; before the buff is applied the target's buffs are **removed** (two calls of the removal
+  walker `0x6F079FE0`: positive with the filters `(0,0,0,0,1,1,0,1)` and negative with `(0,0,0,1,...)`, timed-life buffs kept), and a target with
+  unit flag `0x100` or whose `0x6F29C240` answers 2 is skipped. The model does none of that (UNSURE, flagged).
+* **Soul Burn `ANso`**: the buff `CBuffSoulBurn` derives from `CBuffCripple < CBuffSpeed`, not from a damage-over-time class; the effect
+  hands `(duration, target, DataA, DataB, DataD)` to the buff apply (slot `0x368`). The model's "`DataA` damage per second" reading is therefore
+  UNSURE.
+* **Ankh `AIrc`** (death handler `0x6F1F1D50`): `DataB` is raised to at least 1.0 (soft compare with the constant `1.0`), `DataC` below 0.0 is replaced by
+  a property of the carrier read through `0x6F02DCA0` (the agile value at unit `+0xB8`); then the effect object is created (`0x6F1F0110`) and its
+  slot `0x78` gets `(carrier, DataA, ..., &DataB', &DataC')`, the item's charge routine `0x6F2B8390` runs, the carrier gets flag `0x1000` and
+  `0x6F2964E0` runs. Skipped when the carrier is an illusion, when a pathing test at the death point (`0x6F468F90`, mode 2) fails, or when the
+  item has no charge record. The revival numbers live in the effect object (slot `0x78`), not decoded.
+* **Cloak of Flames `AIcf`** (`0x6F13B960`): hands `(Dur, Area, DataA, the order id of slot 0x308)` to the buff apply (slot `0x368` of
+  `CBuffImmolation < CBuffLightningShield`, `0x6F12C4D0`), which also creates two agile modifiers and a 0.1 s timer family (`0xD01BA`);
+  the per-tick damage was not decoded.
+* **Howl of Terror `ANht`**: only the target rules (`0x3EC`, `0x3F0`) differ from `Aroa`; the shared cast effect `0x6F1EED60` builds a group
+  limited by `f2i(DataG)` (0 = no limit), ordered by `DataH` / `DataI` (comparators `0x6F1DC050` / `0x6F1DC030` / `0x6F1D3BF0`) and applies the buff
+  through the slot `0x3EC` of the ability; the model ignores the limit and the order.
+* **Web scroll `AIwb`**: the unit effect `0x6F0AB010` is byte-identical to `Aweb`'s `0x6F0AADD0` (S53); the effect goes through the buff factory
+  (`0x6F07ECE0` / `0x6F084E70`), so its numbers were not isolated.
+* **Dagger of Escape (`AEbl`) and Staff of Teleportation (`AHmt`)**: the item rows carry the base code itself (spec abilities-items.md s14), so
+  the classes are the ones of the confirmed `AEbl` (Blink validation) and `AHmt` (sort comparator, channel delay, targs normaliser) rows.
+* **Drunken Brawler `ANdb`**: the class overrides only the code getters (`0x4`, `0x1C`, `0x58`, `0x308`) of `CAbilityCriticalStrike`, so every
+  slot that runs the confirmed `AOcr` PRD code is inherited unchanged; its evasion half (`DataD`) goes through the unresolved miss-gate walk.

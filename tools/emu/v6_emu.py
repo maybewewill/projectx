@@ -7,6 +7,8 @@ are recomputed by crates/sim/tests/v6_vectors.rs.
 
 Row kinds (hex unless noted, `|` separates input from output):
   TN  cx cy ux uy best haveBest first excl | replaced best ret   Town Portal destination callback 0x6F0264B0
+  CL  race tlevel buff blevel upper ill mhero munit max | refuses   creep level rule 0x6F1D2630 over the unit level 0x6F29DCA0
+  CE  ill hasowner | kind    Charm effect 0x6F1B13E0: 1 = vtable 0x124(0.0) on an illusion target, 2 = owner change 0x6F1B0C80
   TM  e0 e8 flagD illusion goldcost woodcost bounty_g bounty_w bounty_flag | called gold wood ...  Transmute buff action 0x6F1B59B0 -> 0x6F1B58B0
 
 Usage: GAME_DLL=/path/Game.dll py tools/emu/v6_emu.py OUT.txt [CASES] [SEED] [KIND,KIND]
@@ -92,6 +94,84 @@ def case_tn(r):
     return 'TN %x %x %x %x %x %d %d %d | %d %x %x' % (cx, cy, ux, uy, best, have, first, excl, replaced, r32(TN_CTX + 0x14), ret)
 
 
+# ---------------------------------------------------------------- CL: creep level rule (Charm, Doom, Transmute targets)
+CL_RULE = 0x6F1D2630
+CL_LEVEL = 0x6F29DCA0
+CL_BUFFVT = D + 0xA000
+CL_BUFF = D + 0xA400
+CL_S36C = D + 0xA800
+
+
+def case_cl(r):
+    race = r.choice([8, 8, 8, 7, 1, 2, 3, 4, 0, 9])
+    tlevel = r.choice([0, 1, 2, 3, 5, 6, 9, 10, r.randint(-2, 40)])
+    hasbuff = r.choice([0, 0, 1])
+    bflag = r.choice([0, 1])
+    blevel = r.choice([0, 1, 5, r.randint(-3, 60)])
+    upper = r.choice([0, 0, 1])
+    ill = r.choice([0, 0, 1])
+    mhero = r.choice([10, 10, 100, 0, r.randint(0, 12)])
+    munit = r.choice([100, 100, 5, 0, r.randint(0, 30)])
+    mx = r.choice([0, 1, 2, 3, 5, 6, r.randint(-1, 12)])
+    return run_cl(race, tlevel, hasbuff, bflag, blevel, upper, ill, mhero, munit, mx)
+
+
+def run_cl(race, tlevel, hasbuff, bflag, blevel, upper, ill, mhero, munit, mx):
+    T.setup(0x6F8C9F64)
+    mu.mem_write(CL_BUFF, bytes(0x200))
+    mu.mem_write(CL_BUFFVT, bytes(0x800))
+    w32(CL_BUFF, CL_BUFFVT)
+    w32(CL_BUFFVT + 0x36C, CL_S36C)
+    w32(CL_BUFF + 0xE4, blevel & 0xffffffff)
+    w32(T.UNIT + 0x5C, 0x40000000 if ill else 0)
+    w32(T.UNIT + 0x30, ((0x41 if upper else 0x6E) << 24) | 0x444444)
+    sf = {
+        0x6F29C1B0: lambda *x: race,
+        0x6F29BB80: lambda *x: tlevel & 0xffffffff,
+        0x6F0787D0: lambda *x: CL_BUFF if hasbuff else 0,
+        CL_S36C: lambda *x: bflag,
+        0x6F009F90: lambda uc, c, d, st: mhero if d == 0x6F876208 else munit,
+    }
+    ret, _, _ = T.trace_call(CL_RULE, T.UNIT, (), stub_fn=sf, edx=mx & 0xffffffff, into=(CL_LEVEL,), span=0x200,
+                             cleanup={0x6F29C1B0: 0, 0x6F29BB80: 0, CL_S36C: 0, 0x6F009F90: 4})
+    return 'CL %d %d %d %d %d %d %d %d %d | %d' % (race, tlevel, hasbuff * (1 + bflag), blevel, upper, ill, mhero, munit, mx, ret & 1)
+
+
+# ---------------------------------------------------------------- CE: Charm effect
+CE_S124 = D + 0xA900
+
+
+def case_ce(r):
+    ill = r.choice([0, 1])
+    hasown = r.choice([0, 1])
+    T.setup(0x6F912E44)
+    mu.mem_write(T.OWNER, bytes(0x40))
+    w32(T.ABIL + 0x30, T.OWNER if hasown else 0)
+    victim = D + 0xA980
+    mu.mem_write(victim, bytes(0x100))
+    w32(victim, T.UVT)
+    w32(victim + 0x5C, (0x40000000 if ill else 0) | r.choice([0, 0x10]))
+    w32(T.UVT + 0x124, CE_S124)
+    got = []
+
+    def rec(name):
+        def f(uc, c, d, st):
+            got.append((name, st[0]))
+            return 0
+        return f
+
+    T.trace_call(0x6F1B13E0, T.ABIL, (victim,), stub_fn={CE_S124: rec('s124'), 0x6F1B0C80: rec('own'), 0x6F472890: lambda *x: T.OWNER},
+                 span=0x100, cleanup={CE_S124: 4})
+    kind = 0
+    arg = 0
+    for name, a in got:
+        if name == 's124':
+            kind, arg = 1, a
+        elif name == 'own':
+            kind = 2
+    return 'CE %d %d | %d %x' % (ill, hasown, kind, arg)
+
+
 # ---------------------------------------------------------------- TM: Transmute buff action (inner body)
 TM_INNER = 0x6F1B58B0
 TM_TRAMP = D + 0xF000
@@ -162,7 +242,7 @@ def case_tm(r):
     return out
 
 
-GENS = [('TN', case_tn), ('TM', case_tm)]
+GENS = [('TN', case_tn), ('TM', case_tm), ('CL', case_cl), ('CE', case_ce)]
 
 
 def main():
