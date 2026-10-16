@@ -475,6 +475,8 @@ impl Game {
         let dx = arith::sub(b.x, a.x);
         let dy = arith::sub(b.y, a.y);
         let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
-        !arith::lt(arith::mul(level.area, level.area), d2)
+        // S50: the data row carries the radius in `Rng` (900); `Area` is 0.
+        let radius = if arith::lt(F32::ZERO, level.area) { level.area } else { level.rng };
+        !arith::lt(arith::mul(radius, radius), d2)
     }
 }

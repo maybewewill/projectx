@@ -169,6 +169,8 @@ pub struct State {
     shield: BTreeMap<ObjKey, (F32, F32)>,
     /// State of the S50 batch (`neutral_heroes2.rs`).
     pub(crate) h2: crate::neutral_heroes2::State,
+    /// The invisibility model (`invisibility.rs`).
+    pub(crate) inv: crate::invisibility::State,
 }
 
 /// The order ids this module adds: `(order id, modelled code)`.
@@ -254,6 +256,7 @@ impl Game {
     /// decrement `0x6F077320` (CONFIRMED); the counter is the one `magic_immune` of Avatar and Divine Shield.
     pub fn sync_neutral_spells(&mut self, unit: ObjKey) {
         crate::neutral_forms::sync_neutral2(self, unit);
+        crate::invisibility::sync(self, unit);
         let has = self.unit(unit).abilities.get(MAGIC_IMMUNITY).is_some_and(|a| !a.is_removed());
         let counted = self.spells.neutral.immune.contains(&unit);
         if has && !counted {

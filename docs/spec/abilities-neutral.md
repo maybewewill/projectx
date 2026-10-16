@@ -228,3 +228,52 @@ summoned elementals with their own abilities), Chemical Rage `ANcr` and Robo-Gob
 Healing Spray `ANhs` and Cluster Rockets `ANcs` (a channelled `CAbilityClusterRockets` with 7 / 16 overrides),
 Transmute `ANtm`, Incinerate `ANic` (an orb-like cleave, 8 overrides), Volcano `ANvc`, Tornado `ANto`, Engineering Upgrade
 `ANeg`, Pocket Factory `ANsy` (factory units), Black Arrow `ANba`, Doom `ANdo`, Dark Ranger Life Drain.
+
+## 8. S50: the remaining AN* abilities (no Unicorn run; IDA structure + the editor's own labels)
+
+Modules: `neutral_heroes2.rs` (dispatch, Transmute, Doom), `neutral_waves.rs` (Cluster Rockets, Healing Spray, Monsoon),
+`neutral_rain.rs` (Stampede, Volcano), `neutral_forms.rs` (Storm Earth and Fire, Chemical Rage, Robo-Goblin, Engineering
+Upgrade, Pocket Factory, Tornado and the tornado unit's abilities), `neutral_orbs.rs` (Black Arrow, Incinerate,
+Incinerate Arrow), `neutral_misc.rs` (the rest). Tests: `crates/sim/tests/neutral_heroes2.rs`, `neutral_forms.rs`,
+`neutral_orbs.rs`, `neutral_misc.rs`, `crates/engine/tests/neutral_aliases.rs` (real archives). Hooks in other files are
+one to four lines each: `cast.rs` (timer kinds `0x60..=0x6F`, cast-end, channel time, the Parasite `Cast` field, the spell
+target visibility gate), `natives/unit_event.rs` (the death notification), `combat.rs` (`neutral_orb_on_hit`, acquisition
+gate), `unit_spells.rs` (`UnitMods::damage_flat`, Demolish in `spell_attack_bonus`), `orders.rs` (dropped orders).
+Method: the field roles are the labels of `WorldEditStrings.txt` (`WESTRING_AEVAL_*` of `AbilityMetaData.slk`, which name
+every DataA..F), the order ids come from `docs/research/ability-orders/getters.tsv`, the structure from IDA decompiles of
+the class overrides and of the buff objects (`CBuff*` removal / apply slots). Level data: the user's `AbilityData.slk`.
+The unit-code cells (`DataA` of Storm Earth and Fire / Dark Portal, `DataB` of Pocket Factory, `DataC..F` of Engineering
+Upgrade) are read by `engine::objdata::load_neutral_lists` (`Game::set_neutral_unit_list`).
+
+| code | class (parent) | what is modelled | confidence |
+|---|---|---|---|
+| `ANtm` (852665) | `CAbilityTransmute` (`SimpleSpell`), buff `CBuffTransmute < CBuffPause` | the buff action `0x6F1B59B0` -> `0x6F1B58B0`: the caster's owner gets `f2i(round(DataA * goldcost))` gold and `f2i(round(DataB * woodcost))` lumber (soft multiply, round `0x6F6EF330`), the target's life goes to zero (no killer). Target rule `0x6F19E7A0`: `0x6F1D2630` refuses a unit of race creeps whose level is above `f2i(DataC)` (error 51), then a summoned unit. The race is the one gap: the sim has no race field, a neutral player's unit (slot 12 and up) stands for a creep. The bounty add-on (`DataD`, `0x6F29DD30`) needs bounty values the sim lacks | gold / lumber / kill CONFIRMED, creep test UNSURE, bounty NOT DONE |
+| `ANdo` (852583) | `CAbilityDoom`, buff `CBuffDoom < CBuffLifeDoT`, `CBuffDoomMinion` | `DataA` damage per second (first tick 0.01 s, class 15) until death, no duration, the buff cannot be dispelled (apply slot `0x354` sets the buff flag `0x200`, CONFIRMED), the unit cannot cast; the removal notification `0x6F0B6750` (CONFIRMED) creates `f2i(DataB)` units of `UnitID` at the corpse for the owner of the caster, timed life `DataC` (`BNdi`), summoned class bit cleared. Target rule `0x6F089BC0`: creep level `f2i(DataD)`, already doomed (error 0xD0) | structure CONFIRMED, damage type / silence LIKELY |
+| `ANcs` (852652), `ANhs` (852664) | `CAbilityClusterRockets`, `CAbilityHealingSpray < ClusterRockets`, effects `XNcs`, `XNhs` | one effect creator `0x6F18B150` for both: area `Area`, `DataA` damage / heal, `DataD` cap, `DataE` building factor, wave interval `DataB`. Wave count: Cluster `0x6F161280` = `I2R(f2i(DataF / DataB))` (4 waves of 0.25 s over 1.01 s), Spray `0x6F19E680` = `DataF` (3..5 waves); effect lifetime (the channel time) Cluster `DataF`, Spray `DataB * DataF + 0.01` (`0x6F194AD0`). Amount per unit: the Blizzard formula (`human_heroes::blizzard_unit_damage`, Unicorn-checked there: cap `DataD` over the unit count, building factor, sign flipped for the heal flag), `CBuffAoe` marker `interval - 0.01`. Cluster hits enemy / neutral ground units and structures and stuns for `Dur` (the plain `BSTN`); Spray heals friendly organic units. An interrupted channel destroys the effect | counts and lifetimes CONFIRMED, first-wave time and damage type UNSURE |
+| `ANst` (852593) | `CAbilityStampede`, buff `CBuffStampede` | channel for `HeroDur`; the channel end `0x6F1DF720` destroys the spawn timers (CONFIRMED). A lizard every `1 / DataA` s lands at a random point of the `Area` disc (stream 4: angle `2 pi U`, radius `Area * U`) and explodes `DataE` later for `DataC` damage in `DataD` | end hook CONFIRMED, spawn rule UNSURE |
+| `ANvc` (852669) | `CAbilityVolcano`, effect `CEffectVolcano`, marker `CBuffVolcanoAoe` | `DataB` waves `DataC` s apart (first at once = "Lasts 35 seconds"); `DataE` damage inside half the area, `DataE * DataF` outside, structures `DataD` times, stun `Dur` / `HeroDur`; the destructible `Volc` is not placed | labels CONFIRMED, ring split UNSURE |
+| `ANmo` (852591) | `CAbilityMonsoon` | the Starfall field set (`ESF1..3`) on a target point: a strike every `DataB` s for `HeroDur` on every enemy in `Area`, `DataA` damage, structures `DataC` times | LIKELY / UNSURE |
+| `ANef` (852586) | `CAbilityElementalFury`, buff `CBuffElementalFury < CBuffTimedLife` | `DataA` lists the three elementals; the Brewmaster is hidden and paused, the elementals appear around it for `HeroDur`; at the end the survivors vanish and the Brewmaster returns at the first survivor; if all three die earlier it dies (the tooltip's reading) | LIKELY / UNSURE (death rule) |
+| `ANcr` (852663), `ANrg` (852656 / 852657) | `CAbilityChemicalRage`, `CAbilityRoboGoblin` (`CAbilityMorph`) | `Dur` = transformation time, the unit becomes the level's `UnitID` (`morph_to`) with its learned skills kept; Chemical Rage returns `HeroDur` after the cast, Robo-Goblin on the way-back order after `Dur` again; Robo-Goblin adds `DataF` armor. The rage's speed / attack bonuses ("Info Panel Only" in the editor) come from the form's own unit record; the `DataE` strength bonus is not applied | form change LIKELY, bonuses UNSURE |
+| `ANeg` | `CAbilityEngineeringUpgrade` (`Passive`) | `DataA` movement bonus (buff `BNeg`), `DataB` flat attack damage (the hero attack bonus), `DataC..F` ability upgrade pairs `from,to`: the ability read from row `from` is read from row `to` (the alias layer, `Ability::source`) | LIKELY |
+| `ANsy` (852658) | `CAbilitySummonFactory` | the factory unit `UnitID` for `Dur` (`BNfy`); every `DataA` s it makes a goblin of type `DataB` for `DataC` s (`BNcg`); leash `DataE` and the goblins' explosion are not modelled | LIKELY |
+| `ANto` (852597), `Atdg`, `Atsp` | `CAbilityTornado`; the tornado unit `ntor` carries `Atdg`, `Atsp`, `Atwa`, `Aasl` | the unit for `Dur` (`BNto`); `Atdg` every second: enemy structures within `Area` take `DataA`, within `DataB` they take `DataC`; `Atsp` tosses (stun + invulnerable, Cyclone style) one enemy ground non-structure unit in `Area` per 0.5 s scan for `Dur` / `HeroDur` and marks it `DataB` s; `Atwa` (random wandering) NOT DONE | summon LIKELY, `Atdg` LIKELY, `Atsp` UNSURE (air time `DataA` = 22 unused) |
+| `ANba` / `ANbs` (852578 / 9 autocast, 852577 cast) | `CAbilityBlackArrow < FlamingArrows`, `CAbilityBlackArrowSpell` | autocast orb (default off): `Cost` mana per arrow, `DataA` damage, mark `BNba` for `Dur`; a marked unit that dies becomes `DataB` units of `UnitID` for the archer's owner, `DataC` s (`BNdm`). `ANbs` marks a unit by a cast | LIKELY |
+| `ANic` / `ANia` | `CAbilityIncinerate < CleavingAttack`, `CAbilityIncinerateArrow` | each attack stacks the burn (`BNic`, `Dur` refreshed) and adds `DataA * stacks` damage; a unit that dies burning blasts `DataB` within `DataC` and `DataD` within `DataE` after `DataF` s. `ANia` is the autocast orb form (`Cost` per arrow, orders 852671 / 852672) | LIKELY |
+| `ANbr` (852599) | `CAbilityBattleRoar` | friendly ground / air units (not buildings) within `Area` of the caster get `DataA` flat damage (`UnitMods::damage_flat`) for `Dur` | LIKELY, flat reading UNSURE (Roar's own `DataA` is a fraction) |
+| `ANmr` (852565) | `CAbilityMindRot` | `DataA` mana per second for `Dur` / `HeroDur` | LIKELY |
+| `ANde` | `CAbilityDemolish < WarStomp` | attack damage times `DataB` (building) / `DataC` (unit) / `DataD` (hero) when above zero, at `DataA` percent (only 100 modelled) | LIKELY |
+| `ANpi` (`Apmf`, `Apig`) | `CAbilityPermImmolation` | every `Dur` the enemy ground organic units within `Area` take `DataA` | LIKELY |
+| `ANrc` (852237) | `CAbilityRainOfChaos` | `DataB` infernals, one per `Dur`, each the Dreadlord Inferno effect with the `ANin` row at a random point of the `Area` disc | LIKELY / UNSURE (random point) |
+| `ANin` (852232) | `CAbilityInferno` | a `STATIC_PARENTS` row of `AUin` (same data layout) | LIKELY |
+| `ANfd` (852230) | `CAbilityFingerOfDeath` | `DataC` damage after the graphic delay `DataA` | LIKELY |
+| `ANwm` (852598) | `CAbilityWateryMinion < WaterElemental` | the Water Elemental summon loop with `BNwm` | LIKELY |
+| `ANpa` (852601) | `CAbilityParasite < AutoTargetSpell` | poison `DataA` per second for `Dur`; when the host dies `DataE` units of `UnitID` for `Cast` s (the class keeps its summoned unit duration in the `Cast` field, so the cast core must not wait on it); autocast NOT DONE | LIKELY |
+| `ANcl` (852600) | `CAbilityChannel` | no effect of its own: the events of the cast and the channel time `DataA`; fallback order 852600 | LIKELY |
+| `ANdp` (852229) | `CAbilityDarkPortal` | `DataB..DataC` units of the list `DataA`, in turn, at the point | UNSURE |
+| `ANth`, `ANre` | aliases of `AUts`, `Aarm` | `neutral_spells::is_modelled` now also knows the unit-ability tables of `unit_abilities_a` / `_m`, so the creep alias rows of every modelled code resolve | CONFIRMED mechanism |
+
+Not done, with reasons: `ANsu` Submerge (no data row at all), `ANss` / `ANse` Spell Shield and `ANsa` Sanctuary (item
+rows: `Cool` and a buff only), `ANpr` Preservation, `ANsl` Soul Preservation, `ANdc` Dark Conversion (needs the unit race
+test and a campaign sleep), `ANsp` Spies, `ANgl` Gold to Lumber (shop-like campaign abilities), `ANfy` Factory (a passive
+marker the factory unit carries, no data), `Atwa` Tornado Wander (unit movement AI) and the Transmute bounty.

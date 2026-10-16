@@ -992,6 +992,9 @@ impl Game {
     /// The first unit of the acquire-range query that the unit may attack (CONFIRMED first-passing rule, LIKELY
     /// selection). Returns `None` for a unit whose weapon has no range (it could never swing).
     fn scan_target(&self, unit: ObjKey) -> Option<ObjKey> {
+        if !self.invisibility_allows_acquire(unit) {
+            return None;
+        }
         let ty = self.attack_type_of(unit);
         if !arith::gt(ty.range, F32::ZERO) {
             return None;

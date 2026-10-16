@@ -390,6 +390,10 @@ impl Game {
         if self.orders.locked.contains(&unit) {
             return None;
         }
+        // An order at an enemy unit the issuer's player cannot see is dropped (`invisibility.rs`).
+        if self.order_target_unseen(unit, &order) {
+            return None;
+        }
         if order.id == ORDER_STOP && order.class == OrderClass::Immediate {
             // Stop clears everything and is not queued (its ability is not found: UNVERIFIED).
             self.note_order_replaced(unit, order.id);

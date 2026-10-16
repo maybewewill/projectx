@@ -742,7 +742,7 @@ pub fn begin_cast(
         let class = crate::item_abilities::effect_base(&gm, base);
         match target {
             CastTarget::Unit(t) => {
-                if !crate::hero_extra::target_ok(&gm, class, t) {
+                if !crate::hero_extra::target_ok(&gm, class, t) || gm.spell_target_unseen(caster, t) {
                     return Err(CastError::BadTarget);
                 }
                 if let Some(e) = crate::unit_spells::target_error(&gm, caster, class, t).or_else(|| crate::unit_abilities_a::target_error(&gm, caster, class, t)) {

@@ -797,6 +797,7 @@ fn apply_passive(gm: &mut Game, unit: ObjKey, item: ObjKey, alias: u32, fam: Fam
                 ..crate::abilities::buff_predicates(BUFF_INVIS)
             };
             gm.add_buff(unit, BUFF_INVIS, preds);
+            gm.invisibility_note(unit);
             Applied::Buff { code: BUFF_INVIS, cloak: false }
         }
         Family::CloakOfFlames => {
@@ -1694,6 +1695,9 @@ fn apply_potion_buff(gm: &mut Game, fam: Family, target: ObjKey, level: &SpellLe
         ..Default::default()
     };
     gm.apply_mods_buff(target, code, preds, mods, dur);
+    if code == BUFF_INVIS {
+        gm.invisibility_note(target);
+    }
 }
 
 /// A figurine (`0x6F0B8A00`, structure CONFIRMED by Unicorn `FG` rows): the summon batches of [`figurine_batches`], each

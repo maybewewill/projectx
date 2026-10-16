@@ -28,7 +28,7 @@ Code: `crates/sim/src/invisibility.rs`; tests `crates/sim/tests/invisibility.rs`
 * Effects: `IsUnitInvisible`, `IsUnitDetected`, `IsUnitVisible` (gate first) natives; the idle acquisition scan skips
   units the scanning owner cannot see.
 
-## Open / UNSURE
+## Open / UNSURE (before S50)
 
 * The fade (Apiv `Dur`, Wind Walk `DataA`): the unit is invisible at once here.
 * Whether the viewer mask word contains allies (taken: owner, non-enemies, shared vision).
@@ -38,3 +38,28 @@ Code: `crates/sim/src/invisibility.rs`; tests `crates/sim/tests/invisibility.rs`
   (LIKELY).
 * Shadow Meld: "idle at night" is a stand-in; the fade (DataA 1.5) and the order are not decoded.
 * `UnitInvis` (AI native) still returns false.
+
+## S50: fade-in, ghost hooks, dropped orders
+
+* **Fade-in** (`invisibility_note`, `is_invisible`): the 0 -> positive step of the counter is recorded with its fade (the
+  largest of: Permanent Invisibility `Dur` 2.0, Ghost `Dur`, Wind Walk `DataA` "Transition Time" 0.6, Sorceress
+  Invisibility `DataA`, Shadow Meld `DataA` "Fade Duration" 1.5); the flag counts `fade` seconds later (CONFIRMED
+  structure: `0x6F28D7D0` sets the flag at once only for fade 0, otherwise through a timer, message 852436). Hooks:
+  `sync_neutral_spells` (abilities), `apply_invisibility_buff`, the potion path, Wind Walk. A 0.1 s scan runs while a record
+  or a Shadow Meld unit exists (it stops by itself). A source added without a hook is invisible at once.
+* **Ghost / Aeth**: `Agho` (`unit_abilities_a::is_ghost`) and `Apiv` (`m_perm_invisible`) each add one. `Aeth` is the
+  *visible* ghost form (editor `ETH1/2` "Immune to Morph Effects", "Does Not Block Buildings"): it adds no invisibility and
+  sees nothing; the S46 note "lets the unit see ghosts" was wrong. Ghost `DataA` is "Auto-Acquire Attack Targets": with
+  zero a ghost does not acquire targets while invisible (`invisibility_allows_acquire`, checked in `scan_target`).
+* **Shadow Meld** (`m_shadow_meld_active`): idle (no orders) at night for `DataC` 0.5 s, then the fade 1.5 s; `DataB`
+  "Day/Night Duration" 2.5 s is not used (UNSURE).
+* **True Sight** (`m_true_sight_reveals`): the data row carries the radius in `Rng` (900); the query read `Area` (0) and
+  never revealed. Fixed. Detectors now honour `DataA` ("Detection Type", 3 = invisible + burrowed): a detector whose type
+  has no invisible bit (2) reveals nothing.
+* **Ultravision** (`Ault`): the night sight equals the day sight while the unit has it (UNSURE, no data row).
+* **Orders**: `dispatch_order` drops an order that targets an enemy unit the issuer's player cannot see (invisible, not
+  detected, not shared vision): the natives still answer true. The cast core refuses a unit target the caster's player
+  cannot see (`spell_target_unseen`).
+
+Tests: `crates/sim/tests/invisibility.rs` (fade of Permanent Invisibility, Shadow Meld with the action duration and the
+fade, Ghost vs Aeth, detection type, dropped attack order, Ultravision).

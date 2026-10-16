@@ -147,6 +147,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     match kind {
         crate::neutral_waves::KIND_WAVE => crate::neutral_waves::on_timer(game, rt, kind, aux),
         crate::neutral_rain::KIND_STAMPEDE..=crate::neutral_rain::KIND_VOLCANO => crate::neutral_rain::on_timer(game, rt, kind, aux),
+        crate::invisibility::KIND_SCAN => crate::invisibility::on_scan(game),
         crate::neutral_orbs::KIND_INCINERATE => crate::neutral_orbs::on_timer(game, rt, kind, aux),
         crate::neutral_misc::KIND_DRAIN..=crate::neutral_misc::KIND_PERM_IMMOLATION => {
             crate::neutral_misc::on_timer(game, rt, kind, _unit, aux)

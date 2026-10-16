@@ -279,7 +279,7 @@ fn mind_rot_drains_mana_every_second_for_the_duration() {
     assert!(accepted(&h));
     run(&mut h, 30);
     let mana = h.game().unit(foe).mana.to_f32();
-    assert!(mana <= 500.0 - 15.0 + 0.01 && mana >= 500.0 - 20.0, "3 drains of 5 so far, got {mana}");
+    assert!((480.0..=485.01).contains(&mana), "3 drains of 5 so far, got {mana}");
     run(&mut h, 400);
     let drained = 500.0 - h.game().unit(foe).mana.to_f32();
     assert!(drained == 145.0 || drained == 150.0, "29 or 30 drains over the 30 s, got {drained}");

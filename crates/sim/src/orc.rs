@@ -961,6 +961,8 @@ fn wind_walk(game: &RefCell<Game>, rec: &CastRec) {
     let dur = effect_duration(&rec.level, hero, F32::ZERO);
     let effect = BuffEffect::Slow { move_delta: rec.level.data[1], attack_delta: F32::ZERO };
     gm.add_spell_buff(rec.caster, BUFF_WIND_WALK, effect, dur);
+    // The invisibility counter rises (`invisibility.rs`: the fade-in starts).
+    gm.invisibility_note(rec.caster);
 }
 
 fn rad_to_deg(r: F32) -> F32 {
