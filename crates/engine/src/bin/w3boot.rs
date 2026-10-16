@@ -53,6 +53,8 @@ struct Args {
     sync_defer_main: bool,
     pr_off: u32,
     sync_register: bool,
+    /// `--sync-no-register`: do not register the replay ids of the human's start units (default: register them).
+    sync_no_register: bool,
     ai_delay: u64,
     ai_period: u64,
     steps: u64,
@@ -125,6 +127,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--sync-after" => args.sync_after = true,
             "--sync-defer-main" => args.sync_defer_main = true,
             "--sync-register" => args.sync_register = true,
+            "--sync-no-register" => args.sync_no_register = true,
             "--pr-off" => args.pr_off = parse_seed(&value("--pr-off")?)?,
             "--ai-delay" => {
                 let v = value("--ai-delay")?;
@@ -218,7 +221,7 @@ fn run(argv: &[String]) -> Result<(), String> {
             trace: args.sync_trace,
             constant: args.sync_constant,
             defer_main: args.sync_defer_main,
-            register_units: args.sync_register,
+            register_units: !args.sync_no_register,
             draw_index: draw_index_for(&args, setup.seed),
         };
         engine.host().game_mut().set_pr_disabled(args.pr_off);
@@ -226,6 +229,13 @@ fn run(argv: &[String]) -> Result<(), String> {
         let mut report = engine::sim_sync::run(&mut engine, &parsed, &opts);
         report.notes.extend(setup.notes.iter().cloned());
         print!("{}", report.render());
+        {
+            let shared = engine.ai().shared().borrow();
+            println!("ai unimplemented calls: {:?}", shared.unimplemented);
+            let mut counts: Vec<String> = shared.counts.iter().map(|((p, n), c)| format!("{p}:{n}={c}")).collect();
+            counts.truncate(60);
+            println!("ai counted calls: {}", counts.join(" "));
+        }
         {
             let game = engine.host().game();
             let st = game.pr_stats();

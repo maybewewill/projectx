@@ -69,6 +69,11 @@ pub struct SimSyncReport {
     pub timeline: Vec<TimelineRow>,
     /// Slots where the replay stream could not be turned into commands.
     pub command_errors: Vec<String>,
+    /// Orders given to units, refused by the dispatcher/validator, and object references that resolved to nothing
+    /// (selections and orders together).
+    pub orders_accepted: usize,
+    pub orders_refused: usize,
+    pub refs_unresolved: usize,
     /// Per-slot trace lines (when requested).
     pub trace: Vec<String>,
     /// Final simulated words, for the report.
@@ -140,6 +145,11 @@ impl SimSyncReport {
             s,
             "  final simulated words: X {:#x}  Y {:#x}  R {:#010x}",
             self.final_x, self.final_y, self.final_r
+        );
+        let _ = writeln!(
+            s,
+            "  replay commands: orders accepted {}  refused {}  object references unresolved {}",
+            self.orders_accepted, self.orders_refused, self.refs_unresolved
         );
         for e in self.command_errors.iter().take(5) {
             let _ = writeln!(s, "  command error: {e}");
@@ -345,7 +355,8 @@ pub fn register_start_units(engine: &mut Engine, replay: &w3g::Replay, replay_pi
             engine
                 .commands_mut()
                 .register_object(sim::commands::ObjectRef { id1: id, id2: id }, k);
-            notes.push(format!("object {id:#x} -> unit {idx} of player {sim_player}"));
+            let ty = engine.host().game().unit(k).type_id;
+            notes.push(format!("object {id:#x} -> unit {idx} of player {sim_player} (type {ty:#010x})"));
         }
     }
     notes
@@ -403,12 +414,32 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                 };
                 let t_now = engine.sync().clock();
                 let predicted;
+                let outcomes;
                 if opts.after_commands {
-                    engine.apply_commands(&turn.actions);
+                    outcomes = engine.apply_commands(&turn.actions);
                     predicted = engine.sync_time_slot(*id, &payload);
                 } else {
                     predicted = engine.sync_time_slot(*id, &payload);
-                    engine.apply_commands(&turn.actions);
+                    outcomes = engine.apply_commands(&turn.actions);
+                }
+                for (o, (_, cmd)) in outcomes.iter().zip(&turn.actions) {
+                    if let sim::commands::Outcome::Ordered { refused, accepted, .. } = o {
+                        if *refused > 0 && report.notes.len() < 40 {
+                            report
+                                .notes
+                                .push(format!("slot {slot_index}: order refused by {refused} (accepted {accepted}): {cmd:?}"));
+                        }
+                    }
+                    match o {
+                        sim::commands::Outcome::Selected { unresolved, .. }
+                        | sim::commands::Outcome::Grouped { unresolved, .. } => report.refs_unresolved += unresolved,
+                        sim::commands::Outcome::Ordered { accepted, refused, unresolved } => {
+                            report.orders_accepted += accepted;
+                            report.orders_refused += refused;
+                            report.refs_unresolved += unresolved;
+                        }
+                        _ => {}
+                    }
                 }
                 let changed = {
                     let streams = engine.host().rng();
