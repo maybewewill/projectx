@@ -1432,7 +1432,7 @@ impl Game {
         self.orc.lists.insert(base, lists);
     }
 
-    fn orc_list(&self, base: u32, level_index: usize, column: usize) -> Option<String> {
+    pub(crate) fn orc_list(&self, base: u32, level_index: usize, column: usize) -> Option<String> {
         let c = column.checked_sub(1)?;
         match self.orc.lists.get(&base) {
             Some(v) if !v.is_empty() => v.get(level_index.min(v.len() - 1)).map(|l| l[c].clone()),

@@ -129,6 +129,8 @@ pub struct MiscData {
     /// `MagicImmunesResistDamage` (element 0, an integer flag): Magic attacks cannot target magic immune units and
     /// physical attacks cannot target ethereal units (`docs/spec/weapon-target.md`). `false` when absent.
     pub magic_immunes_resist_damage: bool,
+    /// `IllusionsGetAttackSpeedBonus` (integer flag): an illusion takes the attack speed part of Unholy Frenzy (`0x6F170770`).
+    pub illusions_get_attack_speed_bonus: bool,
 }
 
 impl MiscData {
@@ -189,6 +191,7 @@ impl MiscData {
         let ethereal_heal_bonus = reader.real("EtherealHealBonus").unwrap_or(F32::ZERO);
         let illusions_get_autocast = reader.int_element("IllusionsGetAutocast") != 0;
         let magic_immunes_resist_damage = reader.int_element("MagicImmunesResistDamage") != 0;
+        let illusions_get_attack_speed_bonus = reader.int_element("IllusionsGetAttackSpeedBonus") != 0;
         let hero = HeroMisc::read(&mut reader);
         let Reader {
             defaulted, notes, ..
@@ -221,6 +224,7 @@ impl MiscData {
             ethereal_heal_bonus,
             illusions_get_autocast,
             magic_immunes_resist_damage,
+            illusions_get_attack_speed_bonus,
         }
     }
 
@@ -264,6 +268,7 @@ impl MiscData {
             ethereal_heal_bonus: F32::ZERO,
             illusions_get_autocast: false,
             magic_immunes_resist_damage: false,
+            illusions_get_attack_speed_bonus: false,
         }
     }
 }

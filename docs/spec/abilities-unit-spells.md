@@ -287,7 +287,7 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   flag word lacks bit 2 and the candidate's `+0x248` has `0x200`, then the buff scan `0x6F076D00` with
   `[0, 1, 0, 0, 1, a7, a8, owner, reqLevel != 0]`, `(a7, a8) = (0, 1)` for an ally, `(1, 0)` otherwise. Not modelled: the
   buff-scan exclusion of buffs whose `+0x20` has `0x20000000` unless `reqLevel != 0`, and the two unit flag words.
-* **Polymorph (`Aply`) PARTLY verified (no confirmed-abilities row)**: target rule `0x6F11C230` (`0x33` when `F2I(DataA) > 0`
+* **Polymorph (`Aply`) PARTLY verified (V4; CONFIRMED in section 14)**: target rule `0x6F11C230` (`0x33` when `F2I(DataA) > 0`
   and the target is a creep above that level (`0x6F1D2630(target, level)`), else `0x9F` for a summoned unit) and effect
   `0x6F12F560` (illusion: target slot `0x124` with a zero amount and nothing else; otherwise the hero-rule duration and
   `0x6F12DAA0(level index, target +0x1FC)` feed the ability's slot `0x43C` = `0x6F13F790`; no duration test in the effect)
@@ -308,10 +308,10 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   the apply `0x6F0F0650` makes the buff last `T + 0.01` for `T > 0` (else `T`), sets buff flags `0x100` / `0x200` from the
   two flags, and stores `DataA / T` (life) and `DataB / T` (mana) per tick (soft divisions, `DataA` first). The model now
   takes duration and life per tick from `rejuv_buff_values`; the mana half (`DataB`) and the tick handler are not modelled.
-* **Unholy Frenzy (`Auhf`) PARTLY verified (no row)**: effect `0x6F18C070` -> `0x6F18BF60` hands `(smart ref or target, &dur,
+* **Unholy Frenzy (`Auhf`) PARTLY verified (V4; CONFIRMED in section 14)**: effect `0x6F18C070` -> `0x6F18BF60` hands `(smart ref or target, &dur,
   owner, &DataB, &DataA)` to the buff (existing: slot `0x37C`; new: slot `0x378` with the target first), duration by the hero
   rule; 400 cases, 0 mismatches. The `CBuffDoT` internals (attack speed sink, damage per tick, tick period) are not run.
-* **Roar (`Aroa`) PARTLY verified (no row)**: effect `0x6F1EED60` has the same shape as Taunt: the group within `Area` is collected into 20-byte
+* **Roar (`Aroa`) PARTLY verified (V4; CONFIRMED in section 14, the damage is an integer bonus)**: effect `0x6F1EED60` has the same shape as Taunt: the group within `Area` is collected into 20-byte
   records, `n = F2I(DataG)` (nonzero) sorts them with the comparators `0x6F1D3BF0` (= Taunt's base comparator, same code), `0x6F1DC030` (`f3`
   first, chosen by `DataF != 0`) or `0x6F1DC050` (`f4` first, chosen by `DataE != 0`), limits to `n`, and gives each chosen unit the effect slot
   `0x3EC` with `HeroDur` / `Dur + 0x9C`. The model now uses `group_plan` (400 cases with the real sort, `v4_spell_vectors.rs`; before, every
@@ -319,7 +319,7 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   (`roar_ready_error`, 400 cases), no check without a limit. NOT verified: what the buff (`CBuffRoar` shares the Inner Fire buff base) does
   with `DataA`..`DataD`; since Inner Fire's damage turned out to be an integer weapon bonus, `damage_pct = DataA` in `roar()` is probably wrong
   in the same way.
-* **Lightning Shield (`Alsh`) PARTLY verified (no row)**: effect `0x6F13C690` hands the buff creator `0x6F13C360` the hero-rule duration, the tick period
+* **Lightning Shield (`Alsh`) PARTLY verified (V4; filter CONFIRMED in section 14)**: effect `0x6F13C690` hands the buff creator `0x6F13C360` the hero-rule duration, the tick period
   `recip(C)`, `Area`, the damage per tick `DataA / C` and the constant 2 with `C` = the 2.0 at `0x6FAB0FA4` (`shield_values`, 400 cases with the real
   soft divisions and reciprocal). The per-victim tick slot `0x364` = `0x6F13C410` skips a victim that carries the shield's marker buff (`0x6F10FFB0`
   code), whose unit word `+0xEC` is above zero (signed), or that is the shielded unit; blocked victims (`0x6F28D750`) get only the marker; the model lacks
@@ -329,3 +329,34 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   point, **facing = Misc `BuildingAngle`** (`orc::building_angle_radians`, a multiple of 90 degrees) and flags `2` for a nonzero `Dur + ability
   +0x9C` else `0x502` (food bits). **Bug fixed**: the model created wards with the caster's facing. Stasis Trap (`0x6F1FD180`) shares the model and
   the fix; its own effect was not run. The ward's timed life buff and the aura/ability of the ward unit type are outside this check.
+
+## 14. V8 verification wave (Unicorn, `tools/emu/v8_spells_emu.py`, vectors `crates/sim/tests/data/unit_spells/`, test `crates/sim/tests/v8_spell_vectors.rs`)
+
+Method as V4 (real routines on fake objects, 400 random cases per check, 0 mismatches; one check per process). Rows added to
+`confirmed-abilities.tsv`: Aroa, Auhf, Alsh, Aply.
+
+* **Roar (`Aroa`) CONFIRMED**: the per-unit slot `0x3EC` (`0x6F1FB1F0`) -> creator `0x6F1FAF90` -> the **Inner Fire buff apply** (`CBuffRoar`'s vtable
+  differs from `CBuffInnerFire`'s only in the code getter and the hook `0x328`): `DataA` is the damage fraction (an INTEGER weapon bonus per
+  slot, `inner_fire_weapon_bonus`), `DataB` the armor sink, `DataC` / `DataD` the life / mana regeneration modifiers (0.001 gate); the duration reaches
+  the buff unchanged. **Bug fixed**: the model applied `damage_pct = DataA` (a percentage).
+* **Unholy Frenzy (`Auhf`) CONFIRMED**: new-buff apply `0x6F177340` stores `DataB` (`+0xEC`, the tick amount), `DataA` (`+0x100`), the caster's player
+  (`+0x104`), flags `|= 0x08000100`, arms the first tick 0.01 s; the attack speed sink `0x6F0C9090` gets `DataA` only when flag `0x200` was clear and
+  the target has an attack ability, and an illusion is skipped unless Misc `IllusionsGetAttackSpeedBonus` (`0x6F170770`). The `CBuffDoT` tick
+  `0x6F0D54B0`: skipped when the target carries `BUsl`, or (Misc `MagicImmunesResistDamage`) when `+0x15C > 0` and the class word hits mask
+  `0x6FA6F2CC`, or `+0x158 > 0` and it hits `0x6FA6F2D0`; an amount `>= 0` (NaN too) is damage with record flag bits `(!(flags >> 26)) & 2`, a negative one
+  goes to the life adder `0x6F277C20` (times `EtherealHealBonus` when slot `0x368` says so); the post hook `0x370` gets `sub(life before, life after)`.
+  **Bugs fixed**: the tick ignored `BUsl` and the immunity gate; an illusion received the attack speed bonus. Not modelled: the sign convention of the
+  heal branch (no melee DoT buff uses it).
+* **Lightning Shield (`Alsh`) CONFIRMED for the per-victim filter** (slot `0x364` = `0x6F13C410`): skip when the victim carries the marker buff
+  (`0x6F10FFB0`), its unit word `+0xEC` is above zero (signed), or it is the shielded unit; otherwise the marker is created and registered, and unless
+  the blocked test `0x6F28D750` is true the damage effect `0x6F053040` runs. The model already skipped the shielded unit and blocked victims; the
+  filter is now the tested `shield_victim_plan`. Not modelled: the marker's duration (word `+0xDC`), the unit word `+0xEC`, the tick gate `0x6F1249A0`
+  (shielded unit flags `+0x20` bits 0 and 26, `+0x5C & 0x1000000`, a buff lookup) which was read but not run, and the damage class of `0x6F053040`.
+* **Polymorph (`Aply`) CONFIRMED except the type swap**: the whole chain effect `0x6F12F560` -> `0x43C` `0x6F13F790` -> `0x6F13F710` -> new apply `0x6F12A0B0`
+  with stubs only for the world. A live buff is refreshed through slot `0x350`; a new one stores the picked type (`+0xE0`), is set to last
+  `add(effect duration, Cast)`, flags `0x10400 | 0x800 (unit +0x248 & 0x20) | 0x1000 (& 2) | 0x4000 (& 8)`, and arms the swap timer `0xD01C1` with `Cast`
+  (0.01 s when `Cast` equals 0). The pick is the routine Hex shares (`0x6F12DAA0`, `hex_emu`), now used by the model (before: always a one-sided die).
+  **Bugs fixed**: duration lacked `Cast`; the pick ignored the list. NOT run: the timer handler `0x6F12A1D0` and the type swap `0x6F2AB3E0` (the model swaps
+  at once), the refresh arguments, the creep-level rule.
+* **Not done (V8 ran out of time)**: Ensnare / Web (the effect builds a net missile object through `0x6F07EAE0`, too much world state to stub cheaply; the
+  buff apply `0x6F09B6C0` not run), Raise Dead (corpse selection and cap), Repair (per-tick cost). Their sections above are unchanged (UNSURE).

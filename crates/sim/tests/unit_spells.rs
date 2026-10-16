@@ -846,7 +846,8 @@ fn roar_buffs_friends_in_the_area_including_the_caster_and_not_enemies() {
     assert_eq!(h.game().unit(shaman).mana.to_f32(), 200.0);
     for k in [shaman, grunt, grunt2] {
         assert!(has_buff(&h, k, BUFF_ROAR));
-        assert!((h.game().unit(k).bonuses.damage_pct.to_f32() - 0.25).abs() < 1e-6);
+        // V8: the damage is an integer weapon bonus (Inner Fire buff base), never a percentage.
+        assert_eq!(h.game().unit(k).bonuses.damage_pct.to_f32(), 0.0);
     }
     assert!(!has_buff(&h, foe2, BUFF_ROAR));
     assert!(!has_buff(&h, far, BUFF_ROAR), "out of the area");
