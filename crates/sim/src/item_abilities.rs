@@ -98,20 +98,14 @@ pub const ORB_CORRUPTION: u32 = code(b"AIcb");
 pub const ITEM_CLOAK_OF_FLAMES: u32 = code(b"AIcf");
 /// `CAbilityItemCommand`.
 pub const ITEM_COMMAND: u32 = code(b"AIco");
-/// `CAbilityItemChangeTOD` (Moonstone).
-pub const ITEM_CHANGE_TOD: u32 = code(b"AIct");
 /// `CAbilityItemDefenseAoe` (Scroll of Protection).
 pub const ITEM_DEFENSE_AOE: u32 = code(b"AIda");
 /// `CAbilityItemDispelChain` (Wand of Neutralization).
 pub const ITEM_DISPEL_CHAIN: u32 = code(b"AIdc");
-/// `CAbilityPassiveDefense`.
-pub const ITEM_PASSIVE_DEFENSE: u32 = code(b"AIdd");
 /// `CAbilityItemDamageAoe`.
 pub const ITEM_DAMAGE_AOE: u32 = code(b"AIdm");
 /// `CAbilityItemFlare` (Flare Gun).
 pub const ITEM_FLARE: u32 = code(b"AIfa");
-/// `CAbilityItemFlyingCarpet`.
-pub const ITEM_FLYING_CARPET: u32 = code(b"AIfc");
 /// The figurine subclasses (`CAbilityFigurineRedDrake`, `Furbolg`, `FelHound`) and the figurine base class.
 pub const FIGURINE_DRAKE: u32 = code(b"AIfd");
 pub const FIGURINE_FURBOLG: u32 = code(b"AIff");
@@ -129,7 +123,6 @@ pub const ITEM_GLYPH: u32 = code(b"AIgl");
 pub const ITEM_ILLUSION: u32 = code(b"AIil");
 /// `CAbilityLightningDamageBonus`, `CAbilityLightningPurge`.
 pub const ORB_LIGHTNING: u32 = code(b"AIlb");
-pub const ORB_LIGHTNING_PURGE: u32 = code(b"AIlp");
 /// `CAbilityItemMonsterLure` (a `CAbilityWard` child).
 pub const ITEM_MONSTER_LURE: u32 = code(b"AImo");
 /// `CAbilityPoisonDamageBonus` (Orb of Venom).
@@ -138,22 +131,12 @@ pub const ORB_VENOM: u32 = code(b"AIpb");
 pub const ITEM_PERM_INVIS: u32 = code(b"AIpi");
 /// `CAbilityItemPlaceMine` (Goblin Land Mine).
 pub const ITEM_PLACE_MINE: u32 = code(b"AIpm");
-/// `CAbilityItemVampirePotion`.
-pub const ITEM_VAMPIRE_POTION: u32 = code(b"AIpv");
-/// `CAbilityRebirth` (a `CAbilityTome` child).
-pub const ITEM_REBIRTH: u32 = code(b"AIrb");
-/// `CAbilityItemRandomItem`.
-pub const ITEM_RANDOM_ITEM: u32 = code(b"AIri");
 /// `CAbilityItemRecall` (Amulet of Recall).
 pub const ITEM_RECALL: u32 = code(b"AIrt");
 /// `CAbilityItemRevealMap` (Potion of Omniscience).
 pub const ITEM_REVEAL_MAP: u32 = code(b"AIrv");
-/// `CAbilitySpellEffectBonus` (the orbs that cast a spell on a hit).
-pub const ORB_SPELL_EFFECT: u32 = code(b"AIsb");
 /// `CAbilitySpiritTroll` (a `CAbilitySpiritWolf` child).
 pub const ITEM_SPIRIT_TROLL: u32 = code(b"AIsh");
-/// `CAbilitySoulTrap`.
-pub const ITEM_SOUL_TRAP: u32 = code(b"AIso");
 /// `CAbilityItemDetectAoe`, `CAbilityItemDetectByBuff`.
 pub const ITEM_DETECT_AOE: u32 = code(b"AIta");
 pub const ITEM_DETECT_BUFF: u32 = code(b"AItb");
@@ -168,7 +151,6 @@ pub const BUFF_DEFENSE: u32 = code(b"Bdef");
 pub const BUFF_DETECT: u32 = code(b"Bdet");
 pub const BUFF_CORRUPTION: u32 = code(b"BIcb");
 pub const BUFF_CLOAK: u32 = code(b"BIcf");
-pub const BUFF_VAMPIRE_POTION: u32 = code(b"BIpv");
 pub const BUFF_ILLUSION: u32 = code(b"BIil");
 pub const BUFF_FLARE: u32 = code(b"Xfla");
 pub const BUFF_ANIMATE_DEAD: u32 = code(b"BUan");
@@ -252,12 +234,6 @@ pub enum Family {
     OrbLightning,
     /// `CAbilityFreezeDamageBonus`: the Frost buff after a hit (UNSURE; no stock row has a duration).
     OrbFreezing,
-    /// `CAbilityLightningPurge`: registered, effect NOT DONE.
-    OrbPurge,
-    /// `CAbilitySpellEffectBonus`: registered, effect NOT DONE (it casts the spell named by `UnitID` on a hit).
-    OrbSpellEffect,
-    /// `CAbilityPassiveDefense`: registered, effect NOT DONE.
-    PassiveDefense,
     /// `CAbilityItemDefenseAoe`: `+DataA` armor for the allies in `Area` (UNSURE).
     DefenseAoe,
     /// `CAbilityItemDamageAoe`: `DataA` damage to the enemies in `Area` (UNSURE; no stock row).
@@ -270,12 +246,8 @@ pub enum Family {
     Flare,
     /// `CAbilityItemRevealMap`: the whole map is visible to the owner for `Dur` (UNSURE).
     RevealMap,
-    /// `CAbilityItemChangeTOD`: registered, effect NOT DONE.
-    ChangeTod,
     /// `CAbilityGlyph`: the owner's tech `UnitID` goes up by `DataA` (UNSURE).
     Glyph,
-    /// `CAbilityRebirth`: registered, effect NOT DONE.
-    Rebirth,
     /// `CAbilityItemBuild`: a building of the owner's race (the `UnitID` list) is created at the point (UNSURE).
     BuildScroll,
     /// `CAbilityItemPlaceMine`: the `UnitID` unit is created at the point (UNSURE).
@@ -284,12 +256,8 @@ pub enum Family {
     Command,
     /// `CAbilityItemIllusion`: an illusion of the target for `Dur` (UNSURE).
     Illusion,
-    /// `CAbilityItemVampirePotion`: the marker buff `BIpv` (UNSURE; its effect NOT DONE).
-    VampirePotion,
     /// `CAbilityItemAnimateDead`: up to `DataA` dead non-hero units of `Area` fight for the caster for `Dur` (UNSURE).
     AnimateDead,
-    /// `CAbilityItemFlyingCarpet`, `CAbilitySoulTrap`, `CAbilityItemRandomItem`: registered, effect NOT DONE.
-    Unmodelled,
 }
 
 impl Family {
@@ -319,9 +287,6 @@ impl Family {
                 | Family::OrbCorruption
                 | Family::OrbLightning
                 | Family::OrbFreezing
-                | Family::OrbPurge
-                | Family::OrbSpellEffect
-                | Family::PassiveDefense
         )
     }
 
@@ -367,25 +332,18 @@ impl Family {
             ORB_CORRUPTION => Family::OrbCorruption,
             ORB_LIGHTNING => Family::OrbLightning,
             ORB_FREEZING => Family::OrbFreezing,
-            ORB_LIGHTNING_PURGE => Family::OrbPurge,
-            ORB_SPELL_EFFECT => Family::OrbSpellEffect,
-            ITEM_PASSIVE_DEFENSE => Family::PassiveDefense,
             ITEM_DEFENSE_AOE => Family::DefenseAoe,
             ITEM_DAMAGE_AOE => Family::DamageAoe,
             ITEM_CURE_AOE => Family::CureAoe,
             ITEM_DETECT_AOE | ITEM_DETECT_BUFF => Family::Detect,
             ITEM_FLARE => Family::Flare,
             ITEM_REVEAL_MAP => Family::RevealMap,
-            ITEM_CHANGE_TOD => Family::ChangeTod,
             ITEM_GLYPH => Family::Glyph,
-            ITEM_REBIRTH => Family::Rebirth,
             ITEM_BUILD => Family::BuildScroll,
             ITEM_PLACE_MINE => Family::PlaceMine,
             ITEM_COMMAND => Family::Command,
             ITEM_ILLUSION => Family::Illusion,
-            ITEM_VAMPIRE_POTION => Family::VampirePotion,
             ITEM_ANIMATE_DEAD => Family::AnimateDead,
-            ITEM_FLYING_CARPET | ITEM_SOUL_TRAP | ITEM_RANDOM_ITEM => Family::Unmodelled,
             ITEM_RECALL | ITEM_TELEPORT => Family::TownPortal,
             ITEM_REINCARNATION => Family::ItemReincarnation,
             ORB_FIRE => Family::OrbFire,
@@ -1389,20 +1347,6 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
             }
         }
         Family::Illusion => illusion(gm, caster, target, level),
-        Family::VampirePotion => {
-            let t = effect_target(caster, target);
-            if gm.alive(t) {
-                let hero = gm.target_hero(t);
-                let dur = potion_buff_duration(level, hero, F32::ZERO);
-                let preds = crate::abilities::BuffPredicates {
-                    positive: true,
-                    magic: true,
-                    dispellable: true,
-                    ..crate::abilities::buff_predicates(BUFF_VAMPIRE_POTION)
-                };
-                gm.apply_mods_buff(t, BUFF_VAMPIRE_POTION, preds, Default::default(), dur);
-            }
-        }
         Family::AnimateDead => animate_dead(gm, caster, target, level),
         Family::Gold | Family::Lumber => {
             let t = effect_target(caster, target);

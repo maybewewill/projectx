@@ -198,9 +198,9 @@ fn row(item: &[u8; 4], alias: &[u8; 4], base: &[u8; 4], level: SpellLevel) -> Ro
 #[test]
 fn every_s45_code_has_a_class() {
     let own = [
-        b"AIan", b"AIbl", b"AIca", b"AIcb", b"AIcf", b"AIco", b"AIct", b"AIda", b"AIdd", b"AIdm", b"AIfa", b"AIfc", b"AIfd",
-        b"AIfe", b"AIff", b"AIfg", b"AIfh", b"AIfl", b"AIfm", b"AIfn", b"AIfo", b"AIgl", b"AIil", b"AIlb", b"AIlp", b"AIpb",
-        b"AIpi", b"AIpm", b"AIpv", b"AIrb", b"AIri", b"AIrt", b"AIrv", b"AIsb", b"AIso", b"AIta", b"AItb", b"AIte", b"AIzb",
+        b"AIan", b"AIbl", b"AIca", b"AIcb", b"AIcf", b"AIco", b"AIda", b"AIdm", b"AIfa", b"AIfd",
+        b"AIfe", b"AIff", b"AIfg", b"AIfh", b"AIfl", b"AIfm", b"AIfn", b"AIfo", b"AIgl", b"AIil", b"AIlb", b"AIpb",
+        b"AIpi", b"AIpm", b"AIrt", b"AIrv", b"AIta", b"AItb", b"AIte", b"AIzb",
     ];
     for code in own {
         assert!(Family::of_base(c(code)).is_some(), "{}", String::from_utf8_lossy(code));
@@ -213,7 +213,7 @@ fn every_s45_code_has_a_class() {
     assert_eq!(borrowed_class(c(b"AIsh")), Some(sim::orc::FERAL_SPIRIT));
     assert_eq!(borrowed_class(c(b"AIhe")), None);
     // Passive classes are not castable; the scrolls are.
-    for code in [b"AIfl", b"AIcb", b"AIcf", b"AIpi", b"AIdd"] {
+    for code in [b"AIfl", b"AIcb", b"AIcf", b"AIpi"] {
         assert!(!Family::of_base(c(code)).unwrap().castable());
     }
     for code in [b"AIda", b"AIfa", b"AIgl", b"AIrt", b"AIte", b"AIan"] {
