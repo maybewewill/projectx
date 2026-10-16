@@ -586,6 +586,16 @@ fn silence_stops_spell_casting_in_the_area() {
 #[test]
 fn charm_takes_a_creep_of_a_low_enough_level() {
     let mut h = started_s43();
+    {
+        // V6: the Charm rule refuses only a unit of the `creeps` race (8) above `f2i(DataA)`, with the level capped by Misc
+        // `MaxUnitLevel`: give the two test types the race and the Misc value the engine would install.
+        use sim::natives::game::{KillXpConfig, PickRecord};
+        let mut g = h.game_mut();
+        for code in [b"nlow", b"nbig"] {
+            g.unit_types_mut().set_pick_record(sim::abilities::code(code), PickRecord { race: 8, ..Default::default() });
+        }
+        g.set_kill_xp_config(KillXpConfig { max_unit_level: 100, ..Default::default() });
+    }
     let (low, big) = (unit(&h, "charm_tgt"), unit(&h, "charm_big"));
     h.start("charm_big_it", &[]).expect("charm big");
     run(&mut h, 5);

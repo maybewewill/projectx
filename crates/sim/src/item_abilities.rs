@@ -2503,6 +2503,47 @@ fn town_portal(gm: &mut Game, caster: ObjKey, target: CastTarget, level: &SpellL
     }
 }
 
+/// One step of the Town Portal destination search (`0x6F0264B0`, the group builder callback of `0x6F0610D0`; Unicorn `TN`
+/// rows of `tools/emu/v6_emu.py`): a candidate refused by the ability's slot `0x3EC` changes nothing and the search goes
+/// on; otherwise its squared distance to the reference point (soft subtracts and multiplies, then the add) replaces the
+/// kept one when none is kept yet or when it is **strictly** smaller (a NaN never replaces); with the `first` flag in the
+/// context the search stops after a candidate that passed the refusal test (`continue` false).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PortalStep {
+    /// The candidate became the kept destination.
+    pub replaced: bool,
+    /// The kept squared distance after the step (bits).
+    pub best: u32,
+    /// What the callback returns: keep enumerating.
+    pub keep_going: bool,
+}
+
+/// See [`PortalStep`]. `reference` is the clicked point `(x, y)`, `pos` the candidate's position, `best` the kept squared
+/// distance (`None` when nothing is kept yet).
+pub fn town_portal_step(excluded: bool, reference: (F32, F32), pos: (F32, F32), best: Option<F32>, first: bool) -> PortalStep {
+    let kept = best.map_or(0, |b| b.to_bits());
+    if excluded {
+        return PortalStep { replaced: false, best: kept, keep_going: true };
+    }
+    let dy = arith::sub(pos.1, reference.1);
+    let dx = arith::sub(pos.0, reference.0);
+    let d = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
+    let better = match best {
+        None => true,
+        Some(b) => softfloat_x87_gt(b, d),
+    };
+    if better {
+        PortalStep { replaced: true, best: d.to_bits(), keep_going: !first }
+    } else {
+        PortalStep { replaced: false, best: kept, keep_going: true }
+    }
+}
+
+/// The x87 compare `a > b` (false for a NaN) used by the callbacks of the original.
+fn softfloat_x87_gt(a: F32, b: F32) -> bool {
+    f32::from_bits(a.to_bits()) > f32::from_bits(b.to_bits())
+}
+
 /// The experience a `CAbilityLevelMod` of `n` levels adds (`0x6F0DE200`): the hero ends `n` levels higher with the same
 /// fraction of progress inside the level. `None` for a unit that is not a hero or when the tables are missing.
 pub fn level_mod_amount(gm: &Game, unit: ObjKey, n: i32) -> Option<F32> {

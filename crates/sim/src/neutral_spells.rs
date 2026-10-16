@@ -291,7 +291,10 @@ impl Game {
             return;
         }
         let hero = self.target_hero(target);
-        let dur = if hero { level.hero_dur } else { level.dur };
+        let existing = self.unit(target).buffs.iter().any(|b| b.base == BUFF_POISON);
+        // `0x6F13F2F0` (CONFIRMED, V6 `PA` rows): the numbers come from the plan; an illusion attacker poisons for 0.
+        let plan = poison_plan(self.unit(attacker).illusion, hero, existing, false, &level);
+        let dur = plan.dur;
         if !arith::lt(F32::ZERO, dur) {
             return;
         }
@@ -301,7 +304,7 @@ impl Game {
             ..buff_predicates(BUFF_POISON)
         };
         let serial = self.apply_mods_buff(target, BUFF_POISON, preds, crate::unit_spells::UnitMods::default(), dur);
-        self.register_tick(target, serial, attacker, level.data[0], false, POISON_DAMAGE_TYPE, true);
+        self.register_tick(target, serial, attacker, plan.a, false, POISON_DAMAGE_TYPE, true);
     }
 
     /// Pulverize swing start (`CAbilityWarStomp`, `Awar`, slot `0x124` = `0x6F170F90`, CONFIRMED structure): the
@@ -431,10 +434,10 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             if gm.unit(target).removed || !targs_ok(gm, caster, target, w) {
                 return Some(BadTarget);
             }
-            // `DataA` is the highest creep level that can be charmed (editor `NCH1`, LIKELY).
-            let max = gm.spell_level(caster, CHARM).data[0].to_f32();
-            let level = gm.unit_types().get(gm.unit(target).type_id).map_or(0, |t| t.level);
-            (level as f32 > max).then_some(BadTarget)
+            // `0x6F1A2600` (CONFIRMED, V6): `f2i(DataA)` is the highest creep level that can be charmed; only a unit of the
+            // `creeps` race is refused above it (`neutral_heroes2::creep_level_refuses`, Unicorn `CL` rows).
+            let max = softfloat::conv::f2i(gm.spell_level(caster, CHARM).data[0]);
+            crate::neutral_heroes2::creep_too_high(gm, target, max).then_some(BadTarget)
         }
         _ => crate::neutral_heroes2::target_error(gm, caster, base, target)
             .or_else(|| crate::unit_abilities_m::target_error(gm, caster, base, target)),
@@ -630,6 +633,18 @@ fn cyclone(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     if !gm.alive(target) {
         return;
     }
+    // `0x6F1CCB50` (CONFIRMED, V6 `CY` rows): before the buff goes on, the walker `0x6F079FE0` removes the target's physical and
+    // then its magic buffs of both polarities (timed life and aura buffs stay, no dispellable test).
+    for (physical, magic) in [(true, false), (false, true)] {
+        let select = crate::abilities::BuffSelect {
+            remove_positive: true,
+            remove_negative: true,
+            physical,
+            magic,
+            ..Default::default()
+        };
+        gm.remove_buffs(target, select);
+    }
     let dur = duration_for(&gm, &rec.level, target);
     if !arith::lt(F32::ZERO, dur) {
         return;
@@ -642,6 +657,38 @@ fn cyclone(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
         ..buff_predicates(BUFF_CYCLONE_TWO)
     };
     gm.apply_mods_buff(target, BUFF_CYCLONE_TWO, preds, UnitMods { invuln: true, ..UnitMods::default() }, dur);
+}
+
+/// What the Cyclone effect `0x6F1CCC70` does before and while it puts the buff on (Unicorn `CY` rows of `tools/emu/v6_emu.py`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CyclonePlan {
+    /// The two removal passes (physical buffs, then magic buffs; both polarities) run: false only for a target whose type kind
+    /// (`0x6F29C240`) is 2.
+    pub removes: bool,
+    /// The buff creator: 0 none (a target with unit flag `0x100`, or kind 2), 1 = `0x6F1C9160` (taken when `DataA` is not zero,
+    /// or NaN, and Misc `CycloneStasis` is 0), 2 = `0x6F1C9230`.
+    pub creator: u8,
+    /// `HeroDur` for a hero target, else `Dur` plus the ability's `+0x9C` term (soft add).
+    pub dur: F32,
+}
+
+/// See [`CyclonePlan`].
+pub fn cyclone_plan(hero: bool, level: &SpellLevel, extra: F32, stasis: i32, kind_is_2: bool, flag100: bool) -> CyclonePlan {
+    let dur = effect_duration(level, hero, extra);
+    if kind_is_2 {
+        return CyclonePlan { removes: false, creator: 0, dur };
+    }
+    // x87 equality with 0.0: only an ordered equal compare is "zero" (NaN is unordered and counts as nonzero)
+    let a = level.data[0].to_f32();
+    let nonzero = !(a == 0.0);
+    let creator = if flag100 {
+        0
+    } else if nonzero && stasis == 0 {
+        1
+    } else {
+        2
+    };
+    CyclonePlan { removes: true, creator, dur }
 }
 
 /// Silence (`ANsi`, `CAbilitySilence`; buff `CBuffSilence < CBuffSpeed`, `BNsi`): every enemy air or ground organic
@@ -865,6 +912,12 @@ fn howl(game: &RefCell<Game>, rec: &CastRec) {
     }
 }
 
+/// What the Charm effect `0x6F1B13E0` does to a target (Unicorn `CE` rows of `tools/emu/v6_emu.py`): an illusion is killed
+/// (its life setter, vtable `0x124`, gets 0.0), any other unit changes owner.
+pub fn charm_kills(illusion: bool) -> bool {
+    illusion
+}
+
 /// Charm (`ANch`, `CAbilityCharm`; the only extra overrides are the target rule and the effect spawn): the target
 /// changes owner to the caster's owner for good (the owner change of `SetUnitOwner`), its orders are cleared. The
 /// target rule (`DataA` = highest creep level) is in [`target_error`]. LIKELY.
@@ -872,6 +925,16 @@ fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     let changed = {
         let mut gm = game.borrow_mut();
         if !gm.alive(target) {
+            return;
+        }
+        // `0x6F1B13E0` (CONFIRMED, V6 `CE` rows): an illusion target is killed (its life setter gets 0.0), every other
+        // target changes owner.
+        if charm_kills(gm.unit(target).illusion) {
+            let died = crate::natives::unit::set_life(&mut gm, target, F32::ZERO);
+            drop(gm);
+            if died {
+                dispatch_unit_death_by(game, rt, target, None);
+            }
             return;
         }
         let to = gm.unit(rec.caster).owner;
@@ -890,6 +953,59 @@ fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
     if let Some((from, to)) = changed {
         crate::natives::event::fire_owner_change(game, rt, target, from, to);
     }
+}
+
+/// Which buff path the poison attack apply takes (`0x6F13F2F0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoisonPath {
+    /// The stacking variant is wanted but the ability flag `0x200` is set: nothing is applied.
+    Skip,
+    /// A new poison buff (`Bpoi`, creator `0x6F13ADC0`, apply slot `0x378`).
+    New,
+    /// The victim already carries one: its slot `0x380` refreshes it.
+    Refresh,
+    /// The stacking buff (creator `0x6F13AE90`, apply slot `0x35C`).
+    Stacking,
+}
+
+/// The arguments the poison attack apply hands to the buff (Unicorn `PA` rows of `tools/emu/v6_emu.py`, 350 rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PoisonPlan {
+    pub path: PoisonPath,
+    /// `HeroDur` for a hero victim, else `Dur` (no extra term).
+    pub dur: F32,
+    /// `DataA`, `DataB`, `DataC` of the level, all three 0.0 when the **attacker** is an illusion.
+    pub a: F32,
+    pub b: F32,
+    pub c: F32,
+    /// `f2i(DataD) & 8`, handed to the plain paths.
+    pub flag8: i32,
+    /// `f2i(DataD)`, handed to the stacking path; its low three bits select the stacking mode (0 = plain).
+    pub d: i32,
+}
+
+/// See [`PoisonPlan`]. `existing` is whether the victim already has the plain poison buff (found through `0x6F0787D0`),
+/// `flag200` the ability's flag `0x200` (set while a stacking buff is being applied; cleared at the end of the apply).
+pub fn poison_plan(attacker_illusion: bool, victim_hero: bool, existing: bool, flag200: bool, level: &SpellLevel) -> PoisonPlan {
+    let (a, b, c) = if attacker_illusion {
+        (F32::ZERO, F32::ZERO, F32::ZERO)
+    } else {
+        (level.data[0], level.data[1], level.data[2])
+    };
+    let dur = if victim_hero { level.hero_dur } else { level.dur };
+    let d = softfloat::conv::f2i(level.data[3]);
+    let path = if d & 7 == 0 {
+        if existing {
+            PoisonPath::Refresh
+        } else {
+            PoisonPath::New
+        }
+    } else if flag200 {
+        PoisonPath::Skip
+    } else {
+        PoisonPath::Stacking
+    };
+    PoisonPlan { path, dur, a, b, c, flag8: d & 8, d }
 }
 
 impl Game {

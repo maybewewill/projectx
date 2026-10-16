@@ -1553,7 +1553,11 @@ impl Game {
             return;
         }
         let hero = self.target_hero(target);
-        let dur = if hero { level.hero_dur } else { level.dur };
+        let existing = self.unit(target).buffs.iter().any(|b| b.base == BUFF_SLOW_POISON);
+        // The apply `0x6F13F500` (CONFIRMED, V6 `PS` rows) hands the same plan as the poison attack of Envenomed Spears:
+        // hero-rule duration, all three numbers zero for an illusion attacker.
+        let plan = crate::neutral_spells::poison_plan(self.unit(attacker).illusion, hero, existing, false, &level);
+        let dur = plan.dur;
         if !arith::lt(F32::ZERO, dur) {
             return;
         }
@@ -1563,12 +1567,12 @@ impl Game {
             ..buff_predicates(BUFF_SLOW_POISON)
         };
         let mods = UnitMods {
-            move_delta: arith::neg(level.data[1]),
-            attack_delta: arith::neg(level.data[2]),
+            move_delta: arith::neg(plan.b),
+            attack_delta: arith::neg(plan.c),
             ..UnitMods::default()
         };
         let serial = self.apply_mods_buff(target, BUFF_SLOW_POISON, preds, mods, dur);
-        self.register_tick(target, serial, attacker, level.data[0], false, DAMAGE_TYPE_SLOW_POISON, true);
+        self.register_tick(target, serial, attacker, plan.a, false, DAMAGE_TYPE_SLOW_POISON, true);
     }
 }
 

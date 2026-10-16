@@ -74,3 +74,47 @@ Arej	tools/emu/v4_spells_emu.py rejuv_effect/rejuv_buff	800	V4: effect 0x6F10853
 Atau	tools/emu/v4_spells_emu.py taunt_compare/taunt_effect	800	V4: the three sort comparators 0x6F160310/0x6F16E390/0x6F16E3B0 (400), effect 0x6F17B5A0 with the real CRT qsort, the DataA count rule and the per-unit duration (400, up to 10 candidates). Model rewritten: only the nearest F2I(DataA) enemies are taunted (was: every enemy in Area). Candidate collector 0x6F17B490 (distance key, taunt-buff key) and the buff effect itself not run
 Ahwd	tools/emu/v4_spells_emu.py hwd_effect	400	V4: point effect 0x6F0BABB0 creator arguments (type, point, facing from Misc BuildingAngle, flags 2 / 0x502 by Dur+0x9C). Model bug fixed: the ward faced the caster
 Aeye	tools/emu/v4_spells_emu.py eye_effect	400	V4: Sentry Ward point effect 0x6F0B8510, same creator arguments; same facing fix (Stasis Trap 0x6F1FD180 shares the model but was not run)
+AIhe	tools/emu/item_cores_emu.py FX	113	V6 from spec abilities-items.md s2: heal body 0x6F0E3990 hands DataA to the life adder, no ethereal factor (FX code 0 rows)
+AIma	tools/emu/item_cores_emu.py FX	130	V6 from spec s2: mana restore body 0x6F119F10 (FX code 1 rows)
+AIre	tools/emu/item_cores_emu.py FX	107	V6 from spec s2: restore body 0x6F1DBB10, life DataA then mana DataB (FX code 2 rows)
+AIha	tools/emu/item_cores_emu.py CB	350	V6 from spec s2: area heal callback 0x6F0F0470 (immune skip, illusion Misc gate); area membership not run
+AImi	tools/emu/item_cores_emu.py TM	96	V6 from spec s3: max life mod 0x6F0DE2F0 (life sink mode 2)
+AImn	tools/emu/item_cores_emu.py TM	82	V6 from spec s3: max mana mod 0x6F0DE320
+AIem	tools/emu/item_cores_emu.py TM	84	V6 from spec s3: experience mod 0x6F0DE390 (range flag 1)
+AIaa	tools/emu/item_cores_emu.py TM	88	V6 from spec s3: attack mod 0x6F0DE190 (base damage bonus both weapons)
+AIlm	tools/emu/item_cores_emu.py LM	350	V6 from spec s3: level mod effect 0x6F0DE200 (need table, clamp rule)
+AIxm	tools/emu/item_cores_emu.py AT	350	V6 from spec s3: attribute tome init 0x6F0E5D50 + effect 0x6F0DDDF0 (shared by AIam AIim AIsm)
+AIam	tools/emu/item_cores_emu.py AT	350	V6: same class and body as AIxm (CAbilityAttributeMod child)
+AIim	tools/emu/item_cores_emu.py AT	350	V6: same class and body as AIxm
+AIsm	tools/emu/item_cores_emu.py AT	350	V6: same class and body as AIxm
+AIab	tools/emu/item_cores_emu.py AB	350	V6 from spec s3: attribute bonus init 0x6F0E57E0
+AIat	tools/emu/item_cores_emu.py PB	112	V6 from spec s3: attack bonus apply 0x6F0F4100 / remove 0x6F0F4170 (PB dmg rows)
+AIde	tools/emu/item_cores_emu.py PB	104	V6 from spec s3: defense bonus apply 0x6F0F4340 / remove 0x6F0F4390 (PB arm rows)
+AIas	tools/emu/item_cores_emu.py PB	134	V6 from spec s3: attack speed bonus apply 0x6F0F4230 / remove 0x6F0F4290 (PB asp rows)
+AIml	tools/emu/item_cores_emu.py PL	186	V6 from spec s3: max life bonus init 0x6F0DDF70 / remove (PL life rows)
+AImm	tools/emu/item_cores_emu.py PL	164	V6 from spec s3: max mana bonus init 0x6F0DDFF0 / remove (PL mana rows)
+AIsp	tools/emu/item_cores_emu.py SP	350	V6 from spec s4: item speed effect 0x6F1FC4C0 buff apply arguments (duration by hero rule, DataA, DataB)
+AIvi	tools/emu/item_cores2_emu.py VI	173	V6 from spec s8: potion of invisibility duration 0x6F13C180 (buff class not decoded)
+AIvu	tools/emu/item_cores2_emu.py VI	177	V6 from spec s8: potion of invulnerability duration 0x6F13C270
+Arel	tools/emu/item_cores2_emu.py RL	350	V6 from spec s9: life regeneration apply 0x6F0FB0C0 rate and illusion gate
+AIrm	tools/emu/item_cores2_emu.py RM+RH	700	V6 from spec s9: mana regen rate 0x6F0E64E0 (350) + hero int term 0x6F2082C0 (350)
+AIva	tools/emu/item_cores2_emu.py VA	350	V6 from spec s10: vampire post-damage slot 0x6F0F53A0 (victim immunity query not run)
+AIsr	tools/emu/item_cores2_emu.py SR+RS	700	V6 from spec s10: spell reduction handler 0x6F0F5730 (350) + record scale 0x6F255800 (350)
+AIob	tools/emu/item_cores2_emu.py FR	350	V6 from spec s11: Orb of Frost post-hit 0x6F108FC0 buff duration and illusion bit
+AIfs	tools/emu/item_cores2_emu.py FG	350	V6 from spec s12: figurine summon body 0x6F0B8A00 batches (spawn spots not run)
+AIct	tools/emu/item_cores3_emu.py CT	350	V6 from spec s17: Moonstone 0x6F109EB0 time of day and duration arguments
+AIpv	tools/emu/item_cores3_emu.py PV+VP	700	V6 from spec s17: vampire potion apply arguments 0x6F109F70 (350) + hit handler gates 0x6F0FB7D0 (350)
+AIdd	tools/emu/item_cores3_emu.py DD	350	V6 from spec s17: passive defense handler 0x6F098F90 (arming slot 0x160 not run)
+AIlb	tools/emu/item_cores3_emu.py LB	350	V6 from spec s17: Orb of Lightning post-hit 0x6F0F2F70 firing path (the AIlp effect itself not run)
+AIfb	tools/emu/item_cores3_emu.py FB	350	V6 from spec s17: Orb of Fire area body arguments 0x6F0F2CD0
+AIzb	tools/emu/item_cores3_emu.py ZB	350	V6 from spec s17: Orb of Freezing stun duration 0x6F108E20
+AIcb	tools/emu/item_cores3_emu.py CR	350	V6 from spec s17: Orb of Corruption duration and amount 0x6F109B40
+AIms	tools/emu/item_cores3_emu.py MS	350	V6 from spec s17: move speed bonus is the maximum over abilities 0x6F077590 (boots do not stack)
+AIsb	tools/emu/item_cores3_emu.py SB	350	V6 from spec s17: spell effect bonus proc 0x6F0F3DD0 (PRD on stream 36, kind chances)
+AIil	tools/emu/item_cores3_emu.py IL	350	V6 from spec s17: Wand of Illusion apply arguments 0x6F13DFD0 (spawn spot 0x6F1D26B0 not run)
+AItp	tools/emu/v6_emu.py TN	350	V6: Town Portal destination callback 0x6F0264B0 (nearest candidate, strict <, first-flag stop, refusal slot 0x3EC); the refusal predicate, the teleported group and the cluster direction not run
+ANtm	tools/emu/v6_emu.py TM	350	V6: Transmute buff body 0x6F1B58B0 (gold = f2i(round(DataA * goldcost)), lumber with DataB, bounty add-on, illusion skip); the hand-over of DataA/DataB into the buff fields and the creep-level test not run
+ANch	tools/emu/v6_emu.py CL+CE	700	V6: creep level rule 0x6F1D2630 over unit level 0x6F29DCA0 (350) + Charm effect 0x6F1B13E0 (350); bugs fixed: race gate, illusion kill, f2i(DataA); effect spawn visuals not run
+Aven	tools/emu/v6_emu.py PA	350	V6: poison attack apply 0x6F13F2F0 (Envenomed Spears): hero-rule duration without extra term, DataA..C zero for an illusion attacker, DataD mode/flag split (plain new/refresh, stacking, skipped by flag 0x200); the buff DoT ticks and the stacking buff body not run
+Aspo	tools/emu/v6_emu.py PS	350	V6: poison attack apply 0x6F13F500 (Slow Poison): same plan as Aven (hero-rule duration, DataA..C zero for an illusion attacker, DataD mode split); the slows applied by the buff (0x6F128C20 sinks) not run
+Acyc	tools/emu/v6_emu.py CY	350	V6: Cyclone effect 0x6F1CCC70 -> 0x6F1CCB50: two buff removals before the buff (physical then magic, both polarities, bug fixed: model did not dispel), creator choice by DataA/CycloneStasis, hero-rule duration; the buff bodies (stun/invulnerability split, toss) not run
