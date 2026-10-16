@@ -155,7 +155,7 @@ fn host() -> ScriptHost {
         };
         g.set_spell_levels(POSSESSION, vec![lv(100, 600.0, 0.0, 0.0, &[])]);
         g.set_spell_levels(MAGIC_LEASH, vec![lv(50, 600.0, 0.0, 0.0, &[1.0])]);
-        g.set_spell_levels(SPIRIT_LINK, vec![lv(50, 600.0, 300.0, 60.0, &[3.0])]);
+        g.set_spell_levels(SPIRIT_LINK, vec![lv(50, 600.0, 300.0, 60.0, &[0.5, 3.0])]);
         g.set_spell_levels(SPELL_STEAL, vec![lv(75, 600.0, 0.0, 30.0, &[1.0])]);
         g.set_spell_levels(MILITIA, vec![lv(0, 0.0, 1000.0, 45.0, &[])]);
         g.set_spell_levels(POISON_STING, vec![lv(0, 0.0, 0.0, 10.0, &[5.0])]);
@@ -250,9 +250,10 @@ fn spirit_link_shares_a_hit_between_the_linked_units() {
     }
     let foe = unit(&h, "foe");
     let _ = h.game_mut().unit_damage_target(foe, a, f(90.0), false, false, 0, 1);
-    assert_eq!(life(&h, a), 470.0);
-    assert_eq!(life(&h, b), 470.0);
-    assert_eq!(life(&h, cc), 470.0);
+    // DataA 0.5: the struck unit keeps 45 of 90; the other 45 split over three linked units (15 each, the struck one too).
+    assert_eq!(life(&h, a), 440.0);
+    assert_eq!(life(&h, b), 485.0);
+    assert_eq!(life(&h, cc), 485.0);
     let _ = linker;
 }
 

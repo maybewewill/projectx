@@ -202,22 +202,28 @@ fn dispatch(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, killer: ObjKey, de
 // ---------------------------------------------------------------------------------------------------------------
 // Fan of Knives (`CAbilityFanOfKnives`, `0x6F8AAC14`, a `CAbilitySimpleSpell`, effect slot `0x428` = `0x6F08C100`).
 
-/// The damage each victim takes: `DataA`, or `DataB / n` when `n * DataA` exceeds the cap `DataB` (LIKELY: the tooltip
-/// "75 damage, at most 300 in total"; the original body `0x6F08C100` hands DataA/DataB to the area launcher `0x6F2C5C40`,
-/// whose cap arithmetic was not decoded). A zero cap means "no cap".
-pub fn fan_damage_each(gm: &Game, data_a: F32, data_b: F32, n: usize) -> F32 {
-    if n == 0 || !arith::lt(F32::ZERO, data_b) {
-        return data_a;
+/// The per-victim amounts of the area launcher `0x6F2C5C40` (CONFIRMED, Unicorn 400 cases, `tools/emu/v2_fan_emu.py`): `DataB` is a
+/// pool ("max damage", 1.0 when zero, then the pool is not used up), victims are taken nearest first; before each victim the loop
+/// stops unless the pool is above 0.0 or when `limit != 0 && i > limit` (`limit` = F2I(`DataC`), so `limit + 1` victims at
+/// most); a pool victim takes `prev - (prev - DataA)` through the truncating soft float (so it can differ from `DataA` by one
+/// ulp) and the pool falls by `DataA`: the victim that crosses zero is still hit in full.
+pub fn fan_plan(n: usize, data_a: F32, data_b: F32, limit: i32) -> Vec<F32> {
+    let pooled = data_b.to_f32() != 0.0;
+    let mut pool = if pooled { data_b } else { F32::from_bits(0x3F80_0000) };
+    let mut out = Vec::new();
+    for i in 0..n {
+        if !arith::lt(F32::ZERO, pool) || (limit != 0 && i as i64 > limit as i64) {
+            break;
+        }
+        let mut each = data_a;
+        if pooled {
+            let prev = pool;
+            pool = arith::sub(pool, data_a);
+            each = arith::sub(prev, pool);
+        }
+        out.push(each);
     }
-    let total = arith::mul(conv::i2r(n as i32), data_a);
-    if !arith::lt(data_b, total) {
-        return data_a;
-    }
-    match gm.order_tables() {
-        Some(t) => arith::div(data_b, conv::i2r(n as i32), t),
-        // A host without the Game.dll tables (tests): plain IEEE division.
-        None => F32::from_bits((data_b.to_f32() / n as f32).to_bits()),
-    }
+    out
 }
 
 fn fan_of_knives(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
@@ -236,8 +242,25 @@ fn fan_of_knives(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec
             .into_iter()
             .filter(|&k| is_enemy_unit(&gm, owner, k) && organic_ground_or_air(&gm, k) && !gm.unit_is_invulnerable(k))
             .collect();
-        let each = fan_damage_each(&gm, rec.level.data[0], rec.level.data[1], victims.len());
-        for k in victims {
+        // Nearest first (the launcher sorts its collector by distance, ties by unit id).
+        let mut victims: Vec<(F32, ObjKey)> = victims
+            .into_iter()
+            .map(|k| {
+                let u = gm.unit(k);
+                (arith::dist2(u.x, u.y, cx, cy), k)
+            })
+            .collect();
+        victims.sort_by(|a, b| {
+            if arith::lt(a.0, b.0) {
+                std::cmp::Ordering::Less
+            } else if arith::lt(b.0, a.0) {
+                std::cmp::Ordering::Greater
+            } else {
+                a.1 .0.cmp(&b.1 .0)
+            }
+        });
+        let plan = fan_plan(victims.len(), rec.level.data[0], rec.level.data[1], conv::f2i(rec.level.data[2]));
+        for ((_, k), each) in victims.into_iter().zip(plan) {
             if let Some(d) = gm.unit_damage_target(rec.caster, k, each, false, false, 0, DT_MAGIC) {
                 dead.push(d);
             }
@@ -250,23 +273,28 @@ fn fan_of_knives(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec
 // Mana Burn (`CAbilityManaBurn`, `0x6F8DEFBC`): the cast launches a bolt (`0x6F135220` -> launcher `0x6F2C5C40` with
 // DataA, DataB and the missile art); the burn itself is applied on arrival.
 
-/// The mana a burn takes and the damage it deals: `burned = min(mana, DataA)`, damage `burned * DataC` (LIKELY: DataC = 1 in
-/// every level and the tooltip says the damage equals the mana burned; the role of `DataB = 0.25` is UNSURE and unused).
-pub fn mana_burn_amounts(mana: F32, data_a: F32, data_c: F32) -> (F32, F32) {
-    let burned = if arith::lt(mana, data_a) { mana } else { data_a };
-    (burned, arith::mul(burned, data_c))
+/// The burn of one impact (CONFIRMED, Unicorn 400 cases, `tools/emu/v2_manaburn_emu.py`: impact `0x6F119650` with the mana taker
+/// `0x6F283DB0`): the amount is `DataA` (`0.0` for an invulnerable or magic-immune target, or when the missile has no ability),
+/// `burned = min(mana, amount)` (strict `<`), the target's mana becomes `mana + (-burned)` (soft add) and the damage dealt is
+/// `burned` itself. `DataB` and `DataC` are never read by the launch or the impact. Returns `(mana after, damage)`.
+pub fn mana_burn_result(mana: F32, data_a: F32, blocked: bool) -> (F32, F32) {
+    let amount = if blocked { F32::ZERO } else { data_a };
+    let burned = if arith::lt(mana, amount) { mana } else { amount };
+    (arith::add(mana, F32::from_bits(burned.to_bits() ^ 0x8000_0000)), burned)
 }
 
 fn mana_burn(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target: ObjKey) {
     let mut dead = None;
     {
         let mut gm = game.borrow_mut();
-        if !gm.alive(target) || gm.unit_is_invulnerable(target) {
+        if !gm.alive(target) {
             return;
         }
-        let (burned, damage) = mana_burn_amounts(gm.unit(target).mana, rec.level.data[0], rec.level.data[2]);
-        let rest = arith::sub(gm.unit(target).mana, burned);
+        let blocked = gm.unit_is_invulnerable(target) || gm.unit(target).magic_immune > 0;
+        let (rest, damage) = mana_burn_result(gm.unit(target).mana, rec.level.data[0], blocked);
         gm.write_mana(target, rest);
+        // The original delivers a record (flag 0x10 when the amount is zero) even for a zero burn; the model skips the
+        // zero-damage delivery.
         if arith::lt(F32::ZERO, damage) {
             dead = gm.unit_damage_target(rec.caster, target, damage, false, false, 0, DT_MAGIC);
         }

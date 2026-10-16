@@ -1399,16 +1399,15 @@ pub const SPIKED_CARAPACE: u32 = code(b"AUts");
 /// The sim's damage type of reflected damage (class `0x100000`, the record class of `0x6F1AD4E0`): bit 20.
 const THORNS_DAMAGE_TYPE: u32 = 20;
 
-/// The reflected damage of a Thorns buff (`CBuffAuraThorns` event handler `0x6F1AD4E0`, slot 63; gates and arithmetic read
-/// from the machine code, LIKELY): `strength * (amount - reduced)` with the soft multiply, where `amount` is the damage
-/// record's amount (`+0x10`) and `reduced` its `+0x18` (0.0 at creation, `0x6F2556E0`; the writer of that field was not found,
-/// the model takes 0.0), raised to 1.0 when it is below 1.0 (`0x6F00C110`, `lt(amount, 1.0)`). Gates in the original order:
-/// the record's ignore flag (bit 0, "ranged"), a class other than `0x10` (a basic attack), an allied attacker (`0x6F285AC0`),
-/// an invulnerable attacker (slot `0x11C`), a blocked attacker (`0x6F28D750`); an illusion owner reflects nothing but still
-/// plays the effect.
-pub fn thorns_reflect(strength: F32, amount: F32, reduced: F32) -> F32 {
-    let d = arith::sub(amount, reduced);
-    let v = arith::mul(strength, d);
+/// The reflected damage of a Thorns buff (`CBuffAuraThorns` event handler `0x6F1AD4E0`, slot 63). CONFIRMED, Unicorn 400
+/// cases, 0 mismatches (`tools/emu/v2_thorns_emu.py`, `tests/v2_vectors.rs`): in percent mode (buff flag `0x100`) the amount
+/// is `strength * (amount - reduced)` with the soft multiply and subtract, otherwise the flat `strength`; either way a value
+/// below 1.0 (`lt(v, 1.0)`) becomes 1.0. `amount` is the damage record's amount (`+0x10`) and `reduced` its `+0x18`.
+/// Gates in the original order: the record's ignore flag (bit 0, "ranged"), a class other than `0x10` (a basic attack), an
+/// allied attacker (`0x6F285AC0`), an invulnerable attacker (slot `0x11C`), a blocked attacker (`0x6F28D750`); an illusion
+/// owner delivers nothing but the effect still plays. Which input sets the percent flag (the stock `DataB = 1`) is UNSURE.
+pub fn thorns_reflect(strength: F32, amount: F32, reduced: F32, percent: bool) -> F32 {
+    let v = if percent { arith::mul(strength, arith::sub(amount, reduced)) } else { strength };
     if arith::lt(v, F32::ONE) {
         F32::ONE
     } else {
@@ -1511,7 +1510,7 @@ impl Game {
         }
         if let Some(s) = strength {
             if !self.unit(victim).illusion {
-                let reflect = thorns_reflect(s, damage, F32::ZERO);
+                let reflect = thorns_reflect(s, damage, F32::ZERO, true);
                 if let Some(d) = self.unit_damage_target(victim, attacker, reflect, false, false, 0, THORNS_DAMAGE_TYPE) {
                     died.push(d);
                 }
