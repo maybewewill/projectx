@@ -371,7 +371,7 @@ impl Game {
             if self.resource_amount(unit).is_none() {
                 let amount = self
                     .ability_level_record(unit, GOLD_MINE_ABILITY)
-                    .map(|l| conv::f2i(l.data[0]))
+                    .map(|l| gold_mine_init(l.data[0], l.data[1], l.data[2]).amount)
                     .or_else(|| self.ability_resource.get(&GOLD_MINE_ABILITY).copied())
                     .unwrap_or(0);
                 self.add_resource_node(unit, amount);
@@ -437,6 +437,47 @@ pub fn death_damage_rings(data: [F32; 4]) -> [(F32, F32); 2] {
 /// clear, the dying unit is no illusion (`+0x5C` bit `0x40000000`) and its flag byte `+0x20` has bit 0 clear. CONFIRMED (V7).
 pub fn death_damage_runs(enabled: bool, ability_flags: u32, unit_flags: u32, unit_byte: u8) -> bool {
     enabled && ability_flags & 0x80 == 0 && unit_flags & 0x4000_0000 == 0 && unit_byte & 1 == 0
+}
+
+/// What the Gold Mine ability class (`Agld`, init slot `0x6F0ACB00`) reads from the level-1 data: the gold amount `f2i(DataA)`
+/// (`+0x6C`), the mining rate `DataB` (1.0 when it is exactly 0.0, the holder at `+0x84`) and the number of mining slots
+/// `f2i(DataC)` capped at 32 (1 when `DataC` is exactly 0.0, `+0x8C`). CONFIRMED (V7, Unicorn `tools/emu/v7_harvest_emu.py`, 300
+/// cases; a negative or NaN `DataC` makes the original loop about 2^31 times, so such rows are not generated).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GoldMineInit {
+    pub amount: i32,
+    pub rate: F32,
+    pub slots: i32,
+}
+
+pub fn gold_mine_init(data_a: F32, data_b: F32, data_c: F32) -> GoldMineInit {
+    let is_zero = |x: F32| x.to_f32() == 0.0;
+    GoldMineInit {
+        amount: conv::f2i(data_a),
+        rate: if is_zero(data_b) { F32::ONE } else { data_b },
+        slots: if is_zero(data_c) { 1 } else { conv::f2i(data_c).min(32) },
+    }
+}
+
+/// The level-1 numbers of the harvest classes (`Ahrl` init `0x6F0557D0`, `Ahar` init `0x6F055A20`): `Area` is stored as the
+/// harvest property at `+0x18C`, `f2i(DataA)` is the lumber per hit (`+0x1D8`), `f2i(DataB)` the lumber capacity (`+0x198`), and
+/// `Ahar` adds `f2i(DataC)` as the gold capacity (`+0x194`). CONFIRMED (V7, 600 cases). The two attack-speed style properties at
+/// `+0x1C8` / `+0x1D0` copy the unit's attack ability fields `+0x16C` / `+0x190`, or 0.5 without an attack ability.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HarvestInit {
+    pub area: F32,
+    pub lumber_per_hit: i32,
+    pub lumber_capacity: i32,
+    pub gold_capacity: Option<i32>,
+}
+
+pub fn harvest_init(area: F32, data_a: F32, data_b: F32, data_c: F32, gold: bool) -> HarvestInit {
+    HarvestInit {
+        area,
+        lumber_per_hit: conv::f2i(data_a),
+        lumber_capacity: conv::f2i(data_b),
+        gold_capacity: gold.then(|| conv::f2i(data_c)),
+    }
 }
 
 /// The damage-class masks the collector reads (`0x6FA6F2CC`, `0x6FA6F2D0`; set at start-up, runtime values).
