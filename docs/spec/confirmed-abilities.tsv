@@ -64,3 +64,7 @@ AUdr	tools/emu/undead_ne2_emu.py	500	V5: Dark Ritual vtable slot 0x424 = 0x6F09F
 AEev	tools/emu/evasion_emu.py	300	V5 from spec attack-damage.md s12.2: EvadeAttack 0x6F08BD20 decision (strict chance > stream-2 draw, NaN evades, gates draw nothing); whose entries the gate walks is UNSURE
 AUfa	tools/emu/v5_frostarmor_emu.py + v5_frostarmor_h_emu.py	800	V5: cast effect 0x6F0BA520 + creator (400: DataA = buff duration, DataB = armor, chill duration by the ARMORED unit hero test) and retaliation handler 0x6F0BA3F0 gates + chill args (400); bugs fixed: hero test on the wrong unit, illusion flag ignored
 AUsl	tools/emu/v5_sleep_emu.py	800	V5: effect 0x6F1FBA80 (400: dead gate, hero duration, refresh/new main buff, keeper choice with DataA) + wake handler 0x6F1F6870 (400)
+Aabr	tools/emu/v7_aura_emu.py	300	V7: Babr apply 0x6F043FA0 (200 cases: fraction-of-max flag clear, soft mul strength x max life, illusion gate, applied bit) + ability apply 0x6F06F430 flag = (0.0 == DataB) (100); aura scan/targs not run
+Aoar	tools/emu/v7_aura_emu.py	300	V7: Boar apply 0x6F043A20 (200) + ability apply 0x6F06F310 flag (100); same rule as Aabr
+Aarm	tools/emu/v7_aura_emu.py	300	V7: Barm apply 0x6F043CE0 mana variant (200, max mana 0x6F4773E0) + ability apply 0x6F06F3A0 flag (100)
+Aasl	tools/emu/v7_slow_emu.py	600	V7: Basl update slot 0x370 0x6F1AD2F0: skip when both new strengths are weaker, per-component undo/replace/apply with the tolerance compares, sink values and applied flags (model bug fixed: refresh used to replace both strengths unconditionally)
