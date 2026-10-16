@@ -85,6 +85,76 @@ pub const BUFF_REGEN: u32 = code(b"BIrg");
 /// The buff of the item speed abilities (`BuffID` of `AIsp` and `AIsa`).
 pub const BUFF_SPEED: u32 = code(b"Bspe");
 
+// S45: the item abilities of `docs/spec/abilities-items.md` section 16 (class identities from the ability atlas).
+/// `CAbilityItemAnimateDead` (child of `CAbilityAnimateDead`).
+pub const ITEM_ANIMATE_DEAD: u32 = code(b"AIan");
+/// `CAbilityItemBuild` (build scrolls).
+pub const ITEM_BUILD: u32 = code(b"AIbl");
+/// `CAbilityItemCureAoe`.
+pub const ITEM_CURE_AOE: u32 = code(b"AIca");
+/// `CAbilityCorruptionDamageBonus` (Orb of Corruption).
+pub const ORB_CORRUPTION: u32 = code(b"AIcb");
+/// `CAbilityItemCloakOfFlames` (a `CAbilityPermImmolation` child).
+pub const ITEM_CLOAK_OF_FLAMES: u32 = code(b"AIcf");
+/// `CAbilityItemCommand`.
+pub const ITEM_COMMAND: u32 = code(b"AIco");
+/// `CAbilityItemDefenseAoe` (Scroll of Protection).
+pub const ITEM_DEFENSE_AOE: u32 = code(b"AIda");
+/// `CAbilityItemDispelChain` (Wand of Neutralization).
+pub const ITEM_DISPEL_CHAIN: u32 = code(b"AIdc");
+/// `CAbilityItemDamageAoe`.
+pub const ITEM_DAMAGE_AOE: u32 = code(b"AIdm");
+/// `CAbilityItemFlare` (Flare Gun).
+pub const ITEM_FLARE: u32 = code(b"AIfa");
+/// The figurine subclasses (`CAbilityFigurineRedDrake`, `Furbolg`, `FelHound`) and the figurine base class.
+pub const FIGURINE_DRAKE: u32 = code(b"AIfd");
+pub const FIGURINE_FURBOLG: u32 = code(b"AIff");
+pub const FIGURINE_BASE: u32 = code(b"AIfg");
+pub const FIGURINE_HOUND: u32 = code(b"AIfh");
+/// The flag classes (`CAbilityFlag < CBonusBase` and its four race children).
+pub const FLAG_BASE: u32 = code(b"AIfl");
+pub const FLAG_UNDEAD: u32 = code(b"AIfe");
+pub const FLAG_HUMAN: u32 = code(b"AIfm");
+pub const FLAG_NIGHT_ELF: u32 = code(b"AIfn");
+pub const FLAG_ORC: u32 = code(b"AIfo");
+/// `CAbilityGlyph` (a `CAbilityTome` child).
+pub const ITEM_GLYPH: u32 = code(b"AIgl");
+/// `CAbilityItemIllusion` (Wand of Illusion).
+pub const ITEM_ILLUSION: u32 = code(b"AIil");
+/// `CAbilityLightningDamageBonus`, `CAbilityLightningPurge`.
+pub const ORB_LIGHTNING: u32 = code(b"AIlb");
+/// `CAbilityItemMonsterLure` (a `CAbilityWard` child).
+pub const ITEM_MONSTER_LURE: u32 = code(b"AImo");
+/// `CAbilityPoisonDamageBonus` (Orb of Venom).
+pub const ORB_VENOM: u32 = code(b"AIpb");
+/// `CAbilityItemPermInvis`.
+pub const ITEM_PERM_INVIS: u32 = code(b"AIpi");
+/// `CAbilityItemPlaceMine` (Goblin Land Mine).
+pub const ITEM_PLACE_MINE: u32 = code(b"AIpm");
+/// `CAbilityItemRecall` (Amulet of Recall).
+pub const ITEM_RECALL: u32 = code(b"AIrt");
+/// `CAbilityItemRevealMap` (Potion of Omniscience).
+pub const ITEM_REVEAL_MAP: u32 = code(b"AIrv");
+/// `CAbilitySpiritTroll` (a `CAbilitySpiritWolf` child).
+pub const ITEM_SPIRIT_TROLL: u32 = code(b"AIsh");
+/// `CAbilityItemDetectAoe`, `CAbilityItemDetectByBuff`.
+pub const ITEM_DETECT_AOE: u32 = code(b"AIta");
+pub const ITEM_DETECT_BUFF: u32 = code(b"AItb");
+/// `CAbilityItemTeleport` (the parent of `AItp`).
+pub const ITEM_TELEPORT: u32 = code(b"AIte");
+/// `CAbilityItemWeb`.
+pub const ITEM_WEB: u32 = code(b"AIwb");
+/// `CAbilityFreezeDamageBonus`.
+pub const ORB_FREEZING: u32 = code(b"AIzb");
+/// Buff codes of the S45 abilities (`BuffID` of the stock rows).
+pub const BUFF_DEFENSE: u32 = code(b"Bdef");
+pub const BUFF_DETECT: u32 = code(b"Bdet");
+pub const BUFF_CORRUPTION: u32 = code(b"BIcb");
+pub const BUFF_CLOAK: u32 = code(b"BIcf");
+pub const BUFF_ILLUSION: u32 = code(b"BIil");
+pub const BUFF_FLARE: u32 = code(b"Xfla");
+pub const BUFF_ANIMATE_DEAD: u32 = code(b"BUan");
+
 /// The behaviour class of an item ability base code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
@@ -149,6 +219,45 @@ pub enum Family {
     Invis,
     /// `CAbilityItemInvul` (`AIvu`): the buff `Bvul` for the hero-rule duration; the holder is invulnerable meanwhile.
     Invul,
+    // ---- S45 (spec section 16) ----
+    /// `CAbilityFlag` and the race flags: a capture-the-flag marker, no stat effect (LIKELY).
+    Flag,
+    /// `CAbilityItemPermInvis`: a permanent invisibility marker buff on the carrier (UNSURE).
+    PermInvis,
+    /// `CAbilityItemCloakOfFlames`: a repeating burn of `DataA` to the enemies in `Area` (UNSURE).
+    CloakOfFlames,
+    /// `CAbilityPoisonDamageBonus`: the poison attack buff after a hit (UNSURE duration).
+    OrbVenom,
+    /// `CAbilityCorruptionDamageBonus`: `-DataA` armor for the hero-rule duration after a hit (UNSURE).
+    OrbCorruption,
+    /// `CAbilityLightningDamageBonus`: `DataA` lightning damage to the victim after a hit (UNSURE).
+    OrbLightning,
+    /// `CAbilityFreezeDamageBonus`: the Frost buff after a hit (UNSURE; no stock row has a duration).
+    OrbFreezing,
+    /// `CAbilityItemDefenseAoe`: `+DataA` armor for the allies in `Area` (UNSURE).
+    DefenseAoe,
+    /// `CAbilityItemDamageAoe`: `DataA` damage to the enemies in `Area` (UNSURE; no stock row).
+    DamageAoe,
+    /// `CAbilityItemCureAoe`: the negative buffs of the allies in `Area` end (UNSURE; no stock row).
+    CureAoe,
+    /// `CAbilityItemDetectAoe` / `CAbilityItemDetectByBuff`: the marker buff `Bdet` on the enemies in `Area` (UNSURE).
+    Detect,
+    /// `CAbilityItemFlare`: a visibility reveal of `Area` around the target point for `Dur` (UNSURE).
+    Flare,
+    /// `CAbilityItemRevealMap`: the whole map is visible to the owner for `Dur` (UNSURE).
+    RevealMap,
+    /// `CAbilityGlyph`: the owner's tech `UnitID` goes up by `DataA` (UNSURE).
+    Glyph,
+    /// `CAbilityItemBuild`: a building of the owner's race (the `UnitID` list) is created at the point (UNSURE).
+    BuildScroll,
+    /// `CAbilityItemPlaceMine`: the `UnitID` unit is created at the point (UNSURE).
+    PlaceMine,
+    /// `CAbilityItemCommand`: the target changes owner when its creep level is at most `DataA` (UNSURE).
+    Command,
+    /// `CAbilityItemIllusion`: an illusion of the target for `Dur` (UNSURE).
+    Illusion,
+    /// `CAbilityItemAnimateDead`: up to `DataA` dead non-hero units of `Area` fight for the caster for `Dur` (UNSURE).
+    AnimateDead,
 }
 
 impl Family {
@@ -171,6 +280,13 @@ impl Family {
                 | Family::OrbFire
                 | Family::OrbFrost
                 | Family::ItemReincarnation
+                | Family::Flag
+                | Family::PermInvis
+                | Family::CloakOfFlames
+                | Family::OrbVenom
+                | Family::OrbCorruption
+                | Family::OrbLightning
+                | Family::OrbFreezing
         )
     }
 
@@ -207,7 +323,28 @@ impl Family {
             BONUS_MANA_REGEN => Family::BonusManaRegen,
             BONUS_SPELL_REDUCTION => Family::BonusSpellReduction,
             BONUS_VAMPIRE => Family::BonusVampire,
-            FIGURINE | FIGURINE_GOLEM | FIGURINE_GUARD => Family::Figurine,
+            FIGURINE | FIGURINE_GOLEM | FIGURINE_GUARD | FIGURINE_DRAKE | FIGURINE_FURBOLG | FIGURINE_BASE
+            | FIGURINE_HOUND => Family::Figurine,
+            FLAG_BASE | FLAG_UNDEAD | FLAG_HUMAN | FLAG_NIGHT_ELF | FLAG_ORC => Family::Flag,
+            ITEM_PERM_INVIS => Family::PermInvis,
+            ITEM_CLOAK_OF_FLAMES => Family::CloakOfFlames,
+            ORB_VENOM => Family::OrbVenom,
+            ORB_CORRUPTION => Family::OrbCorruption,
+            ORB_LIGHTNING => Family::OrbLightning,
+            ORB_FREEZING => Family::OrbFreezing,
+            ITEM_DEFENSE_AOE => Family::DefenseAoe,
+            ITEM_DAMAGE_AOE => Family::DamageAoe,
+            ITEM_CURE_AOE => Family::CureAoe,
+            ITEM_DETECT_AOE | ITEM_DETECT_BUFF => Family::Detect,
+            ITEM_FLARE => Family::Flare,
+            ITEM_REVEAL_MAP => Family::RevealMap,
+            ITEM_GLYPH => Family::Glyph,
+            ITEM_BUILD => Family::BuildScroll,
+            ITEM_PLACE_MINE => Family::PlaceMine,
+            ITEM_COMMAND => Family::Command,
+            ITEM_ILLUSION => Family::Illusion,
+            ITEM_ANIMATE_DEAD => Family::AnimateDead,
+            ITEM_RECALL | ITEM_TELEPORT => Family::TownPortal,
             ITEM_REINCARNATION => Family::ItemReincarnation,
             ORB_FIRE => Family::OrbFire,
             ORB_FROST => Family::OrbFrost,
@@ -254,6 +391,8 @@ pub struct ItemAbilityData {
     pub levels: BTreeMap<u32, Vec<SpellLevel>>,
     /// The unit type codes of `DataC` / `DataD` of the figurine rows (0 = the row has none).
     pub unit_codes: BTreeMap<u32, [u32; 2]>,
+    /// The `UnitID` lists of the build scroll rows (the whole comma list, in row order).
+    pub unit_lists: BTreeMap<u32, Vec<u32>>,
     /// The aura level records of the item aura rows by alias (the aura classes read `Area`, `DataA..D`, `BuffID`, `targs`).
     pub auras: BTreeMap<u32, Vec<crate::auras::AuraLevel>>,
 }
@@ -271,6 +410,8 @@ enum Applied {
     Attrs { agi: i32, int: i32, str: i32 },
     /// A regeneration modifier of the agile engine (or, without stats, the aura bonus fallback).
     Regen { mana: bool, rate: F32, modifier: Option<crate::agile::ModId> },
+    /// A permanent marker buff (`AIpi`) or the Cloak of Flames buff (`AIcf`, with its burn timer record by serial).
+    Buff { code: u32, cloak: bool },
 }
 
 /// State of the item abilities (owned by the spell system).
@@ -290,6 +431,15 @@ pub struct State {
     regen: BTreeMap<u32, RegenRec>,
     /// The unit type codes of the figurine rows by alias.
     unit_codes: BTreeMap<u32, [u32; 2]>,
+    /// The `UnitID` lists of the build scroll rows by alias (one unit per race, in the order of the row).
+    unit_lists: BTreeMap<u32, Vec<u32>>,
+    /// Units the S45 effects killed, `(killer, victim)`, waiting for the death events of the caller that owns the runtime.
+    deaths: Vec<(ObjKey, ObjKey)>,
+    /// Cloak of Flames burns by buff serial.
+    cloaks: BTreeMap<u32, CloakRec>,
+    /// Visibility reveals of the flare and the potion of omniscience: id -> fog modifier.
+    fogs: BTreeMap<u32, ObjKey>,
+    next_fog: u32,
     /// The item ability ids that are aura classes (`AIae` -> Endurance, ...): the aura system treats them as the class.
     aura_alias: BTreeMap<u32, crate::auras::AuraKind>,
     /// Misc `IllusionsCanRestoreLife` (key CONFIRMED at `0x6F876B18`): illusions heal and carry life regeneration items.
@@ -298,6 +448,14 @@ pub struct State {
     pub illusions_mana: bool,
     /// Misc `IntRegenBonus` (read by `0x6F2082C0`): mana regeneration per point of hero intelligence.
     pub int_regen_bonus: F32,
+}
+
+/// One Cloak of Flames: the burn per tick, the radius and the repeating timer.
+#[derive(Debug, Clone, Copy)]
+struct CloakRec {
+    amount: F32,
+    area: F32,
+    timer: Option<TimerId>,
 }
 
 /// One running regeneration (`AIrg`): the amounts per 1.0 s tick and the repeating timer.
@@ -360,6 +518,9 @@ impl Game {
         for (&alias, codes) in &data.unit_codes {
             self.spells.item.unit_codes.insert(alias, *codes);
         }
+        for (&alias, list) in &data.unit_lists {
+            self.spells.item.unit_lists.insert(alias, list.clone());
+        }
         for (&alias, levels) in &data.auras {
             let kind = data.bases.get(&alias).and_then(|&b| crate::auras::AuraKind::of(b));
             if let Some(kind) = kind {
@@ -420,7 +581,7 @@ pub(crate) fn takes_no_target(gm: &Game, base: u32) -> bool {
 /// the unit spell's effect runs with the item's level record. CONFIRMED for `AIrs` (only the code and order getters
 /// of `CAbilityResurrection` are overridden) and `AIrd` (the same effect slot `0x424` = `0x6F0E6AA0` as `Arai`; the
 /// child only changes the autocast gate `0x380`); LIKELY for the others (same class).
-const DELEGATED: [u32; 15] = [
+const DELEGATED: [u32; 17] = [
     crate::unit_spells::DISPEL_MAGIC,
     crate::undead_ne::BLINK,
     crate::human_heroes::DIVINE_SHIELD,
@@ -436,7 +597,22 @@ const DELEGATED: [u32; 15] = [
     crate::orc::CHAIN_LIGHTNING,
     crate::undead_ne::DEATH_PACT,
     crate::undead_ne::INFERNO,
+    // S45: `AIsh` (`CAbilitySpiritTroll < CAbilitySpiritWolf`) and `AIwb` (`CAbilityItemWeb`) run the unit spell.
+    crate::orc::FERAL_SPIRIT,
+    crate::unit_spells::WEB,
 ];
+
+/// The unit spell class an S45 item class borrows by its atlas parent (`AIdc` -> Dispel Magic, `AIsh` -> Feral Spirit,
+/// `AImo` -> the ward effect, `AIwb` -> Web); `None` for every other base code.
+pub fn borrowed_class(base: u32) -> Option<u32> {
+    match base {
+        ITEM_DISPEL_CHAIN => Some(crate::unit_spells::DISPEL_MAGIC),
+        ITEM_SPIRIT_TROLL => Some(crate::orc::FERAL_SPIRIT),
+        ITEM_MONSTER_LURE => Some(crate::unit_spells::SENTRY_WARD),
+        ITEM_WEB => Some(crate::unit_spells::WEB),
+        _ => None,
+    }
+}
 
 /// The class code that runs an ability id's effect: the factory base code of the alias, with the two item classes that
 /// inherit a spell class mapped to it (`AIrs` -> `AHre`, `AIrd` -> `Arai`). An id with no registered base maps to itself.
@@ -447,7 +623,8 @@ pub(crate) fn effect_base(gm: &Game, alias: u32) -> u32 {
         // `AIdi` (CAbilityItemDispelAoe) overrides only the code and order getters of `CAbilityDispelMagic`; the area
         // effect slot `0x418` is `0x6F0EF320` in both.
         ITEM_DISPEL => crate::unit_spells::DISPEL_MAGIC,
-        b => b,
+        // S45 (LIKELY: the atlas parents; the effect slots `0x424` of these classes are their own, not decoded).
+        b => borrowed_class(b).unwrap_or(b),
     }
 }
 
@@ -613,6 +790,19 @@ fn apply_passive(gm: &mut Game, unit: ObjKey, item: ObjKey, alias: u32, fam: Fam
             }
             Applied::Regen { mana: true, rate, modifier }
         }
+        Family::PermInvis => {
+            let preds = crate::abilities::BuffPredicates {
+                positive: true,
+                magic: true,
+                ..crate::abilities::buff_predicates(BUFF_INVIS)
+            };
+            gm.add_buff(unit, BUFF_INVIS, preds);
+            Applied::Buff { code: BUFF_INVIS, cloak: false }
+        }
+        Family::CloakOfFlames => {
+            start_cloak(gm, unit, &level);
+            Applied::Buff { code: BUFF_CLOAK, cloak: true }
+        }
         _ => return,
     };
     gm.spells.item.applied.insert((item, alias), (unit, applied));
@@ -629,6 +819,12 @@ fn undo_applied(gm: &mut Game, unit: ObjKey, applied: Applied) {
         Applied::Sight(a) => add_sight(gm, unit, arith::neg(a)),
         Applied::Attrs { agi, int, str } => {
             add_attributes(gm, unit, agi.wrapping_neg(), int.wrapping_neg(), str.wrapping_neg())
+        }
+        Applied::Buff { code, cloak } => {
+            if cloak {
+                stop_cloak(gm, unit);
+            }
+            gm.remove_buff_code(unit, code);
         }
         Applied::Regen { modifier: Some(m), .. } => gm.release_modifier(m),
         Applied::Regen { mana, rate, modifier: None } => {
@@ -896,6 +1092,11 @@ pub fn on_hit(gm: &mut Game, attacker: ObjKey, victim: ObjKey, damage: F32, vict
             Some(Family::OrbFrost) if enemy && victim_alive && !gm.unit(attacker).illusion => {
                 gm.frost_apply(victim, &level);
             }
+            Some(fam @ (Family::OrbCorruption | Family::OrbVenom | Family::OrbLightning | Family::OrbFreezing))
+                if enemy && victim_alive && !gm.unit(attacker).illusion =>
+            {
+                orb_effects(gm, attacker, victim, fam, &level, &mut died);
+            }
             _ => {}
         }
     }
@@ -1099,6 +1300,54 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
                 apply_regen(gm, caster, k, level);
             }
         }
+        Family::DefenseAoe => {
+            for k in area_units(gm, caster, target, level) {
+                apply_defense(gm, k, level);
+            }
+        }
+        Family::DamageAoe => damage_aoe(gm, caster, target, level),
+        Family::CureAoe => {
+            let select = crate::abilities::BuffSelect {
+                remove_negative: true,
+                dispellable: true,
+                ..Default::default()
+            };
+            for k in area_units(gm, caster, target, level) {
+                gm.remove_buffs(k, select);
+            }
+        }
+        Family::Detect => detect(gm, caster, target, level),
+        Family::Flare => {
+            let (x, y) = match target {
+                CastTarget::Point(x, y) => (x, y),
+                _ => area_center(gm, caster, target),
+            };
+            reveal(gm, caster, x, y, level.area, level.dur);
+        }
+        Family::RevealMap => {
+            // The whole playable map: a circle larger than any map around the caster.
+            let (x, y) = area_center(gm, caster, target);
+            reveal(gm, caster, x, y, F32::from_bits(0x471C_4000), level.dur);
+        }
+        Family::Glyph => {
+            let owner = gm.unit(caster).owner;
+            if level.unit_id != 0 {
+                crate::natives::misc::add_tech(gm, owner, level.unit_id, conv::f2i(level.data[0]));
+            }
+        }
+        Family::BuildScroll => build_scroll(gm, caster, alias, target),
+        Family::PlaceMine => {
+            let (x, y) = match target {
+                CastTarget::Point(x, y) => (x, y),
+                _ => area_center(gm, caster, target),
+            };
+            let (owner, facing) = (gm.unit(caster).owner, gm.unit(caster).facing);
+            if level.unit_id != 0 {
+                let _ = crate::natives::unit::build(gm, owner, level.unit_id, x, y, facing, true);
+            }
+        }
+        Family::Illusion => illusion(gm, caster, target, level),
+        Family::AnimateDead => animate_dead(gm, caster, target, level),
         Family::Gold | Family::Lumber => {
             let t = effect_target(caster, target);
             let owner = gm.unit(t).owner;
@@ -1110,6 +1359,307 @@ fn apply_effect(gm: &mut Game, fam: Family, alias: u32, level: &SpellLevel, cast
             gm.credit_resource(owner, res, conv::f2i(d[0]), crate::economy::Flags::NONE);
         }
         _ => {}
+    }
+}
+
+
+// ---- S45 effects (spec section 16; UNSURE models unless the spec says otherwise) ----
+
+/// `AIda`: the hero-rule duration, the buff `Bdef` with `+DataA` armor (UNSURE: the stock `AIdb` row also has `DataB` 150
+/// and `DataC` 100, not used).
+fn apply_defense(gm: &mut Game, k: ObjKey, level: &SpellLevel) {
+    if !gm.alive(k) {
+        return;
+    }
+    let hero = gm.target_hero(k);
+    let dur = potion_buff_duration(level, hero, F32::ZERO);
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let preds = crate::abilities::BuffPredicates {
+        positive: true,
+        magic: true,
+        dispellable: true,
+        ..crate::abilities::buff_predicates(BUFF_DEFENSE)
+    };
+    let mods = crate::unit_spells::UnitMods {
+        armor: level.data[0],
+        ..Default::default()
+    };
+    gm.apply_mods_buff(k, BUFF_DEFENSE, preds, mods, dur);
+}
+
+fn enemies_in_area(gm: &Game, caster: ObjKey, cx: F32, cy: F32, area: F32) -> Vec<ObjKey> {
+    let owner = gm.unit(caster).owner;
+    crate::natives::circle_candidates(gm, cx, cy, area)
+        .into_iter()
+        .filter(|&k| gm.alive(k) && !gm.unit(k).hidden && gm.is_enemy(owner, gm.unit(k).owner))
+        .collect()
+}
+
+/// `AIdm`: `DataA` Spells-row damage to every enemy within `Area` of the target or the caster.
+fn damage_aoe(gm: &mut Game, caster: ObjKey, target: CastTarget, level: &SpellLevel) {
+    let (cx, cy) = area_center(gm, caster, target);
+    for k in enemies_in_area(gm, caster, cx, cy, level.area) {
+        if let Some(d) = gm.unit_damage_target(caster, k, level.data[0], false, false, 0, ORB_DAMAGE_TYPE) {
+            gm.spells.item.deaths.push((caster, d));
+        }
+    }
+}
+
+/// `AIta` / `AItb`: the marker buff `Bdet` on the enemy units around the target (or the caster) for the hero-rule duration.
+fn detect(gm: &mut Game, caster: ObjKey, target: CastTarget, level: &SpellLevel) {
+    let (cx, cy) = area_center(gm, caster, target);
+    for k in enemies_in_area(gm, caster, cx, cy, level.area) {
+        let hero = gm.target_hero(k);
+        let dur = potion_buff_duration(level, hero, F32::ZERO);
+        if !arith::lt(F32::ZERO, dur) {
+            continue;
+        }
+        let preds = crate::abilities::BuffPredicates {
+            negative: true,
+            ..crate::abilities::buff_predicates(BUFF_DETECT)
+        };
+        gm.apply_mods_buff(k, BUFF_DETECT, preds, Default::default(), dur);
+    }
+}
+
+/// `AIfa` / `AIrv`: a visible-state fog modifier over a circle for the caster's owner, stopped by a one-shot timer after
+/// `dur` (the original's reveal is an effect object, not decoded).
+fn reveal(gm: &mut Game, caster: ObjKey, x: F32, y: F32, area: F32, dur: F32) {
+    if !arith::lt(F32::ZERO, dur) {
+        return;
+    }
+    let owner = gm.unit(caster).owner;
+    let cells = gm.fog_grid().circle_shape(x, y, area);
+    let handle = gm.fog_create(owner, crate::natives::fog::FOG_VISIBLE, cells, false, false);
+    let Some(key) = gm.fog_modifier_of_handle(handle) else {
+        return;
+    };
+    gm.fog_start(key);
+    let st = &mut gm.spells.item;
+    st.next_fog += 1;
+    let id = st.next_fog;
+    st.fogs.insert(id, key);
+    gm.timers.start(
+        dur.to_f32(),
+        false,
+        crate::natives::game::Payload::Spell(crate::cast::SpellMsg::Item { kind: TICK_FOG, unit: caster, aux: id }),
+    );
+}
+
+/// `AIbl`: the unit of the row's `UnitID` list that matches the owner's race (human 1, orc 2, undead 3, night elf 4, in the
+/// order of the stock rows `hcas,ofrt,unp2,etoe`) is created at the target point, finished at once (UNSURE: `Dur` is the
+/// construction time in the data and is not modelled).
+fn build_scroll(gm: &mut Game, caster: ObjKey, alias: u32, target: CastTarget) {
+    let (x, y) = match target {
+        CastTarget::Point(x, y) => (x, y),
+        _ => area_center(gm, caster, target),
+    };
+    let (owner, facing) = (gm.unit(caster).owner, gm.unit(caster).facing);
+    let race = gm.player(owner).race.clamp(1, 4) as usize;
+    let Some(&code) = gm.spells.item.unit_lists.get(&alias).and_then(|l| l.get(race - 1).or(l.first())) else {
+        return;
+    };
+    let _ = crate::natives::unit::build(gm, owner, code, x, y, facing, true);
+}
+
+/// `AIil`: a copy of the target unit for the caster's player, an illusion for `Dur` (the damage factors are `DataA` dealt
+/// and `DataB` taken; UNSURE).
+fn illusion(gm: &mut Game, caster: ObjKey, target: CastTarget, level: &SpellLevel) {
+    let t = effect_target(caster, target);
+    if !gm.alive(t) || !arith::lt(F32::ZERO, level.dur) {
+        return;
+    }
+    let (ty, x, y, facing) = {
+        let u = gm.unit(t);
+        (u.type_id, u.x, u.y, u.facing)
+    };
+    let owner = gm.unit(caster).owner;
+    if let Some((k, _)) = crate::natives::unit::build(gm, owner, ty, x, y, facing, true) {
+        gm.unit_mut(k).illusion = true;
+        gm.register_illusion(k, level.data[0], level.data[1]);
+        gm.apply_timed_life(k, BUFF_ILLUSION, level.dur);
+    }
+}
+
+/// `AIan`: up to `DataA` dead non-hero units within `Area` come back under the caster's player with full life for `Dur`
+/// (timed life `BUan`). UNSURE: the corpse choice (query order), the placement (where they died), the hero case.
+fn animate_dead(gm: &mut Game, caster: ObjKey, target: CastTarget, level: &SpellLevel) {
+    let (cx, cy) = area_center(gm, caster, target);
+    let owner = gm.unit(caster).owner;
+    let mut left = conv::f2i(level.data[0]);
+    for k in crate::natives::circle_candidates(gm, cx, cy, level.area) {
+        if left <= 0 {
+            break;
+        }
+        let u = gm.unit(k);
+        if !u.dead || u.removed || u.hero.is_some() || gm.unit_types().is_building(u.type_id) {
+            continue;
+        }
+        gm.resurrect_unit(k);
+        if gm.unit(k).owner != owner {
+            crate::natives::unit::change_owner(gm, k, owner);
+        }
+        gm.unit_mut(k).summoned = true;
+        gm.apply_timed_life(k, BUFF_ANIMATE_DEAD, level.dur);
+        left -= 1;
+    }
+}
+
+/// `AIcf` (Cloak of Flames): the permanent buff `BIcf` and a repeating tick every `Dur` seconds (1.0 when the row has
+/// none) that burns the enemies within `Area` of the carrier for `DataA` (UNSURE: the tick period and amount reading).
+fn start_cloak(gm: &mut Game, unit: ObjKey, level: &SpellLevel) {
+    let period = if arith::lt(F32::ZERO, level.dur) { level.dur.to_f32() } else { 1.0 };
+    let preds = crate::abilities::buff_predicates(BUFF_CLOAK);
+    let serial = gm.add_buff(unit, BUFF_CLOAK, preds);
+    let timer = gm.timers.start(
+        period,
+        true,
+        crate::natives::game::Payload::Spell(crate::cast::SpellMsg::Item { kind: TICK_CLOAK, unit, aux: serial }),
+    );
+    gm.spells.item.cloaks.insert(serial, CloakRec { amount: level.data[0], area: level.area, timer: Some(timer) });
+}
+
+fn stop_cloak(gm: &mut Game, unit: ObjKey) {
+    let serials: Vec<u32> = gm.unit(unit).buffs.iter().filter(|b| b.base == BUFF_CLOAK).map(|b| b.serial).collect();
+    for s in serials {
+        if let Some(rec) = gm.spells.item.cloaks.remove(&s) {
+            if let Some(t) = rec.timer {
+                gm.timers.cancel(t);
+            }
+        }
+    }
+}
+
+/// The timer kinds of S45.
+pub const TICK_CLOAK: u8 = 2;
+pub const TICK_FOG: u8 = 3;
+
+/// `AIcb` / `AIpb` / `AIlb` / `AIzb` after a basic hit (UNSURE models, see the family docs).
+fn orb_effects(gm: &mut Game, attacker: ObjKey, victim: ObjKey, fam: Family, level: &SpellLevel, died: &mut Vec<ObjKey>) {
+    match fam {
+        Family::OrbCorruption => {
+            let hero = gm.target_hero(victim);
+            let dur = if hero { level.hero_dur } else { level.dur };
+            if !arith::lt(F32::ZERO, dur) {
+                return;
+            }
+            let preds = crate::abilities::BuffPredicates {
+                negative: true,
+                magic: true,
+                dispellable: true,
+                ..crate::abilities::buff_predicates(BUFF_CORRUPTION)
+            };
+            let mods = crate::unit_spells::UnitMods {
+                armor: arith::neg(level.data[0]),
+                ..Default::default()
+            };
+            gm.apply_mods_buff(victim, BUFF_CORRUPTION, preds, mods, dur);
+        }
+        Family::OrbVenom => {
+            let hero = gm.target_hero(victim);
+            let mut dur = if hero { level.hero_dur } else { level.dur };
+            if !arith::lt(F32::ZERO, dur) {
+                // The stock `AIpb` row has no duration; UNSURE stand-in of 5.0 s.
+                dur = F32::from_bits(5.0f32.to_bits());
+            }
+            let preds = crate::abilities::BuffPredicates {
+                negative: true,
+                physical: true,
+                ..crate::abilities::buff_predicates(crate::neutral_spells::BUFF_POISON)
+            };
+            let serial = gm.apply_mods_buff(victim, crate::neutral_spells::BUFF_POISON, preds, Default::default(), dur);
+            gm.register_tick(victim, serial, attacker, level.data[0], false, 23, true);
+        }
+        Family::OrbLightning => {
+            if let Some(d) = gm.unit_damage_target(attacker, victim, level.data[0], false, false, 0, ORB_DAMAGE_TYPE) {
+                died.push(d);
+            }
+        }
+        Family::OrbFreezing => gm.frost_apply(victim, level),
+        _ => {}
+    }
+}
+
+/// `AIco`: the target (a non-hero enemy or neutral unit whose creep level is at most `DataA`) changes owner to the
+/// caster's player and stops (the Charm body). UNSURE: the target rules of `0x6F1CF8B0`.
+fn command(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) {
+    let CastTarget::Unit(t) = rec.target else {
+        return;
+    };
+    let changed = {
+        let mut gm = game.borrow_mut();
+        if !gm.alive(t) || gm.unit(t).hero.is_some() {
+            return;
+        }
+        let owner = gm.unit(rec.caster).owner;
+        if !gm.is_enemy(owner, gm.unit(t).owner) {
+            return;
+        }
+        let max = conv::f2i(rec.level.data[0]);
+        let lvl = gm.unit_types().get(gm.unit(t).type_id).map_or(0, |ty| ty.level);
+        if lvl > max {
+            return;
+        }
+        let from = crate::natives::unit::change_owner(&mut gm, t, owner);
+        if from.is_some() {
+            let stop = crate::orders::Order {
+                id: crate::orders::ORDER_STOP,
+                class: crate::orders::OrderClass::Immediate,
+                point: None,
+                target: 0,
+            };
+            let _ = gm.issue_order(t, stop, true);
+        }
+        from.map(|f| (f, owner))
+    };
+    if let Some((from, to)) = changed {
+        crate::natives::event::fire_owner_change(game, rt, t, from, to);
+    }
+}
+
+/// A tick of the S45 timers: the Cloak of Flames burn and the end of a reveal.
+fn s45_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, aux: u32) {
+    match kind {
+        TICK_CLOAK => {
+            {
+                let mut gm = game.borrow_mut();
+                let Some(rec) = gm.spells.item.cloaks.get(&aux).copied() else {
+                    return;
+                };
+                let live = gm.alive(unit) && gm.unit(unit).buffs.iter().any(|b| b.serial == aux);
+                if !live {
+                    if let Some(t) = rec.timer {
+                        gm.timers.cancel(t);
+                    }
+                    gm.spells.item.cloaks.remove(&aux);
+                    return;
+                }
+                let (cx, cy) = (gm.unit(unit).x, gm.unit(unit).y);
+                for k in enemies_in_area(&gm, unit, cx, cy, rec.area) {
+                    if let Some(d) = gm.unit_damage_target(unit, k, rec.amount, false, false, 0, ORB_DAMAGE_TYPE) {
+                        gm.spells.item.deaths.push((unit, d));
+                    }
+                }
+            }
+            flush_deaths(game, rt);
+        }
+        TICK_FOG => {
+            let mut gm = game.borrow_mut();
+            if let Some(key) = gm.spells.item.fogs.remove(&aux) {
+                gm.fog_stop(key);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Dispatches the death events of the units the S45 effects killed.
+fn flush_deaths(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime) {
+    let deaths = std::mem::take(&mut game.borrow_mut().spells.item.deaths);
+    for (killer, victim) in deaths {
+        crate::natives::dispatch_unit_death_by(game, rt, victim, Some(killer));
     }
 }
 
@@ -1219,8 +1769,9 @@ fn apply_regen(gm: &mut Game, caster: ObjKey, target: ObjKey, level: &SpellLevel
 pub const TICK_REGEN: u8 = 1;
 
 /// A timer of [`crate::cast::SpellMsg::Item`]: one regeneration tick while the buff lives.
-pub(crate) fn on_timer(game: &RefCell<Game>, _rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, serial: u32) {
+pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, serial: u32) {
     if kind != TICK_REGEN {
+        s45_timer(game, rt, kind, unit, serial);
         return;
     }
     let mut gm = game.borrow_mut();
@@ -1392,14 +1943,22 @@ fn add_hero_xp(gm: &mut Game, unit: ObjKey, value: F32, range: bool) {
 
 /// The class effect of a cast item ability (called from `cast::run_effect`). Returns whether `rec.base` is an item
 /// ability handled here.
-pub(crate) fn run_effect(game: &RefCell<Game>, rec: &CastRec) -> bool {
-    let mut gm = game.borrow_mut();
-    let Some(fam) = gm.spells.item.family(rec.base) else {
-        return false;
+pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
+    let fam = {
+        let gm = game.borrow();
+        let Some(fam) = gm.spells.item.family(rec.base) else {
+            return false;
+        };
+        if !fam.castable() {
+            return true;
+        }
+        fam
     };
-    if !fam.castable() {
+    if fam == Family::Command {
+        command(game, rt, rec);
         return true;
     }
+    let mut gm = game.borrow_mut();
     let level = match fam {
         // The tomes read level 1 whatever the ability level.
         Family::TomeLife
@@ -1407,10 +1966,13 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rec: &CastRec) -> bool {
         | Family::TomeXp
         | Family::TomeLevel
         | Family::TomeAttrs
-        | Family::TomeAttack => level_one(&gm, rec.base),
+        | Family::TomeAttack
+        | Family::Glyph => level_one(&gm, rec.base),
         _ => rec.level,
     };
     apply_effect(&mut gm, fam, rec.base, &level, rec.caster, rec.target);
+    drop(gm);
+    flush_deaths(game, rt);
     true
 }
 

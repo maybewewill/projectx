@@ -797,7 +797,7 @@ fn tech_of(gm: &Game, p: u32, tech: u32) -> TechLevel {
 }
 
 /// Adds `count` levels, one at a time, while the level is below the maximum (`AddPlayerTechResearched`).
-fn add_tech(gm: &mut Game, p: u32, tech: u32, count: i32) {
+pub(crate) fn add_tech(gm: &mut Game, p: u32, tech: u32, count: i32) {
     let mut level = tech_of(gm, p, tech);
     let mut left = count;
     while left > 0 && level.researched < level.max_allowed {
