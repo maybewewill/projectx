@@ -229,6 +229,64 @@ def check_innerfire(cases, r, rows):
                        rd(CAP + 0x50), rd(CAP + 0x54)])
 
 
+VT_CRIPPLE_ABIL = 0x6F914394
+VT_CRIPPLE_BUFF = 0x6F89EDCC
+
+
+def random_weapons(r):
+    masks = [0x80, 1, 0x40, 0x100, 2, 0, 0xFFFF, 0x1C0, 0x7F, 0x181]
+    weap = []
+    for _w in range(2):
+        count = r.choice([0, 1, 1, 2, 3, 5, r.randint(-3, 9), r.getrandbits(32)]) if r.random() < 0.95 else r.getrandbits(32)
+        sides = r.choice([0, 2, 4, 6, 6, 8, 12, r.randint(-3, 20)])
+        bonus = r.choice([0, 5, 10, 20, 50, r.randint(-20, 120), -1])
+        mask = r.choice(masks) if r.random() < 0.8 else r.getrandbits(32)
+        weap.append((u32(count), u32(sides), u32(bonus), u32(mask)))
+    return weap
+
+
+def make_attack(weap, base0, base1):
+    mu.mem_write(ATK, b"\0" * 0x400)
+    wr(ATK + 0x30, TGT)
+    for w, (count, sides, bonus, mask) in enumerate(weap):
+        wr(ATK + 0x88 + 4 * w, count)
+        wr(ATK + 0x94 + 4 * w, sides)
+        wr(ATK + 0xA0 + 4 * w, bonus)
+        wr(ATK + 0x218 + 4 * w, mask)
+    wr(ATK + 0xAC, base0)
+    wr(ATK + 0xB0, base1)
+
+
+def check_cripple(cases, r, rows):
+    """Rows: dur herodur DataA DataB DataC extra hero | weapons (4 words each) | slot-0x320 arg1 arg2 | movement sink value,
+    calls | attack speed sink value, calls | attack counter deltas | stored amounts (+0xFC, +0x100) | holder +0xF4 value."""
+    ret0 = A.stub_ret(0, 0)
+    s320 = slot_capture2()
+    s324 = A.stub_ret(4, 0)
+    A.patch_jump(0x6F1C9090, A.stub_ret(0, BUFF))
+    for _ in range(cases):
+        dur, hdur, da, db, dc = (rbits(r) for _ in range(5))
+        if r.random() < 0.5:
+            dc = f2u(r.choice([0.1, 0.25, 0.5, 0.75, r.uniform(0, 1), r.uniform(-1, 2)]))
+        extra = rbits(r) if r.random() < 0.3 else 0
+        hero = r.random() < 0.5
+        weap = random_weapons(r)
+        A.make_ability(VT_CRIPPLE_ABIL, 0x41637269, 75)
+        level(A.LVL, dur, hdur, [da, db, dc])
+        wr(A.OBJ + 0x9C, extra)
+        make_target(hero)
+        base0, base1 = r.randint(0, 5), r.randint(0, 5)
+        make_attack(weap, base0, base1)
+        make_buff(VT_CRIPPLE_BUFF, (0xCC, 0xD4, 0xF0), (), {0x320: s320, 0x324: s324})
+        wr(BUFF + 0xF8, 2)
+        clear_cap()
+        call(0x6F1CC450, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append([dur, hdur, da, db, dc, extra, int(hero)] + [x for w in weap for x in w]
+                    + [rd(CAP + 0x80), rd(CAP + 0x84), rd(CAP + 0x10), rd(CAP + 0x14), rd(CAP + 0x20), rd(CAP + 0x24),
+                       u32(rd(ATK + 0xAC) - base0), u32(rd(ATK + 0xB0) - base1), rd(BUFF + 0xFC), rd(BUFF + 0x100),
+                       rd(BUFF + 0xF4)])
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -243,6 +301,8 @@ def main():
     check_bloodlust(cases, r, out["bloodlust"])
     out["innerfire"] = []
     check_innerfire(cases, r, out["innerfire"])
+    out["cripple"] = []
+    check_cripple(cases, r, out["cripple"])
     for name, rows in out.items():
         print("%s rows %d" % (name, len(rows)))
         for row in rows[:4]:

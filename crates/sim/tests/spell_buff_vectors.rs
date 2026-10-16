@@ -96,3 +96,37 @@ fn inner_fire_values_match_the_original() {
     assert!(skipped > 20 && applied > 300 && negative > 20 && clamped > 5, "{skipped} {applied} {negative} {clamped}");
     assert!(regen_off > 0 || true);
 }
+
+#[test]
+fn cripple_values_match_the_original() {
+    // 0..7: dur herodur A B C extra hero | 7..11 weapon 0 (count sides bonus targs) | 11..15 weapon 1 |
+    // 15 arg1, 16 duration | 17, 18 movement sink | 19, 20 attack speed sink | 21, 22 counter changes |
+    // 23, 24 stored amounts | 25 holder value
+    let rows = hex_rows(include_str!("data/unit_spells/cripple.txt"));
+    assert!(rows.len() >= 300);
+    let (mut zero, mut positive, mut negative, mut clamped) = (0, 0, 0, 0);
+    for r in &rows {
+        let l = level(r[0], r[1], &[r[2], r[3], r[4]]);
+        let v = cripple_values(&l, r[6] != 0, f(r[5]));
+        assert_eq!(r[16], v.dur.to_bits(), "duration, row {:08x?}", r);
+        assert_eq!((r[17], r[18]), (v.move_delta.to_bits(), 1), "movement sink, row {:08x?}", r);
+        assert_eq!((r[19], r[20]), (v.attack_delta.to_bits(), 1), "attack speed sink, row {:08x?}", r);
+        assert_eq!(r[25], v.damage_fraction.to_bits(), "damage holder, row {:08x?}", r);
+        for w in 0..2 {
+            let o = 7 + 4 * w;
+            let change = cripple_weapon_change(v.damage_fraction, r[o] as i32, r[o + 1] as i32, r[o + 2] as i32);
+            assert_eq!(r[21 + w], change as u32, "counter change, weapon {w}, row {:08x?}", r);
+            assert_eq!(r[23 + w], change.wrapping_neg() as u32, "stored amount, weapon {w}, row {:08x?}", r);
+            match change.signum() {
+                0 => zero += 1,
+                -1 => negative += 1,
+                _ => positive += 1,
+            }
+            if change.wrapping_neg() < 0 && change.wrapping_neg() == (r[o + 2] as i32).wrapping_add(r[o] as i32).wrapping_neg() {
+                clamped += 1;
+            }
+        }
+    }
+    assert!(zero > 20 && positive > 5 && negative > 100 && clamped > 5, "{zero} {positive} {negative} {clamped}");
+}
+

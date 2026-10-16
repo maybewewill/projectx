@@ -670,7 +670,10 @@ fn cripple_slows_movement_and_attacks_and_cuts_damage_then_wears_off() {
         let u = g.unit(foe2);
         assert_eq!(g.effective_move_speed(foe2).to_f32(), 270.0 * 0.25);
         assert!((u.bonuses.attack_mult.to_f32() - 0.5).abs() < 1e-6);
-        assert!((u.bonuses.damage_pct.to_f32() + 0.5).abs() < 1e-6);
+        // The damage cut is an integer change of the weapon's damage counter (`cripple_weapon_change`, Unicorn-checked);
+        // the test weapon has no dice, so its average damage is 0 and the change is 0 (no sign rule for Cripple).
+        assert_eq!(u.bonuses.damage, 0);
+        assert_eq!(u.bonuses.damage_pct.to_f32(), 0.0);
     }
     run(&mut h, 52);
     let g = h.game();

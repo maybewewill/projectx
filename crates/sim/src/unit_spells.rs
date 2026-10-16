@@ -2151,6 +2151,45 @@ fn run_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, seri
     }
 }
 
+/// What Cripple's effect slot `0x6F1CC450` hands to its buff (CONFIRMED, **Unicorn 400/400**,
+/// `tools/emu/spell_buff_emu.py`: the real effect, creator `0x6F1CC320`, apply slot `0x6F1B7FD0`, speed apply `0x6F0D6460`,
+/// sink routines and the damage routine `0x6F1B2BC0`): the duration as for Bloodlust; the movement sink gets `-DataA`
+/// and the attack speed sink `-DataB` (sign bit flipped); `DataC` reaches the damage holder unchanged.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CrippleValues {
+    pub dur: F32,
+    pub move_delta: F32,
+    pub attack_delta: F32,
+    pub damage_fraction: F32,
+}
+
+pub fn cripple_values(l: &SpellLevel, hero: bool, extra: F32) -> CrippleValues {
+    CrippleValues {
+        dur: effect_duration(l, hero, extra),
+        move_delta: arith::neg(l.data[0]),
+        attack_delta: arith::neg(l.data[1]),
+        damage_fraction: l.data[2],
+    }
+}
+
+/// The change Cripple makes to one weapon slot's damage counter (`0x6F1B2BC0`, CONFIRMED, **Unicorn 400/400**, both
+/// slots, no `targs` filter): `amount = F2I(add(mul(DataC, X), 0.5))` with `X` the weapon's AVERAGE damage
+/// ([`crate::orc::command_base_damage`]); a negative amount is clamped from below by `-(bonus + count)`; the counter changes
+/// by `-amount` (a zero amount changes nothing, and there is NO "at least one" sign rule here, unlike Inner Fire). The
+/// returned value is that change (negative for the usual positive `DataC`).
+pub fn cripple_weapon_change(fraction: F32, count: i32, sides: i32, bonus: i32) -> i32 {
+    let x = crate::orc::command_base_damage(count, sides, bonus);
+    let half = F32::from_bits(0x3F00_0000);
+    let mut amount = conv::f2i(arith::add(arith::mul(fraction, x), half));
+    if amount < 0 {
+        let floor = bonus.wrapping_add(count).wrapping_neg();
+        if amount < floor {
+            amount = floor;
+        }
+    }
+    amount.wrapping_neg()
+}
+
 /// What Bloodlust's effect slot `0x6F1CB080` hands to its buff (CONFIRMED, **Unicorn 400/400**,
 /// `tools/emu/spell_buff_emu.py`: the real effect, the real buff creator `0x6F1CAF70`, the real `CBuffBloodlust` apply slot
 /// `0x35C` and the real sink routines `0x6F0D59A0` / `0x6F0D59F0` on a fake buff): the duration is `HeroDur` for a hero and
@@ -2253,14 +2292,21 @@ fn buff_spell(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
             },
         )
     } else if rec.base == CRIPPLE {
-        // Cripple (`0x6F1CC450`): `DataA` movement, `DataB` attack speed, `DataC` damage reduction, all subtracted
-        // (the buff negates them, `0x6F1B7FD0`; the editor labels name them in this order).
+        let v = cripple_values(&rec.level, hero, F32::ZERO);
+        let type_id = gm.unit(target).type_id;
+        let ty = gm.attack_type(type_id);
+        let reduction = cripple_weapon_change(
+            v.damage_fraction,
+            i32::try_from(ty.dice).unwrap_or(i32::MAX),
+            i32::try_from(ty.sides).unwrap_or(i32::MAX),
+            ty.dice_bonus,
+        );
         (
             BUFF_CRIPPLE,
             UnitMods {
-                move_delta: arith::neg(d[0]),
-                attack_delta: arith::neg(d[1]),
-                damage_pct: arith::neg(d[2]),
+                move_delta: v.move_delta,
+                attack_delta: v.attack_delta,
+                damage_int: reduction,
                 ..UnitMods::default()
             },
         )

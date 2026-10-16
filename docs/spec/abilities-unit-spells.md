@@ -122,12 +122,19 @@ Both are `CAbilityAutoTargetSpell` classes with one unique effect slot (`0x424`)
 * Data (first level): cost 175, range 600, Dur 60 / HeroDur 10, `DataA` 0.75, `DataB` 0.5, `DataC` 0.5, buff `Bcri`,
   targets air, ground, enemy, organic, neutral. Editor labels: `DataA` movement speed reduction, `DataB` attack speed
   reduction, `DataC` damage reduction.
-* Effect slot `0x424` = `0x6F1CC450` (CONFIRMED structure): hero test, `HeroDur` / `Dur`, the buff apply
-  `0x6F1CC320`. The buff (`CBuffCripple`, apply `0x6F1B7FD0`) negates its values (sign flips) and hands two to the
-  speed buff base `CBuffSpeed` (movement `0x6F202FF0` and attack speed `0x6F0C9090` sinks, CONFIRMED by scanning the
-  apply slots) and one to the attack-record damage modifiers (slot `0x2D4`, negated list at `+0xF8`).
-* Model: `UnitMods { move_delta = -A, attack_delta = -B, damage_pct = -C }` as a negative, magic, dispellable buff
-  `Bcri`; refresh replaces the values. UNSURE: the order of the percentage damage modifier against other modifiers.
+* Effect slot `0x424` = `0x6F1CC450`, **CONFIRMED by Unicorn, 400 cases, 0 mismatches** (V1,
+  `tools/emu/spell_buff_emu.py`, `crates/sim/tests/data/unit_spells/cripple.txt`, `spell_buff_vectors.rs`; the real effect,
+  creator `0x6F1CC320`, `CBuffCripple` apply `0x6F1B7FD0`, `0x6F0D6460`, sink routines and the damage routine `0x6F1B2BC0`):
+  duration as for Bloodlust (`HeroDur` for a hero, else `Dur` + `+0x9C`); the movement sink gets `-DataA`, the attack
+  speed sink `-DataB` (sign bit flipped), `DataC` reaches the damage holder (`+0xF0`) unchanged (`cripple_values`).
+  The damage cut is an INTEGER per weapon slot, not a percentage (`cripple_weapon_change`): `amount = F2I(add(mul(DataC, X),
+  0.5))`, `X` the weapon's average damage (`orc::command_base_damage`), a negative amount clamped from below by
+  `-(bonus + count)`, no `targs` filter and no "at least one" rule (a zero amount changes nothing); the weapon's damage
+  counter (`0x6F0C6C10`) changes by `-amount` and the amount is kept for the undo.
+* Model: `UnitMods { move_delta = -A, attack_delta = -B, damage_int = -amount of weapon slot 0 }` as a negative, magic,
+  dispellable buff `Bcri`; refresh replaces the values. **Corrected in V1**: the model had `damage_pct = -DataC`
+  (a percentage of the rolled damage). Still UNSURE: the refresh slot `0x360` path (same arguments by reading only), the
+  weapon-2 amount (the sim keeps one damage counter).
 
 ## 5. Faerie Fire (`Afae`, `CAbilityFaerieFire` vtable `0x6F8AA36C`, an AutoTargetSpell)
 
