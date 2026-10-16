@@ -53,7 +53,8 @@ fn every_registered_ability_has_level_data() {
     assert!(unexpected.is_empty(), "registered codes without level data: {unexpected:?}");
     // The cast spells (an order id is registered) must carry real numbers; passives may have all-default levels.
     let spells: std::collections::BTreeSet<u32> = sim::cast::SpellSystem::new().order_bases().collect();
-    let empty_spells: Vec<String> = empty.iter().filter(|n| spells.contains(&u32::from_be_bytes(n.as_bytes().try_into().unwrap()))).cloned().collect();
+    // `Alam` (Sacrifice, S51) is cast but its stock 1.26a row carries only zero numbers (the unit comes from the target).
+    let empty_spells: Vec<String> = empty.iter().filter(|n| n.as_str() != "Alam").filter(|n| spells.contains(&u32::from_be_bytes(n.as_bytes().try_into().unwrap()))).cloned().collect();
     assert!(empty_spells.is_empty(), "cast spells whose level data is all default: {empty_spells:?}");
     for known in ["AHtb", "AOws", "Abur", "Aabr", "Anhe", "ACrn"] {
         let c = u32::from_be_bytes(known.as_bytes().try_into().unwrap());

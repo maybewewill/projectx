@@ -1247,6 +1247,8 @@ impl Game {
             self.spell_on_hit(attacker, target);
             // The ranger arrows of `hero_extra.rs` (Searing, Cold, Poison).
             died.extend(self.hero_orb_on_hit(attacker, target));
+            // Flak, Frag Shards, Flaming Attack and the breaths of `unit_abilities_a2.rs`.
+            died.extend(self.a2_on_hit(attacker, target));
         }
         let bash = if killed.is_none() {
             self.bash_on_hit(attacker, target)

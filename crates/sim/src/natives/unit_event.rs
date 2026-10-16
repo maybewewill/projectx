@@ -170,6 +170,7 @@ pub(crate) fn dispatch_unit_death_by(
         let ty = gm.unit(unit).type_id;
         gm.kill_log.push((killer_owner, owner, ty));
         gm.orc_on_unit_died(unit);
+        gm.a2_on_unit_died(unit);
     }
     // The Ankh of Reincarnation (`AIrc`) carried by the dying unit.
     crate::item_abilities::on_unit_died(game, rt, unit);

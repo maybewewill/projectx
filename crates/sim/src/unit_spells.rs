@@ -1939,7 +1939,7 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
 /// loss and the ability notification for it). The dispel record (amount 0, record flag `0x10`, enemies only) is applied by
 /// the target's damage handler, which is not decoded: no effect in the model. The mana loss takes `min(mana, amount)`
 /// (UNSURE).
-fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32, smart: bool, a7: u32) -> Option<ObjKey> {
+pub(crate) fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32, smart: bool, a7: u32) -> Option<ObjKey> {
     let owner = gm.unit(caster).owner;
     let (enemy, summoned, illusion, immune) = {
         let u = gm.unit(k);

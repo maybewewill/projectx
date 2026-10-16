@@ -38,6 +38,14 @@ pub enum Sim {
     Detector,
     /// A hook for the invisibility module (S44).
     Hook,
+    /// An economy ability tied to the production system (S51).
+    Economy,
+    /// An on-hit or on-death effect (S51).
+    Strike,
+    /// An ability on a tree or a corpse (S51).
+    Terrain,
+    /// A unit merge, split or conversion (S51).
+    Convert,
 }
 
 /// Confidence of the model of one code.
@@ -96,6 +104,13 @@ pub const ABILITIES: &[Info] = &[
     Info { code: code(b"Aloa"), class: "CAbilityCargoLoad", parent: "CAbilitySimpleSpell", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityCargoLoad (SimpleSpell): load order 852046, target unit with a cargo hold" },
 ];
 
+impl State {
+    /// Whether some unit carries the entangle ability (S51).
+    pub(crate) fn has_entanglers(&self) -> bool {
+        self.b.has_entanglers()
+    }
+}
+
 /// The registry entry of `base`.
 pub fn info(base: u32) -> Option<&'static Info> {
     ABILITIES.iter().find(|i| i.code == base)
@@ -141,6 +156,8 @@ pub struct State {
     ghosts: BTreeSet<ObjKey>,
     /// Units that carry `Aeth` (see ghosts).
     ghost_seers: BTreeSet<ObjKey>,
+    /// Part two of the batch (S51, `unit_abilities_a2.rs`).
+    pub(crate) b: crate::unit_abilities_a2::State,
     /// Pending morphs: unit -> (target type, ability that started it).
     morphing: BTreeMap<ObjKey, (u32, u32)>,
     /// Digestion records of devoured units: passenger -> (devourer, damage per second).
@@ -218,6 +235,7 @@ impl Game {
         self.sync_unit_abilities_m(unit);
         self.sync_cargo_and_detect(unit);
         self.sync_ghosts(unit);
+        self.sync_unit_abilities_a2(unit);
     }
 
     /// Applies aura `base` of `source` to `target` (the shared apply of `CAbilityAura`, `auras.rs`): source gates,
@@ -298,6 +316,7 @@ impl Game {
 
 /// Order ids this batch adds: `(order id, ability)`.
 pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
+    crate::unit_abilities_a2::register_orders(ids);
     for (id, base) in [
         (ORDER_LOAD, LOAD),
         (ORDER_DROP, DROP),
@@ -311,11 +330,14 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// Abilities of this batch cast without a target.
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    matches!(base, DROP | DROP_INSTANT | BERSERK | FRENZY)
+    matches!(base, DROP | DROP_INSTANT | BERSERK | FRENZY) || crate::unit_abilities_a2::takes_no_target(base)
 }
 
 /// Extra target rules (called after the earlier modules' rules).
 pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
+    if let Some(e) = crate::unit_abilities_a2::target_error(gm, caster, base, target) {
+        return Some(e);
+    }
     match base {
         LOAD => {
             // targs: ground,friend,invu,vuln (`Aloa` row).
@@ -338,6 +360,9 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
 
 /// The class effects of this batch. Returns false for any other ability.
 pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec) -> bool {
+    if crate::unit_abilities_a2::run_effect(game, rt, rec) {
+        return true;
+    }
     match rec.base {
         LOAD | DEVOUR => {
             if let CastTarget::Unit(t) = rec.target {
@@ -386,7 +411,8 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
                 crate::natives::dispatch_unit_death_by(game, rt, victim, killer);
             }
         }
-        _ => crate::unit_abilities_m::on_timer(game, rt, kind, unit, base, aux),
+        0x60..=0x6F => crate::unit_abilities_m::on_timer(game, rt, kind, unit, base, aux),
+        _ => crate::unit_abilities_a2::on_timer(game, rt, kind, unit, base, aux),
     }
 }
 

@@ -1426,7 +1426,7 @@ fn detect(gm: &mut Game, caster: ObjKey, target: CastTarget, level: &SpellLevel)
 
 /// `AIfa` / `AIrv`: a visible-state fog modifier over a circle for the caster's owner, stopped by a one-shot timer after
 /// `dur` (the original's reveal is an effect object, not decoded).
-fn reveal(gm: &mut Game, caster: ObjKey, x: F32, y: F32, area: F32, dur: F32) {
+pub(crate) fn reveal(gm: &mut Game, caster: ObjKey, x: F32, y: F32, area: F32, dur: F32) {
     if !arith::lt(F32::ZERO, dur) {
         return;
     }

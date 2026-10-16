@@ -422,6 +422,7 @@ impl Game {
     /// The ability handling `order_id`, if the unit has it.
     pub fn spell_for_order(&self, unit: ObjKey, order_id: u32) -> Option<u32> {
         let base = *self.spells.order_ids.get(&order_id)?;
+        let base = crate::unit_abilities_a2::order_alias(self, unit, order_id, base);
         let ab = self.unit(unit).abilities.get(base)?;
         (!ab.is_removed()).then_some(base)
     }
@@ -750,10 +751,11 @@ pub fn begin_cast(
                 if !crate::hero_extra::target_ok(&gm, class, t) {
                     return Err(CastError::BadTarget);
                 }
+                let walks = crate::unit_abilities_a2::ignores_range(class);
                 if let Some(e) = crate::unit_spells::target_error(&gm, caster, class, t).or_else(|| crate::unit_abilities_a::target_error(&gm, caster, class, t)) {
                     return Err(e);
                 }
-                if arith::lt(F32::ZERO, level.rng) {
+                if arith::lt(F32::ZERO, level.rng) && !walks {
                     let (a, b) = (gm.unit(caster), gm.unit(t));
                     let dx = arith::sub(b.x, a.x);
                     let dy = arith::sub(b.y, a.y);
@@ -764,7 +766,7 @@ pub fn begin_cast(
                 }
             }
             CastTarget::Point(px, py) => {
-                if arith::lt(F32::ZERO, level.rng) {
+                if arith::lt(F32::ZERO, level.rng) && !crate::unit_abilities_a2::ignores_range(class) {
                     let a = gm.unit(caster);
                     let dx = arith::sub(px, a.x);
                     let dy = arith::sub(py, a.y);

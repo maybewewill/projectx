@@ -171,7 +171,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
 /// Whether `t` is a legal unit target for the cast check: a live unit, except for Carrion Scarabs whose target is a
 /// corpse (targs `dead`).
 pub(crate) fn target_ok(gm: &Game, base: u32, t: ObjKey) -> bool {
-    if base == CARRION_SCARABS {
+    if base == CARRION_SCARABS || crate::unit_abilities_a2::wants_corpse(base) {
         let u = gm.unit(t);
         return u.dead && !u.removed;
     }

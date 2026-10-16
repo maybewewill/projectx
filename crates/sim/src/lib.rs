@@ -65,6 +65,7 @@ pub mod unit_counts;
 pub mod undead_ne;
 pub mod unit_abilities_m;
 pub mod unit_abilities_a;
+pub mod unit_abilities_a2;
 pub mod unit_spells;
 pub mod unitclass;
 pub mod unit_position;
