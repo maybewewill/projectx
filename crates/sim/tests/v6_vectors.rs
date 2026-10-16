@@ -49,3 +49,32 @@ fn town_portal_destination_step_matches_the_original() {
     }
     assert!(replaced > 50 && stopped > 10, "the rows reach the replace and stop paths ({replaced}, {stopped})");
 }
+
+#[test]
+fn transmute_buff_amounts_match_the_original() {
+    let rs = rows("TM");
+    assert!(rs.len() >= 300);
+    let (mut gave, mut skipped, mut bountied) = (0, 0, 0);
+    for r in &rs {
+        // TM s0 s1 flag ill goldcost woodcost bg bw bflag | called gold wood c d setlife
+        let (s0, s1) = (h(r[1]), h(r[2]));
+        let (flag, ill) = (r[3] == "1", r[4] == "1");
+        let (gc, wc) = (r[5].parse::<u32>().unwrap() as i32, r[6].parse::<u32>().unwrap() as i32);
+        let (bg, bw) = (r[7].parse::<i32>().unwrap(), r[8].parse::<i32>().unwrap());
+        let bflag = r[9] == "1";
+        assert_eq!(r[10], "|");
+        if r[11] == "0" {
+            assert!(ill, "row {r:?}: nothing is given only for an illusion");
+            skipped += 1;
+            continue;
+        }
+        assert!(!ill, "row {r:?}");
+        // the gold factor is the float at `eax` (struct+4 = s1), the lumber factor the one behind the third argument (s0)
+        let bounty = (flag && bflag).then_some((bg, bw));
+        let (gold, wood) = sim::neutral_heroes2::transmute_amounts(f(s1), f(s0), gc, wc, bounty);
+        assert_eq!((gold, wood), (r[12].parse::<i32>().unwrap(), r[13].parse::<i32>().unwrap()), "row {r:?}");
+        gave += 1;
+        bountied += usize::from(bounty.is_some());
+    }
+    assert!(gave > 150 && skipped > 20 && bountied > 20, "paths ({gave}, {skipped}, {bountied})");
+}

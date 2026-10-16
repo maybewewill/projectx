@@ -103,3 +103,4 @@ AIms	tools/emu/item_cores3_emu.py MS	350	V6 from spec s17: move speed bonus is t
 AIsb	tools/emu/item_cores3_emu.py SB	350	V6 from spec s17: spell effect bonus proc 0x6F0F3DD0 (PRD on stream 36, kind chances)
 AIil	tools/emu/item_cores3_emu.py IL	350	V6 from spec s17: Wand of Illusion apply arguments 0x6F13DFD0 (spawn spot 0x6F1D26B0 not run)
 AItp	tools/emu/v6_emu.py TN	350	V6: Town Portal destination callback 0x6F0264B0 (nearest candidate, strict <, first-flag stop, refusal slot 0x3EC); the refusal predicate, the teleported group and the cluster direction not run
+ANtm	tools/emu/v6_emu.py TM	350	V6: Transmute buff body 0x6F1B58B0 (gold = f2i(round(DataA * goldcost)), lumber with DataB, bounty add-on, illusion skip); the hand-over of DataA/DataB into the buff fields and the creep-level test not run

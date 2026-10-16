@@ -202,8 +202,7 @@ fn transmute(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, ta
         }
         let ty = gm.unit_types().get(gm.unit(target).type_id).cloned();
         let (gold_cost, wood_cost) = ty.map_or((0, 0), |t| (t.gold_cost, t.wood_cost));
-        let gold = conv::f2i(softfloat::math::round(arith::mul(rec.level.data[0], conv::i2r(gold_cost))));
-        let wood = conv::f2i(softfloat::math::round(arith::mul(rec.level.data[1], conv::i2r(wood_cost))));
+        let (gold, wood) = transmute_amounts(rec.level.data[0], rec.level.data[1], gold_cost, wood_cost, None);
         let owner = gm.unit(rec.caster).owner;
         if gold != 0 {
             gm.credit_resource(owner, crate::economy::Res::Gold, gold, crate::economy::Flags::NONE);
@@ -216,6 +215,21 @@ fn transmute(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, ta
     if died {
         dispatch_unit_death_by(game, rt, target, None);
     }
+}
+
+/// The amounts of the Transmute buff body `0x6F1B58B0` (Unicorn `TM` rows of `tools/emu/v6_emu.py`): gold =
+/// `f2i(round(DataA * I2R(goldcost)))`, lumber = `f2i(round(DataB * I2R(woodcost)))` (soft multiply, the round helper
+/// `0x6F6EF330`, then the truncating `f2i`), plus the target's own bounty (`0x6F29DD30` / `0x6F29DDD0`) when the buff
+/// carries the `DataD` flag and the bounty test `0x6F473170` answers yes (`bounty` is `Some((gold, lumber))` then; the
+/// sim has no bounty values, so the unit-spell path passes `None`).
+pub fn transmute_amounts(gold_mult: F32, wood_mult: F32, gold_cost: i32, wood_cost: i32, bounty: Option<(i32, i32)>) -> (i32, i32) {
+    let mut gold = conv::f2i(softfloat::math::round(arith::mul(gold_mult, conv::i2r(gold_cost))));
+    let mut wood = conv::f2i(softfloat::math::round(arith::mul(wood_mult, conv::i2r(wood_cost))));
+    if let Some((bg, bw)) = bounty {
+        gold = gold.wrapping_add(bg);
+        wood = wood.wrapping_add(bw);
+    }
+    (gold, wood)
 }
 
 /// Doom (`ANdo`; effect `0x6F0B65F0` creates `BNdo`, `CBuffDoom < CBuffLifeDoT`): the target takes `DataA` damage per
