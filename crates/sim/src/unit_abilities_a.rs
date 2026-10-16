@@ -96,7 +96,7 @@ pub const ABILITIES: &[Info] = &[
     Info { code: code(b"Advc"), class: "CAbilityDevourCargo", parent: "CAbilityCargoHold", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityDevourCargo < CAbilityCargoHold: devour stomach, capacity DataA 2" },
     Info { code: code(b"Aenc"), class: "CAbilityEntangleCargo", parent: "CAbilityCargoHold", sim: Sim::Cargo, conf: Conf::Likely, note: "CAbilityEntangleCargo < CAbilityCargoHold: entangled gold mine, capacity DataA 5" },
     Info { code: code(b"Aetf"), class: "CAbilityEtherealForm", parent: "CAbilityMorph", sim: Sim::Morph, conf: Conf::Likely, note: "CAbilityEtherealForm < CAbilityMorph" },
-    Info { code: code(b"Aeth"), class: "CAbilityGhostVisible", parent: "CAbility", sim: Sim::Hook, conf: Conf::Unsure, note: "CAbilityGhostVisible: lets the unit see ghosts (DataA/DataB flags); hook only" },
+    Info { code: code(b"Aeth"), class: "CAbilityGhostVisible", parent: "CAbility", sim: Sim::Hook, conf: Conf::Unsure, note: "CAbilityGhostVisible: the visible ghost form (editor ETH1/2: immune to morph effects, does not block buildings); adds no invisibility and sees nothing (S50 correction); hook only" },
     Info { code: code(b"Aetl"), class: "CAbilityEthereal", parent: "CAbilityPassive", sim: Sim::Passive, conf: Conf::Confirmed, note: "init slot 0x80 -> 0x6F07A340 adds one to the ethereal counter (+0x158), removal 0x6F0796A0 subtracts" },
     Info { code: code(b"Afzy"), class: "CAbilityFrenzy", parent: "CAbilityBloodlust", sim: Sim::Spell, conf: Conf::Likely, note: "CAbilityFrenzy < CAbilityBloodlust: self Bloodlust numbers, buff Bfzy" },
     Info { code: code(b"Agho"), class: "CAbilityGhost", parent: "CAbilityPermInvis", sim: Sim::Hook, conf: Conf::Unsure, note: "CAbilityGhost < CAbilityPermInvis: permanent invisibility; hook only (S44 invisibility.rs owns the rules)" },
@@ -411,7 +411,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
                 crate::natives::dispatch_unit_death_by(game, rt, victim, killer);
             }
         }
-        0x60..=0x6F => crate::unit_abilities_m::on_timer(game, rt, kind, unit, base, aux),
+        0x70..=0x7F => crate::unit_abilities_m::on_timer(game, rt, kind, unit, base, aux),
         _ => crate::unit_abilities_a2::on_timer(game, rt, kind, unit, base, aux),
     }
 }
@@ -702,7 +702,7 @@ impl Game {
         self.spells.unit_a.ghosts.contains(&unit)
     }
 
-    /// Whether `unit` carries `Aeth` (sees ghosts, hook).
+    /// Whether `unit` carries `Aeth`, the visible ghost form (S50: not a ghost seer, see `docs/spec/abilities-invisibility.md`).
     pub fn sees_ghosts(&self, unit: ObjKey) -> bool {
         self.spells.unit_a.ghost_seers.contains(&unit)
     }

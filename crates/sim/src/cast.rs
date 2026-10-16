@@ -748,7 +748,7 @@ pub fn begin_cast(
         let class = crate::item_abilities::effect_base(&gm, base);
         match target {
             CastTarget::Unit(t) => {
-                if !crate::hero_extra::target_ok(&gm, class, t) {
+                if !crate::hero_extra::target_ok(&gm, class, t) || gm.spell_target_unseen(caster, t) {
                     return Err(CastError::BadTarget);
                 }
                 let walks = crate::unit_abilities_a2::ignores_range(class);
@@ -853,6 +853,7 @@ fn stage1(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
         && !crate::undead_ne::cast_field_is_period(rec.base)
         && !crate::human_heroes::cast_field_is_wave_interval(rec.base)
         && !crate::unit_abilities_m::cast_field_is_duration(rec.base)
+        && !crate::neutral_heroes2::cast_field_is_data(rec.base)
     {
         game.borrow_mut().timers.start(
             rec.level.cast.to_f32(),
@@ -937,6 +938,9 @@ fn channel_time(gm: &Game, rec: &CastRec) -> F32 {
     if let Some(t) = crate::human_heroes::channel_time_override(rec.base, &rec.level) {
         return t;
     }
+    if let Some(t) = crate::neutral_heroes2::channel_time_override(rec.base, &rec.level) {
+        return t;
+    }
     gm.spells
         .timings
         .get(&gm.unit(rec.caster).type_id)
@@ -973,6 +977,7 @@ fn end_cast(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32, completed
     }
     crate::human_heroes::on_cast_end(game, &rec);
     crate::hero_extra::on_cast_end(game, &rec);
+    crate::neutral_heroes2::on_cast_end(game, &rec, completed);
     fire_spell_event(game, rt, SPELL_ENDCAST, &rec);
     crate::item_abilities::on_cast_end(game, rt, &rec, completed);
 }
@@ -1247,6 +1252,7 @@ pub fn expire_spell_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, msg:
         SpellMsg::HeroSpell { kind, unit, aux } if kind >= 0x80 => crate::orc::on_timer(game, rt, kind, unit, aux),
         SpellMsg::HeroSpell { kind, unit, aux } => crate::undead_ne::on_timer(game, rt, kind, unit, aux),
         SpellMsg::Human { kind, id } => crate::human_heroes::on_timer(game, rt, kind, id),
+        SpellMsg::UnitSpell { kind, unit, base, aux } if (0x60..0x70).contains(&kind) => crate::neutral_heroes2::on_timer(game, rt, kind, unit, base, aux),
         SpellMsg::UnitSpell { kind, unit, base, aux } if kind >= 0x40 => crate::unit_abilities_a::on_timer(game, rt, kind, unit, base, aux),
         SpellMsg::UnitSpell { kind, unit, base, aux } => crate::unit_spells::on_timer(game, rt, kind, unit, base, aux),
         SpellMsg::Item { kind, unit, aux } => crate::item_abilities::on_timer(game, rt, kind, unit, aux),

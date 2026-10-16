@@ -568,16 +568,18 @@ impl Game {
         let dx = arith::sub(b.x, a.x);
         let dy = arith::sub(b.y, a.y);
         let d2 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
-        !arith::lt(arith::mul(level.area, level.area), d2)
+        // S50: the data row carries the radius in `Rng` (900); `Area` is 0.
+        let radius = if arith::lt(F32::ZERO, level.area) { level.area } else { level.rng };
+        !arith::lt(arith::mul(radius, radius), d2)
     }
 }
 
 // ---- S52: timers, repair, replenish, unsummon, taunt ----
 
 /// Timer kinds of this module (`SpellMsg::UnitSpell`, routed here by `unit_abilities_a::on_timer`).
-pub const KIND_REPAIR: u8 = 0x60;
-pub const KIND_REPLENISH: u8 = 0x61;
-pub const KIND_PULSE: u8 = 0x62;
+pub const KIND_REPAIR: u8 = 0x70;
+pub const KIND_REPLENISH: u8 = 0x71;
+pub const KIND_PULSE: u8 = 0x72;
 /// Seconds between two repair ticks (a model choice, UNSURE: the original's repair progress is a per-tick task of the
 /// builder that was not read).
 pub const REPAIR_PERIOD: f32 = 0.5;

@@ -992,6 +992,9 @@ impl Game {
     /// The first unit of the acquire-range query that the unit may attack (CONFIRMED first-passing rule, LIKELY
     /// selection). Returns `None` for a unit whose weapon has no range (it could never swing).
     fn scan_target(&self, unit: ObjKey) -> Option<ObjKey> {
+        if !self.invisibility_allows_acquire(unit) {
+            return None;
+        }
         let ty = self.attack_type_of(unit);
         if !arith::gt(ty.range, F32::ZERO) {
             return None;
@@ -1249,6 +1252,8 @@ impl Game {
             died.extend(self.hero_orb_on_hit(attacker, target));
             // Flak, Frag Shards, Flaming Attack and the breaths of `unit_abilities_a2.rs`.
             died.extend(self.a2_on_hit(attacker, target));
+            // Black Arrow and Incinerate (`neutral_orbs.rs`).
+            died.extend(self.neutral_orb_on_hit(attacker, target));
         }
         let bash = if killed.is_none() {
             self.bash_on_hit(attacker, target)

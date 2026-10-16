@@ -84,7 +84,9 @@ const PULVERIZE_DAMAGE_TYPE: u32 = 5;
 /// `(derived class code, modelled code it derives from, order id of the derived class)`. Parents are the RTTI
 /// parents of the atlas (`docs/research/ability-atlas/factory.tsv`); the order ids are the Unicorn-checked cast getters
 /// (`tools/analysis/ability_orders.py`, slot `0x348`).
-pub const STATIC_PARENTS: [(u32, u32, u32); 8] = [
+pub const STATIC_PARENTS: [(u32, u32, u32); 9] = [
+    // CAbilityInferno (neutral Pit Lord row) shares the layout of the Dreadlord's `AUin` (S50).
+    (code(b"ANin"), code(b"AUin"), 852_232),
     // CAbilityNeutralHeal < CAbilityHeal: only the order ids (slots 0x348 / 0x308 / 0x318) differ.
     (code(b"Anhe"), code(b"Ahea"), ORDER_NEUTRAL_HEAL),
     // CAbilityCreepThunderBolt < CAbilityThunderBolt, no override but the codes.
@@ -123,10 +125,16 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"AUdr", *b"AUfa", *b"AUfn", *b"AUfu", *b"Auhf", *b"AUim", *b"AUin", *b"AUsl", *b"AUts", *b"Aweb", *b"Ablo",
     *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
     *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm", *b"ANsg", *b"ANsq", *b"ANsw", *b"ANdh", *b"ANdb", *b"ANlm", *b"ANso", *b"ANab", *b"ANfl",
+    *b"ANtm", *b"ANdo", *b"ANcs", *b"ANhs", *b"ANst", *b"ANvc", *b"ANef", *b"ANcr", *b"ANrg", *b"ANeg", *b"ANsy", *b"ANto", *b"Atdg", *b"Atsp", *b"ANba", *b"ANbs", *b"ANic",
+    *b"ANbr", *b"ANmr", *b"ANde", *b"ANpi", *b"ANrc", *b"ANfd", *b"ANwm", *b"ANpa", *b"ANcl", *b"ANdp", *b"ANin", *b"ANmo", *b"ANia",
 ];
 
 fn is_modelled(c: u32) -> bool {
     MODELLED.iter().any(|m| u32::from_be_bytes(*m) == c)
+        || crate::unit_abilities_a::ABILITIES.iter().any(|i| i.code == c)
+        || crate::unit_abilities_m::CODES.iter().any(|(b, _, _, st)| {
+            u32::from_be_bytes(**b) == c && matches!(st, crate::unit_abilities_m::Status::Modelled | crate::unit_abilities_m::Status::Query)
+        })
 }
 
 /// The modelled ability the alias rows of one `code` group stand for, if any. `code_col` is the group's `code` column,
@@ -159,6 +167,10 @@ pub struct State {
     pulv_armed: BTreeSet<ObjKey>,
     /// Mana Shield parameters `(DataA, DataB)` of the level the shield was cast at, by unit (valid while `BNms` exists).
     shield: BTreeMap<ObjKey, (F32, F32)>,
+    /// State of the S50 batch (`neutral_heroes2.rs`).
+    pub(crate) h2: crate::neutral_heroes2::State,
+    /// The invisibility model (`invisibility.rs`).
+    pub(crate) inv: crate::invisibility::State,
 }
 
 /// The order ids this module adds: `(order id, modelled code)`.
@@ -185,11 +197,12 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     ] {
         ids.insert(id, base);
     }
+    crate::neutral_heroes2::register_orders(ids);
 }
 
 /// Abilities of this module cast without a target (Mana Shield, Howl of Terror).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    base == MANA_SHIELD || base == HOWL || is_summon(base)
+    base == MANA_SHIELD || base == HOWL || is_summon(base) || crate::neutral_heroes2::takes_no_target(base)
 }
 
 fn is_summon(base: u32) -> bool {
@@ -206,6 +219,12 @@ pub(crate) fn toggle_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Optio
         }
         gm.remove_buff_code(unit, BUFF_MANA_SHIELD);
         return Some(true);
+    }
+    if let Some(r) = crate::neutral_forms::toggle_order(game, unit, id) {
+        return Some(r);
+    }
+    if let Some(r) = crate::neutral_orbs::toggle_order(game, unit, id) {
+        return Some(r);
     }
     if id != ORDER_NEUTRAL_HEAL_ON && id != ORDER_NEUTRAL_HEAL_OFF {
         return None;
@@ -236,6 +255,8 @@ impl Game {
     /// `0x80` (`0x6F110730`) calls the immunity increment `0x6F07A3A0` and the removal slot `0x6F110700` the
     /// decrement `0x6F077320` (CONFIRMED); the counter is the one `magic_immune` of Avatar and Divine Shield.
     pub fn sync_neutral_spells(&mut self, unit: ObjKey) {
+        crate::neutral_forms::sync_neutral2(self, unit);
+        crate::invisibility::sync(self, unit);
         let has = self.unit(unit).abilities.get(MAGIC_IMMUNITY).is_some_and(|a| !a.is_removed());
         let counted = self.spells.neutral.immune.contains(&unit);
         if has && !counted {
@@ -404,7 +425,8 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let level = gm.unit_types().get(gm.unit(target).type_id).map_or(0, |t| t.level);
             (level as f32 > max).then_some(BadTarget)
         }
-        _ => crate::unit_abilities_m::target_error(gm, caster, base, target),
+        _ => crate::neutral_heroes2::target_error(gm, caster, base, target)
+            .or_else(|| crate::unit_abilities_m::target_error(gm, caster, base, target)),
     }
 }
 
@@ -469,7 +491,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             crate::human_heroes::summon(game, rec, buff);
             true
         }
-        _ => crate::unit_abilities_m::run_effect(game, rt, rec),
+        _ => crate::neutral_heroes2::run_effect(game, rt, rec) || crate::unit_abilities_m::run_effect(game, rt, rec),
     }
 }
 
@@ -771,7 +793,10 @@ fn charm(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec, target
 impl Game {
     /// Whether `unit` carries the Silence buff (it cannot start a spell).
     pub fn is_silenced(&self, unit: ObjKey) -> bool {
-        self.unit(unit).buffs.iter().any(|b| b.base == BUFF_SILENCE || b.base == BUFF_SOUL_BURN)
+        self.unit(unit)
+            .buffs
+            .iter()
+            .any(|b| b.base == BUFF_SILENCE || b.base == BUFF_SOUL_BURN || b.base == crate::neutral_heroes2::BUFF_DOOM)
     }
 
     /// Mana Shield (`CBuffManaShield` damage slot `0x6F126DD0`, structure CONFIRMED, numbers LIKELY): of an incoming
