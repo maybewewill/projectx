@@ -99,6 +99,34 @@ fn unholy_frenzy_buff_apply_matches_the_original() {
 }
 
 #[test]
+fn lightning_shield_victim_matches_the_original() {
+    // 0..4: marker victim_ec is_self blocked | 4 return | 5 marker calls, 6 marker arg is the victim, 7 marker duration word, 8 third |
+    // 9 register calls | 10 blocked calls | 11 damage calls, 12 damage ecx is the buff, 13 damage arg is the victim
+    let rows = hex_rows(include_str!("data/unit_spells/shield_victim.txt"));
+    assert!(rows.len() >= 300);
+    let (mut skip, mut marker_only, mut damage) = (0, 0, 0);
+    for r in &rows {
+        let plan = shield_victim_plan(r[0] != 0, r[1] as i32, r[2] != 0, r[3] != 0);
+        match plan {
+            ShieldVictim::Skip => {
+                assert_eq!((r[5], r[9], r[10], r[11]), (0, 0, 0, 0), "skipped victim, row {:08x?}", r);
+                skip += 1;
+            }
+            ShieldVictim::MarkerOnly => {
+                assert_eq!((r[5], r[6], r[8], r[9], r[10], r[11]), (1, 1, 0, 1, 1, 0), "marker only, row {:08x?}", r);
+                marker_only += 1;
+            }
+            ShieldVictim::MarkerAndDamage => {
+                assert_eq!((r[5], r[6], r[8], r[9], r[10], r[11], r[12], r[13]), (1, 1, 0, 1, 1, 1, 1, 1), "damage, row {:08x?}", r);
+                damage += 1;
+            }
+        }
+        assert_eq!(r[4], u32::from(plan != ShieldVictim::Skip), "return value, row {:08x?}", r);
+    }
+    assert!(skip > 100 && marker_only > 20 && damage > 50, "{skip} {marker_only} {damage}");
+}
+
+#[test]
 fn dot_tick_matches_the_original() {
     // 0..13: amount class misc imm_magic imm_phys busl s368 bonus buff_flags f4 f0 life0 life1 | 13 damage calls (slot 0x120),
     // 14 builder calls | 15, 16 builder ecx edx | 17 amount, 18 class, 19 source, 20 flag bits, 21 zero | 22 buff flags at the damage

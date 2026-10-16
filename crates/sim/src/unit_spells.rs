@@ -1912,6 +1912,30 @@ fn lightning_shield(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     );
 }
 
+/// What the per-victim slot `0x364` (`0x6F13C410`) of the Lightning Shield buff does with one unit of the tick's group (CONFIRMED,
+/// **Unicorn V8**, `tools/emu/v8_spells_emu.py` check `shield_victim`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShieldVictim {
+    /// The victim already carries the marker buff (`Blsa`, found by `0x6F0787D0`), or its unit word `+0xEC` is above zero (signed
+    /// compare), or it is the shielded unit itself: nothing happens.
+    Skip,
+    /// A marker buff is created and registered on the victim (slot `0x358` with the victim, the buff word `+0xDC` and 0.0), but the
+    /// blocked test `0x6F28D750` is true: no damage.
+    MarkerOnly,
+    /// The marker is created and the damage effect `0x6F053040(buff, victim)` runs.
+    MarkerAndDamage,
+}
+
+pub fn shield_victim_plan(has_marker: bool, victim_word_ec: i32, is_shielded: bool, blocked: bool) -> ShieldVictim {
+    if has_marker || victim_word_ec > 0 || is_shielded {
+        ShieldVictim::Skip
+    } else if blocked {
+        ShieldVictim::MarkerOnly
+    } else {
+        ShieldVictim::MarkerAndDamage
+    }
+}
+
 /// A Lightning Shield tick: damages the units around the shielded unit and re-arms the one-shot timer.
 fn shield_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, serial: u32) {
     let mut killed = Vec::new();
@@ -1940,7 +1964,12 @@ fn shield_tick(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, s
         gm.spells.unit.shield.insert(serial, rec);
         let (cx, cy) = (gm.unit(unit).x, gm.unit(unit).y);
         for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.area) {
-            if k == unit || !gm.alive(k) || gm.unit(k).hidden || gm.unit(k).magic_immune > 0 {
+            if !gm.alive(k) || gm.unit(k).hidden {
+                continue;
+            }
+            // The marker `Blsa` (duration not decoded) and the unit word `+0xEC` (meaning unknown) are not modelled: both False/0.
+            let blocked = gm.unit(k).magic_immune > 0;
+            if shield_victim_plan(false, 0, k == unit, blocked) != ShieldVictim::MarkerAndDamage {
                 continue;
             }
             if let Some(t) = gm.unit_damage_target(rec.source, k, rec.amount, false, false, 0, DAMAGE_TYPE_MAGIC) {

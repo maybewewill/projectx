@@ -179,7 +179,70 @@ def check_dot_tick(cases, r, rows):
                        rd(CAP + 0x1CC), rd(CAP + 0x100)])
 
 
+VT_SHIELD_BUFF = 0x6F8CF344
+
+
+def check_shield_victim(cases, r, rows):
+    """Lightning Shield per-victim slot 0x364 (0x6F13C410, real) on a fake buff. Stubs: buff lookup (marker present?), the marker
+    factory 0x6F139CB0 (returns a fake buff whose slot 0x358 records its arguments), the registration 0x6F079CA0, the creator smart
+    reference, the blocked test 0x6F28D750, the damage effect 0x6F053040. Rows: marker victim_ec is_self blocked | return value |
+    marker calls, marker arg victim (is it the victim), marker duration word, marker third arg | register calls | blocked calls |
+    damage calls, damage ecx is the buff, damage arg is the victim."""
+    S.install()
+    mb = S.M + 0x5000
+    mvt = S.M + 0x5400
+    mu.mem_write(mb, b"\0" * 0x100)
+    mu.mem_write(mvt, b"\0" * 0x400)
+    wr(mb, mvt)
+    wr(mb + 4, 100)
+    wr(mvt, A.stub_ret(0, 0))
+    wr(mvt + 0x324, A.stub_ret(4, 0))
+    wr(mvt + 0x358, recorder(0xB0, [(0, False), (1, True), (2, True)], 0xC, counter=0x1D0))
+    A.patch_jump(0x6F139CB0, A.stub_ret(0, mb))
+    A.patch_jump(0x6F0419C0, A.stub_ret(4, 0))
+    V4.ret_var(0x6F0787D0, 0x14, 0x18)          # lookup: marker present?
+    A.patch_jump(0x6F079CA0, recorder(0xC8, [], 4, counter=0x1D4))
+    A.patch_jump(0x6F28D750, recorder(0xD0, [(0, False), (1, False)], 8, eax=0, counter=0x1D8))
+    A.patch_jump(0x6F053040, recorder(0xE0, [(0, False)], 4, regs=True, counter=0x1DC))
+    # the creator smart reference: ctor of a smart pointer object at ecx from a unit pointer; resolve returns a live unit
+    creator = S.M + 0x5800
+    mu.mem_write(creator, b"\0" * 0x100)
+    wr(creator, mvt)
+    wr(creator + 4, 100)
+    A.patch_jump(0x6F4786B0, A.stub_ret(0, creator))
+    A.patch_jump(0x6F0E7410, new_code(b"\x8B\x44\x24\x04\x89\x01\x89\xC8\xC2\x04\x00"))
+    # blocked test returns the case switch (the recorder cannot): replace with a variable reader that also counts
+    blocked = new_code(b"\xFF\x05" + a32(CAP + 0x1D8) + b"\xA1" + a32(VARS + 0x24) + b"\xC2\x08\x00")
+    A.patch_jump(0x6F28D750, blocked)
+    for _ in range(cases):
+        marker = r.random() < 0.25
+        ec = r.choice([0, 0, 1, 5, 0xFFFFFFFF, 0x80000000, 0x7FFFFFFF, r.getrandbits(32)])
+        is_self = r.random() < 0.2
+        blk = r.random() < 0.3
+        S.make_target(False)
+        mu.mem_write(A.UNIT, b"\0" * 0x400)
+        wr(A.UNIT + 4, 100)
+        victim = A.UNIT if is_self else TGT
+        wr(victim + 0xEC, ec)
+        wr(victim + 4, 100)
+        mu.mem_write(BUFF, b"\0" * 0x400)
+        wr(BUFF, S.FVT)
+        wr(BUFF + 0x30, A.UNIT)
+        wr(BUFF + 0xDC, rbits(r))
+        wr(BUFF + 0xE8, 0x1111)
+        wr(BUFF + 0xEC, 5)
+        wr(BUFF + 0xF0, 6)
+        wr(VARS + 0x18, 0x7777 if marker else 0)
+        wr(VARS + 0x24, int(blk))
+        S.clear_cap()
+        ret = S.call(0x6F13C410, ecx=BUFF, stack_args=(victim,))
+        rows.append([int(marker), ec, int(is_self), int(blk), ret, rd(CAP + 0x1D0), int(rd(CAP + 0xB0) == victim), rd(CAP + 0xB4),
+                     rd(CAP + 0xB8), rd(CAP + 0x1D4), rd(CAP + 0x1D8), rd(CAP + 0x1DC), int(rd(CAP + 0xE0) == BUFF),
+                     int(rd(CAP + 0xE8) == victim)])
+
+
 CHECKS = {
+    "shield_victim": check_shield_victim,
     "roar_unit": check_roar_unit,
     "unholy_buff": check_unholy_buff,
     "dot_tick": check_dot_tick,
