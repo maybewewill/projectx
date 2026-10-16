@@ -44,6 +44,7 @@ pub mod mover;
 pub mod movement;
 pub mod neutral_forms;
 pub mod neutral_heroes2;
+pub mod neutral_orbs;
 pub mod neutral_rain;
 pub mod neutral_spells;
 pub mod neutral_waves;

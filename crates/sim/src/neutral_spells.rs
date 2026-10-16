@@ -123,7 +123,7 @@ pub const MODELLED: &[[u8; 4]] = &[
     *b"AUdr", *b"AUfa", *b"AUfn", *b"AUfu", *b"Auhf", *b"AUim", *b"AUin", *b"AUsl", *b"AUts", *b"Aweb", *b"Ablo",
     *b"Acri", *b"Acrs", *b"Adis", *b"Aven", *b"Amim", *b"Awar", *b"ANca", *b"Arsk", *b"ANms", *b"Acyc", *b"ANsi",
     *b"ANch", *b"ANht", *b"AHbz", *b"Aivs", *b"Apiv", *b"Agho", *b"Ashm", *b"ANsg", *b"ANsq", *b"ANsw", *b"ANdh", *b"ANdb", *b"ANlm", *b"ANso", *b"ANab", *b"ANfl",
-    *b"ANtm", *b"ANdo", *b"ANcs", *b"ANhs", *b"ANst", *b"ANvc", *b"ANef", *b"ANcr", *b"ANrg", *b"ANeg", *b"ANsy", *b"ANto", *b"Atdg", *b"Atsp",
+    *b"ANtm", *b"ANdo", *b"ANcs", *b"ANhs", *b"ANst", *b"ANvc", *b"ANef", *b"ANcr", *b"ANrg", *b"ANeg", *b"ANsy", *b"ANto", *b"Atdg", *b"Atsp", *b"ANba", *b"ANbs", *b"ANic",
 ];
 
 fn is_modelled(c: u32) -> bool {
@@ -212,6 +212,9 @@ pub(crate) fn toggle_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Optio
         return Some(true);
     }
     if let Some(r) = crate::neutral_forms::toggle_order(game, unit, id) {
+        return Some(r);
+    }
+    if let Some(r) = crate::neutral_orbs::toggle_order(game, unit, id) {
         return Some(r);
     }
     if id != ORDER_NEUTRAL_HEAL_ON && id != ORDER_NEUTRAL_HEAL_OFF {

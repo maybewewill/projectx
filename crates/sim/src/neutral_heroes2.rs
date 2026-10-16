@@ -55,6 +55,7 @@ pub struct State {
     pub(crate) waves: crate::neutral_waves::State,
     pub(crate) rain: crate::neutral_rain::State,
     pub(crate) forms: crate::neutral_forms::State,
+    pub(crate) orbs: crate::neutral_orbs::State,
 }
 
 pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
@@ -63,6 +64,7 @@ pub(crate) fn register_orders(ids: &mut BTreeMap<u32, u32>) {
     crate::neutral_waves::register_orders(ids);
     crate::neutral_rain::register_orders(ids);
     crate::neutral_forms::register_orders(ids);
+    crate::neutral_orbs::register_orders(ids);
 }
 
 /// Abilities of this batch that are cast without a target.
@@ -103,7 +105,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             let max = conv::f2i(gm.spell_level(caster, DOOM).data[3]);
             (creep_too_high(gm, target, max) || gm.neutral2_doomed(target)).then_some(BadTarget)
         }
-        _ => None,
+        _ => crate::neutral_orbs::target_error(gm, caster, base, target),
     }
 }
 
@@ -131,6 +133,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             true
         }
         b if crate::neutral_forms::is_forms_spell(b) => crate::neutral_forms::run_effect(game, rec),
+        crate::neutral_orbs::BLACK_ARROW_SPELL => crate::neutral_orbs::run_effect(game, rec),
         _ => false,
     }
 }
@@ -140,6 +143,7 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     match kind {
         crate::neutral_waves::KIND_WAVE => crate::neutral_waves::on_timer(game, rt, kind, aux),
         crate::neutral_rain::KIND_STAMPEDE..=crate::neutral_rain::KIND_VOLCANO => crate::neutral_rain::on_timer(game, rt, kind, aux),
+        crate::neutral_orbs::KIND_INCINERATE => crate::neutral_orbs::on_timer(game, rt, kind, aux),
         crate::neutral_forms::KIND_SPLIT_END..=crate::neutral_forms::KIND_PASSIVE => {
             crate::neutral_forms::on_timer(game, rt, kind, _unit, _base, aux)
         }
@@ -163,6 +167,7 @@ pub(crate) fn on_cast_end(game: &RefCell<Game>, rec: &CastRec, completed: bool) 
 pub(crate) fn on_unit_died(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, unit: ObjKey, _killer: Option<ObjKey>) {
     doom_death(game, unit);
     crate::neutral_forms::on_unit_died(game, rt, unit);
+    crate::neutral_orbs::on_unit_died(game, unit);
 }
 
 /// Transmute (`ANtm`; the effect `0x6F1C18B0` puts `BNtm` on the target and the buff's action slot `0x33C` =
