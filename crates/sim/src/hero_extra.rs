@@ -182,6 +182,16 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
     true
 }
 
+/// Whether `t` is a legal unit target for the cast check: a live unit, except for Carrion Scarabs whose target is a
+/// corpse (targs `dead`).
+pub(crate) fn target_ok(gm: &Game, base: u32, t: ObjKey) -> bool {
+    if base == CARRION_SCARABS {
+        let u = gm.unit(t);
+        return u.dead && !u.removed;
+    }
+    gm.alive(t)
+}
+
 /// `true` for abilities of this module whose effect is a passive on-hit orb (no cast).
 pub fn is_orb(base: u32) -> bool {
     matches!(base, COLD_ARROWS | SEARING_ARROWS | POISON_ARROWS)
@@ -219,7 +229,8 @@ pub fn fan_damage_each(gm: &Game, data_a: F32, data_b: F32, n: usize) -> F32 {
     }
     match gm.order_tables() {
         Some(t) => arith::div(data_b, conv::i2r(n as i32), t),
-        None => data_a,
+        // A host without the Game.dll tables (tests): plain IEEE division.
+        None => F32::from_bits((data_b.to_f32() / n as f32).to_bits()),
     }
 }
 
@@ -619,7 +630,7 @@ fn heal(gm: &mut Game, unit: ObjKey, amount: F32) {
 
 impl Game {
     /// Called by the attack path after a hit that left the victim alive; returns the units that died of the orb damage.
-    pub(crate) fn hero_orb_on_hit(&mut self, attacker: ObjKey, target: ObjKey) -> Vec<ObjKey> {
+    pub fn hero_orb_on_hit(&mut self, attacker: ObjKey, target: ObjKey) -> Vec<ObjKey> {
         let mut died = Vec::new();
         for base in [SEARING_ARROWS, COLD_ARROWS, POISON_ARROWS] {
             if !self.alive(target) {

@@ -735,7 +735,7 @@ pub fn begin_cast(
         let class = crate::item_abilities::effect_base(&gm, base);
         match target {
             CastTarget::Unit(t) => {
-                if !gm.alive(t) {
+                if !crate::hero_extra::target_ok(&gm, class, t) {
                     return Err(CastError::BadTarget);
                 }
                 if let Some(e) = crate::unit_spells::target_error(&gm, caster, class, t) {
@@ -815,7 +815,7 @@ fn recheck(game: &RefCell<Game>, id: u32) -> Option<CastRec> {
         return None;
     }
     if let CastTarget::Unit(t) = rec.target {
-        if !gm.alive(t) {
+        if !crate::hero_extra::target_ok(&gm, rec.base, t) {
             return None;
         }
     }
