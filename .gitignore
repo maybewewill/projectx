@@ -37,3 +37,4 @@ tools/emu/pylib/
 __pycache__/
 tools/emu/jasscomp/out/
 site/
+tools/replays/

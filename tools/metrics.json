@@ -1,3 +1,14 @@
 {
-  "replay": {"file": "2856263.w3g (DotA, 1.26a)", "exact_pairs": 516, "pairs": 71307, "measured": "2026-10-12"}
+ "replay": {
+  "file": "EchoIsles, игрок против компьютера, 1.26a (записан 2026-10-17)",
+  "exact_pairs": 127,
+  "pairs": 5503,
+  "measured": "2026-10-17"
+ },
+ "replay_dota": {
+  "file": "2856263.w3g (DotA, 1.26a)",
+  "exact_pairs": 516,
+  "pairs": 71307,
+  "measured": "2026-10-12"
+ }
 }
