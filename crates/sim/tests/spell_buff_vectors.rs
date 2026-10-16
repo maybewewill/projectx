@@ -172,3 +172,22 @@ fn command_aura_weapon_bonus_matches_the_original() {
     assert!(skipped > 20 && flat > 50 && signed > 20 && clamped > 2, "{skipped} {flat} {signed} {clamped}");
 }
 
+#[test]
+fn avatar_values_match_the_original() {
+    // 0 dur, 1 extra, 2..6 DataA..D | 6, 7 set-duration args | 8, 9 armor sink | 10, 11, 12 life sink value, mode, calls |
+    // 13, 14 counter deltas | 15.. holders and integer | 19 immunity calls, 20 argument
+    let rows = hex_rows(include_str!("data/unit_spells/avatar.txt"));
+    assert!(rows.len() >= 300);
+    for r in &rows {
+        let l = level(r[0], 0, &[r[2], r[3], r[4], r[5]]);
+        let v = sim::human_heroes::avatar_values(&l, f(r[1]));
+        assert_eq!(r[7], v.dur.to_bits(), "duration, row {:08x?}", r);
+        assert_eq!((r[8], r[9]), (v.armor.to_bits(), 1), "armor sink, row {:08x?}", r);
+        assert_eq!((r[10], r[11], r[12]), (v.life.to_bits(), 3, 1), "life sink, row {:08x?}", r);
+        assert_eq!((r[13], r[14]), (v.damage as u32, v.damage as u32), "damage counters, row {:08x?}", r);
+        assert_eq!(r[17], v.damage as u32, "stored integer, row {:08x?}", r);
+        assert_eq!(r[18], r[5], "DataD holder, row {:08x?}", r);
+        assert_eq!((r[19], r[20]), (1, 1), "immunity, row {:08x?}", r);
+    }
+}
+

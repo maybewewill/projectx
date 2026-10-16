@@ -313,6 +313,61 @@ def check_command_aura(cases, r, rows):
                     + [u32(rd(ATK + 0xAC) - base0), u32(rd(ATK + 0xB0) - base1), rd(BUFF + 0xE4), rd(BUFF + 0xE8)])
 
 
+VT_AVATAR_ABIL = 0x6F90998C
+VT_AVATAR_BUFF = 0x6F9039A4
+UVT = M + 0x2C00
+
+
+def check_avatar(cases, r, rows):
+    """Avatar's cast slot `0x3C0` (`0x6F1CA180`, real) -> `CBuffAvatar` apply slot 214 (`0x6F1A03B0`, real) -> the stat sink
+    helpers `0x6F196A40` (armor), `0x6F196A60` (life, mode 3), `0x6F196A80` (damage counter, real `0x6F0C6C10`). Rows:
+    dur extra DataA DataB DataC DataD | set-duration args (owner, duration) | armor sink value, calls | life sink value,
+    mode, calls | counter deltas | holders +0xD4 +0xDC, integer +0xE4, holder +0xE8 | immunity calls, argument."""
+    A.patch_jump(0x6F1B69E0, A.stub_ret(0, 0))
+    A.patch_jump(0x6F4778F0, A.stub_ret(0x14, 0))
+    A.patch_jump(0x6F1C7F80, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F4786B0, A.stub_ret(0, 0))
+    A.patch_jump(0x6F1A1400, A.stub_ret(4, 0))
+    A.patch_jump(0x6F052B60, A.stub_ret(8, 0))
+    A.patch_jump(0x6F27B460, A.stub_ret(4, 0))
+    # set duration (owner, &duration): record both
+    code = (b"\x8B\x44\x24\x04\xA3" + a32(CAP + 0x90) + b"\x8B\x44\x24\x08\x8B\x00\xA3" + a32(CAP + 0x94)
+            + b"\xC2\x08\x00")
+    A.patch_jump(0x6F0D28F0, new_code(code))
+    # the life sink 0x6F2AC450 (ecx = unit; &value, mode)
+    code = (b"\x8B\x44\x24\x04\x8B\x00\xA3" + a32(CAP + 0x60) + b"\x8B\x44\x24\x08\xA3" + a32(CAP + 0x64)
+            + b"\xFF\x05" + a32(CAP + 0x68) + b"\xC2\x08\x00")
+    A.patch_jump(0x6F2AC450, new_code(code))
+    # the magic immunity counter 0x6F07A3A0 (ecx = unit; flag)
+    code = b"\x8B\x44\x24\x04\xA3" + a32(CAP + 0x74) + b"\xFF\x05" + a32(CAP + 0x70) + b"\xC2\x04\x00"
+    A.patch_jump(0x6F07A3A0, new_code(code))
+    mu.mem_write(UVT, b"\0" * 0x400)
+    ret12 = A.stub_ret(0xC, 0)
+    wr(UVT + 0x8C, ret12)
+    wr(UVT + 0x90, ret12)
+    for _ in range(cases):
+        dur, hdur, extra = rbits(r), rbits(r), (rbits(r) if r.random() < 0.3 else 0)
+        da, db, dc, dd = (rbits(r) for _ in range(4))
+        if r.random() < 0.5:
+            dc = f2u(float(r.randint(-5, 15)))
+        A.make_ability(VT_AVATAR_ABIL, 0x41486176, 75)
+        level(A.LVL, dur, hdur, [da, db, dc, dd])
+        wr(A.OBJ + 0x9C, extra)
+        wr(A.UNIT, UVT)
+        wr(A.UNIT + 0x1E8, ATK)
+        weap = random_weapons(r)
+        base0, base1 = r.randint(0, 5), r.randint(0, 5)
+        make_attack(weap, base0, base1)
+        wr(ATK + 0x30, A.UNIT)
+        make_buff(VT_AVATAR_BUFF, (0xD4, 0xDC, 0xE8), (), {0x320: A.stub_ret(0xC, 0), 0x324: A.stub_ret(4, 0)})
+        wr(BUFF + 0x30, A.UNIT)
+        clear_cap()
+        call(0x6F1CA180, ecx=A.OBJ)
+        rows.append([dur, extra, da, db, dc, dd, rd(CAP + 0x90), rd(CAP + 0x94), rd(CAP + 0x30), rd(CAP + 0x34),
+                     rd(CAP + 0x60), rd(CAP + 0x64), rd(CAP + 0x68), u32(rd(ATK + 0xAC) - base0), u32(rd(ATK + 0xB0) - base1),
+                     rd(BUFF + 0xD8), rd(BUFF + 0xE0), rd(BUFF + 0xE4), rd(BUFF + 0xEC), rd(CAP + 0x70), rd(CAP + 0x74)])
+
+
 def main():
     args = sys.argv[1:]
     dump = None
@@ -331,6 +386,8 @@ def main():
     check_cripple(cases, r, out["cripple"])
     out["command_aura"] = []
     check_command_aura(cases, r, out["command_aura"])
+    out["avatar"] = []
+    check_avatar(cases, r, out["avatar"])
     for name, rows in out.items():
         print("%s rows %d" % (name, len(rows)))
         for row in rows[:4]:

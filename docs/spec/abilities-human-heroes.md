@@ -145,8 +145,15 @@ class stops orders and attacks the way a stun does; its class was not read beyon
   Then presentation (scale and model change through unit slots `0x8C`/`0x90`) and the notification `0xB`.
 * Remove (slot 207, `0x6F1A0480`, CONFIRMED): the same sinks with the negated values (`-DataA`, `-DataB`, `-int`) and one
   magic immunity count off.
-* Field meaning (LIKELY from the sink each value reaches): A = armor bonus, B = hit point bonus, C = damage bonus
-  (integer), D = a stored flag (magic immunity switch, UNSURE: the stored cell is not read by the sinks above).
+* **Field meaning and values: CONFIRMED by Unicorn, 400 cases, 0 mismatches** (V1, `tools/emu/spell_buff_emu.py` check
+  `avatar`, `crates/sim/tests/data/unit_spells/avatar.txt`, `spell_buff_vectors.rs`; the real cast slot `0x6F1CA180`, the real
+  `CBuffAvatar` apply slot 214, the real helpers `0x6F196A40/60/80` and the real damage counter `0x6F0C6C10`; stubbed: the
+  timer start, the buff allocator and registration, the holder objects, the armor / life sinks and the immunity counter,
+  which record their arguments; `human_heroes::avatar_values`): duration = `Dur` + `+0x9C` by soft add, no hero test; `DataA`
+  reaches the armor sink `0x6F2769C0` unchanged; `DataB` the life sink `0x6F2AC450` with mode 3 (unchanged value);
+  both weapon slots' damage counters (mask -1) grow by `F2I(DataC)`; `DataD` is stored in the holder at `+0xE8` and nothing
+  reads it (so the "magic immunity switch" reading is wrong: the immunity count is added unconditionally, once, with
+  argument 1). The remove slot 207 (negated values) was read, not run.
 * Model: `apply_avatar` / `undo_avatar`: `bonuses.armor += A`, the hero life sink in mode 3 with B, `bonuses.damage +=
   f2i(C)`, `magic_immune += 1`; undone exactly. Expiry through the buff timer (message `0xD01C4`, `buffs.md`). UNSURE:
   whether the original's immunity counter is the only effect of "magic immunity" (damage gates in `damage.rs` read
