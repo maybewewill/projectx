@@ -17,7 +17,7 @@
 use std::fmt::Write as _;
 
 use sim::sync::{
-    participant_rotation, residual, slot, tick_clock_at_slot, y_chain_feasible, RecordPoint,
+    participant_rotation, residual, slot, y_chain_feasible, RecordPoint,
     SyncState,
 };
 use w3g::{Block, Replay};
@@ -138,10 +138,19 @@ pub fn check_blocks(blocks: &[Block]) -> SyncReport {
     let mut points: Vec<RecordPoint> = Vec::new();
     for block in blocks {
         match block {
-            Block::TimeSlot { id, .. } => {
+            Block::TimeSlot { id, commands, .. } => {
                 let payload = block.time_slot_payload().unwrap_or_default();
                 let inc = u16::from_le_bytes([payload[0], payload[1]]);
-                let t = tick_clock_at_slot(state.elapsed_ms());
+                for c in commands {
+                    for a in c.decode().unwrap_or_default() {
+                        match a {
+                            w3g::Action::PauseGame => state.pause(),
+                            w3g::Action::ResumeGame => state.resume(),
+                            _ => {}
+                        }
+                    }
+                }
+                let t = state.clock();
                 let predicted = state.time_slot(*id, &payload);
                 pending = Some((report.time_slots, inc, predicted, t, state.net().value()));
                 report.time_slots += 1;

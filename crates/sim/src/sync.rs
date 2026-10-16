@@ -354,6 +354,13 @@ pub struct SyncState {
     net: NetChecksum,
     elapsed_ms: u64,
     last: u32,
+    /// The tick clock `T` (`CNetData+0x1C70`) at the next slot: 25 ms units consumed so far (see [`SyncState::pause`]).
+    clock: u32,
+    /// Milliseconds received and not yet consumed (below 25 unless paused).
+    buffer: u64,
+    paused: bool,
+    /// 25 ms units the last slot released to the tick loop.
+    last_units: u64,
 }
 
 impl Default for SyncState {
@@ -368,6 +375,10 @@ impl Default for SyncState {
             net: NetChecksum::new(),
             elapsed_ms: 0,
             last: 0,
+            clock: 0,
+            buffer: 0,
+            paused: false,
+            last_units: 0,
         }
     }
 }
@@ -408,7 +419,7 @@ impl SyncState {
             .get(..2)
             .map_or(0, |b| u64::from(u16::from_le_bytes([b[0], b[1]])));
         if inc != 0 {
-            let t = tick_clock_at_slot(self.elapsed_ms);
+            let t = self.clock;
             let reg = self.registry_now();
             self.last = sync_value(
                 t,
@@ -419,7 +430,46 @@ impl SyncState {
             );
         }
         self.elapsed_ms += inc;
+        self.buffer += inc;
+        self.last_units = 0;
+        if !self.paused {
+            self.last_units = self.buffer / u64::from(TICK_UNIT_MS);
+            self.buffer %= u64::from(TICK_UNIT_MS);
+            self.clock = self.clock.wrapping_add(self.last_units as u32 * TICK_UNIT_MS);
+        }
         self.last
+    }
+
+    /// The tick clock `T` the next slot's record will use.
+    pub fn clock(&self) -> u32 {
+        self.clock
+    }
+
+    /// 25 ms units the last slot released to the tick loop (zero while paused).
+    pub fn last_units(&self) -> u64 {
+        self.last_units
+    }
+
+    /// Whether the game is paused.
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// The pause action (0x01): the tick loop stops. Slots keep arriving and their time piles up in the buffer, the
+    /// clock stays (CONFIRMED on the EchoIsles replay: every pair inside a pause has a zero residual with `T` frozen).
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// The resume action (0x02): the whole units that piled up during the pause are dropped (only the remainder below
+    /// 25 ms is kept) and the clock advances one unit at once. Fitted on the EchoIsles replay (five pauses, 2,766 of
+    /// 5,503 pairs exact, against 406 without the rule); the one extra unit is the least understood part.
+    pub fn resume(&mut self) {
+        if self.paused {
+            self.paused = false;
+            self.buffer %= u64::from(TICK_UNIT_MS);
+            self.clock = self.clock.wrapping_add(TICK_UNIT_MS);
+        }
     }
 
     /// Processes a leave-game block (folded into the net checksum; no record is computed).

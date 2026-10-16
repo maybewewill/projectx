@@ -62,6 +62,7 @@ pub mod pathing;
 pub mod replay;
 pub mod replay_setup;
 pub mod scripts;
+pub mod sim_sync;
 pub mod sync_check;
 pub mod terrain;
 

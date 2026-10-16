@@ -38,6 +38,12 @@ struct Args {
     buildings: bool,
     /// `--check-sync`: with `--replay`, compare the replay's 0x22 sync records with the model (no map needed).
     check_sync: bool,
+    /// `--sim-sync`: with `--replay` and a map, run the full engine and compare every 0x22 record.
+    sim_sync: bool,
+    sync_trace: bool,
+    sync_after: bool,
+    sync_slots: usize,
+    sync_constant: u32,
     steps: u64,
     /// `--wipe SLOT@STEP`: at STEP set the life of every structure of SLOT to zero (test aid for the melee defeat check).
     wipe: Vec<(u32, u64)>,
@@ -103,6 +109,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 .push(parse_ai_script(&value("--ai-script")?)?),
             "--check-natives" => args.boot.check_natives = true,
             "--check-sync" => args.check_sync = true,
+            "--sim-sync" => args.sim_sync = true,
+            "--sync-trace" => args.sync_trace = true,
+            "--sync-after" => args.sync_after = true,
+            "--sync-slots" => {
+                let v = value("--sync-slots")?;
+                args.sync_slots = v.parse().map_err(|_| format!("--sync-slots: not a number: {v}"))?;
+            }
+            "--sync-constant" => args.sync_constant = parse_seed(&value("--sync-constant")?)?,
             "--buildings" => args.buildings = true,
             "--seed" => args.boot.seed = Some(parse_seed(&value("--seed")?)?),
             "--replay" => args.boot.replay = Some(value("--replay")?),
@@ -145,6 +159,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         }
         return Ok(args);
     }
+    if args.sim_sync && args.boot.replay.is_none() {
+        return Err("--sim-sync needs --replay FILE.w3g".to_string());
+    }
     if args.boot.map.is_none() {
         return Err("no map file given".to_string());
     }
@@ -165,6 +182,23 @@ fn run(argv: &[String]) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let replay = w3g::Replay::parse(&bytes).map_err(|e| format!("--replay {path}: {e}"))?;
         print!("{}", engine::sync_check::check_replay(&replay).render());
+        return Ok(());
+    }
+    if args.sim_sync {
+        let path = args.boot.replay.as_deref().unwrap_or_default();
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let parsed = w3g::Replay::parse(&bytes).map_err(|e| format!("--replay {path}: {e}"))?;
+        let inputs = cli::inputs(&args.boot)?;
+        let (mut engine, setup) = engine::Engine::boot_from_replay(&bytes, inputs).map_err(|e| e.to_string())?;
+        let opts = engine::sim_sync::Options {
+            after_commands: args.sync_after,
+            max_slots: args.sync_slots,
+            trace: args.sync_trace,
+            constant: args.sync_constant,
+        };
+        let mut report = engine::sim_sync::run(&mut engine, &parsed, &opts);
+        report.notes.extend(setup.notes.iter().cloned());
+        print!("{}", report.render());
         return Ok(());
     }
     let mut engine = cli::boot(&args.boot)?;
