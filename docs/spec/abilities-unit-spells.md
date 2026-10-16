@@ -272,3 +272,18 @@ relation tests, life adder) are stubs that read per-case switches or record thei
   run, 600 cases). **Bugs fixed**: (1) the foreign-marker refusal (`0xAE`) applies to manual casts too, the model only had
   it in the autocast filter; (2) the autocast filter refuses a candidate whose unit type `regenHP` (type record `+0x7C`)
   is below zero (ordered compare; NaN passes), missing in the model.
+* **Dispel Magic (`Adis`), Purge (`Aprg`), Abolish Magic (`Aadm`) CONFIRMED** (worker `0x6F0EEF00` earlier, 1,600 cases; here the
+  three effects hand it these stack arguments `[target, order id, ability, positive, negative, a6, a7, &damage, &mana, flags]`
+  with `ecx` = the ability's owner and `edx` = the owner's slot `0xEC`; IDA labels of the "this" push/pop pairs in
+  `0x6F107CC0` and `0x6F106C00` are saved registers, not arguments). Dispel callback `0x6F0EF210`: `[1, 1, 0, 1]`, damage
+  `DataB`, mana `DataA`, flags 64. Purge `0x6F107E10`: `[1, 1, 0, 1]`, damage `DataC`, mana `DataF`, flags 64; afterwards a
+  target that is dead (`+0x5C & 0x100`) or passively allied (`0x6F285AC0`) is left alone, otherwise the hero rule picks
+  `HeroDur`, else `Dur + ability +0x9C` by soft add (a denormal `Dur` flushes to 0, model fixed to use
+  `effect_duration`), an existing `Bprg` is removed (`0x6F079CC0`) and the apply slot `0x354` gets `(target, &dur, owner,
+  &DataA, &DataB, &DataD, &DataE)`. Abolish `0x6F0EF0F0`: smart = Misc `AbolishMagicDispelSmart` ? `DataC != 0.0` : ability
+  flag bit 21; smart removes positive buffs from non-allies (`0x6F285B00`) and negative ones from the rest, else both;
+  `a6` = flag bit 21; **`a7` = 1 without the flag, else `reqLevel != 0`** (`0x6F02E5A0` reads the definition's `+0x40`,
+  NOT `DataI` as the model assumed; fixed). Abolish autocast filter `0x6F0E2B90`: base filter, then reject when the caster's
+  flag word lacks bit 2 and the candidate's `+0x248` has `0x200`, then the buff scan `0x6F076D00` with
+  `[0, 1, 0, 0, 1, a7, a8, owner, reqLevel != 0]`, `(a7, a8) = (0, 1)` for an ally, `(1, 0)` otherwise. Not modelled: the
+  buff-scan exclusion of buffs whose `+0x20` has `0x20000000` unless `reqLevel != 0`, and the two unit flag words.

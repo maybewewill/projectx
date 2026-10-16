@@ -1306,11 +1306,15 @@ fn abolish_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec
         if !gm.alive(target) {
             return;
         }
-        let a7 = u32::from(arith::lt(F32::ZERO, rec.level.data[8]));
         // Smart mode (relation-aware removal) only for a cast the autocast started (see `scan`); a manual order removes
-        // both polarities like Dispel Magic (UNSURE: the ability flag `0x200000` decides in the original).
+        // both polarities like Dispel Magic. In the original the ability flag `0x200000` decides (Misc
+        // `AbolishMagicDispelSmart` is absent from the data, so the flag branch is taken); `abolish_args` is CONFIRMED.
         let smart = gm.spells.unit.auto_started.remove(&(rec.caster, ABOLISH_MAGIC));
-        dispel_one(&mut gm, rec.caster, target, rec.level.data[1], rec.level.data[0], smart, a7)
+        let flags = if smart { 0x20_0000 } else { 0 };
+        let not_ally = gm.is_enemy(gm.unit(rec.caster).owner, gm.unit(target).owner);
+        let req = gm.hero_ability_def(ABOLISH_MAGIC).map_or(0, |d| d.req_level as u32);
+        let a = abolish_args(false, flags, &rec.level, not_ally, req);
+        dispel_one(&mut gm, rec.caster, target, a.damage, a.mana, smart, a.a7)
     };
     if let Some(t) = killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
@@ -1343,12 +1347,13 @@ pub(crate) fn purge_body(gm: &mut Game, rec: &CastRec, target: ObjKey) -> Option
         if !gm.alive(target) {
             return None;
         }
-        let killed = dispel_one(gm, rec.caster, target, rec.level.data[2], rec.level.data[5], false, 1);
+        let args = purge_args(&rec.level);
+        let killed = dispel_one(gm, rec.caster, target, args.damage, args.mana, false, args.a7);
         if killed.is_none() && gm.alive(target) {
             let owner = gm.unit(rec.caster).owner;
-            if gm.is_enemy(owner, gm.unit(target).owner) {
+            if purge_slows(false, !gm.is_enemy(owner, gm.unit(target).owner)) {
                 let hero = gm.target_hero(target);
-                let dur = if hero { rec.level.hero_dur } else { rec.level.dur };
+                let dur = effect_duration(&rec.level, hero, F32::ZERO);
                 let div = |a: F32, b: F32| gm.soft_div(a, b);
                 let (mv, mstep, mtime) = purge_schedule(rec.level.data[0], dur, &div);
                 let (av, astep, atime) = purge_schedule(rec.level.data[1], dur, &div);
@@ -1932,7 +1937,8 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
             if !gm.alive(k) || gm.unit(k).hidden {
                 continue;
             }
-            if let Some(t) = dispel_one(&mut gm, rec.caster, k, rec.level.data[1], rec.level.data[0], false, 1) {
+            let args = dispel_magic_args(&rec.level);
+            if let Some(t) = dispel_one(&mut gm, rec.caster, k, args.damage, args.mana, false, args.a7) {
                 killed.push(t);
             }
         }
@@ -1940,6 +1946,62 @@ fn dispel_magic(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
     for t in killed {
         crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
     }
+}
+
+/// The stack arguments the three dispel-family effects hand to the worker `0x6F0EEF00` (CONFIRMED by Unicorn, V4,
+/// `tools/emu/v4_spells_emu.py` `dispel_args` / `purge_args` / `abolish_args`, 400 cases each): the worker removes
+/// positive / negative buffs by `positive` / `negative`, `a6` and `a7` are the pass-through words, `damage` is the
+/// summoned-unit damage, `mana` the mana loss, `flags` the damage record flags.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkerArgs {
+    pub positive: u32,
+    pub negative: u32,
+    pub a6: u32,
+    pub a7: u32,
+    pub damage: F32,
+    pub mana: F32,
+    pub flags: u32,
+}
+
+/// Dispel Magic's callback `0x6F0EF210`: both polarities, `(a6, a7) = (0, 1)`, damage `DataB`, mana loss `DataA`, flags 64.
+pub fn dispel_magic_args(l: &SpellLevel) -> WorkerArgs {
+    WorkerArgs { positive: 1, negative: 1, a6: 0, a7: 1, damage: l.data[1], mana: l.data[0], flags: 64 }
+}
+
+/// Purge's effect `0x6F107E10`: both polarities, `(0, 1)`, damage `DataC`, mana loss `DataF`, flags 64.
+pub fn purge_args(l: &SpellLevel) -> WorkerArgs {
+    WorkerArgs { positive: 1, negative: 1, a6: 0, a7: 1, damage: l.data[2], mana: l.data[5], flags: 64 }
+}
+
+/// Abolish Magic's effect `0x6F0EF0F0`. `not_ally` is `0x6F285B00(owner, target)` (the passive alliance row says the target
+/// is not an ally); `misc_smart` Misc `AbolishMagicDispelSmart`; `ability_flags` the ability's `+0x20`. Smart mode
+/// (`misc_smart ? DataC != 0.0 (an unordered compare counts as unequal) : flag bit 21`) removes positive buffs from
+/// non-allies and negative ones from the rest; otherwise both. `a6` is flag bit 21; `a7` is 1 without that flag, else
+/// whether the definition's `reqLevel` (`0x6F02E5A0`, definition `+0x40`; 1 when there is no definition) is nonzero. Damage `DataB`, mana `DataA`, flags 64.
+pub fn abolish_args(misc_smart: bool, ability_flags: u32, l: &SpellLevel, not_ally: bool, req_level: u32) -> WorkerArgs {
+    let bit = (ability_flags >> 21) & 1;
+    let smart = if misc_smart { l.data[2].to_f32() != 0.0 } else { bit != 0 };
+    let (positive, negative) = if smart { (u32::from(not_ally), u32::from(!not_ally)) } else { (1, 1) };
+    let a7 = if ability_flags & 0x20_0000 != 0 { u32::from(req_level != 0) } else { 1 };
+    WorkerArgs { positive, negative, a6: bit, a7, damage: l.data[1], mana: l.data[0], flags: 64 }
+}
+
+/// Abolish Magic's autocast filter, slot `0x450` = `0x6F0E2B90` (CONFIRMED by Unicorn, V4): rejects when the base filter
+/// fails or when the caster's unit flag word has bit 2 clear while the candidate's `+0x248` has bit `0x200`; otherwise
+/// asks the buff scan `0x6F076D00` with `[a2..a10]` = `[0, 1, 0, 0, 1, a7, a8, owner, reqLevel != 0]` where `(a7, a8)` is
+/// `(0, 1)` for an ally (a negative buff to remove) and `(1, 0)` for anyone else (a positive one). `None` = rejected.
+pub fn abolish_filter_scan(base_ok: bool, owner_flags: u32, cand_flags248: u32, ally: bool, req_level: u32, owner: u32) -> Option<[u32; 9]> {
+    if !base_ok || (owner_flags & 4 == 0 && cand_flags248 & 0x200 != 0) {
+        return None;
+    }
+    let (a7, a8) = if ally { (0, 1) } else { (1, 0) };
+    Some([0, 1, 0, 0, 1, a7, a8, owner, u32::from(req_level != 0)])
+}
+
+/// Whether Purge slows the target: not when the target is dead (`+0x5C & 0x100`) or the caster's player is passively
+/// allied with it (`0x6F285AC0`). `0x6F107E10`, CONFIRMED by Unicorn (V4).
+pub fn purge_slows(target_dead: bool, allied: bool) -> bool {
+    !target_dead && !allied
 }
 
 /// One unit of a dispel: builds the worker inputs from the model and carries out the calls of

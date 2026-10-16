@@ -180,6 +180,166 @@ def check_heal_filter(cases, r, rows):
                      res & 0xFF])
 
 
+def recorder(base, spec, nbytes, eax=0, regs=False, counter=0x1F8):
+    """Stub that records stack arguments (spec: list of (argidx, deref)) as consecutive dwords at CAP+base, optionally
+    ecx and edx first, counts the call at CAP+0x1F8 and returns eax (callee pops nbytes)."""
+    code = b""
+    off = base
+    if regs:
+        code += b"\x89\x0D" + a32(CAP + off) + b"\x89\x15" + a32(CAP + off + 4)
+        off += 8
+    for argidx, deref in spec:
+        code += b"\x8B\x44\x24" + bytes([4 + 4 * argidx])
+        if deref:
+            code += b"\x8B\x00"
+        code += b"\xA3" + a32(CAP + off)
+        off += 4
+    code += b"\xFF\x05" + a32(CAP + counter) + b"\xB8" + a32(eax) + b"\xC2" + struct.pack("<H", nbytes)
+    return new_code(code)
+
+
+WORKER_SPEC = [(0, False), (1, False), (2, False), (3, False), (4, False), (5, False), (6, False), (7, True), (8, True),
+               (9, False)]
+VTU = M + 0x2C00         # fake owner unit vtable (slot 0xEC)
+VTT = M + 0x2E00         # fake target unit vtable (slot 0xEC)
+CTX = M + 0x2F00         # callback context: [0] = ability
+
+
+def worker_row():
+    """The recorded worker call: ecx, edx, then ten stack arguments (pointer arguments dereferenced)."""
+    return [rd(CAP + 0x100 + 4 * i) for i in range(12)]
+
+
+def unit_vtables():
+    mu.mem_write(VTU, b"\0" * 0x200)
+    mu.mem_write(VTT, b"\0" * 0x200)
+    wr(VTU + 0xEC, A.stub_ret(0, 0x77))
+    wr(VTT + 0xEC, A.stub_ret(0, 0))
+
+
+def check_dispel_args(cases, r, rows):
+    """Dispel Magic's per-unit callback 0x6F0EF210 (ecx = unit, edx = context {ability}) -> the worker 0x6F0EEF00 (recorded).
+    Rows: DataA DataB | ecx edx target a2 ability pos neg a6 a7 damage mana flags."""
+    S.install()
+    A.patch_jump(0x6F2AB540, A.stub_ret(0, 0))
+    A.patch_jump(0x6F0EEF00, recorder(0x100, WORKER_SPEC, 0x28, regs=True))
+    unit_vtables()
+    for _ in range(cases):
+        da, db = rbits(r), rbits(r)
+        A.make_ability(0x6F8C3A24, 0x41646973, 75)
+        level(A.LVL, rbits(r), rbits(r), [da, db])
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT, VTU)
+        S.make_target(False)
+        wr(TGT, VTT)
+        wr(CTX, A.OBJ)
+        S.clear_cap()
+        S.call(0x6F0EF210, ecx=TGT, edx=CTX)
+        rows.append([da, db] + worker_row())
+
+
+def check_purge_args(cases, r, rows):
+    """Purge effect 0x6F107E10 (ecx = ability, arg = target): the worker call (recorded), the gate, the hero rule and the
+    buff apply 0x354 (recorded). Rows: DataA..DataF dur herodur flag100 allied hero existing | worker (12 words) |
+    apply: target dur owner A B D E | apply calls | removal calls."""
+    S.install()
+    A.patch_jump(0x6F0EEF00, recorder(0x100, WORKER_SPEC, 0x28, regs=True))
+    unit_vtables()
+    ret_var(0x6F285AC0, 4, 0)
+    ret_var(0x6F1D2660, 0, 4)
+    A.patch_jump(0x6F0787D0, new_code(b"\xA1" + a32(VARS + 8) + b"\xC2\x14\x00"))
+    A.patch_jump(0x6F079CC0, recorder(0x1D0, [(0, False)], 4, counter=0x1F4))
+    A.patch_jump(0x6F106A60, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+    A.patch_jump(0x6F2835A0, A.stub_ret(0x10, 0))
+    A.patch_jump(0x6F0405D0, A.stub_ret(0xC, 0))
+    s354 = recorder(0x180, [(0, False), (1, True), (2, False), (3, True), (4, True), (5, True), (6, True)], 0x1C)
+    for _ in range(cases):
+        data = [rbits(r) for _ in range(6)]
+        dur, hdur = rbits(r), rbits(r)
+        f100 = r.random() < 0.2
+        allied = r.random() < 0.3
+        hero = r.random() < 0.5
+        existing = r.random() < 0.4
+        A.make_ability(0x6F8C46CC, 0x41707267, 75)
+        level(A.LVL, dur, hdur, data)
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT, VTU)
+        S.make_target(False)
+        wr(TGT, VTT)
+        wr(TGT + 0x5C, 0x100 if f100 else 0)
+        mu.mem_write(S.FVT, b"\0" * 0x400)
+        wr(S.FVT + 0x324, A.stub_ret(4, 0))
+        wr(S.FVT + 0x354, s354)
+        mu.mem_write(BUFF, b"\0" * 0x200)
+        wr(BUFF, S.FVT)
+        S.clear_cap()
+        wr(VARS + 0, int(allied))
+        wr(VARS + 4, int(hero))
+        wr(VARS + 8, BUFF if existing else 0)
+        S.call(0x6F107E10, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append(data + [dur, hdur, int(f100), int(allied), int(hero), int(existing)] + worker_row()
+                    + [rd(CAP + 0x180 + 4 * i) for i in range(7)] + [rd(CAP + 0x1F8), rd(CAP + 0x1F4)])
+
+
+def check_abolish_args(cases, r, rows):
+    """Abolish Magic effect 0x6F0EF0F0 (ecx = ability, arg = target): the worker call (recorded). Rows: misc_smart flags
+    DataC DataI v4 DataA DataB | worker (12 words)."""
+    S.install()
+    A.patch_jump(0x6F0EEF00, recorder(0x100, WORKER_SPEC, 0x28, regs=True))
+    unit_vtables()
+    ret_var(0x6F285B00, 4, 0)
+    misc_int_stub(0x6F009F90, 4)
+    for _ in range(cases):
+        misc = r.random() < 0.3
+        flags = r.choice([0, 0x200000, 0x200000, 0x1, 0x200001, r.getrandbits(32)])
+        dc = rbits(r) if r.random() < 0.5 else r.choice([0, 0x80000000, f2u(1.0), 0x7FC00000])
+        di = r.choice([0, 0, 1, 0x80000000, 0x3F800000, r.getrandbits(32)])
+        v4 = r.random() < 0.5
+        da, db = rbits(r), rbits(r)
+        A.make_ability(0x6F8C35AC, 0x41616D64, 75)
+        level(A.LVL, rbits(r), rbits(r), [da, db, dc, 0, 0, 0, 0, 0, rbits(r)])
+        wr(A.DEF + 0x40, di)
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.OBJ + 0x20, flags)
+        wr(A.UNIT, VTU)
+        S.make_target(False)
+        wr(TGT, VTT)
+        S.clear_cap()
+        wr(VARS + 0, int(v4))
+        wr(VARS + 4, int(misc))
+        S.call(0x6F0EF0F0, ecx=A.OBJ, stack_args=(TGT,))
+        rows.append([int(misc), flags, dc, di, int(v4), da, db] + worker_row())
+
+
+def check_abolish_filter(cases, r, rows):
+    """Abolish Magic autocast filter slot 0x450 = 0x6F0E2B90 (ecx = ability, args candidate, 0). Stubs: base filter, ally test,
+    the buff scan 0x6F076D00 (recorded: ecx and nine stack arguments, returns 1). Rows: base_ok ownerflags cand248 ally
+    reqLevel | result | scan calls | ecx | a2..a10."""
+    S.install()
+    ret_var(0x6F030730, 8, 0)
+    ret_var(0x6F285B80, 4, 8)
+    A.patch_jump(0x6F076D00, recorder(0x100, [(i, False) for i in range(9)], 0x24, eax=1, regs=True))
+    for _ in range(cases):
+        base_ok = r.random() < 0.8
+        ownerflags = r.choice([0, 4, 4, 0, r.getrandbits(32)])
+        cand248 = r.choice([0, 0x200, 0x200, 4, r.getrandbits(32)])
+        ally = r.random() < 0.5
+        req = r.choice([0, 0, 1, 2, 5, r.getrandbits(32)])
+        A.make_ability(0x6F8C35AC, 0x41616D64, 75)
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT + 0x5C, ownerflags)
+        wr(A.DEF + 0x40, req)
+        S.make_target(False)
+        wr(TGT + 0x248, cand248)
+        S.clear_cap()
+        wr(VARS + 0, int(base_ok))
+        wr(VARS + 8, int(ally))
+        res = S.call(0x6F0E2B90, ecx=A.OBJ, stack_args=(TGT, 0))
+        rows.append([int(base_ok), ownerflags, cand248, int(ally), req, res & 0xFF, rd(CAP + 0x1F8)]
+                    + [rd(CAP + 0x100 + 4 * i) for i in range(11)])
+
+
 def _trace_install():
     from collections import deque
     from unicorn import UC_HOOK_CODE
@@ -192,6 +352,10 @@ CHECKS = {
     "heal_effect": check_heal_effect,
     "heal_target": check_heal_target,
     "heal_filter": check_heal_filter,
+    "dispel_args": check_dispel_args,
+    "purge_args": check_purge_args,
+    "abolish_args": check_abolish_args,
+    "abolish_filter": check_abolish_filter,
 }
 
 
