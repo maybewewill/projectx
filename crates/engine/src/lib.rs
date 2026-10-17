@@ -491,6 +491,7 @@ impl Engine {
     /// Runs `config` now, synchronously (UNSURE: the real game runs it at map load). A `config` that
     /// sleeps is discarded by the synchronous call and reported as an error.
     pub fn run_config(&mut self) -> Result<(), RunStatus> {
+        sim::rng::trace::set_ctx("config");
         let result = self.host.vm_mut().call("config", &[]).map(|_| ());
         self.config_status = describe(&result);
         result
@@ -511,6 +512,7 @@ impl Engine {
     /// Starts `main` as a thread and runs it at once, until its first stop (lockstep.md section 12.1;
     /// UNSURE: the real game starts `main` at game start). Calling it twice runs `main` twice.
     pub fn start_main(&mut self) -> Result<ThreadId, RunStatus> {
+        sim::rng::trace::set_ctx("main");
         let result = self.host.start("main", &[]);
         self.main_status = match &result {
             Ok(id) => format!("started as thread {}", id.0),

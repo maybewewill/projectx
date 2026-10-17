@@ -29,6 +29,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         match gm.rng_parts() {
             Some((table, streams)) => {
+                crate::rng::trace::note(|| format!("GetRandomInt({lo},{hi})"));
                 NativeResult::Return(Value::Integer(streams.global.random_int(table, lo, hi)))
             }
             None => NativeResult::Fail(RunStatus::MissingTables),
@@ -41,6 +42,7 @@ pub fn register(reg: &mut NativeRegistry, game: &Rc<RefCell<Game>>) {
         let mut gm = g.borrow_mut();
         match gm.rng_parts() {
             Some((table, streams)) => {
+                crate::rng::trace::note(|| "GetRandomReal".to_string());
                 let r = streams.global.random_real_soft(table, lo, hi);
                 NativeResult::Return(Value::Real(r))
             }

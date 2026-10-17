@@ -209,12 +209,42 @@ pub fn resolve_random_races(game: &mut Game, setup: &ReplaySetup) -> Vec<String>
             notes.push("random races stay as the map gave them: no RNG table".to_string());
             return notes;
         };
+        sim::rng::trace::note(|| format!("race of player {n}"));
         let r = streams.global.next_u32(table);
         let race = (r >> 30) + 1;
         if let Some(p) = game.player_mut(n as u32) {
             p.race = race;
         }
         notes.push(format!("player {n}: random race resolved to {race} (draw {r:#010x})"));
+    }
+    notes
+}
+
+/// The player placement of the game load (`0x6F3AA700`, run after the races and before the map script;
+/// docs/spec/lockstep.md section 21). In the random path (placement modes 0 and the teams-together fallback) every
+/// team collects its open slots and shuffles them with the global generator (`0x6F4ACF60`: for `i` in `1..n` one draw
+/// `r` and a swap of entries `i` and `(r * (i + 1)) >> 32`), so `n` open slots cost `n - 1` draws. Here `n` is the
+/// number of occupied slots (the map's slots equal the players on a melee map). The assignment itself is not
+/// modelled (on EchoIsles the third draw has its top bit set, the swap index is 1, nothing moves: matches the replay,
+/// where the human starts at start location 0). Returns one note.
+pub fn placement_draws(game: &mut Game, setup: &ReplaySetup) -> Vec<String> {
+    let open = setup
+        .slots
+        .iter()
+        .take(12)
+        .filter(|s| s.status == SLOT_USED)
+        .count();
+    let mut notes = Vec::new();
+    if open < 2 {
+        return notes;
+    }
+    let Some((table, streams)) = game.rng_parts() else { return notes };
+    sim::rng::trace::note(|| "placement shuffle".to_string());
+    for i in 1..open as u64 {
+        sim::rng::trace::note(|| format!("placement shuffle i={i}"));
+        let r = streams.global.next_u32(table);
+        let j = (u64::from(r) * (i + 1)) >> 32;
+        notes.push(format!("placement shuffle i={i}: draw {r:#010x}, swap with {j}"));
     }
     notes
 }
@@ -241,6 +271,8 @@ impl Engine {
             let local = apply_slots(&mut game, &setup);
             let resolved = resolve_random_races(&mut game, &setup);
             setup.notes.extend(resolved);
+            let placed = placement_draws(&mut game, &setup);
+            setup.notes.extend(placed);
             local
         };
         if let Some(local) = local.or(setup.local_player) {

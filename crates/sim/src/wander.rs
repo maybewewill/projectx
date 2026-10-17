@@ -79,6 +79,7 @@ fn arm(gm: &mut Game, unit: ObjKey) {
     let Some((table, streams)) = gm.rng_parts() else {
         return;
     };
+    crate::rng::trace::note(|| "wander delay".into());
     let delay = streams.global.random_real_soft(table, f(LO), f(HI));
     let delay = if arith::lt(delay, f(MIN_DELAY)) { f(MIN_DELAY) } else { delay };
     if let Some(Some(old)) = gm.spells.neutral.h2.misc.wander.get(&unit).copied() {

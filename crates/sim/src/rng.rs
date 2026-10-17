@@ -121,6 +121,7 @@ impl Rng {
 
     /// Advances one step and returns the new accumulator value.
     pub fn next_u32(&mut self, table: &RngTable) -> u32 {
+        trace::record(self as *const Rng as usize, self.a, self.b);
         let [b3, b2, b1, b0] = self.b.to_be_bytes();
         let p = index(b3, 4, 188);
         let q = index(b2, 12, 212);
@@ -289,5 +290,76 @@ pub const fn game_start_seed(settings_flags: u32, fold: u32) -> u32 {
         FIXED_GAME_SEED
     } else {
         fold
+    }
+}
+
+/// Debug trace of every generator step (global and streams), used to attribute the draws of the global generator
+/// (docs/spec/lockstep.md section 21). Off by default; costs one thread-local read per step.
+pub mod trace {
+    use std::cell::RefCell;
+
+    /// One recorded step: the state before the step and the context label at that time.
+    #[derive(Debug, Clone)]
+    pub struct Entry {
+        pub ptr: usize,
+        pub a: u32,
+        pub b: u32,
+        pub ctx: String,
+    }
+
+    thread_local! {
+        static LOG: RefCell<Option<Vec<Entry>>> = const { RefCell::new(None) };
+        static CTX: RefCell<String> = const { RefCell::new(String::new()) };
+        static NOTE: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+
+    /// A one-shot label appended to the next recorded step (the caller, e.g. a native with its arguments).
+    pub fn note(s: impl FnOnce() -> String) {
+        if enabled() {
+            NOTE.with(|n| *n.borrow_mut() = s());
+        }
+    }
+
+    /// Starts recording.
+    pub fn enable() {
+        LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
+    }
+
+    /// True while recording.
+    pub fn enabled() -> bool {
+        LOG.with(|l| l.borrow().is_some())
+    }
+
+    /// Sets the label stored with the following steps.
+    pub fn set_ctx(s: &str) {
+        if enabled() {
+            CTX.with(|c| {
+                let mut c = c.borrow_mut();
+                c.clear();
+                c.push_str(s);
+            });
+        }
+    }
+
+    pub(super) fn record(ptr: usize, a: u32, b: u32) {
+        LOG.with(|l| {
+            if let Some(v) = l.borrow_mut().as_mut() {
+                let mut ctx = CTX.with(|c| c.borrow().clone());
+                NOTE.with(|n| {
+                    let mut n = n.borrow_mut();
+                    if !n.is_empty() {
+                        ctx.push_str(" | ");
+                        ctx.push_str(&n);
+                        n.clear();
+                    }
+                });
+                v.push(Entry { ptr, a, b, ctx });
+            }
+        });
+    }
+
+    /// Takes the recorded entries (recording continues, empty).
+    pub fn take() -> Vec<Entry> {
+        LOG.with(|l| l.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default())
     }
 }

@@ -278,6 +278,7 @@ fn pick(gm: &mut Game, k: ObjKey) -> Result<Option<u32>, RunStatus> {
         .iter()
         .fold(F32::ZERO, |acc, &(_, w)| arith::add(acc, w));
     let (table, streams) = gm.rng_parts().ok_or(RunStatus::MissingTables)?;
+    crate::rng::trace::note(|| "pool".into());
     let u = streams.global.random_fraction(table);
     let r = arith::mul(total, u);
     let mut cum = F32::ZERO;

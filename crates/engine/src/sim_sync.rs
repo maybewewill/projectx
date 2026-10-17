@@ -394,6 +394,7 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                 if opts.max_slots != 0 && slot_index >= opts.max_slots {
                     break;
                 }
+                sim::rng::trace::set_ctx(&format!("slot {slot_index}"));
                 let payload = block.time_slot_payload().unwrap_or_default();
                 for c in commands {
                     for a in c.decode().unwrap_or_default() {
