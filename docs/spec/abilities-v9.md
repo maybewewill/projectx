@@ -34,6 +34,11 @@ rows dumped as hex words and re-computed by the Rust model. A row is added to `c
     `Dur + ability+0x9C`. The stock row has all `Data*` zero, `Dur` = `HeroDur` = 90, so stock Anti-Magic Shell dispels both polarities and gives `Bams`.
     **Bug fixed**: the model applied only a buff and an immunity count (no dispel at cast, no `Bam2`, restart instead of the set-duration rule, no second-counter rule);
     `unit_abilities_a::ams_plan` / `anti_magic_shell`, `BuffEffect::ShellImmunity`. Not modelled: what the stored `DataB` / `DataC` value does (the damage-absorb read).
+* **Invulnerable (`Avul`) and the invulnerability counter CONFIRMED (400)**: init `0x6F10FAE0` = bonus apply slot `0x2F4` then `0x6F0796F0(unit, 1)`; removal `0x6F10FB10` = base
+  removal then `0x6F079730(unit, 1)`. The counter `+0xE8` does something only on the step to exactly 1 (flag bit 8 of `+0x20` set, enter notice `0x6F2AB310` when notifying,
+  refreshes `0x6F26FE20` / `0x6F26FE10`) and to exactly 0 (flag cleared, leave notice `0x6F2AC3A0`); it is **not clamped**, so a removal at 0 gives -1 and a later add
+  comes back to 0 without setting the flag. **Bug fixed**: the model decided invulnerability from `invuln_count > 0` and clamped removals at 0 (Mirror Image delay, Big Bad
+  Voodoo, spell buffs); it now keeps the flag (`Unit::invuln_flag`) and every writer goes through `abilities::invuln_add` / `invuln_remove`. Test `v9_invulnerable.rs`.
 * **Item classes that inherit a verified spell class (CONFIRMED, 400 each)**: `AIdi` (`CAbilityItemDispelAoe`, vtable `0x6F8C4F34`, Dispel Magic callback and worker
   arguments, order 852271), `AIlp` (`CAbilityLightningPurge`, vtable `0x6F8CB464`, the Purge effect reached through its own slot `0x424` = `jmp 0x6F107E10`, order 852275),
   `AIsh` (`CAbilitySpiritTroll`, vtable `0x6F92828C`, the Feral Spirit effect from slot `0x3C0`, identical in both vtables). Tests `v9_item_dispel.rs`,

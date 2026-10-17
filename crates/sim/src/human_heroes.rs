@@ -352,7 +352,7 @@ impl Game {
         self.set_buff_duration(unit, serial, duration);
         // `0x6F07D180`: purge removal and dispel first, then the invulnerability and immunity counts.
         self.magic_immunity_dispel(unit);
-        self.unit_mut(unit).invuln_count += 1;
+        self.invuln_add(unit);
         self.magic_immunity_add(unit, true);
         serial
     }

@@ -309,7 +309,7 @@ fn two_blizzards_do_not_stack_and_invulnerable_units_are_skipped() {
     let (a, b) = (unit(&h, "foeA"), unit(&h, "foeB"));
     h.game_mut().ability_types_mut().insert(BLIZZARD, AbilityType { max_level: Some(1) });
     // The shield of foeB: an invulnerability count, like Divine Shield / 'Avul' (the enumeration word has no `invu`).
-    h.game_mut().unit_mut(b).invuln_count += 1;
+    h.game_mut().invuln_add(b);
     h.start("blizzard", &[]).unwrap();
     h.start("blizzard2", &[]).unwrap();
     run(&mut h, 12); // first wave at 0.9 s from both casters

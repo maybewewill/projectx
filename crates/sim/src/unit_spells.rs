@@ -291,7 +291,7 @@ impl Game {
             *self.spells.unit.rooted.entry(unit).or_insert(0) += 1;
         }
         if m.invuln {
-            self.unit_mut(unit).invuln_count += 1;
+            self.invuln_add(unit);
         }
         if nonzero(m.damage_flat) {
             let u = self.unit_mut(unit);
@@ -326,8 +326,7 @@ impl Game {
         };
         self.apply_mods(unit, &neg);
         if m.invuln {
-            let u = self.unit_mut(unit);
-            u.invuln_count = (u.invuln_count - 1).max(0);
+            self.invuln_remove(unit);
         }
         if m.morph {
             self.restore_morph(unit);

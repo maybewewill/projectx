@@ -1006,7 +1006,7 @@ fn mirror_image(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
     // undoes all three (`0x6F1280D0` -> `0x6F079730`, `0x6F0767F0`, flag clear) and issues a stop order (`0x6F2A4B80`).
     let had = gm.orc.mirror_pending.insert(rec.caster, (serial, rec.level)).is_some();
     if !had {
-        gm.unit_mut(rec.caster).invuln_count += 1;
+        gm.invuln_add(rec.caster);
     }
     gm.timers_start_hero(rec.level.data[3].to_f32(), TICK_MIRROR, rec.caster, serial);
 }
@@ -1035,10 +1035,7 @@ fn mirror_fire(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, caster: ObjKey,
         return;
     }
     gm.orc.mirror_pending.remove(&caster);
-    {
-        let u = gm.unit_mut(caster);
-        u.invuln_count = (u.invuln_count - 1).max(0);
-    }
+    gm.invuln_remove(caster);
     if gm.unit(caster).removed {
         return;
     }
@@ -1575,7 +1572,7 @@ fn voodoo_pulse(gm: &mut Game, serial: u32) {
         }
         let buff = gm.add_spell_buff(k, BUFF_VOODOO, BuffEffect::Marker, dur);
         if buff != 0 {
-            gm.unit_mut(k).invuln_count += 1;
+            gm.invuln_add(k);
             gm.orc.voodoo_buffs.insert(buff, k);
         }
     }
@@ -1909,8 +1906,7 @@ fn far_sight(game: &RefCell<Game>, rec: &CastRec) {
 pub(crate) fn on_buff_dropped(game: &mut Game, serial: u32) {
     game.orc.hexed.retain(|_, &mut (s, _)| s != serial);
     if let Some(k) = game.orc.voodoo_buffs.remove(&serial) {
-        let u = game.unit_mut(k);
-        u.invuln_count = (u.invuln_count - 1).max(0);
+        game.invuln_remove(k);
     }
     if let Some(key) = game.orc.reveals.remove(&serial) {
         game.fog_stop(key);

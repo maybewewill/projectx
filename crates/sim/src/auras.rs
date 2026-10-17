@@ -698,7 +698,7 @@ impl Game {
             Some(BuffEffect::Avatar { armor, life, damage }) => self.undo_avatar(unit, armor, life, damage),
             Some(BuffEffect::ShellImmunity) => self.magic_immunity_remove(unit, false),
             Some(BuffEffect::DivineShield) => {
-                self.unit_mut(unit).invuln_count -= 1;
+                self.invuln_remove(unit);
                 self.magic_immunity_remove(unit, true);
             }
             Some(BuffEffect::Mods(m)) => self.undo_mods(unit, &m),

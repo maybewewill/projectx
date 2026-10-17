@@ -156,6 +156,45 @@ def check_immunity(cases, r, rows):
                      rd(CAP + 0x108), rd(CAP + 0x10C), rd(CAP + 0x110)] + [rd(CAP + 0x120 + 4 * i) for i in range(9)])
 
 
+def check_invuln(cases, r, rows):
+    """The invulnerability counter of a unit (+0xE8, flag bit 8 of +0x20): add 0x6F0796F0 (ecx = unit, arg = notify) and remove 0x6F079730,
+    driven through the Invulnerable ability's init 0x6F10FAE0 (notify 1) and removal 0x6F10FB10 (notify 1) and directly with notify 0
+    (what Divine Shield passes: `0x6F0796F0(1)` in its apply, so notify 1 too). Stubs: the enter / leave notices 0x6F2AB310 /
+    0x6F2AC3A0 and the refreshes 0x6F26FE20 / 0x6F26FE10 (counted), the bonus-apply slot 0x2F4 and the base removal 0x6F0D1CD0.
+    Row: start_count start_flags ops | count flags | enter leave refresh_a refresh_b."""
+    S.install()
+    A.patch_jump(0x6F2AB310, V4.new_code(b"\xFF\x05" + a32(CAP + 0x100) + b"\xC2\x08\x00"))
+    A.patch_jump(0x6F2AC3A0, V4.new_code(b"\xFF\x05" + a32(CAP + 0x104) + b"\xC3"))
+    A.patch_jump(0x6F26FE20, V4.new_code(b"\xFF\x05" + a32(CAP + 0x108) + b"\xC3"))
+    A.patch_jump(0x6F26FE10, V4.new_code(b"\xFF\x05" + a32(CAP + 0x10C) + b"\xC2\x04\x00"))
+    A.patch_jump(0x6F0D1CD0, A.stub_ret(0, 0))
+    for _ in range(cases):
+        s1 = r.choice([0, 0, 0, 1, 2, 0xFFFFFFFF, 5])
+        s2 = r.choice([0, 8, 0x20, 0x28, r.getrandbits(32)])
+        ops = "".join(r.choice("IRia") for _ in range(r.randint(1, 10)))
+        S.make_target(False)
+        wr(TGT + 0xE8, s1)
+        wr(TGT + 0x20, s2)
+        A.make_ability(0x6F8D25BC, 0x41767574, 75)         # CAbilityInvulnerable, 'Avul'
+        mu.mem_write(S.FVT, bytes(mu.mem_read(0x6F8D25BC, 0x400)))
+        wr(S.FVT + 0x2F4, A.stub_ret(0xC, 0))
+        wr(A.OBJ, S.FVT)
+        wr(A.OBJ + 0x30, TGT)
+        S.clear_cap()
+        mu.mem_write(CAP + 0x100, b"\0" * 0x20)
+        for op in ops:
+            if op == "I":
+                S.call(0x6F10FAE0, ecx=A.OBJ, stack_args=(TGT, 0))
+            elif op == "R":
+                S.call(0x6F10FB10, ecx=A.OBJ)
+            elif op == "i":
+                S.call(0x6F0796F0, ecx=TGT, stack_args=(0,))
+            else:
+                S.call(0x6F079730, ecx=TGT, stack_args=(0,))
+        rows.append([s1, s2, ops, rd(TGT + 0xE8), rd(TGT + 0x20), rd(CAP + 0x100), rd(CAP + 0x104), rd(CAP + 0x108),
+                     rd(CAP + 0x10C)])
+
+
 BAMS, BAM2 = 0x42616D73, 0x42616D32
 VT_AMS_ABIL, ABIL_AMS = 0x6F8DDEB4, 0x4161_6D73       # CAbilityAntiMagicShell, 'Aams'
 VT_AMI_ABIL, ABIL_AMI = 0x6F8DE2E4, 0x4161_6D69       # CAbilityAntiMagicShellInstant, 'Aami'
@@ -233,6 +272,7 @@ def check_ami_effect(cases, r, rows):
 
 
 CHECKS = {
+    "invuln": check_invuln,
     "ams_effect": check_ams_effect,
     "ami_effect": check_ami_effect,
     "immunity": check_immunity,

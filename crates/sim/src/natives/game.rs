@@ -718,6 +718,9 @@ pub struct UnitObj {
     /// Invulnerability counter of buffs (Divine Shield, object `+0xE8` of the buff target: LIKELY): the unit is
     /// invulnerable while it is above zero, next to the `Avul` ability of `SetUnitInvulnerable`.
     pub invuln_count: i32,
+    /// The unit flag the counter drives (object `+0x20` bit 8): set when `invuln_count` reaches 1, cleared when it reaches 0
+    /// ([`crate::abilities::invuln_add`]); the unit is invulnerable while it is set.
+    pub invuln_flag: bool,
     /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
     pub abilities: UnitAbilities,
     /// The unit's buffs in the order they were added (see [`crate::abilities`]).

@@ -539,6 +539,7 @@ pub(crate) fn build(
         magic_immune: 0,
         magic_immune_flagged: 0,
         invuln_count: 0,
+        invuln_flag: false,
         sight: ty.sight,
         night_sight: ty.night_sight,
         revealed: 0,
