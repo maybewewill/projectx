@@ -1362,6 +1362,8 @@ pub struct Game {
     pub(crate) movers: crate::movement::Movers,
     /// Push-apart records and the pathing-cell occupant lists (`crate::push`).
     pub(crate) push: crate::push::PushState,
+    /// The path follower: footprint nodes and follower state (`crate::follow_game`).
+    pub(crate) follow: crate::follow_game::FollowState,
     /// Whether the vision refresh timer (0x80269, [`Payload::Vision`]) has been armed. Armed once per game.
     pub vision_armed: bool,
     /// The softfloat tables that the playable-area grid needs (set by the host, see [`Game::set_vision_tables`]).
@@ -1508,6 +1510,7 @@ impl Game {
             game_row: 0,
             movers: crate::movement::Movers::new(),
             push: crate::push::PushState::default(),
+            follow: crate::follow_game::FollowState::default(),
             vision_armed: false,
             vision_tables: None,
             contexts: Vec::new(),

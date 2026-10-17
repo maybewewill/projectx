@@ -87,6 +87,10 @@ pub fn install(
     game.set_pathing(Some(PathingMap { search, origin }));
     // unit push-apart needs the cell grid size (movement-7.md section 8)
     game.enable_push_apart(map.width as i32, map.height as i32);
+    // the path follower's footprint grid (docs/spec/movement-8.md); opt-in with `SIM_FOLLOW=1`: it overdraws (docs/spec/movement-8.md)
+    if std::env::var_os("SIM_FOLLOW").is_some() {
+        game.enable_follow(map.width as i32, map.height as i32, &words);
+    }
     Some(PathingSummary {
         width: map.width,
         height: map.height,

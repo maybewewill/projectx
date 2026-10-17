@@ -562,3 +562,99 @@ pub fn walk_step(
     }
     Some(StepOut { code: 1, list, drew: false, restored: false })
 }
+
+/// Whether one cell step of the follower's footprint class is free (the trace of `0x6F49D8D0` without the blocker
+/// scan): no blocked cell and no unit footprint other than the walker's own.
+fn cell_step_free(
+    occ: &mut Occupancy,
+    ex: &mut [NodeExtra],
+    host: &dyn FollowHost,
+    p: &Follower,
+    from: (i32, i32),
+    to: (i32, i32),
+) -> bool {
+    let code = direction_code(from, to);
+    let mut list: List = Vec::new();
+    if let Some(n) = p.own_node {
+        ex[n as usize].word40 = ex[n as usize].word40.wrapping_add(1);
+    }
+    trace_class(occ, ex, p.mask, host, &mut list, size_class(p.radius), to, code);
+    if let Some(n) = p.own_node {
+        ex[n as usize].word40 = ex[n as usize].word40.wrapping_sub(1);
+    }
+    list.is_empty()
+}
+
+/// The local detour search that stands in for `0x6F49BB90` -> `0x6F4A3CC0` (a cell-level A* around blocked cells and
+/// foreign footprints; **not ported**, UNSURE): eight-neighbour A* from `from` to `to` over steps for which the
+/// follower's own trace is free, at most `limit` expansions. When `to` is unreachable the path ends on the expanded
+/// cell closest to it. Returns the cells after `from`, or `None` when nothing but the start was reached.
+pub fn find_detour(
+    occ: &mut Occupancy,
+    ex: &mut [NodeExtra],
+    host: &mut dyn FollowHost,
+    me: u32,
+    from: (i32, i32),
+    to: (i32, i32),
+    limit: usize,
+) -> Option<Vec<(i32, i32)>> {
+    use std::cmp::Reverse;
+    use std::collections::{BTreeMap, BinaryHeap};
+    let p = *host.follower(me);
+    let h = |c: (i32, i32)| -> u32 {
+        let (dx, dy) = ((c.0 - to.0).unsigned_abs(), (c.1 - to.1).unsigned_abs());
+        10 * dx.max(dy) + 4 * dx.min(dy)
+    };
+    let mut g: BTreeMap<(i32, i32), u32> = BTreeMap::new();
+    let mut parent: BTreeMap<(i32, i32), (i32, i32)> = BTreeMap::new();
+    let mut open = BinaryHeap::new();
+    let mut seq = 0u32;
+    g.insert(from, 0);
+    open.push(Reverse((h(from), seq, from)));
+    let mut best = (h(from), from);
+    let mut expanded = 0;
+    let mut found = false;
+    while let Some(Reverse((_, _, cur))) = open.pop() {
+        if cur == to {
+            found = true;
+            break;
+        }
+        expanded += 1;
+        if expanded > limit {
+            break;
+        }
+        let gc = g[&cur];
+        for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0), (1, -1), (1, 1), (-1, 1), (-1, -1)] {
+            let nb = (cur.0 + dx, cur.1 + dy);
+            let cost = gc + if dx != 0 && dy != 0 { 14 } else { 10 };
+            if g.get(&nb).is_some_and(|&old| old <= cost) {
+                continue;
+            }
+            if !cell_step_free(occ, ex, host, &p, cur, nb) {
+                continue;
+            }
+            g.insert(nb, cost);
+            parent.insert(nb, cur);
+            seq += 1;
+            open.push(Reverse((cost + h(nb), seq, nb)));
+            if h(nb) < best.0 {
+                best = (h(nb), nb);
+            }
+        }
+    }
+    let end = if found { to } else { best.1 };
+    if end == from {
+        return None;
+    }
+    let mut path = vec![end];
+    let mut c = end;
+    while let Some(&pc) = parent.get(&c) {
+        if pc == from {
+            break;
+        }
+        path.push(pc);
+        c = pc;
+    }
+    path.reverse();
+    Some(path)
+}
