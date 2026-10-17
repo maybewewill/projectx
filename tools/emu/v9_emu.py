@@ -92,9 +92,27 @@ def check_creep_clap_slow(cases, r, rows):
     H3.check_thunder_slow(cases, r, rows)
 
 
+def check_lpurge(cases, r, rows):
+    """Lightning Purge (`AIlp`, CAbilityLightningPurge vtable 0x6F8CB464): the V4 Purge check with the Purge effect reached through the
+    LP class's own unit-effect slot 0x424 (0x6F10C070, a `jmp 0x6F107E10`) and the LP vtable on the fake ability."""
+    vt = 0x6F8CB464
+    thunk = A.rd(vt + 0x424)
+    orig_make, orig_call = A.make_ability, S.call
+
+    def make(v, code, cost):
+        orig_make(vt if v == 0x6F8C46CC else v, 0x41496C70 if v == 0x6F8C46CC else code, cost)       # 'AIlp'
+
+    def call(fn, **kw):
+        return orig_call(thunk if fn == 0x6F107E10 else fn, **kw)
+    A.make_ability, S.call = make, call
+    V4.check_purge_args(cases, r, rows)
+
+
 CHECKS = {
+    "lpurge_args": check_lpurge,
     "frenzy": check_frenzy,
     "creep_clap_slow": check_creep_clap_slow,
+    "itemdispel_args": _swap_ability(V4.check_dispel_args, 0x6F8C3A24, 0x6F8C4F34, 0x41496469),     # 'AIdi'
     "disenchant_args": _swap_ability(V4.check_dispel_args, 0x6F8C3A24, 0x6F8C3E5C, 0x41646368),     # 'Adch'
     "nheal_effect": _neutral_heal(V4.check_heal_effect),
     "nheal_target": _neutral_heal(V4.check_heal_target),

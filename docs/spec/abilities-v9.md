@@ -19,6 +19,10 @@ rows dumped as hex words and re-computed by the Rust model. A row is added to `c
   (`0x6F18AA90` instead of `0x6F18A930`; same body with the creep buff factory `0x6F188C00`). Per-unit body (shared with War Stomp) run with the creep vtable
   (`v9_creep_clap_unit.py`) and the slow slot run for real (`v9_emu.py` check `creep_clap_slow`: hero-rule duration, `-DataC` movement, `-DataD` attack speed;
   the hero walk `0x6F0766A0` stubbed to "no" as in V1). The model aliases `AHtc` (`neutral_spells.rs`). Test `v9_creep_clap.rs`.
+* **Item classes that inherit a verified spell class (CONFIRMED, 400 each)**: `AIdi` (`CAbilityItemDispelAoe`, vtable `0x6F8C4F34`, Dispel Magic callback and worker
+  arguments, order 852271), `AIlp` (`CAbilityLightningPurge`, vtable `0x6F8CB464`, the Purge effect reached through its own slot `0x424` = `jmp 0x6F107E10`, order 852275),
+  `AIsh` (`CAbilitySpiritTroll`, vtable `0x6F92828C`, the Feral Spirit effect from slot `0x3C0`, identical in both vtables). Tests `v9_item_dispel.rs`,
+  `v9_lightning_purge.rs`, `v9_troll.rs`; harness reruns in `v9_emu.py` (`itemdispel_args`, `lpurge_args`) and `v9_troll_emu.py`.
 * **Creep summons `ANsg` Summon Grizzly, `ANsq` Quilbeast, `ANsw` War Eagle, `ANlm` Lava Monster, `ANwm` Watery Minion CONFIRMED (150 each)**: all five share
   the Water Elemental loop `0x6F163390` at slot `0x3C0` (and the `UnitID` getter `0x3E8`); only the code / name / order getters and the class slot `0x3E4`
   (the timed-life attach) differ. The V5 harness (`v5_summon_emu.py`) was re-run on their vtables (`v9_summon_emu.py`; `0x3E4` stubbed as for `AEst`/`AEsv`):
