@@ -77,6 +77,8 @@ pub struct Follower {
     pub reissue: (F32, F32),
     /// `+0xA4` is non-zero (a request token: UNSURE, the sim has none).
     pub token: bool,
+    /// `+0xA0`: the walker's own footprint node.
+    pub own_node: Option<u32>,
     /// `+0x74`: the waypoint index (`0xFFFFFFFF` after a detour request).
     pub index: u32,
     /// `+0x50`: the number of waypoints.
@@ -95,6 +97,7 @@ impl Follower {
             radius,
             reissue: (F32::ZERO, F32::ZERO),
             token: false,
+            own_node: None,
             index: 0,
             count: 0,
         }
@@ -128,6 +131,24 @@ pub trait FollowHost {
     fn handle_valid(&self, h: (u32, u32)) -> bool;
     /// One step of the global generator.
     fn draw(&mut self) -> u32;
+}
+
+/// Walks between two requests of a kind (`dword_6F953340`): 0 = the cell-level detour search (`0x6F49BB90`), 1 = the
+/// region path request (`0x6F49B9C0`), 2 = (`0x40`, unused here).
+pub const REQUEST_INTERVAL: [u32; 3] = [10, 10, 0x40];
+
+/// `0x6F49ACA0`: the per-follower request budget. `last` is the walk counter of the last grant (`P+0x7C + 4k`), `now`
+/// the world's walk counter (`world+0x538`); returns the grant, and the elapsed walks.
+pub fn request_gate(last: &mut u32, now: u32, interval: u32) -> (bool, u32) {
+    if *last > now {
+        *last = now.wrapping_sub(interval);
+    }
+    let elapsed = now.wrapping_sub(*last);
+    if elapsed < interval {
+        return (false, elapsed);
+    }
+    *last = now;
+    (true, elapsed)
 }
 
 /// The trace list: `None` is a blocked cell or an occupant without the mover tag (a null entry).
@@ -437,7 +458,7 @@ fn scan_blockers(host: &mut dyn FollowHost, me: u32, list: &List) {
 /// `0x6F49D8D0`: `true` when the one-cell step from `pos` toward `wp` is free. Fills the blocker state of `me`.
 pub fn step_is_clear(
     occ: &mut Occupancy,
-    ex: &[NodeExtra],
+    ex: &mut [NodeExtra],
     host: &mut dyn FollowHost,
     me: u32,
     pos: (F32, F32),
@@ -460,7 +481,15 @@ pub fn step_is_clear(
     let p = *host.follower(me);
     let mut list: List = Vec::new();
     let class = size_class(p.radius);
+    // the walker's own footprint node is counted up for the length of the trace (`P+0xA0`, `node+0x40`), which makes
+    // the trace skip it
+    if let Some(n) = p.own_node {
+        ex[n as usize].word40 = ex[n as usize].word40.wrapping_add(1);
+    }
     trace_class(occ, ex, p.mask, host, &mut list, class, end, code);
+    if let Some(n) = p.own_node {
+        ex[n as usize].word40 = ex[n as usize].word40.wrapping_sub(1);
+    }
     scan_blockers(host, me, &list);
     (list.is_empty(), list)
 }
@@ -482,7 +511,7 @@ pub struct StepOut {
 /// Returns `None` when the waypoint is reached (the caller advances the path: `0x6F49C3B0` reached branch).
 pub fn walk_step(
     occ: &mut Occupancy,
-    ex: &[NodeExtra],
+    ex: &mut [NodeExtra],
     host: &mut dyn FollowHost,
     me: u32,
     pos: (F32, F32),

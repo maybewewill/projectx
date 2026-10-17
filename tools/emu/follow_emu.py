@@ -177,6 +177,7 @@ def gen_case(rng):
             mask=rng.choice([0xFF000000 | 0x1, 0x02000001, 0x0A000003, rng.getrandbits(32), 0xFFFFFFFF]),
             radius=f2b(rng.choice([0.2, 0.4, 0.7, 0.99, 1.2, 1.4, 2.0, 3.5])),
             p24=(f2b(rng.uniform(0, w)), f2b(rng.uniform(0, h))),
+            own=(rng.randrange(nnodes) if nnodes and rng.random() < 0.7 else -1),
         ))
     if rng.random() < 0.4:
         # crowded style: moving, valid movers with equal nibbles, units standing in the cells
@@ -285,6 +286,7 @@ def setup_case(c):
         wr32(a + 0x98, f["retry"])
         wr32(a + 0x9C, f["mask"])
         wr32(a + 0xB4, f["radius"])
+        wr32(a + 0xA0, 0 if f["own"] < 0 else NODES + 0x100 * f["own"])
         b = f["blk_mover"]
         if b < 0:
             wr32(a + 0xA8, 0xFFFFFFFF)
@@ -357,7 +359,7 @@ def write_case(c):
         t += [hx(u["serial"]), hx(u["flags"]), hx(u["stamp"]), hx(1 if u["valid"] else 0)]
     for f in c["fols"]:
         t += [hx(f["flags"]), hx(f["wait"]), hx(f["retry"]), hx(f["blk_mover"]), hx(1 if f["blk_bad"] else 0),
-              hx(f["mask"]), hx(f["radius"]), hx(f["p24"][0]), hx(f["p24"][1])]
+              hx(f["mask"]), hx(f["radius"]), hx(f["p24"][0]), hx(f["p24"][1]), hx(f["own"])]
     t.append(hx(len(c["wps"])))
     for x, y in c["wps"]:
         t += [hx(x), hx(y)]
@@ -372,6 +374,19 @@ def main():
     rng = random.Random(seed)
     lines = []
     stats = {}
+    if len(sys.argv) > 4 and sys.argv[4] == "A":
+        # the request budget 0x6F49ACA0(this, k, now, &out): slots 0 and 1, intervals dword_6F953340[k]
+        for _ in range(n):
+            k = rng.choice([0, 1])
+            last = rng.choice([0, rng.getrandbits(12), rng.getrandbits(32), 4000])
+            now = rng.choice([4000, rng.getrandbits(12), rng.getrandbits(32), last + rng.randint(0, 80)]) & 0xFFFFFFFF
+            wr32(FOLS + 4 * (31 + k), last)
+            r = emu.call(0x6F49ACA0, ecx=FOLS, stack_args=(k, now, SCRATCH + 0x200))
+            lines.append("A " + " ".join(hx(v) for v in (k, last, now, r & 0xFF, rd32(FOLS + 4 * (31 + k)), rd32(SCRATCH + 0x200))))
+        with open(out, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        print("gate cases", len(lines))
+        return
     while len(lines) < n:
         c = gen_case(rng)
         # skip waypoint-reached cases: the reach branch is covered by crates/sim mover::waypoint_reached

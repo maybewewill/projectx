@@ -132,7 +132,7 @@ fn walk_step_matches_the_original() {
             occ.pool.push(Entry { w0, node });
         }
         let nnodes = c.next() as usize;
-        let mut extra = Vec::new();
+        let mut extra: Vec<NodeExtra> = Vec::new();
         for _ in 0..nnodes {
             let flags = c.next();
             let stamp = c.next();
@@ -154,13 +154,14 @@ fn walk_step_matches_the_original() {
         }
         let mut fols = Vec::new();
         for _ in 0..nm {
-            let (flags, wait, retry, blk, bad, mask, radius, px, py) =
-                (c.next(), c.next(), c.next(), c.next(), c.next(), c.next(), c.next(), c.next(), c.next());
+            let (flags, wait, retry, blk, bad, mask, radius, px, py, own) =
+                (c.next(), c.next(), c.next(), c.next(), c.next(), c.next(), c.next(), c.next(), c.next(), c.next());
             let mut f = Follower::new(mask, F32(radius));
             f.flags = flags;
             f.wait = wait;
             f.retry = retry;
             f.reissue = (F32(px), F32(py));
+            f.own_node = if own == u32::MAX { None } else { Some(own) };
             if blk != u32::MAX {
                 f.blocker = (blk, movers[blk as usize].serial.wrapping_add(bad));
             }
@@ -183,7 +184,7 @@ fn walk_step_matches_the_original() {
         };
         let wp = wps[idx];
         let fols_radius = host.fols[me as usize].radius.0;
-        let out = walk_step(&mut occ, &extra, &mut host, me, pos, wp, &tables)
+        let out = walk_step(&mut occ, &mut extra, &mut host, me, pos, wp, &tables)
             .unwrap_or_else(|| panic!("line {ln}: waypoint reached"));
         // expected, in the order of follow_emu.collect()
         let mut o = Cur { v: &ov, i: 0 };
@@ -233,4 +234,20 @@ fn walk_step_matches_the_original() {
     }
     eprintln!("follow vectors: {cases} cases, {draws} draws, codes {codes:?}, blocker marked {marked}, others told to wait {asked}");
     assert!(cases >= 300, "too few cases: {cases}");
+}
+
+const A: &str = include_str!("data/follow_a.txt");
+
+#[test]
+fn request_gate_matches_the_original() {
+    let mut n = 0;
+    for (ln, line) in A.lines().enumerate() {
+        let v: Vec<u32> = line.split_whitespace().skip(1).map(|t| u32::from_str_radix(t, 16).unwrap()).collect();
+        let (k, last, now, want_ok, want_last, want_out) = (v[0], v[1], v[2], v[3], v[4], v[5]);
+        let mut l = last;
+        let (ok, el) = sim::follow::request_gate(&mut l, now, sim::follow::REQUEST_INTERVAL[k as usize]);
+        assert_eq!((ok as u32, l, el), (want_ok, want_last, want_out), "line {ln}");
+        n += 1;
+    }
+    assert!(n >= 300);
 }
