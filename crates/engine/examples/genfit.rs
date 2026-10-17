@@ -36,6 +36,23 @@ fn main() {
             println!("{k} draws with no bit above 21: {m} of {}", n - k);
         }
     }
+    if let Ok(ab) = std::env::var("GENFIT_AB") {
+        // "a,b": residual of every change in the slot range against the draws a -> b.
+        let v: Vec<usize> = ab.split(',').map(|s| s.parse().unwrap()).collect();
+        let g = (h[v[0]] ^ h[v[1]]).rotate_left(3);
+        println!("rol3(h[{}] ^ h[{}]) = {g:08x}", v[0], v[1]);
+        for line in trace.lines() {
+            let Some(rest) = line.trim_start().strip_prefix("slot") else { continue };
+            let slot: u32 = rest.split_whitespace().next().unwrap().parse().unwrap();
+            if slot < lo || slot > hi {
+                continue;
+            }
+            let Some(i) = line.find("real change ") else { continue };
+            let ch = u32::from_str_radix(&line[i + 12..i + 20], 16).unwrap();
+            println!("slot {slot} change {ch:08x} residual {:08x}", g ^ ch);
+        }
+        return;
+    }
     let mask: u32 = if low == 0 { 0 } else { (1u64 << low).wrapping_sub(1) as u32 };
     for line in trace.lines() {
         let Some(rest) = line.trim_start().strip_prefix("slot") else { continue };

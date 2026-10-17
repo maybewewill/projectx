@@ -39,6 +39,16 @@ pub const KIND_WANDER: u8 = 0x6E;
 /// The stream of the offsets (`mov edx, 8` before `0x6F2853D0`, CONFIRMED by the disassembly of `0x6F170DF0`).
 pub const WANDER_STREAM: usize = 8;
 
+/// Delay draws when the unit gets the ability: the class arms at its own init (`0x6F162820`, 1) and the new unit's idle
+/// notifications `0xD0148` and `0xD0178` each arm once more (`0x6F1628F0`, `0x6F162930`). UNSURE as a count, FITTED:
+/// docs/spec/lockstep.md section 21 (the replay has 28 global draws by record 32; 3 per critter is the number that
+/// brings the sim's cumulative count to 26/28 there, 103/104 at record 700).
+pub const CREATE_ARMS: usize = 3;
+/// Delay draws when the order list empties: the notifications `0xD0148` and `0xD0178` both arm (the ability has ONE
+/// embedded timer at `+0x6C`, so the second arm replaces the first timer but still draws). FITTED on the burst of 12
+/// draws (6 critters x 2) in records 103 to 149 of the replay.
+pub const IDLE_ARMS: usize = 2;
+
 const LO: u32 = 0x40A0_0000; // 5.0   (0x6FAB1D7C after start-up)
 const HI: u32 = 0x4120_0000; // 10.0  (0x6FAB1D80)
 const MIN_DELAY: u32 = 0x3C23_D70A; // 0.01 (0x6FAAE480)
@@ -56,7 +66,10 @@ pub(crate) fn sync(gm: &mut Game, unit: ObjKey) {
     if has && !tracked {
         // The entry exists from now on, with or without a running timer.
         gm.spells.neutral.h2.misc.wander.insert(unit, None);
-        arm(gm, unit);
+        let n = CREATE_ARMS;
+        for _ in 0..n {
+            arm(gm, unit);
+        }
     } else if !has && tracked {
         if let Some(Some(id)) = gm.spells.neutral.h2.misc.wander.remove(&unit) {
             gm.timers.cancel(id);
@@ -67,7 +80,10 @@ pub(crate) fn sync(gm: &mut Game, unit: ObjKey) {
 /// The unit's order list emptied (the idle messages `0xD0148` / `0xD0178`): arm again.
 pub(crate) fn on_idle(gm: &mut Game, unit: ObjKey) {
     if gm.spells.neutral.h2.misc.wander.contains_key(&unit) && gm.alive(unit) {
-        arm(gm, unit);
+        let n = IDLE_ARMS;
+        for _ in 0..n {
+            arm(gm, unit);
+        }
     }
 }
 
@@ -82,6 +98,7 @@ fn arm(gm: &mut Game, unit: ObjKey) {
     crate::rng::trace::note(|| "wander delay".into());
     let delay = streams.global.random_real_soft(table, f(LO), f(HI));
     let delay = if arith::lt(delay, f(MIN_DELAY)) { f(MIN_DELAY) } else { delay };
+    // One embedded timer per ability (`+0x6C`): a new arm replaces the running one.
     if let Some(Some(old)) = gm.spells.neutral.h2.misc.wander.get(&unit).copied() {
         gm.timers.cancel(old);
     }

@@ -239,6 +239,11 @@ pub fn placement_draws(game: &mut Game, setup: &ReplaySetup) -> Vec<String> {
         return notes;
     }
     let Some((table, streams)) = game.rng_parts() else { return notes };
+    if let Some(extra) = std::env::var("SIM_EXTRA_LOAD_DRAWS").ok().and_then(|s| s.parse::<usize>().ok()) {
+        for _ in 0..extra {
+            streams.global.next_u32(table);
+        }
+    }
     sim::rng::trace::note(|| "placement shuffle".to_string());
     for i in 1..open as u64 {
         sim::rng::trace::note(|| format!("placement shuffle i={i}"));
