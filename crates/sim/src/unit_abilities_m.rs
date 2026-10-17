@@ -234,8 +234,6 @@ pub struct State {
     pub pending_deaths: Vec<(ObjKey, ObjKey)>,
     /// Running repairs by builder (S52).
     repairs: BTreeMap<ObjKey, RepairJob>,
-    /// Running replenish channels by caster (S52).
-    replenish: BTreeMap<ObjKey, ReplenishJob>,
     /// Running permanent-immolation pulses by (unit, ability) (S52).
     pulses: BTreeMap<(ObjKey, u32), TimerId>,
 }
@@ -248,13 +246,7 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// Abilities cast without a target (Call to Arms).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    matches!(base, MILITIA | MILITIA_CONVERT | RETURN | TAUNT)
-}
-
-/// Classes whose `Cast` field is the length of the effect (a channel of `Cast / Dur` ticks), not a delay before it:
-/// the replenish family (UNSURE, see the spec). `cast.rs` skips its stage-2 wait for them.
-pub(crate) fn cast_field_is_duration(base: u32) -> bool {
-    matches!(base, REPLENISH | REPLENISH_LIFE | REPLENISH_MANA)
+    matches!(base, MILITIA | MILITIA_CONVERT | RETURN | TAUNT | REPLENISH | REPLENISH_LIFE | REPLENISH_MANA)
 }
 
 pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
@@ -280,17 +272,6 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             };
             let u = gm.unit(target);
             (bad(w) || !arith::lt(u.life, u.max_life)).then_some(CastError::BadTarget)
-        }
-        REPLENISH | REPLENISH_LIFE | REPLENISH_MANA => {
-            let u = gm.unit(target);
-            let hurt = arith::lt(u.life, u.max_life);
-            let dry = arith::lt(u.mana, u.max_mana);
-            let needs = match base {
-                REPLENISH_LIFE => hurt,
-                REPLENISH_MANA => dry,
-                _ => hurt || dry,
-            };
-            (bad("ground,air,friend,self,organic,vuln,invu") || !needs).then_some(CastError::BadTarget)
         }
         UNSUMMON => bad("structure,player").then_some(CastError::BadTarget),
         _ => None,
@@ -332,9 +313,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             true
         }
         REPLENISH | REPLENISH_LIFE | REPLENISH_MANA => {
-            if let CastTarget::Unit(t) = rec.target {
-                start_replenish(game, rec, t);
-            }
+            replenish_pulse(game, rec);
             true
         }
         UNSUMMON => {
@@ -608,7 +587,6 @@ impl Game {
 
 /// Timer kinds of this module (`SpellMsg::UnitSpell`, routed here by `unit_abilities_a::on_timer`).
 pub const KIND_REPAIR: u8 = 0x70;
-pub const KIND_REPLENISH: u8 = 0x71;
 pub const KIND_PULSE: u8 = 0x72;
 /// Seconds between two repair ticks (a model choice, UNSURE: the original's repair progress is a per-tick task of the
 /// builder that was not read).
@@ -617,7 +595,6 @@ pub const REPAIR_PERIOD: f32 = 0.5;
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, _aux: u32) {
     match kind {
         KIND_REPAIR => game.borrow_mut().repair_tick(unit),
-        KIND_REPLENISH => game.borrow_mut().replenish_tick(unit),
         KIND_PULSE => {
             let dead = game.borrow_mut().pulse_tick(unit, base);
             for victim in dead {
@@ -692,17 +669,6 @@ pub struct RepairJob {
     paid: [i32; 2],
     /// Where the builder stood when it started (it leaves the job by moving).
     at: (F32, F32),
-    timer: TimerId,
-}
-
-/// A running replenish channel (the Moon Well).
-#[derive(Debug, Clone)]
-pub struct ReplenishJob {
-    pub target: ObjKey,
-    life: F32,
-    mana: F32,
-    ticks_left: u32,
-    period: f32,
     timer: TimerId,
 }
 
@@ -824,93 +790,259 @@ impl Game {
     }
 }
 
-/// Replenish Mana and Life / Life / Mana (`CAbilityReplenish`, `...Life`, `...Mana`; the Moon Well). UNSURE model: the
-/// `Cast` field is the channel length (`cast_field_is_duration`), `Dur` the tick period, and every tick gives the
-/// target `DataA` life (Arpb, Arpl) and `DataB` mana (Arpb, Arpm); the generic cast paid `Cost` mana once for the
-/// whole channel. The first tick is immediate.
-fn start_replenish(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+// ---- Replenish (the Moon Well), CONFIRMED by Unicorn (V10, `tools/emu/v10_emu.py` checks `rep_effect`, `rep_precheck`) ----
+
+/// The marker buffs of the Moon Well (`CBuffReplenish < CBuffHeal`, id getters `0x6F1D34E0`, `0x6F1D3560`, `0x6F1D35E0`).
+pub const BUFF_REPLENISH: u32 = code(b"Brpb");
+pub const BUFF_REPLENISH_LIFE: u32 = code(b"Brpl");
+pub const BUFF_REPLENISH_MANA: u32 = code(b"Brpm");
+
+/// The inputs of the Moon Well pulse (`CAbilityReplenish`, `Arpb`; `CAbilityReplenishLife` `Arpl` and `...Mana` `Arpm` differ only in
+/// slots `0x478` / `0x47C`, which return `0.0` for the missing half). All values are level-record fields (`Cast` +4, `Dur` +8,
+/// `HeroDur` +0xC, `Cost` +0x10, `Cool` +0x14, `DataA` +0x20, `DataB` +0x24, `DataE` +0x30) or ability fields (`extra` +0x9C,
+/// `extra_cool` +0x13C).
+#[derive(Debug, Clone, Copy)]
+pub struct ReplenishIn {
+    pub base: u32,
+    pub cast: F32,
+    pub dur: F32,
+    pub hero_dur: F32,
+    pub extra: F32,
+    pub cost: i32,
+    pub cool: F32,
+    pub data_a: F32,
+    pub data_b: F32,
+    pub data_e: F32,
+    pub extra_cool: F32,
+    /// Misc `IllusionsCanRestoreLife` / `IllusionsCanRestoreMana`.
+    pub misc_life: bool,
+    pub misc_mana: bool,
+    /// Misc `EtherealHealBonus`.
+    pub ethereal_bonus: F32,
+}
+
+/// One candidate of the group, in the collector's order, with every value the callback `0x6F1FAAA0` reads.
+#[derive(Debug, Clone, Copy)]
+pub struct ReplenishUnit {
+    pub hero: bool,
+    pub life: F32,
+    pub max_life: F32,
+    pub mana: F32,
+    pub max_mana: F32,
+    pub illusion: bool,
+    /// The ethereal count (`+0x158`, a signed compare).
+    pub ethereal: i32,
+    /// Whether the unit already carries each marker buff the callback could look up (`Brpb`, `Brpl`, `Brpm`).
+    pub existing: [bool; 3],
+    /// The per-unit gate, slot `0x3EC` (`0x6F04F7A0`), nonzero = the unit is refused.
+    pub refused: bool,
+}
+
+/// What the pulse does, in order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReplenishEvent {
+    /// The target effect `0x6F052EC0` (presentation).
+    Fx(usize),
+    /// The marker lookup `0x6F0787D0(unit, id, 0, 0, 1, 1)`.
+    Lookup { unit: usize, id: u32 },
+    /// The marker exists: slot `0x350` with the duration.
+    Refresh { unit: usize, id: u32, dur: F32 },
+    /// The marker is created: `0x324`, `0x354(unit, &dur, caster)`, registered on the unit.
+    Create { unit: usize, id: u32, dur: F32 },
+    /// The life adder `0x6F277C20` gets `amount`.
+    Life { unit: usize, amount: F32 },
+    /// The mana adder `0x6F279140` gets `amount`.
+    Mana { unit: usize, amount: F32 },
+    /// The caster effect `0x6F053040` after the group.
+    CasterFx,
+    /// The mana payment `0x6F283DB0(caster, &out, &cost, 1)`.
+    Pay(F32),
+    /// The cooldown start (`Cool + ability +0x13C`, flag 1).
+    Cooldown(F32),
+}
+
+fn lt87(a: F32, b: F32) -> bool {
+    f64::from(a.to_f32()) < f64::from(b.to_f32())
+}
+
+/// The precheck value of the Moon Well, slot `0x374` = `0x6F1DBCC0` (CONFIRMED by Unicorn, V10 `rep_precheck`): `0.0 + I2R(F2I(DataE) *
+/// Cost)` by soft add (the base slot `0x36C` returns `0.0`). The readiness test compares the caster's mana with it (slot `0x370`
+/// `0x6F1D36A0`: a value equal to `0.0` passes, otherwise the mana check `0x6F283C70`). The generic payment of the cast body is skipped
+/// (slot `0x3D4` returns 0): the effect pays itself.
+pub fn replenish_precheck(data_e: F32, cost: i32) -> F32 {
+    let product = softfloat::conv::f2i(data_e).wrapping_mul(cost);
+    arith::add(F32::ZERO, softfloat::conv::i2r(product))
+}
+
+/// The readiness test of the Moon Well for a caster with `mana` (slot `0x370` = `0x6F1D36A0`, CONFIRMED by reading: a precheck value equal to
+/// `0.0` passes, otherwise the unit-side mana check). `None` for abilities with the generic rule.
+pub(crate) fn precheck_ok(base: u32, level: &crate::cast::SpellLevel, mana: F32) -> Option<bool> {
+    if !pays_in_effect(base) {
+        return None;
+    }
+    let need = replenish_precheck(level.data[4], level.cost);
+    Some(!nonzero(need) || crate::cast::mana_check(mana, need))
+}
+
+/// The classes whose cost slot `0x3D4` returns 0, so the generic cast body pays nothing (`0x6F05C840`): the effect pays itself.
+pub(crate) fn pays_in_effect(base: u32) -> bool {
+    matches!(base, REPLENISH | REPLENISH_LIFE | REPLENISH_MANA)
+}
+
+/// The pulse of the Moon Well (effect slot `0x428` = `0x6F1FADC0` and its per-unit callback `0x6F1FAAA0`; CONFIRMED by Unicorn, V10
+/// `rep_effect`): an immediate pulse with no target. The callback runs for the candidates of the group (targs flags, `Area` around the
+/// caster) in collector order; the record it shares holds the life amount (`DataA`) and the mana amount (`DataB`) and **is changed in
+/// place** by the ethereal bonus, so a later unit sees the scaled value. Per unit: stop when `F2I(Cast)` is nonzero and that many
+/// units were taken; skip a unit that needs nothing (an amount is "set" when nonzero, "needed" when `0.0 < max - current`) or that slot
+/// `0x3EC` refuses; otherwise count it, look up / refresh / create the marker (`Brpb` both amounts, `Brpl` life only, `Brpm` mana
+/// only) with `HeroDur` for a hero else `Dur + extra`, then (unless an illusion is blocked by the two Misc switches) scale the life
+/// amount for an ethereal unit and hand the amounts to the adders. After the group the caster pays `max(1, min(count, F2I(DataE))) *
+/// Cost` and starts its cooldown.
+pub fn replenish_plan(inp: &ReplenishIn, units: &[ReplenishUnit]) -> Vec<ReplenishEvent> {
+    let mut ev = Vec::new();
+    let mut life_amt = if inp.base == REPLENISH_MANA { F32::ZERO } else { inp.data_a };
+    let mana_amt = if inp.base == REPLENISH_LIFE { F32::ZERO } else { inp.data_b };
+    let limit = softfloat::conv::f2i(inp.cast);
+    let normal_dur = arith::add(inp.dur, inp.extra);
+    let mut count: i32 = 0;
+    for (i, u) in units.iter().enumerate() {
+        if limit != 0 && count == limit {
+            break;
+        }
+        let life_set = nonzero(life_amt);
+        let mana_set = nonzero(mana_amt);
+        let life_need = life_set && lt87(F32::ZERO, arith::sub(u.max_life, u.life));
+        let mana_need = mana_set && lt87(F32::ZERO, arith::sub(u.max_mana, u.mana));
+        if !((life_set || mana_set) && (life_need || mana_need)) || u.refused {
+            continue;
+        }
+        ev.push(ReplenishEvent::Fx(i));
+        count = count.wrapping_add(1);
+        let dur = if u.hero { inp.hero_dur } else { normal_dur };
+        let (id, slot) = match (life_set, mana_set) {
+            (true, true) => (BUFF_REPLENISH, 0),
+            (true, false) => (BUFF_REPLENISH_LIFE, 1),
+            _ => (BUFF_REPLENISH_MANA, 2),
+        };
+        ev.push(ReplenishEvent::Lookup { unit: i, id });
+        if u.existing[slot] {
+            ev.push(ReplenishEvent::Refresh { unit: i, id, dur });
+        } else {
+            ev.push(ReplenishEvent::Create { unit: i, id, dur });
+        }
+        if (u.illusion && !inp.misc_life && life_need) || (u.illusion && !inp.misc_mana && mana_need) {
+            continue;
+        }
+        if u.ethereal > 0 {
+            life_amt = arith::mul(life_amt, inp.ethereal_bonus);
+        }
+        if life_need {
+            ev.push(ReplenishEvent::Life { unit: i, amount: life_amt });
+        }
+        if mana_need {
+            ev.push(ReplenishEvent::Mana { unit: i, amount: mana_amt });
+        }
+    }
+    ev.push(ReplenishEvent::CasterFx);
+    let cap = softfloat::conv::f2i(inp.data_e) as u32;
+    let mut n = if (count as u32) < cap { count as u32 } else { cap };
+    if n == 0 {
+        n = 1;
+    }
+    ev.push(ReplenishEvent::Pay(softfloat::conv::i2r((n as i32).wrapping_mul(inp.cost))));
+    ev.push(ReplenishEvent::Cooldown(arith::add(inp.cool, inp.extra_cool)));
+    ev
+}
+
+/// The Moon Well pulse in the game: collects the candidates like the other area effects (circle of `Area` around the caster, the
+/// level's targs flags `ground,air,friend,self,organic,vuln,invu`), runs [`replenish_plan`] and applies the events.
+fn replenish_pulse(game: &RefCell<Game>, rec: &CastRec) {
     let mut gm = game.borrow_mut();
-    if !gm.alive(target) {
+    if !gm.alive(rec.caster) {
         return;
     }
-    if let Some(old) = gm.spells.m.replenish.remove(&rec.caster) {
-        gm.timers.cancel(old.timer);
+    let (cx, cy) = {
+        let c = gm.unit(rec.caster);
+        (c.x, c.y)
+    };
+    let word = targs_word("ground,air,friend,self,organic,vuln,invu");
+    let mut keys: Vec<ObjKey> = Vec::new();
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        let u = gm.unit(k);
+        if !gm.alive(k) || u.hidden || u.removed || !targs_ok(&gm, rec.caster, k, word) {
+            continue;
+        }
+        keys.push(k);
     }
-    let l = &rec.level;
-    let life = if rec.base == REPLENISH_MANA { F32::ZERO } else { l.data[0] };
-    let mana = if rec.base == REPLENISH_LIFE { F32::ZERO } else { l.data[1] };
-    let period = if arith::lt(F32::ZERO, l.dur) { l.dur.to_f32() } else { 1.0 };
-    let ticks = if arith::lt(F32::ZERO, l.cast) { (l.cast.to_f32() / period).floor().max(1.0) as u32 } else { 1 };
-    let timer = gm.timers.start(
-        period,
-        false,
-        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPLENISH, unit: rec.caster, base: rec.base, aux: 0 }),
-    );
-    gm.spells.m.replenish.insert(rec.caster, ReplenishJob { target, life, mana, ticks_left: ticks, period, timer });
-    // The first tick now (the job's remaining count excludes it).
-    gm.replenish_tick_now(rec.caster);
+    let units: Vec<ReplenishUnit> = keys
+        .iter()
+        .map(|&k| {
+            let u = gm.unit(k);
+            ReplenishUnit {
+                hero: gm.target_hero(k),
+                life: u.life,
+                max_life: u.max_life,
+                mana: u.mana,
+                max_mana: u.max_mana,
+                illusion: u.illusion,
+                ethereal: u.ethereal as i32,
+                existing: [BUFF_REPLENISH, BUFF_REPLENISH_LIFE, BUFF_REPLENISH_MANA].map(|b| gm.buff_position(k, b).is_some()),
+                refused: false,
+            }
+        })
+        .collect();
+    let d = &rec.level.data;
+    let inp = ReplenishIn {
+        base: rec.base,
+        cast: rec.level.cast,
+        dur: rec.level.dur,
+        hero_dur: rec.level.hero_dur,
+        extra: F32::ZERO,
+        cost: rec.level.cost,
+        cool: rec.level.cool,
+        data_a: d[0],
+        data_b: d[1],
+        data_e: d[4],
+        extra_cool: F32::ZERO,
+        misc_life: gm.spells.item.illusions_heal,
+        misc_mana: gm.spells.item.illusions_mana,
+        ethereal_bonus: gm.spells.unit.ethereal_heal_bonus,
+    };
+    let plan = replenish_plan(&inp, &units);
+    for e in plan {
+        match e {
+            ReplenishEvent::Create { unit, id, dur } => gm.replenish_mark(keys[unit], id, dur),
+            ReplenishEvent::Refresh { unit, id, dur } => gm.replenish_mark(keys[unit], id, dur),
+            ReplenishEvent::Life { unit, amount } => crate::item_abilities::add_life(&mut gm, keys[unit], amount),
+            ReplenishEvent::Mana { unit, amount } => crate::item_abilities::add_mana(&mut gm, keys[unit], amount),
+            ReplenishEvent::Pay(cost) => {
+                let mana = gm.unit(rec.caster).mana;
+                let (_, new_mana) = crate::cast::pay_mana(mana, cost);
+                gm.write_mana(rec.caster, new_mana);
+            }
+            // The cooldown is started by the cast body after the effect (`Cool`, no ability bonus in the model).
+            ReplenishEvent::Fx(_) | ReplenishEvent::Lookup { .. } | ReplenishEvent::CasterFx | ReplenishEvent::Cooldown(_) => {}
+        }
+    }
 }
 
 impl Game {
-    fn replenish_tick_now(&mut self, caster: ObjKey) {
-        let Some(job) = self.spells.m.replenish.get(&caster).cloned() else {
-            return;
+    /// Puts (or refreshes, by the set-duration rule) a Moon Well marker on `target`.
+    fn replenish_mark(&mut self, target: ObjKey, id: u32, duration: F32) {
+        let serial = match self.buff_position(target, id) {
+            Some(i) => self.unit(target).buffs[i].serial,
+            None => {
+                let serial = self.next_buff_serial();
+                self.unit_mut(target).buffs.push(crate::abilities::Buff {
+                    serial,
+                    base: id,
+                    predicates: buff_predicates(id),
+                    ..crate::abilities::Buff::default()
+                });
+                serial
+            }
         };
-        if !self.alive(caster) || !self.alive(job.target) {
-            self.end_replenish(caster);
-            return;
-        }
-        let t = job.target;
-        let (life, max_life, mana, max_mana) = {
-            let u = self.unit(t);
-            (u.life, u.max_life, u.mana, u.max_mana)
-        };
-        if nonzero(job.life) {
-            let sum = arith::add(life, job.life);
-            crate::natives::set_life(self, t, if arith::lt(max_life, sum) { max_life } else { sum });
-        }
-        if nonzero(job.mana) {
-            let sum = arith::add(mana, job.mana);
-            self.write_mana(t, if arith::lt(max_mana, sum) { max_mana } else { sum });
-        }
-        if let Some(j) = self.spells.m.replenish.get_mut(&caster) {
-            j.ticks_left = j.ticks_left.saturating_sub(1);
-        }
-    }
-
-    fn end_replenish(&mut self, caster: ObjKey) {
-        if let Some(j) = self.spells.m.replenish.remove(&caster) {
-            self.timers.cancel(j.timer);
-        }
-    }
-
-    fn replenish_tick(&mut self, caster: ObjKey) {
-        let Some(job) = self.spells.m.replenish.get(&caster).cloned() else {
-            return;
-        };
-        if job.ticks_left == 0 {
-            self.end_replenish(caster);
-            return;
-        }
-        self.replenish_tick_now(caster);
-        let left = self.spells.m.replenish.get(&caster).map_or(0, |j| j.ticks_left);
-        if left == 0 {
-            self.end_replenish(caster);
-            return;
-        }
-        let timer = self.timers.start(
-            job.period,
-            false,
-            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPLENISH, unit: caster, base: REPLENISH, aux: 0 }),
-        );
-        if let Some(j) = self.spells.m.replenish.get_mut(&caster) {
-            j.timer = timer;
-        }
-    }
-
-    /// The target of a running replenish channel of `caster`.
-    pub fn m_replenishing(&self, caster: ObjKey) -> Option<ObjKey> {
-        self.spells.m.replenish.get(&caster).map(|j| j.target)
+        self.set_buff_duration(target, serial, duration);
     }
 }
 

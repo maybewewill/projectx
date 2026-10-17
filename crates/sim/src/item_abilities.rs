@@ -1568,7 +1568,7 @@ fn level_one(gm: &Game, alias: u32) -> SpellLevel {
 }
 
 /// The life adder `0x6F277C20` (no healing modifiers in the model) on `target`: add and clamp to the maximum.
-fn add_life(gm: &mut Game, target: ObjKey, amount: F32) {
+pub(crate) fn add_life(gm: &mut Game, target: ObjKey, amount: F32) {
     let (life, max) = {
         let u = gm.unit(target);
         (u.life, u.max_life)
@@ -1579,7 +1579,7 @@ fn add_life(gm: &mut Game, target: ObjKey, amount: F32) {
 }
 
 /// The mana adder `0x6F279140` on `target` (UNSURE clamp: the property setter limits the value to the maximum).
-fn add_mana(gm: &mut Game, target: ObjKey, amount: F32) {
+pub(crate) fn add_mana(gm: &mut Game, target: ObjKey, amount: F32) {
     let (mana, max) = {
         let u = gm.unit(target);
         (u.mana, u.max_mana)

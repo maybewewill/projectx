@@ -94,7 +94,7 @@ function repair_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(repairer, 852024, foe_bld)
 endfunction
 function replenish_it takes nothing returns nothing
-    set accepted = IssueTargetOrderById(well, 852542, hurt)
+    set accepted = IssueImmediateOrderById(well, 852542)
 endfunction
 function taunt_it takes nothing returns nothing
     set accepted = IssueImmediateOrderById(taunter, 852520)
@@ -196,7 +196,7 @@ fn host() -> ScriptHost {
         };
         // AbilityData.slk rows (patch 1.26a).
         g.set_spell_levels(REPAIR, vec![lv(0.0, 0.0, 0, 50.0, 0.0, &[0.35, 1.5, 0.0, 0.0, 75.0], 0)]);
-        g.set_spell_levels(REPLENISH, vec![lv(6.0, 1.0, 6, 250.0, 700.0, &[25.0, 25.0, 0.0, 0.0, 5.0], 0)]);
+        g.set_spell_levels(REPLENISH, vec![lv(0.0, 1.0, 6, 250.0, 700.0, &[25.0, 25.0, 0.0, 0.0, 5.0], 0)]);
         g.set_spell_levels(TAUNT, vec![lv(0.0, 0.0, 0, 0.0, 450.0, &[10.0], 0)]);
         g.set_spell_levels(UNSUMMON, vec![lv(0.0, 0.0, 0, 0.0, 0.0, &[0.5, 50.0], 0)]);
         g.set_spell_levels(AURA_REGEN_LIFE, vec![lv(0.0, 0.0, 0, 0.0, 500.0, &[0.02, 1.0], 0)]);
@@ -321,21 +321,20 @@ fn repair_runs_to_the_end_when_it_can_pay_and_stops_whole() {
 }
 
 #[test]
-fn replenish_channels_life_and_mana_into_the_target() {
+fn replenish_pulses_once_into_every_unit_that_needs_it() {
     let mut h = started();
     let (well, hurt) = (unit(&h, "well"), unit(&h, "hurt"));
     call(&mut h, "replenish_it");
     run(&mut h, 3);
     assert!(accepted(&h));
-    // The first tick is immediate: +25 life and +25 mana, the cost of 6 mana is paid once.
+    // One pulse (V10, CONFIRMED against `0x6F1FADC0`): +25 life and +25 mana for the one unit that needs them, the caster pays
+    // `max(1, min(units, F2I(DataE))) * Cost` = 6 mana; there is no channel.
     assert_eq!(life(&h, hurt), 525.0);
     assert_eq!(mana(&h, hurt), 25.0);
     assert_eq!(mana(&h, well), 594.0);
     run(&mut h, 80);
-    // Six ticks in all (Cast 6 / Dur 1).
-    assert_eq!(life(&h, hurt), 650.0);
-    assert_eq!(mana(&h, hurt), 150.0);
-    assert!(h.game().m_replenishing(well).is_none());
+    assert_eq!(life(&h, hurt), 525.0);
+    assert_eq!(mana(&h, hurt), 25.0);
 }
 
 #[test]

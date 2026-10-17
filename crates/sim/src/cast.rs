@@ -515,7 +515,8 @@ impl Game {
     /// The readiness of a cast (`0x6F050880` order: mana `209`, then cooling `210`).
     fn spell_ready(&self, caster: ObjKey, base: u32, level: &SpellLevel) -> Result<(), CastError> {
         let u = self.unit(caster);
-        if !mana_check(u.mana, cost_value(level.cost)) {
+        let enough = crate::unit_abilities_m::precheck_ok(base, level, u.mana).unwrap_or_else(|| mana_check(u.mana, cost_value(level.cost)));
+        if !enough {
             return Err(CastError::NoMana);
         }
         if self.is_cooling(caster, base) || crate::item_abilities::group_cooling(self, caster, base) {
@@ -852,7 +853,6 @@ fn stage1(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
     if waits(rec.level.cast)
         && !crate::undead_ne::cast_field_is_period(rec.base)
         && !crate::human_heroes::cast_field_is_wave_interval(rec.base)
-        && !crate::unit_abilities_m::cast_field_is_duration(rec.base)
         && !crate::neutral_heroes2::cast_field_is_data(rec.base)
     {
         game.borrow_mut().timers.start(
@@ -905,7 +905,7 @@ fn stage3(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, id: u32) {
     {
         let mut gm = game.borrow_mut();
         let cost = cost_value(rec.level.cost);
-        if !arith::eq(cost, F32::ZERO) {
+        if !arith::eq(cost, F32::ZERO) && !crate::unit_abilities_m::pays_in_effect(rec.base) {
             let mana = gm.unit(rec.caster).mana;
             let (_, new_mana) = pay_mana(mana, cost);
             gm.write_mana(rec.caster, new_mana);
