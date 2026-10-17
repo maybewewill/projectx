@@ -19,3 +19,7 @@ rows dumped as hex words and re-computed by the Rust model. A row is added to `c
   (`0x6F18AA90` instead of `0x6F18A930`; same body with the creep buff factory `0x6F188C00`). Per-unit body (shared with War Stomp) run with the creep vtable
   (`v9_creep_clap_unit.py`) and the slow slot run for real (`v9_emu.py` check `creep_clap_slow`: hero-rule duration, `-DataC` movement, `-DataD` attack speed;
   the hero walk `0x6F0766A0` stubbed to "no" as in V1). The model aliases `AHtc` (`neutral_spells.rs`). Test `v9_creep_clap.rs`.
+* **Creep summons `ANsg` Summon Grizzly, `ANsq` Quilbeast, `ANsw` War Eagle, `ANlm` Lava Monster, `ANwm` Watery Minion CONFIRMED (150 each)**: all five share
+  the Water Elemental loop `0x6F163390` at slot `0x3C0` (and the `UnitID` getter `0x3E8`); only the code / name / order getters and the class slot `0x3E4`
+  (the timed-life attach) differ. The V5 harness (`v5_summon_emu.py`) was re-run on their vtables (`v9_summon_emu.py`; `0x3E4` stubbed as for `AEst`/`AEsv`):
+  count `F2I(DataA)`, duration `Dur + ability+0x9C`, flag `0x502` / `2`, creator arguments, link calls, per-unit duration all equal `orc::feral_plan`. Test `v9_summon_family.rs`.
