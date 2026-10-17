@@ -516,10 +516,51 @@ pub struct Buff {
     pub expiry: Option<TimerId>,
 }
 
+/// One invulnerability count on (`0x6F0796F0`, ECX = unit, argument = `notify`; CONFIRMED, **Unicorn V9**, `tools/emu/v9_emu.py` check
+/// `invuln`, 400 sequences, also driven through the `Avul` init `0x6F10FAE0` / removal `0x6F10FB10`): `(count, flags)` are the counter
+/// `+0xE8` and the unit flag word `+0x20`. Only the step to exactly 1 does anything: flag bit 8 is set, the enter notice `0x6F2AB310` is
+/// posted when `notify`, and the property refreshes run. Returns `(count, flags, notice, refreshed)`.
+pub fn invuln_add(state: (i32, u32), notify: bool) -> (i32, u32, bool, bool) {
+    let count = state.0.wrapping_add(1);
+    if count == 1 {
+        (count, state.1 | 8, notify, true)
+    } else {
+        (count, state.1, false, false)
+    }
+}
+
+/// One invulnerability count off (`0x6F079730`): the mirror of [`invuln_add`]; only the step to exactly 0 clears flag bit 8 and posts the
+/// leave notice `0x6F2AC3A0` (when `notify`). The counter is not clamped: a removal at 0 goes to -1 and nothing happens.
+pub fn invuln_remove(state: (i32, u32), notify: bool) -> (i32, u32, bool, bool) {
+    let count = state.0.wrapping_sub(1);
+    if count == 0 {
+        (count, state.1 & !8, notify, true)
+    } else {
+        (count, state.1, false, false)
+    }
+}
+
 impl Game {
     /// Whether unit `k` is invulnerable: it has the ability `Avul` (CONFIRMED structure, see the module notes).
     pub fn unit_is_invulnerable(&self, k: ObjKey) -> bool {
-        self.unit(k).abilities.contains(INVULNERABLE) || self.unit(k).invuln_count > 0
+        self.unit(k).abilities.contains(INVULNERABLE) || self.unit(k).invuln_flag
+    }
+
+    /// One invulnerability count on (`0x6F0796F0`, see [`invuln_add`]); the unit flag follows the counter's 0 -> 1 edge.
+    pub fn invuln_add(&mut self, k: ObjKey) {
+        let u = self.unit_mut(k);
+        let (count, flags, _, _) = invuln_add((u.invuln_count, u32::from(u.invuln_flag) << 3), false);
+        u.invuln_count = count;
+        u.invuln_flag = flags & 8 != 0;
+    }
+
+    /// One invulnerability count off (`0x6F079730`, see [`invuln_remove`]). The counter is not clamped: an unbalanced removal goes negative
+    /// like the original's and the flag then stays clear until the counter has come back through 1.
+    pub fn invuln_remove(&mut self, k: ObjKey) {
+        let u = self.unit_mut(k);
+        let (count, flags, _, _) = invuln_remove((u.invuln_count, u32::from(u.invuln_flag) << 3), false);
+        u.invuln_count = count;
+        u.invuln_flag = flags & 8 != 0;
     }
 
     /// `SetUnitInvulnerable` on unit `k` (the body of the original's unit slot 42, CONFIRMED structure): adds the

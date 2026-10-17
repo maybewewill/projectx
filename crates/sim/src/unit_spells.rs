@@ -119,6 +119,8 @@ pub const PURGE: u32 = code(b"Aprg");
 pub const BUFF_PURGE: u32 = code(b"Bprg");
 /// Anti-magic Shell's buff code, the one the dispel worker looks for (`0x6F110530` returns `0x42616D73`).
 pub const BUFF_ANTI_MAGIC_SHELL: u32 = code(b"Bams");
+/// `CBuffAntiMagicShellTwo` (`Bam2`): the shell variant Anti-Magic Shell applies when `DataC != 0`; it takes no immunity count.
+pub const BUFF_ANTI_MAGIC_SHELL_TWO: u32 = code(b"Bam2");
 
 pub const ORDER_HEAL: u32 = 852_063;
 pub const ORDER_HEAL_ON: u32 = 852_064;
@@ -289,7 +291,7 @@ impl Game {
             *self.spells.unit.rooted.entry(unit).or_insert(0) += 1;
         }
         if m.invuln {
-            self.unit_mut(unit).invuln_count += 1;
+            self.invuln_add(unit);
         }
         if nonzero(m.damage_flat) {
             let u = self.unit_mut(unit);
@@ -324,8 +326,7 @@ impl Game {
         };
         self.apply_mods(unit, &neg);
         if m.invuln {
-            let u = self.unit_mut(unit);
-            u.invuln_count = (u.invuln_count - 1).max(0);
+            self.invuln_remove(unit);
         }
         if m.morph {
             self.restore_morph(unit);
@@ -1117,18 +1118,28 @@ fn corpse_ok(gm: &Game, k: ObjKey) -> bool {
 /// order is the circle query order (LIKELY). The 1.26a data of the later fields (mana regeneration, prefer hostiles,
 /// max units) is not modelled.
 fn roar(game: &RefCell<Game>, rec: &CastRec) {
+    roar_family(game, rec, false);
+}
+
+/// Roar and Howl of Terror (`ANht`, `CAbilityHowlOfTerror < CAbilityRoar`, CONFIRMED by Unicorn V9 `howl_unit`): the two classes share the
+/// whole area effect (slot `0x3C0`, vtable difference only in `0x100`, `0x308` and the per-unit slot `0x3EC`); Howl's per-unit slot
+/// hands the Inner Fire buff apply `(-DataA, -DataB, DataC, DataD)` ([`howl_unit_values`]) and its targs are `air,ground,enemy,neutral`.
+pub(crate) fn roar_family(game: &RefCell<Game>, rec: &CastRec, howl: bool) {
     let mut gm = game.borrow_mut();
     let (cx, cy, owner) = {
         let c = gm.unit(rec.caster);
         (c.x, c.y, c.owner)
     };
     let d = &rec.level.data;
+    let buff = if howl { crate::neutral_spells::BUFF_HOWL } else { BUFF_ROAR };
     let preds = crate::abilities::BuffPredicates {
-        positive: true,
+        positive: !howl,
+        negative: howl,
         magic: true,
         dispellable: true,
-        ..buff_predicates(BUFF_ROAR)
+        ..buff_predicates(buff)
     };
+    let howl_word = targs_word("air,ground,enemy,neutral");
     // The group is collected into records, sorted and limited like Taunt's (`group_plan`, CONFIRMED by Unicorn, V4): the
     // limit is `F2I(DataG)`, the comparator keys `DataE` / `DataF`; each chosen unit gets the effect slot `0x3EC`.
     let mut cands: Vec<(ObjKey, crate::unit_abilities_m::TauntRec, bool)> = Vec::new();
@@ -1137,10 +1148,17 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
             continue;
         }
         let u = gm.unit(k);
-        let ally = k == rec.caster || u.owner == owner || !gm.is_enemy(owner, u.owner);
-        if !ally || is_unit_type(&gm, u, ty::STRUCTURE) {
-            continue;
+        if howl {
+            if u.removed || u.hidden || u.dead || u.magic_immune > 0 || !targs_ok(&gm, rec.caster, k, howl_word) {
+                continue;
+            }
+        } else {
+            let ally = k == rec.caster || u.owner == owner || !gm.is_enemy(owner, u.owner);
+            if !ally || is_unit_type(&gm, u, ty::STRUCTURE) {
+                continue;
+            }
         }
+        let u = gm.unit(k);
         let (dx, dy) = (arith::sub(u.x, cx), arith::sub(u.y, cy));
         let f1 = arith::add(arith::mul(dx, dx), arith::mul(dy, dy));
         let hero = gm.target_hero(k);
@@ -1165,7 +1183,7 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
         let type_id = gm.unit(k).type_id;
         let ty = gm.attack_type(type_id);
         let targs = gm.weapon_extra(type_id, 0).map_or(0, |e| e.targs);
-        let (fraction, armor, life, mana) = roar_unit_values(&rec.level);
+        let (fraction, armor, life, mana) = if howl { howl_unit_values(&rec.level) } else { roar_unit_values(&rec.level) };
         let damage = inner_fire_weapon_bonus(
             fraction,
             i32::try_from(ty.dice).unwrap_or(i32::MAX),
@@ -1181,7 +1199,7 @@ fn roar(game: &RefCell<Game>, rec: &CastRec) {
             mana_regen: inner_fire_regen(mana),
             ..UnitMods::default()
         };
-        gm.apply_mods_buff(k, BUFF_ROAR, preds, mods, dur);
+        gm.apply_mods_buff(k, buff, preds, mods, dur);
     }
 }
 
@@ -2268,6 +2286,24 @@ pub fn purge_slows(target_dead: bool, allied: bool) -> bool {
 /// (UNSURE).
 pub(crate) fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32, smart: bool, a7: u32) -> Option<ObjKey> {
     let owner = gm.unit(caster).owner;
+    let enemy = gm.is_enemy(owner, gm.unit(k).owner);
+    let args = WorkerArgs {
+        positive: if smart { u32::from(enemy) } else { 1 },
+        negative: if smart { u32::from(!enemy) } else { 1 },
+        a6: u32::from(smart),
+        a7,
+        damage,
+        mana,
+        flags: 64,
+    };
+    dispel_with(gm, caster, k, &args)
+}
+
+/// [`dispel_one`] with the worker's stack arguments given (`positive`, `negative`, `a6`, `a7`, `damage`, `mana`; the flags word is the
+/// record flag the callers pass, 64, and is not used by the model).
+pub(crate) fn dispel_with(gm: &mut Game, caster: ObjKey, k: ObjKey, args: &WorkerArgs) -> Option<ObjKey> {
+    let (damage, mana) = (args.damage, args.mana);
+    let owner = gm.unit(caster).owner;
     let (enemy, summoned, illusion, immune) = {
         let u = gm.unit(k);
         (gm.is_enemy(owner, u.owner), u.summoned, u.illusion, u.magic_immune > 0)
@@ -2284,10 +2320,10 @@ pub(crate) fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, 
         misc: u32::from(gm.spells.unit.invuln_summon_dispel_damage),
         a2: 0,
         ability: 1,
-        positive: if smart { u32::from(enemy) } else { 1 },
-        negative: if smart { u32::from(!enemy) } else { 1 },
-        a6: u32::from(smart),
-        a7,
+        positive: args.positive,
+        negative: args.negative,
+        a6: args.a6,
+        a7: args.a7,
         damage_bits: damage.to_bits(),
         mana_bits: mana.to_bits(),
         flags: 0,
@@ -2640,6 +2676,12 @@ pub fn inner_fire_weapon_bonus(fraction: F32, count: i32, sides: i32, bonus: i32
 /// What Roar's per-unit slot `0x3EC` (`0x6F1FB1F0` -> creator `0x6F1FAF90`) hands to the Inner Fire buff apply (CONFIRMED,
 /// **Unicorn V8**, `tools/emu/v8_spells_emu.py` check `roar_unit`): `(damage fraction, armor, life regen, mana regen)` =
 /// `(DataA, DataB, DataC, DataD)`; the duration argument reaches the buff unchanged.
+pub fn howl_unit_values(l: &SpellLevel) -> (F32, F32, F32, F32) {
+    (arith::neg(l.data[0]), arith::neg(l.data[1]), l.data[2], l.data[3])
+}
+
+/// What Howl of Terror's per-unit slot `0x3EC` (`0x6F0BAF20` -> creator `0x6F0BAE90`) hands to the Inner Fire buff apply
+/// (CONFIRMED, Unicorn V9 `howl_unit`): `(damage fraction, armor, life regen, mana regen)` = `(-DataA, -DataB, DataC, DataD)`.
 pub fn roar_unit_values(l: &SpellLevel) -> (F32, F32, F32, F32) {
     (l.data[0], l.data[1], l.data[2], l.data[3])
 }

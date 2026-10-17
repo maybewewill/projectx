@@ -237,7 +237,44 @@ pub(crate) fn toggle_order(game: &RefCell<Game>, unit: ObjKey, id: u32) -> Optio
     Some(true)
 }
 
+/// One immunity count on (`0x6F07A3A0`, ECX = unit, argument = `flag`; CONFIRMED, **Unicorn V9**, `tools/emu/v9_emu.py` check
+/// `immunity`, 400 sequences): `+0x15C` always goes up, `+0x160` only with the flag. Returns the new `(+0x15C, +0x160)` and whether
+/// the "enter" work runs (side effect `0x6F2AB310`, removal of the purge debuff, the dispel walker): when `+0x15C` became 1, or the flag
+/// is set and `+0x160` became 1. Magic Immunity, Avatar and Divine Shield pass the flag, Anti-Magic Shell and Sanctuary do not.
+pub fn immunity_add(counts: (i32, i32), flag: bool) -> ((i32, i32), bool) {
+    let c = counts.0.wrapping_add(1);
+    let d = if flag { counts.1.wrapping_add(1) } else { counts.1 };
+    ((c, d), c == 1 || (flag && d == 1))
+}
+
+/// One immunity count off (`0x6F077320`): the mirror of [`immunity_add`]; returns whether the "leave" work (`0x6F2AC3A0`) runs: when
+/// `+0x15C` became 0, or the flag is set and `+0x160` became 0.
+pub fn immunity_remove(counts: (i32, i32), flag: bool) -> ((i32, i32), bool) {
+    let c = counts.0.wrapping_sub(1);
+    let d = if flag { counts.1.wrapping_sub(1) } else { counts.1 };
+    ((c, d), c == 0 || (flag && d == 0))
+}
+
 impl Game {
+    /// Adds one magic immunity count to `unit` through [`immunity_add`]; the enter work dispels (`magic_immunity_dispel`).
+    pub(crate) fn magic_immunity_add(&mut self, unit: ObjKey, flag: bool) {
+        let u = self.unit_mut(unit);
+        let ((c, d), entered) = immunity_add((u.magic_immune, u.magic_immune_flagged), flag);
+        u.magic_immune = c;
+        u.magic_immune_flagged = d;
+        if entered {
+            self.magic_immunity_dispel(unit);
+        }
+    }
+
+    /// Removes one magic immunity count from `unit` through [`immunity_remove`] (the leave work is not modelled).
+    pub(crate) fn magic_immunity_remove(&mut self, unit: ObjKey, flag: bool) {
+        let u = self.unit_mut(unit);
+        let ((c, d), _) = immunity_remove((u.magic_immune, u.magic_immune_flagged), flag);
+        u.magic_immune = c;
+        u.magic_immune_flagged = d;
+    }
+
     /// Registers `alias` (an ability row) as an alias of the modelled ability `base`.
     pub fn set_spell_alias(&mut self, alias: u32, base: u32) {
         if alias != base {
@@ -262,13 +299,10 @@ impl Game {
         let counted = self.spells.neutral.immune.contains(&unit);
         if has && !counted {
             self.spells.neutral.immune.insert(unit);
-            self.unit_mut(unit).magic_immune += 1;
-            if self.unit(unit).magic_immune == 1 {
-                self.magic_immunity_dispel(unit);
-            }
+            self.magic_immunity_add(unit, true);
         } else if !has && counted {
             self.spells.neutral.immune.remove(&unit);
-            self.unit_mut(unit).magic_immune -= 1;
+            self.magic_immunity_remove(unit, true);
         }
     }
 
@@ -882,34 +916,8 @@ fn forked_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &Cast
 /// sign and the relation come from the level's `targs` (`air,ground,enemy,neutral`); the buff base is the Roar one
 /// (damage fraction sink). LIKELY.
 fn howl(game: &RefCell<Game>, rec: &CastRec) {
-    let mut gm = game.borrow_mut();
-    let (cx, cy) = {
-        let c = gm.unit(rec.caster);
-        (c.x, c.y)
-    };
-    let word = targs_word("air,ground,enemy,neutral");
-    let preds = crate::abilities::BuffPredicates {
-        negative: true,
-        magic: true,
-        dispellable: true,
-        ..buff_predicates(BUFF_HOWL)
-    };
-    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
-        {
-            let u = gm.unit(k);
-            if u.removed || u.hidden || u.dead || u.magic_immune > 0 {
-                continue;
-            }
-        }
-        if !targs_ok(&gm, rec.caster, k, word) {
-            continue;
-        }
-        let dur = duration_for(&gm, &rec.level, k);
-        if arith::lt(F32::ZERO, dur) {
-            let mods = UnitMods { damage_pct: arith::neg(rec.level.data[0]), ..UnitMods::default() };
-            gm.apply_mods_buff(k, BUFF_HOWL, preds, mods, dur);
-        }
-    }
+    // CONFIRMED by Unicorn V9 (`howl_unit`): the Roar effect with the Howl per-unit values (see `unit_spells::roar_family`).
+    crate::unit_spells::roar_family(game, rec, true);
 }
 
 /// What the Charm effect `0x6F1B13E0` does to a target (Unicorn `CE` rows of `tools/emu/v6_emu.py`): an illusion is killed

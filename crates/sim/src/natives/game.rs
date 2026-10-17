@@ -711,9 +711,16 @@ pub struct UnitObj {
     pub ethereal: i32,
     /// Magic immunity counter (object `+0x15C`): `IsUnitType(MAGIC_IMMUNE)` is `> 0`. No writer in the model yet.
     pub magic_immune: i32,
+    /// The flagged magic immunity counter (object `+0x160`): moved together with `magic_immune` by the callers that pass the flag
+    /// (Magic Immunity, Avatar, Divine Shield) and left alone by the others (Anti-Magic Shell, Sanctuary); see
+    /// [`crate::neutral_spells::immunity_add`].
+    pub magic_immune_flagged: i32,
     /// Invulnerability counter of buffs (Divine Shield, object `+0xE8` of the buff target: LIKELY): the unit is
     /// invulnerable while it is above zero, next to the `Avul` ability of `SetUnitInvulnerable`.
     pub invuln_count: i32,
+    /// The unit flag the counter drives (object `+0x20` bit 8): set when `invuln_count` reaches 1, cleared when it reaches 0
+    /// ([`crate::abilities::invuln_add`]); the unit is invulnerable while it is set.
+    pub invuln_flag: bool,
     /// The unit's abilities: the fixed slots and the ability list (see [`crate::abilities`]).
     pub abilities: UnitAbilities,
     /// The unit's buffs in the order they were added (see [`crate::abilities`]).

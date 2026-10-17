@@ -306,11 +306,8 @@ impl Game {
         self.add_armor(unit, armor);
         self.avatar_life(unit, life);
         self.add_damage(unit, damage);
-        self.unit_mut(unit).magic_immune += 1;
-        // `0x6F07A3A0`: the first immunity count removes the purge debuff and dispels (section 17).
-        if self.unit(unit).magic_immune == 1 {
-            self.magic_immunity_dispel(unit);
-        }
+        // `0x6F07A3A0` with the flag: the first immunity count removes the purge debuff and dispels (section 17).
+        self.magic_immunity_add(unit, true);
         serial
     }
 
@@ -327,7 +324,7 @@ impl Game {
         self.add_armor(unit, arith::neg(armor));
         self.avatar_life(unit, arith::neg(life));
         self.add_damage(unit, damage.saturating_neg());
-        self.unit_mut(unit).magic_immune -= 1;
+        self.magic_immunity_remove(unit, true);
     }
 
     // ---- Divine Shield ------------------------------------------------------------------------------------------
@@ -355,9 +352,8 @@ impl Game {
         self.set_buff_duration(unit, serial, duration);
         // `0x6F07D180`: purge removal and dispel first, then the invulnerability and immunity counts.
         self.magic_immunity_dispel(unit);
-        let u = self.unit_mut(unit);
-        u.invuln_count += 1;
-        u.magic_immune += 1;
+        self.invuln_add(unit);
+        self.magic_immunity_add(unit, true);
         serial
     }
 
