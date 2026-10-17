@@ -605,6 +605,15 @@ impl Game {
         }
     }
 
+    /// A point in cell coordinates as a world point.
+    fn cell_point_world(&self, p: (F32, F32)) -> (F32, F32) {
+        let (ox, oy) = self.world_origin();
+        (
+            crate::unit_position::cell_to_world(p.0, ox),
+            crate::unit_position::cell_to_world(p.1, oy),
+        )
+    }
+
     /// The active order of `unit` (the head of its list), or `None` when it has none.
     pub(crate) fn order_head(&self, unit: ObjKey) -> Option<Order> {
         self.orders
@@ -653,6 +662,7 @@ impl Game {
     /// The move issue of a freshly planned route: the mover takes the unit's speed and a zero velocity
     /// (`movement-6.md` section 5; `Game::mover_issue`). Without tables there is no mover and the unit stays put.
     fn issue_route_motion(&mut self, unit: ObjKey) {
+        self.follow_reset(unit);
         let Some(t) = self.orders.tables.take() else {
             return;
         };
@@ -744,6 +754,7 @@ impl Game {
         let Some(tables) = self.orders.tables.take() else {
             return;
         };
+        self.follow_begin_walk();
         let keys: Vec<ObjKey> = self
             .orders
             .units
@@ -791,6 +802,39 @@ impl Game {
         let g = self.layer();
         let mut kin = self.kin_of(unit);
         let pos = kin.position(&g);
+        // The follower dropped its path after a blocked step and asks for a detour (0x6F49C930 -> 0x6F49BB90): at most
+        // once per 10 walks; until the grant the unit stands (the step answers "blocked"). The detour search
+        // 0x6F4A3CC0 is not ported: the region planner toward the waypoint stands in (UNSURE).
+        let mut route = route;
+        let mut detour_wait = false;
+        if self.follow_wants_detour(unit) {
+            if self.follow_detour_granted(unit) {
+                let wpw = route.points[route.next];
+                let cur = self.cells_of(wpw);
+                let here = {
+                    let g = self.layer();
+                    self.kin_of(unit).position(&g)
+                };
+                let mut pts: Vec<(F32, F32)> = match self.follow_detour(unit, here, cur) {
+                    Some(cells) => {
+                        let mut v: Vec<(F32, F32)> = cells.into_iter().map(|c| self.cell_point_world(c)).collect();
+                        v.push(wpw);
+                        v
+                    }
+                    None => Vec::new(),
+                };
+                if pts.is_empty() {
+                    pts.push(wpw);
+                }
+                route.points.splice(0..=route.next, pts);
+                route.next = 0;
+                if let Some(rt) = self.orders.units.get_mut(&unit).and_then(|s| s.route.as_mut()) {
+                    *rt = route.clone();
+                }
+            } else {
+                detour_wait = true;
+            }
+        }
         // Intermediate waypoints count as reached inside 0.49 cells (0x6F49C3B0, squared compare, LIKELY).
         let last = route.points.len() - 1;
         let mut next = route.next;
@@ -813,7 +857,13 @@ impl Game {
         let goal = self.cells_of(route.points[last]);
         let waypoint = self.cells_of(route.points[next]);
         let pilot = self.pilot_of(unit);
-        let trace = mover::walk(&mut kin, &pilot, &g, goal, PathState::Open(waypoint), t);
+        // 0x6F49E020 -> 0x6F49DF00: the one-cell step toward the waypoint is traced before the unit moves
+        let path = if detour_wait {
+            PathState::Blocked
+        } else {
+            self.follow_path_state(unit, pos, waypoint, t)
+        };
+        let trace = mover::walk(&mut kin, &pilot, &g, goal, path, t);
         // The speed writer's velocity notification (0x6F494620 -> 0x6F4A74A0, CONFIRMED by `WN` vectors): the facing
         // of a unit in motion is the heading of its velocity. The mover joins the smoother list.
         kin.notify_facing(t);
@@ -821,6 +871,7 @@ impl Game {
         if let Some(rt) = self.movers.get_mut(&unit) {
             rt.listed = true;
         }
+        self.follow_after_walk(unit);
         if trace.arrived {
             self.route_finished(unit);
         }
