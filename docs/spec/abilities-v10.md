@@ -62,3 +62,25 @@ finished building (no `ABnP` construction ability on the target), unit-target ef
 * NOT covered (stubs / open): the `ABnP` branches (taking over or joining a construction, "power build" `DataC` / `DataD`), the validation details of
   `0x6F035070` beyond the gate (range re-check and re-order; the model stops when the builder moves), Renew's own gate (slot `0x3F0` = `0x6F04C5D0`; its
   start effect is the same function), the stop of the agile property at max life, the `Buns` / locked flags in the sim (locked is not modelled).
+
+## Spell Steal (`Asps`) - decoded, NOT verified (no tsv row)
+
+`CAbilitySpellSteal < CAbilityAutoTargetSpell` (vtable `0x6F924F74`). Findings from the machine code (no Unicorn run; the effect is an interactive multi-stage
+transfer that the model does not reproduce):
+
+* Target gate slot `0x3F0` = `0x6F1D6D30`: error `189` unless the buff scan `0x6F078FF0` finds a buff on the target. Arguments: `a2 = (ability +0x6C level hook != 0)`,
+  `a3 = 0`, `a4 = 0` (physical buffs excluded), `a5 = 1` (magic allowed), `a6 = 0`, `a7` = relation `0x6F285B00(caster, target)`, `a8` = relation `0x6F285B80(caster,
+  target)`. A buff passes when it is a real buff (not flagged `0x10000000`), slot `0x334` is true, `a2` allows a `0x20000000` buff, slot `0x32C` is false, and
+  `(not positive or a7 or not a8) and (not negative or a8 or not a7)` (positive = slot `0x1E4`, negative = slot `0x1E0`, physical = `0x1DC`, magic = `0x1D8`). So
+  a neutral target (neither relation) offers positive **and** negative buffs; the model's "positive on an enemy, negative on a friend" is the two corner cases.
+* Effect slot `0x424` = `0x6F1F2F00`: builds a spell object `0x6F079240(...)` (the buff pick: the same filter plus a priority order over the buff keys at `+0xB0` /
+  `+0xB4` and a real, taking the last candidate that is not worse on all three; the class test `0x6F471910(code, 0x6F0D1AB0())` limits it to stealable buff
+  classes), collects the receiving friendly candidates in `Area` around the caster with `0x6F2A3270` / callback `0x6F1DE900` (visibility `0x6F284EE0`, targs, order
+  validity, the buff's own `0x6F077280` rule), and hands the result to the spell object's slot `0x340` (208 * 4 = `0xD0`). The stolen buff therefore goes to the best
+  candidate chosen by the group callback, not to "the caster as a marker".
+* Open: the priority keys, the stealable class base, the receiver ranking and the object slot `0xD0`.
+
+## Not reached in V10
+
+Ensnare / Web (effects `0x6F0AAB90` / `0x6F0AADD0` share a spell-object pattern; gate slots `0x3F0` = `0x6F07F1E0` / `0x6F07F260` return 105 when the target has no
+movement ability pointer (`+0x1EC`), as the model assumes), Poison / Frost attacks, Corrosive Breath, Liquid Fire, detectors and the cargo family were not verified.
