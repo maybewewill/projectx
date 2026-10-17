@@ -826,3 +826,27 @@ impl Game {
         }
     }
 }
+
+impl Game {
+    /// Diagnostic: one line per unit that walks a route (owner, type, position, order id, waypoint progress).
+    pub fn debug_movers(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (&k, st) in self.orders.units.iter() {
+            let Some(route) = st.route.as_ref() else { continue };
+            let Object::Unit(u) = self.object(k) else { continue };
+            let head = st.list.first().map(|e| e.order.id).unwrap_or(0);
+            out.push(format!(
+                "k{} p{} {:08x} order {:x} wp {}/{} pos ({:.0},{:.0})",
+                k.0,
+                u.owner,
+                u.type_id,
+                head,
+                route.next,
+                route.points.len(),
+                u.x.to_f32(),
+                u.y.to_f32()
+            ));
+        }
+        out
+    }
+}

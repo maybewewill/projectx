@@ -1738,3 +1738,23 @@ draws (`0x6F49B340`) and the push-apart, which the sim does not draw like the or
 1. Two (or three) draws before record 32 are still unexplained; the AI's first sleep draw is at slot 3 in the sim, probably later in the original.
 2. Run the decoded sources in Unicorn: placement `0x6F3AA700`, the wander message pair at unit creation (poster not found), the repath draw of the mover.
 3. The registry slots 5 to 9 and 12 to 19 and X0/Y0 are untouched (R4 stopped at the generator).
+
+## 22. Pass 19 (2026-10-17): the global-generator deficit over the game (R5)
+
+Replay `echoisles_ai_1.w3g`. Tools: `cargo run -p engine --example drawwalk` (per-record walk; **unreliable after about slot 1400**, polluted by the rand and game words; diagnostic only), `genfit DLL TRACE 0 6000 0 60 1400` (exact 32-bit windows, negligible false-positive rate: 247 single-draw anchors `(slot, n -> n+1)` for n < 1300), `SIM_DUMP_MOVERS=lo-hi` (engine `sim_sync`, every 10th slot prints the units that walk a route, `Game::debug_movers`).
+
+### 22.1 Callers of the generator step `0x6F011390` (capstone scan: 95 direct calls, no pointer to it in data)
+ECX = the state object. (a) **stream draws** `0x6F285320/0x6F2853D0/0x6F2852D0`: not global. (b) **global** (`[0x6FAB73D8]`): races `0x6F3A31A0`, placement shuffle `0x6F4ACF60` (5 sites), natives `0x6F3B3560/35A0/36D0`, pool selectors via `0x6F4B1390`, hero names `0x6F430E8A`, wander `0x6F170D60`/`0x6F156450`, push-apart `0x6F4961C0` -> `0x6F4B7FE0`, the **follower detour interval `0x6F49B340`** (via `0x6F4BBFE0(2, world)`), the placement search `0x6F4A3E80` (via `0x6F4BC3A0`), light flicker `0x6F011C0F`. (c) **other objects**: presentation `0x6FAB58CC`, particles (`0x6F4F1xxx`, `0x6FAB81xx`), `0x6F4DAxxx` (`0x6FAB8010`), the setup shuffle `0x6F5C37A0`. The wrapper family `0x6F4ABFB0..0x6F4B8250` / `0x6F4BBFE0..0x6F4BC610` is the generic random class; only its calls with `[0x6FAB73D8]` are global.
+
+### 22.2 The deficit is a burst (anchors vs sim `n`, real minus sim)
+slot 404: 0, 995: -2, 1400: +3, 1758: +3, 1978: +17, 2257: +49, 2347: +75, 2532: +90, 3017: +142, 3481: +184, 3980: +235, 4612: +330, 5118: +342, 5452: +373. The sim is right until about slot 1760 (165 s), then loses 72 draws in about 600 slots; real draws are dense there (slots 2300 to 2373: 45 draws in 7 s, about 6 per second; sim 0.13 per slot). Afterwards the gap grows at about 0.07 per slot. Wander and AI sleeps are not what is missing. In the sim, p1 acolytes (`uaco`) hold move orders at fixed positions over slots 2230 to 2300.
+
+### 22.3 Best candidate: the path follower's detour interval (decoded from Hex-Rays, not ported)
+`0x6F49E020` (follower step, per walk of a moving unit) -> `0x6F49DF00` -> when the straight-line trace `0x6F49D8D0` (size-class cell trace `0x6F4A2070/2180/2360/2550` plus the other pathing objects gathered by `0x6F49D770`) says blocked -> `0x6F49DE90`: result 3 if `0x6F49C460`; with `P+0x98 == 0` it calls `0x6F49B340`: counter = 2 when `dist2(P+0x24, pos) <= [0x6FAB775C]` and the request object's `+0x38 <= 1`, otherwise **`7 + rand(2)` with one global draw**; counter 1 ends with result 4, else `0x6F49DBE0` and `P+0x98 -= 1`. A unit that stays blocked draws once per 7 to 8 walks (0.21 to 0.24 s), about 4 per second per stuck unit, which matches the burst (one to two stuck units). The sim has no blocked trace and no unit-unit blocking, so it never draws here. Porting needs `0x6F49D8D0`, `0x6F49D770`, `0x6F49B430` and the values at `0x6FAB775C`, `0x6FAB7758+0x38`. **Not done** (no Unicorn run); nothing was added to the sim (a stand-in could not be attributed).
+Also read: `0x6F2A50C0` (placement validation; units standing in the footprint get two global draws and a move order, only with the move-away flag) and `0x6F2ABFB0` -> `0x6F473A80` -> `0x6F4A3E80` (position search; two draws per failed try, none on a free spot). Neither fits a six-per-second burst. UNSURE: all of 22.3 is static reading.
+
+### 22.4 Numbers (sim unchanged; cumulative sim/real draws)
+record 32: 26/29, 102: 27/32, 700: 103/104, 2094: 320/348, 5497: 923/1315. Records with an exactly matching generator term: unchanged (pairs exact 380).
+
+### 22.5 Next
+Port `0x6F49D8D0` (level-0 trace first) in Unicorn, give units pathing objects that block each other, then the counter in `step_unit`; score with the anchors (the burst at slots 1760 to 2370 first). The 2 to 3 draws before slot 0: not found (no further global user on the load path).

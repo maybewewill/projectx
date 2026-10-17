@@ -475,6 +475,15 @@ pub fn run(engine: &mut Engine, replay_file: &w3g::Replay, opts: &Options) -> Si
                 // Units released by this slot (zero while paused).
                 let units = engine.sync().last_units();
                 engine.step_ticks(units * speed.ticks_per_unit());
+                if let Ok(range) = std::env::var("SIM_DUMP_MOVERS") {
+                    let mut it = range.split('-').filter_map(|x| x.parse::<usize>().ok());
+                    let (lo, hi) = (it.next().unwrap_or(0), it.next().unwrap_or(0));
+                    if slot_index >= lo && slot_index <= hi && slot_index % 10 == 0 {
+                        for l in engine.host().game().debug_movers() {
+                            eprintln!("movers slot {slot_index}: {l}");
+                        }
+                    }
+                }
                 pending = Some((slot_index, *increment_ms, predicted ^ opts.constant, inputs));
                 slot_index += 1;
                 report.time_slots += 1;
