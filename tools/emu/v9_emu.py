@@ -195,6 +195,45 @@ def check_invuln(cases, r, rows):
                      rd(CAP + 0x10C)])
 
 
+VT_HOWL_ABIL, ABIL_HOWL, VT_HOWL_BUFF = 0x6F8A25B4, 0x414E6874, 0x6F8A29AC        # CAbilityHowlOfTerror 'ANht', CBuffHowlOfTerror
+
+
+def check_howl_unit(cases, r, rows):
+    """Howl of Terror's per-unit slot 0x3EC (0x6F0BAF20) -> creator 0x6F0BAE90 -> the CBuffHowlOfTerror apply slot 0x354 (the Inner Fire
+    buff apply 0x6F12CA40) -> the attack / armor / regeneration helpers: the V8 Roar check on the Howl classes. Rows as V8 roar_unit:
+    A B C D | duration argument | weapons (8 words) | slot-0x320 arg1 arg2 | counter deltas | stored amounts +0xE0/+0xE4 | armor value, calls |
+    life regen value, calls | mana regen value, calls."""
+    S.install()
+    s320 = S.slot_capture2()
+    s324 = A.stub_ret(4, 0)
+    A.patch_jump(0x6F0B5F10, A.stub_ret(0, BUFF))
+    durbox = S.M + 0x6000
+    for _ in range(cases):
+        da, db, dc, dd = (rbits(r) for _ in range(4))
+        if r.random() < 0.5:
+            da = f2u(r.choice([0.1, 0.05, 0.15, 0.25, r.uniform(-0.5, 0.5), 1.0, r.uniform(0, 2)]))
+        if r.random() < 0.15:
+            dc = 0
+        if r.random() < 0.15:
+            dd = 0
+        dur = rbits(r)
+        weap = S.random_weapons(r)
+        A.make_ability(VT_HOWL_ABIL, ABIL_HOWL, 75)
+        level(A.LVL, 0, 0, [da, db, dc, dd])
+        S.make_target(False)
+        base0, base1 = r.randint(0, 5), r.randint(0, 5)
+        S.make_attack(weap, base0, base1)
+        S.make_buff(VT_HOWL_BUFF, (0xCC, 0xD4, 0xE8, 0xF0, 0xF8), (), {0x320: s320, 0x324: s324})
+        wr(durbox, dur)
+        wr(durbox + 8, 0x1234)
+        S.clear_cap()
+        S.call(0x6F0BAF20, ecx=A.OBJ, stack_args=(TGT, durbox + 8, durbox))
+        rows.append([da, db, dc, dd, dur] + [x for w in weap for x in w]
+                    + [rd(CAP + 0x80), rd(CAP + 0x84), u32(rd(ATK + 0xAC) - base0), u32(rd(ATK + 0xB0) - base1),
+                       rd(S.BUFF + 0xE0), rd(S.BUFF + 0xE4), rd(CAP + 0x30), rd(CAP + 0x34), rd(CAP + 0x40), rd(CAP + 0x44),
+                       rd(CAP + 0x50), rd(CAP + 0x54)])
+
+
 BAMS, BAM2 = 0x42616D73, 0x42616D32
 VT_AMS_ABIL, ABIL_AMS = 0x6F8DDEB4, 0x4161_6D73       # CAbilityAntiMagicShell, 'Aams'
 VT_AMI_ABIL, ABIL_AMI = 0x6F8DE2E4, 0x4161_6D69       # CAbilityAntiMagicShellInstant, 'Aami'
@@ -272,6 +311,7 @@ def check_ami_effect(cases, r, rows):
 
 
 CHECKS = {
+    "howl_unit": check_howl_unit,
     "invuln": check_invuln,
     "ams_effect": check_ams_effect,
     "ami_effect": check_ami_effect,

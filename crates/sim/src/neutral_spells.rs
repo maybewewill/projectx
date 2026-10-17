@@ -916,34 +916,8 @@ fn forked_lightning(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &Cast
 /// sign and the relation come from the level's `targs` (`air,ground,enemy,neutral`); the buff base is the Roar one
 /// (damage fraction sink). LIKELY.
 fn howl(game: &RefCell<Game>, rec: &CastRec) {
-    let mut gm = game.borrow_mut();
-    let (cx, cy) = {
-        let c = gm.unit(rec.caster);
-        (c.x, c.y)
-    };
-    let word = targs_word("air,ground,enemy,neutral");
-    let preds = crate::abilities::BuffPredicates {
-        negative: true,
-        magic: true,
-        dispellable: true,
-        ..buff_predicates(BUFF_HOWL)
-    };
-    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
-        {
-            let u = gm.unit(k);
-            if u.removed || u.hidden || u.dead || u.magic_immune > 0 {
-                continue;
-            }
-        }
-        if !targs_ok(&gm, rec.caster, k, word) {
-            continue;
-        }
-        let dur = duration_for(&gm, &rec.level, k);
-        if arith::lt(F32::ZERO, dur) {
-            let mods = UnitMods { damage_pct: arith::neg(rec.level.data[0]), ..UnitMods::default() };
-            gm.apply_mods_buff(k, BUFF_HOWL, preds, mods, dur);
-        }
-    }
+    // CONFIRMED by Unicorn V9 (`howl_unit`): the Roar effect with the Howl per-unit values (see `unit_spells::roar_family`).
+    crate::unit_spells::roar_family(game, rec, true);
 }
 
 /// What the Charm effect `0x6F1B13E0` does to a target (Unicorn `CE` rows of `tools/emu/v6_emu.py`): an illusion is killed

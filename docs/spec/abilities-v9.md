@@ -39,6 +39,11 @@ rows dumped as hex words and re-computed by the Rust model. A row is added to `c
   refreshes `0x6F26FE20` / `0x6F26FE10`) and to exactly 0 (flag cleared, leave notice `0x6F2AC3A0`); it is **not clamped**, so a removal at 0 gives -1 and a later add
   comes back to 0 without setting the flag. **Bug fixed**: the model decided invulnerability from `invuln_count > 0` and clamped removals at 0 (Mirror Image delay, Big Bad
   Voodoo, spell buffs); it now keeps the flag (`Unit::invuln_flag`) and every writer goes through `abilities::invuln_add` / `invuln_remove`. Test `v9_invulnerable.rs`.
+* **Howl of Terror (`ANht`, `CAbilityHowlOfTerror < CAbilityRoar`) CONFIRMED (400, `howl_unit`)**: vtable differs from Roar's only in slots `0x100`, `0x308` and the per-unit slot
+  `0x3EC` (`0x6F0BAF20` -> creator `0x6F0BAE90`, buff `CBuffHowlOfTerror` whose apply slot `0x354` is the Inner Fire apply `0x6F12CA40`). It hands the apply
+  `(-DataA, -DataB, DataC, DataD)`: an INTEGER weapon bonus per slot from the negated fraction (`inner_fire_weapon_bonus`), the armor sink gets `-DataB`, the regeneration
+  modifiers the raw `DataC` / `DataD`. **Bug fixed**: the model applied `damage_pct = -DataA` (the same percent error Roar had). The area effect, group limit `F2I(DataG)` and
+  comparator (`DataE` / `DataF`) are Roar's (same slot `0x3C0`), so Howl now runs `unit_spells::roar_family` with the enemy targs filter. Test `v9_howl.rs`.
 * **Item classes that inherit a verified spell class (CONFIRMED, 400 each)**: `AIdi` (`CAbilityItemDispelAoe`, vtable `0x6F8C4F34`, Dispel Magic callback and worker
   arguments, order 852271), `AIlp` (`CAbilityLightningPurge`, vtable `0x6F8CB464`, the Purge effect reached through its own slot `0x424` = `jmp 0x6F107E10`, order 852275),
   `AIsh` (`CAbilitySpiritTroll`, vtable `0x6F92828C`, the Feral Spirit effect from slot `0x3C0`, identical in both vtables). Tests `v9_item_dispel.rs`,
