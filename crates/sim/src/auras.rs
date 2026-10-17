@@ -427,6 +427,8 @@ pub enum BuffEffect {
     },
     /// Divine Shield (`CBuffDivineShield`): one invulnerability count and one magic immunity count.
     DivineShield,
+    /// Anti-Magic Shell (`CBuffAntiMagicShell`, `Bams`): one magic immunity count without the flag (removal `0x6F1107D0`).
+    ShellImmunity,
     /// A spell buff that adds stat modifiers (`unit_spells.rs`): undone exactly on removal.
     Mods(crate::unit_spells::UnitMods),
 }
@@ -694,10 +696,10 @@ impl Game {
                 u.bonuses.stun = u.bonuses.stun.saturating_sub(1);
             }
             Some(BuffEffect::Avatar { armor, life, damage }) => self.undo_avatar(unit, armor, life, damage),
+            Some(BuffEffect::ShellImmunity) => self.magic_immunity_remove(unit, false),
             Some(BuffEffect::DivineShield) => {
-                let u = self.unit_mut(unit);
-                u.invuln_count -= 1;
-                u.magic_immune -= 1;
+                self.unit_mut(unit).invuln_count -= 1;
+                self.magic_immunity_remove(unit, true);
             }
             Some(BuffEffect::Mods(m)) => self.undo_mods(unit, &m),
             None => {}

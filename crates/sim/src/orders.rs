@@ -331,6 +331,11 @@ impl Game {
         }
     }
 
+    /// Whether the unit is locked (`+0x5C` bit `0x100`, see [`Game::set_unit_locked`]).
+    pub fn is_unit_locked(&self, unit: ObjKey) -> bool {
+        self.orders.locked.contains(&unit)
+    }
+
     /// The order ids in the unit's list, head (the active order) first. Pending orders are not included.
     pub fn unit_order_ids(&self, unit: ObjKey) -> Vec<u32> {
         self.orders

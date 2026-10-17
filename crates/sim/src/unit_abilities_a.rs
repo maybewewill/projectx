@@ -166,8 +166,6 @@ pub struct State {
     cargo_timers: BTreeMap<ObjKey, TimerId>,
     /// Running digestion timers, by devourer.
     digesters: BTreeMap<ObjKey, TimerId>,
-    /// Anti-magic shell expiry timers by unit (one magic immunity count each).
-    shells: BTreeMap<ObjKey, TimerId>,
     /// The form a transformed unit came from (the alternate order returns to it).
     morph_back: BTreeMap<ObjKey, u32>,
     /// Alternate forms by type, for units placed already transformed.
@@ -488,7 +486,6 @@ pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u
     match kind {
         KIND_AURA_SCAN => game.borrow_mut().a_aura_scan(unit, base),
         KIND_DETECT => game.borrow_mut().recompute_detection(),
-        KIND_SHELL => game.borrow_mut().shell_expired(unit),
         KIND_MORPH => game.borrow_mut().morph_finished(unit, aux),
         KIND_CARGO => {
             let dead = game.borrow_mut().cargo_upkeep(unit);
@@ -861,7 +858,6 @@ pub const CONTROL_MAGIC: u32 = code(b"Acmg");
 pub const BUFF_FRENZY: u32 = code(b"Bfzy");
 pub const BUFF_BERSERK: u32 = code(b"Bbsk");
 pub const BUFF_CONTROL_MAGIC: u32 = code(b"Bcmg");
-pub const KIND_SHELL: u8 = 0x45;
 pub const ORDER_FRENZY: u32 = 852_561;
 
 /// Registers the spell order ids (called by [`register_orders`]).
@@ -948,7 +944,10 @@ fn spell_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
             }
         }
         ANTI_MAGIC | ANTI_MAGIC_INSTANT => {
-            game.borrow_mut().anti_magic_shell(target, &rec.level);
+            let killed = game.borrow_mut().anti_magic_shell(rec.caster, target, &rec.level);
+            if let Some(t) = killed {
+                crate::natives::dispatch_unit_death_by(game, rt, t, Some(rec.caster));
+            }
         }
         CONTROL_MAGIC => {
             let changed = {
@@ -1004,38 +1003,94 @@ impl Game {
         self.write_mana(caster, arith::add(cm, take));
     }
 
-    /// Anti-Magic Shell (`Aams`, `CAbilityAntiMagicShell`, buff `Bams`): the target has one magic immunity count for the
-    /// duration; casting again restarts the timer without a second count. UNSURE: the data fields (summoned unit
-    /// damage, magic damage reduction) are zero in the stock rows and are not used.
-    fn anti_magic_shell(&mut self, target: ObjKey, level: &crate::cast::SpellLevel) {
+    /// Anti-Magic Shell (`Aams` / `Aami`, effect `0x6F13C900`, CONFIRMED by Unicorn V9, `ams_effect` / `ami_effect`): the dispel worker
+    /// runs on the target first ([`ams_plan`]), then the shell buff `Bams` (`DataC == 0`, which also takes one flag-0 magic immunity
+    /// count for as long as it lives) or `Bam2` (`DataC != 0`, no immunity count) is applied or refreshed by the set-duration rule.
+    /// Returns the unit the worker's damage killed. Not modelled: the absorbed amount stored in the buff (`DataB` / `DataC`).
+    fn anti_magic_shell(&mut self, caster: ObjKey, target: ObjKey, level: &crate::cast::SpellLevel) -> Option<ObjKey> {
         if !self.alive(target) {
-            return;
+            return None;
         }
         let hero = self.target_hero(target);
-        let dur = crate::cast::effect_duration(level, hero, F32::ZERO);
-        if !arith::lt(F32::ZERO, dur) {
-            return;
-        }
-        let preds = BuffPredicates { positive: true, magic: true, dispellable: true, ..buff_predicates(crate::unit_spells::BUFF_ANTI_MAGIC_SHELL) };
-        self.apply_mods_buff(target, crate::unit_spells::BUFF_ANTI_MAGIC_SHELL, preds, UnitMods::default(), dur);
-        if let Some(old) = self.spells.unit_a.shells.remove(&target) {
-            self.timers.cancel(old);
-        } else {
-            self.unit_mut(target).magic_immune += 1;
-        }
-        let id = self.timers.start(
-            dur.to_f32(),
-            false,
-            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_SHELL, unit: target, base: ANTI_MAGIC, aux: 0 }),
+        let two = crate::unit_spells::BUFF_ANTI_MAGIC_SHELL_TWO;
+        let one = crate::unit_spells::BUFF_ANTI_MAGIC_SHELL;
+        let plan = ams_plan(
+            level,
+            hero,
+            F32::ZERO,
+            self.buff_position(target, one).is_some(),
+            self.buff_position(target, two).is_some(),
+            self.is_unit_locked(target),
         );
-        self.spells.unit_a.shells.insert(target, id);
-    }
-
-    fn shell_expired(&mut self, unit: ObjKey) {
-        if self.spells.unit_a.shells.remove(&unit).is_some() {
-            self.unit_mut(unit).magic_immune -= 1;
+        let killed = crate::unit_spells::dispel_with(self, caster, target, &plan.worker);
+        if killed.is_some() || !self.alive(target) {
+            return killed;
         }
+        let Some(b) = plan.buff else {
+            return None;
+        };
+        let code = if b.immune { one } else { two };
+        let preds = BuffPredicates { positive: true, magic: true, dispellable: true, ..buff_predicates(code) };
+        if let Some(i) = self.buff_position(target, code) {
+            let serial = self.unit(target).buffs[i].serial;
+            self.set_buff_duration(target, serial, b.dur);
+        } else {
+            if b.immune {
+                // `CBuffAntiMagicShell` apply `0x6F110750`: one immunity count without the flag; its first count dispels again. The
+                // buff is registered on the unit only afterwards (`0x6F079CA0`), so the dispel does not see it.
+                self.magic_immunity_add(target, false);
+            }
+            let serial = self.next_buff_serial();
+            self.unit_mut(target).buffs.push(crate::abilities::Buff {
+                serial,
+                base: code,
+                predicates: preds,
+                effect: b.immune.then_some(crate::auras::BuffEffect::ShellImmunity),
+                ..crate::abilities::Buff::default()
+            });
+            self.set_buff_duration(target, serial, b.dur);
+        }
+        None
     }
+}
+
+/// The buff the Anti-Magic Shell effect applies (see [`ams_plan`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AmsBuff {
+    /// `Bams` (true, with the magic immunity count) or `Bam2` (false).
+    pub immune: bool,
+    /// The target already carries that buff: the effect refreshes it (buff slot `0x358`) instead of creating it (slot `0x354`).
+    pub existing: bool,
+    /// The duration handed to the buff (hero rule: `HeroDur`, else `Dur + ability+0x9C`).
+    pub dur: F32,
+    /// The value stored in the buff: `DataB` for `Bams`, `DataC` for `Bam2`.
+    pub data: F32,
+}
+
+/// What Anti-Magic Shell's effect `0x6F13C900` does (CONFIRMED, **Unicorn V9**, `tools/emu/v9_emu.py` checks `ams_effect` and `ami_effect`,
+/// 400 cases each): the dispel worker `0x6F0EEF00` always runs on the target with both polarities set exactly when `DataC == 0` (x87
+/// equality, NaN is not equal), `(a6, a7) = (0, 1)`, damage `DataA`, mana loss `DataD`, flags 64; unless the target is locked
+/// (`+0x5C & 0x100`) the shell buff follows through `0x6F13C790`: `DataC == 0` gives `Bams` carrying `DataB`, otherwise `Bam2`
+/// carrying `DataC`. `existing_*` say whether the target carries `Bams` / `Bam2`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AmsPlan {
+    pub worker: crate::unit_spells::WorkerArgs,
+    pub buff: Option<AmsBuff>,
+}
+
+pub fn ams_plan(l: &crate::cast::SpellLevel, hero: bool, extra: F32, existing_bams: bool, existing_bam2: bool, locked: bool) -> AmsPlan {
+    let plain = l.data[2].to_f32() == 0.0;
+    let both = u32::from(plain);
+    let worker = crate::unit_spells::WorkerArgs { positive: both, negative: both, a6: 0, a7: 1, damage: l.data[0], mana: l.data[3], flags: 64 };
+    let buff = (!locked).then(|| {
+        let dur = crate::cast::effect_duration(l, hero, extra);
+        if plain {
+            AmsBuff { immune: true, existing: existing_bams, dur, data: l.data[1] }
+        } else {
+            AmsBuff { immune: false, existing: existing_bam2, dur, data: l.data[2] }
+        }
+    });
+    AmsPlan { worker, buff }
 }
 
 // ---- transforms: Aave, Abrf, Acpf, Aetf, Abur (CAbilityMorph) ----

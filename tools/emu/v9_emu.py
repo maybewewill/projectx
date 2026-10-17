@@ -108,7 +108,134 @@ def check_lpurge(cases, r, rows):
     V4.check_purge_args(cases, r, rows)
 
 
+def check_immunity(cases, r, rows):
+    """The magic immunity counters of a unit: add 0x6F07A3A0 (ecx = unit, arg = flag) and remove 0x6F077320 (same), driven through the
+    Magic Immunity ability's init slot 0x6F110730 (flag 1) and removal slot 0x6F110700 (flag 1), and directly with flag 0 (what the
+    CBuffAntiMagicShell apply 0x6F110750 / remove 0x6F1107D0 pass). Stubs: the enter / leave side effects 0x6F2AB310 / 0x6F2AC3A0
+    (counted), the lookup of the purge debuff 0x6F0787D0 and its removal 0x6F079CC0 (counted), the dispel walker 0x6F079FE0 (nine
+    arguments recorded), the passive base slots 0x6F054860 / 0x6F060A30. Row: start+0x15C start+0x160 purge_present ops |
+    +0x15C +0x160 | enter calls leave calls | lookups removals | walker calls, walker arguments (9)."""
+    S.install()
+    A.patch_jump(0x6F2AB310, V4.new_code(b"\xFF\x05" + a32(CAP + 0x100) + b"\xC2\x08\x00"))
+    A.patch_jump(0x6F2AC3A0, V4.new_code(b"\xFF\x05" + a32(CAP + 0x104) + b"\xC3"))
+    A.patch_jump(0x6F0787D0, V4.new_code(b"\xFF\x05" + a32(CAP + 0x108) + b"\xA1" + a32(VARS + 8) + b"\xC2\x14\x00"))
+    A.patch_jump(0x6F079CC0, V4.new_code(b"\xFF\x05" + a32(CAP + 0x10C) + b"\xC2\x04\x00"))
+    A.patch_jump(0x6F079FE0, recorder(0x120, [(i, False) for i in range(9)], 0x24, counter=0x110))
+    A.patch_jump(0x6F054860, A.stub_ret(8, 0))
+    A.patch_jump(0x6F060A30, A.stub_ret(0, 0))
+    for _ in range(cases):
+        s1 = r.choice([0, 0, 0, 1, 2, 0xFFFFFFFF, 5])
+        s2 = r.choice([0, 0, 0, 1, 2, 0xFFFFFFFF, 3])
+        purge = r.random() < 0.5
+        ops = "".join(r.choice("AaRrBCD") for _ in range(r.randint(1, 10)))
+        S.make_target(False)
+        wr(TGT + 0x15C, s1)
+        wr(TGT + 0x160, s2)
+        A.make_ability(0x6F8DDEB4, 0x416D696D, 75)         # any ability object; only +0x30 (the owner unit) is read
+        wr(A.OBJ + 0x30, TGT)
+        wr(VARS + 8, EX1 if purge else 0)
+        S.make_buff(0x6F8D28DC, (0xCC,), (), {0x320: A.stub_ret(0xC, 0)})     # a CBuffAntiMagicShell; base apply 0x320 stubbed
+        S.clear_cap()
+        mu.mem_write(CAP + 0x100, b"\0" * 0x80)
+        for op in ops:
+            if op == "B":        # CBuffAntiMagicShell apply 0x354 (0x6F110750): base apply, one flag-0 count, the holder value
+                S.call(0x6F110750, ecx=BUFF, stack_args=(TGT, A.OBJ, A.OBJ + 0x10))
+            elif op == "C":      # CBuffAntiMagicShellTwo apply 0x354 (0x6F1107F0): base apply and the holder value, no count
+                S.call(0x6F1107F0, ecx=BUFF, stack_args=(TGT, A.OBJ, A.OBJ + 0x10))
+            elif op == "D":      # CBuffAntiMagicShell removal 0x6F1107D0: one flag-0 count off (unit = buff + 0x30)
+                S.call(0x6F1107D0, ecx=BUFF)
+            elif op == "A":
+                S.call(0x6F110730, stack_args=(TGT, 0))
+            elif op == "a":
+                S.call(0x6F07A3A0, ecx=TGT, stack_args=(0,))
+            elif op == "R":
+                S.call(0x6F110700, ecx=A.OBJ)
+            else:
+                S.call(0x6F077320, ecx=TGT, stack_args=(0,))
+        rows.append([s1, s2, int(purge), ops, rd(TGT + 0x15C), rd(TGT + 0x160), rd(CAP + 0x100), rd(CAP + 0x104),
+                     rd(CAP + 0x108), rd(CAP + 0x10C), rd(CAP + 0x110)] + [rd(CAP + 0x120 + 4 * i) for i in range(9)])
+
+
+BAMS, BAM2 = 0x42616D73, 0x42616D32
+VT_AMS_ABIL, ABIL_AMS = 0x6F8DDEB4, 0x4161_6D73       # CAbilityAntiMagicShell, 'Aams'
+VT_AMI_ABIL, ABIL_AMI = 0x6F8DE2E4, 0x4161_6D69       # CAbilityAntiMagicShellInstant, 'Aami'
+EX1, EX2, NEW2 = S.M + 0x5A00, S.M + 0x5B00, S.M + 0x5C00        # existing Bams, existing Bam2, a new Bam2 (BUFF is the new Bams)
+
+
+def check_ams_effect(cases, r, rows, vt=VT_AMS_ABIL, code=ABIL_AMS, entry=0x6F13C900, instant=False):
+    """The Anti-Magic Shell effect 0x6F13C900 (ecx = ability, arg = target; the instant class enters through 0x6F143040 with the owner).
+    Real: the level getters, the hero test 0x6F1D2660, 0x6F02F880 (Dur + ability+0x9C), HeroDur, the code getters 0x6F110530 (Bams)
+    and 0x6F1105B0 (Bam2), 0x6F13C790. Stubs: the dispel worker 0x6F0EEF00 (recorded), the buff lookup 0x6F0787D0 (existing Bams / Bam2
+    by code), the buff factories 0x6F139D80 (new Bams = BUFF) / 0x6F139E50 (new Bam2 = NEW2), the registration, the list item 0x6F02EE20.
+    Row: DataA DataB DataC DataD dur herodur extra hero ex_bams ex_bam2 flag100 listitem | worker (12 words) | slot 0x324 calls +
+    (ecx, edx, arg) | slot 0x354 calls + (ecx, edx, target, dur, data) | slot 0x358 calls + (ecx, edx, ref, dur, data)."""
+    S.install()
+    A.patch_jump(0x6F0EEF00, recorder(0x100, V4.WORKER_SPEC, 0x28, regs=True))
+    V4.unit_vtables()
+    V4.ret_var(0x6F02EE20, 8, 0x30)
+    V4.ret_var(0x6F1D2660, 0, 4)
+    # if code == Bams: eax = [VARS+8]; elif code == Bam2: eax = [VARS+12]; else eax = 0 (retn 0x14 each)
+    look = new_code(b"\x8B\x44\x24\x04"
+                    + b"\x3D" + a32(BAMS) + b"\x75\x08" + b"\xA1" + a32(VARS + 8) + b"\xC2\x14\x00"
+                    + b"\x3D" + a32(BAM2) + b"\x75\x08" + b"\xA1" + a32(VARS + 12) + b"\xC2\x14\x00"
+                    + b"\x31\xC0\xC2\x14\x00")
+    A.patch_jump(0x6F0787D0, look)
+    A.patch_jump(0x6F139D80, A.stub_ret(0, BUFF))
+    A.patch_jump(0x6F139E50, A.stub_ret(0, NEW2))
+    A.patch_jump(0x6F079CA0, A.stub_ret(4, 0))
+    s324 = recorder(0x1C0, [(0, True)], 4, regs=True, counter=0x1E8)
+    s354 = recorder(0x180, [(0, False), (1, True), (2, True)], 0xC, regs=True, counter=0x1E0)
+    s358 = recorder(0x1A0, [(0, True), (1, True), (2, True)], 0xC, regs=True, counter=0x1E4)
+    mu.mem_write(S.FVT, b"\0" * 0x400)
+    wr(S.FVT + 0x324, s324)
+    wr(S.FVT + 0x354, s354)
+    wr(S.FVT + 0x358, s358)
+    for _ in range(cases):
+        da, db, dc, dd = (rbits(r) for _ in range(4))
+        if r.random() < 0.6:
+            dc = r.choice([0, 0, 0x80000000, 0x7FC00000, f2u(1.0), rbits(r)])
+        dur, hdur = rbits(r), rbits(r)
+        extra = rbits(r) if r.random() < 0.4 else 0
+        hero = r.random() < 0.5
+        ex1, ex2 = r.random() < 0.3, r.random() < 0.3
+        f100 = r.random() < 0.2
+        item = r.getrandbits(32)
+        A.make_ability(vt, code, 75)
+        level(A.LVL, dur, hdur, [da, db, dc, dd])
+        wr(A.OBJ + 0x9C, extra)
+        wr(A.OBJ + 0x30, A.UNIT)
+        wr(A.UNIT, V4.VTU)
+        S.make_target(False)
+        wr(TGT, V4.VTT)
+        wr(TGT + 0x5C, 0x100 if f100 else 0)
+        for b in (BUFF, EX1, EX2, NEW2):
+            mu.mem_write(b, b"\0" * 0x200)
+            wr(b, S.FVT)
+        S.clear_cap()
+        wr(VARS + 4, int(hero))
+        wr(VARS + 8, EX1 if ex1 else 0)
+        wr(VARS + 12, EX2 if ex2 else 0)
+        wr(VARS + 0x30, item)
+        if instant:
+            S.call(0x6F143040, ecx=A.OBJ)       # takes the owner unit itself as the target
+        else:
+            S.call(entry, ecx=A.OBJ, stack_args=(TGT,))
+        tail = []
+        for base in (0x1C0, 0x180, 0x1A0):
+            cnt = {0x1C0: 0x1E8, 0x180: 0x1E0, 0x1A0: 0x1E4}[base]
+            tail += [rd(CAP + cnt)] + [rd(CAP + base + 4 * i) for i in range(5 if base != 0x1C0 else 3)] + [0] * (0 if base != 0x1C0 else 2)
+        rows.append([da, db, dc, dd, dur, hdur, extra, int(hero), int(ex1), int(ex2), int(f100), item]
+                    + V4.worker_row() + tail)
+
+
+def check_ami_effect(cases, r, rows):
+    check_ams_effect(cases, r, rows, VT_AMI_ABIL, ABIL_AMI, 0x6F143040, True)
+
+
 CHECKS = {
+    "ams_effect": check_ams_effect,
+    "ami_effect": check_ami_effect,
+    "immunity": check_immunity,
     "lpurge_args": check_lpurge,
     "frenzy": check_frenzy,
     "creep_clap_slow": check_creep_clap_slow,
@@ -145,12 +272,12 @@ def main():
             raise
         print("%s rows %d" % (name, len(rows)))
         for row in rows[:5]:
-            print(" ".join("%08x" % x for x in row))
+            print(" ".join(("%08x" % x) if isinstance(x, int) else x for x in row))
         if dump:
             os.makedirs(dump, exist_ok=True)
             with open(os.path.join(dump, name + ".txt"), "w") as fh:
                 for row in rows:
-                    fh.write(" ".join("%08x" % x for x in row) + "\n")
+                    fh.write(" ".join(("%08x" % x) if isinstance(x, int) else x for x in row) + "\n")
 
 
 if __name__ == "__main__":

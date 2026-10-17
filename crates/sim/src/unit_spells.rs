@@ -119,6 +119,8 @@ pub const PURGE: u32 = code(b"Aprg");
 pub const BUFF_PURGE: u32 = code(b"Bprg");
 /// Anti-magic Shell's buff code, the one the dispel worker looks for (`0x6F110530` returns `0x42616D73`).
 pub const BUFF_ANTI_MAGIC_SHELL: u32 = code(b"Bams");
+/// `CBuffAntiMagicShellTwo` (`Bam2`): the shell variant Anti-Magic Shell applies when `DataC != 0`; it takes no immunity count.
+pub const BUFF_ANTI_MAGIC_SHELL_TWO: u32 = code(b"Bam2");
 
 pub const ORDER_HEAL: u32 = 852_063;
 pub const ORDER_HEAL_ON: u32 = 852_064;
@@ -2268,6 +2270,24 @@ pub fn purge_slows(target_dead: bool, allied: bool) -> bool {
 /// (UNSURE).
 pub(crate) fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, mana: F32, smart: bool, a7: u32) -> Option<ObjKey> {
     let owner = gm.unit(caster).owner;
+    let enemy = gm.is_enemy(owner, gm.unit(k).owner);
+    let args = WorkerArgs {
+        positive: if smart { u32::from(enemy) } else { 1 },
+        negative: if smart { u32::from(!enemy) } else { 1 },
+        a6: u32::from(smart),
+        a7,
+        damage,
+        mana,
+        flags: 64,
+    };
+    dispel_with(gm, caster, k, &args)
+}
+
+/// [`dispel_one`] with the worker's stack arguments given (`positive`, `negative`, `a6`, `a7`, `damage`, `mana`; the flags word is the
+/// record flag the callers pass, 64, and is not used by the model).
+pub(crate) fn dispel_with(gm: &mut Game, caster: ObjKey, k: ObjKey, args: &WorkerArgs) -> Option<ObjKey> {
+    let (damage, mana) = (args.damage, args.mana);
+    let owner = gm.unit(caster).owner;
     let (enemy, summoned, illusion, immune) = {
         let u = gm.unit(k);
         (gm.is_enemy(owner, u.owner), u.summoned, u.illusion, u.magic_immune > 0)
@@ -2284,10 +2304,10 @@ pub(crate) fn dispel_one(gm: &mut Game, caster: ObjKey, k: ObjKey, damage: F32, 
         misc: u32::from(gm.spells.unit.invuln_summon_dispel_damage),
         a2: 0,
         ability: 1,
-        positive: if smart { u32::from(enemy) } else { 1 },
-        negative: if smart { u32::from(!enemy) } else { 1 },
-        a6: u32::from(smart),
-        a7,
+        positive: args.positive,
+        negative: args.negative,
+        a6: args.a6,
+        a7: args.a7,
         damage_bits: damage.to_bits(),
         mana_bits: mana.to_bits(),
         flags: 0,

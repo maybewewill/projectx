@@ -19,6 +19,21 @@ rows dumped as hex words and re-computed by the Rust model. A row is added to `c
   (`0x6F18AA90` instead of `0x6F18A930`; same body with the creep buff factory `0x6F188C00`). Per-unit body (shared with War Stomp) run with the creep vtable
   (`v9_creep_clap_unit.py`) and the slow slot run for real (`v9_emu.py` check `creep_clap_slow`: hero-rule duration, `-DataC` movement, `-DataD` attack speed;
   the hero walk `0x6F0766A0` stubbed to "no" as in V1). The model aliases `AHtc` (`neutral_spells.rs`). Test `v9_creep_clap.rs`.
+* **Magic immunity counters, Magic Immunity (`Amim`), Anti-Magic Shell (`Aams`, `Aami`) CONFIRMED (400 each: `immunity`, `ams_effect`, `ami_effect`)**
+  - Counters: add `0x6F07A3A0` / remove `0x6F077320` (ECX = unit, argument = flag) move `+0x15C` always and the **second counter `+0x160` only with the flag**;
+    the enter work (side effect `0x6F2AB310`, removal of the purge debuff `Bprg`, the dispel walker `0x6F079FE0(0,1,0,0,0,1,1,0,1)`) runs when `+0x15C` becomes 1
+    **or** the flag is set and `+0x160` becomes 1; the leave work (`0x6F2AC3A0`) mirrors it. Callers that pass the flag: Magic Immunity (init `0x6F110730`,
+    removal `0x6F110700`), Avatar, Divine Shield; callers that do not: the Anti-Magic Shell buff (apply `0x6F110750`, removal `0x6F1107D0`) and Sanctuary.
+    The sequences also drive those buff slots for real (`B` / `C` / `D` ops). **Bug fixed**: the model had one counter and dispelled only when it reached 1, so
+    an Anti-Magic Shell followed by Magic Immunity (or any flagged source after a flag-0 one) missed the second enter dispel. `neutral_spells::immunity_add` /
+    `immunity_remove`, `Game::magic_immunity_add` / `magic_immunity_remove`, unit field `magic_immune_flagged`; every `magic_immune` writer now goes through them.
+  - Anti-Magic Shell effect `0x6F13C900` (the instant class `0x6F143040` passes the owner as target): the dispel worker `0x6F0EEF00` **always runs** on the target with
+    positive = negative = `(DataC == 0)` (x87 equality, NaN false), `(a6, a7) = (0, 1)`, damage `DataA`, mana loss `DataD`, flags 64; unless the target is locked
+    (`+0x5C & 0x100`) the shell follows: `DataC == 0` -> buff `Bams` (`CBuffAntiMagicShell`) carrying `DataB`, otherwise `Bam2` (`CBuffAntiMagicShellTwo`, no immunity count)
+    carrying `DataC`; an existing buff of that code is refreshed through slot `0x358` (set-duration rule) instead of created through `0x354`; duration = `HeroDur` for a hero else
+    `Dur + ability+0x9C`. The stock row has all `Data*` zero, `Dur` = `HeroDur` = 90, so stock Anti-Magic Shell dispels both polarities and gives `Bams`.
+    **Bug fixed**: the model applied only a buff and an immunity count (no dispel at cast, no `Bam2`, restart instead of the set-duration rule, no second-counter rule);
+    `unit_abilities_a::ams_plan` / `anti_magic_shell`, `BuffEffect::ShellImmunity`. Not modelled: what the stored `DataB` / `DataC` value does (the damage-absorb read).
 * **Item classes that inherit a verified spell class (CONFIRMED, 400 each)**: `AIdi` (`CAbilityItemDispelAoe`, vtable `0x6F8C4F34`, Dispel Magic callback and worker
   arguments, order 852271), `AIlp` (`CAbilityLightningPurge`, vtable `0x6F8CB464`, the Purge effect reached through its own slot `0x424` = `jmp 0x6F107E10`, order 852275),
   `AIsh` (`CAbilitySpiritTroll`, vtable `0x6F92828C`, the Feral Spirit effect from slot `0x3C0`, identical in both vtables). Tests `v9_item_dispel.rs`,
