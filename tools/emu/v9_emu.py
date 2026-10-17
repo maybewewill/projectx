@@ -53,8 +53,20 @@ def check_frenzy(cases, r, rows):
                      rd(CAP + 0x10), rd(CAP + 0x14), rd(CAP + 0x20), rd(CAP + 0x24)])
 
 
+def _neutral_heal(fn):
+    """The V4 Heal checks re-run on the CAbilityNeutralHeal vtable (0x6F8C9AEC): its vtable differs from CAbilityHeal's only in
+    slots 0x04 (dtor), 0x1C (code), 0x58 (name) and the order id getters 0x308 / 0x318 / 0x348."""
+    def run(cases, r, rows):
+        V4.VT_HEAL_ABIL, V4.ABIL_HEAL = 0x6F8C9AEC, 0x416E6865     # 'Anhe'
+        fn(cases, r, rows)
+    return run
+
+
 CHECKS = {
     "frenzy": check_frenzy,
+    "nheal_effect": _neutral_heal(V4.check_heal_effect),
+    "nheal_target": _neutral_heal(V4.check_heal_target),
+    "nheal_filter": _neutral_heal(V4.check_heal_filter),
 }
 
 
