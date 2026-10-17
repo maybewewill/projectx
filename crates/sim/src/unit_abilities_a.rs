@@ -846,6 +846,14 @@ pub const ABSORB: u32 = code(b"Aabs");
 pub const DISENCHANT: u32 = code(b"Adch");
 pub const DETONATE: u32 = code(b"Adtn");
 pub const FRENZY: u32 = code(b"Afzy");
+
+/// What Frenzy's self effect slot `0x428` (`0x6F1CB1D0`, the body of Bloodlust's unit effect `0x6F1CB080` with the owner as target)
+/// hands to its buff (CONFIRMED, **Unicorn V9**, `tools/emu/v9_emu.py` check `frenzy`: the real effect, creator `0x6F1CB150`,
+/// the `CBuffFrenzy` apply slot `0x35C` (shared with Bloodlust) and the real sink routines): `(duration, movement, attack speed)`
+/// exactly as [`crate::unit_spells::bloodlust_values`] -- movement `DataB`, attack speed `DataA`.
+pub fn frenzy_values(l: &crate::cast::SpellLevel, hero: bool, extra: F32) -> (F32, F32, F32) {
+    crate::unit_spells::bloodlust_values(l, hero, extra)
+}
 pub const BERSERK: u32 = code(b"Absk");
 pub const ANTI_MAGIC: u32 = code(b"Aams");
 pub const ANTI_MAGIC_INSTANT: u32 = code(b"Aami");
@@ -920,10 +928,10 @@ fn spell_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: &CastRec)
             // buff Bfzy, self only (targs air,ground,self).
             let mut gm = game.borrow_mut();
             let hero = gm.target_hero(target);
-            let dur = crate::cast::effect_duration(&rec.level, hero, F32::ZERO);
+            let (dur, mv, atk) = frenzy_values(&rec.level, hero, F32::ZERO);
             if gm.alive(target) && arith::lt(F32::ZERO, dur) {
                 let preds = BuffPredicates { positive: true, magic: true, dispellable: true, ..buff_predicates(BUFF_FRENZY) };
-                let mods = UnitMods { attack_delta: rec.level.data[0], move_delta: rec.level.data[1], ..UnitMods::default() };
+                let mods = UnitMods { attack_delta: atk, move_delta: mv, ..UnitMods::default() };
                 gm.apply_mods_buff(target, BUFF_FRENZY, preds, mods, dur);
             }
         }
