@@ -60,7 +60,7 @@ def read_log():
     return n, out
 
 
-def logstub(kind, args=(), retn=0, ret_ecx_off=None, ret_val=0):
+def logstub(kind, args=(), retn=0, ret_ecx_off=None, ret_val=0, tail=None):
     """A stub appending (kind, ecx, v1, v2, v3) to the log. args: list of (argidx, deref) for v1..v3. The return value is
     [ecx + ret_ecx_off] when given, else ret_val. The callee pops retn bytes."""
     code = b"\xA1" + a32(LOGP)                                  # mov eax,[LOGP]
@@ -72,6 +72,8 @@ def logstub(kind, args=(), retn=0, ret_ecx_off=None, ret_val=0):
             code += b"\x8B\x12"                                 # mov edx,[edx]
         code += b"\x89\x50" + bytes([8 + 4 * i])                # mov [eax+8+4i], edx
     code += b"\x83\x05" + a32(LOGP) + b"\x14"                   # add dword [LOGP], 0x14
+    if tail is not None:
+        return new_code(code + tail)                            # the caller supplies the return code
     if ret_ecx_off is not None:
         code += b"\x8B\x81" + a32(ret_ecx_off)                  # mov eax,[ecx+off]
     else:

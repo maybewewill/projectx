@@ -452,6 +452,10 @@ pub struct UnitType {
     pub gold_cost: i32,
     /// Wood cost, read by `GetUnitWoodCost` (CONFIRMED: the type record's wood field, `+0x24`, `FUN_6f29b830`).
     pub wood_cost: i32,
+    /// UnitBalance `goldRep` / `lumberRep` / `reptm` (type record `+0x28`, `+0x2C`, `+0x1C`): the repair cost and time.
+    pub gold_rep: i32,
+    pub lumber_rep: i32,
+    pub repair_time: i32,
     /// Sight radius (record `+0x18C`, UnitBalance `sight`), the day sight of a new unit. 0 when the host has not
     /// filled it (TODO(gamedata): the engine loads it from the unit rows).
     pub sight: F32,

@@ -36,3 +36,29 @@ The old model (a channel of `Cast / Dur` ticks on a unit target) was wrong in ev
   model refuses only removed / targs-mismatching units), the two adders (their listener walks `68..82` / `84..98` and the clamp of the
   setters), the marker buff internals after the apply slot (the model uses the set-duration rule, UNSURE for `0x350` / `0x354` of
   `CBuffReplenish`), the autocast scan of the class (no autocast in the model), the target effect and caster effect (presentation).
+
+## Repair (`Arep`), Restoration (`Arst`), Renew (`Aren`): start and gate CONFIRMED (400 cases each; `rep_start`, `rep_gate`)
+
+The old model (a 0.5 s tick that healed `max / (bldtm * DataB)` and paid `DataA * cost * fraction` as it went) was a stand-in. The original, for a
+finished building (no `ABnP` construction ability on the target), unit-target effect slot `0x424` = `0x6F070AB0`:
+
+* The numbers come from the **UnitBalance repair columns**: `goldRep` (type record `+0x28`), `lumberRep` (`+0x2C`) and **`reptm`** (`+0x1C`; the old spec
+  said there was no repair-time column; `bldtm` is `+0x18`). `T = max(5.0, DataB * reptm)` (constant `0x6FAAF09C` = 5.0); totals `DataA * goldRep`,
+  `DataA * lumberRep` (soft multiplies).
+* A nonzero total needs one unit payable (`0x6F02D730` / `0x6F02D760`, `stored/10 >= 1`), else **nothing starts**. Then each nonzero total **pays one unit
+  immediately** (`0x6F416A00(-1,...)`, scaled by 10) and starts a **periodic timer of `T / total` seconds** (messages `0xD01D0` gold, `0xD01D1` lumber): the
+  repair is paid in single units at a steady rate. When both periods are at least 1.0 (a missing period counts as 1.0) a one-second tick (`0xD01C1`,
+  constant `0x6FAAF0A0` = 1.0) validates the job. The target gets a **life regeneration modifier of `max life / T` per second** (`0x6F02DC60`, kept in the
+  ability, `0x6F029580`); presentation callbacks `0x6F2AB3E0`/`0x6F2AB1E0`/`0x6F021500` follow.
+* Every timer message runs `0x6F070FE0`: the validation `0x6F035070` (target present, targs, **the class gate slot `0x3F0` = `0x6F04BF70`**, ...) stops the
+  ability (`0x6F06BBB0`: timers and modifier go) when it fails; a payment message then takes one more unit (`0x6F416A00`/`0x6F416A40(-1,...)`).
+* Gate `0x6F04BF70` (finished building): `152` locked unit (`+0x5C & 0x100`), `30` when `max - life` is ordered below 1.0 (**the repair ends when less than 1 life
+  is missing**, and a target that is not hurt by 1.0 cannot be ordered), `161` with an `Buns` buff, `162` illusion, `8` / `9` when `goldRep` / `lumberRep`
+  is nonzero and one unit cannot be paid (so a repair also **stops when the owner runs out**), else `0`.
+* Model: `unit_abilities_m::{repair_start_plan, repair_gate_code}` (pure, driven by the vectors), `RepairJob` (modifier + payment timers),
+  `repair_event` (the timer handler). `UnitType` gained `gold_rep`, `lumber_rep`, `repair_time`. **Bugs fixed**: wrong time base (`bldtm` instead of `reptm`),
+  wrong cost base (the type's gold/lumber cost instead of `goldRep` / `lumberRep`), payment proportional to the life restored instead of single units on a
+  timer, a 0.5 s healing tick instead of a regeneration modifier, an order accepted with an empty purse, no refusal of a nearly whole target.
+* NOT covered (stubs / open): the `ABnP` branches (taking over or joining a construction, "power build" `DataC` / `DataD`), the validation details of
+  `0x6F035070` beyond the gate (range re-check and re-order; the model stops when the builder moves), Renew's own gate (slot `0x3F0` = `0x6F04C5D0`; its
+  start effect is the same function), the stop of the agile property at max life, the `Buns` / locked flags in the sim (locked is not modelled).

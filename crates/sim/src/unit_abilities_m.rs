@@ -270,8 +270,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             } else {
                 "mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln"
             };
-            let u = gm.unit(target);
-            (bad(w) || !arith::lt(u.life, u.max_life)).then_some(CastError::BadTarget)
+            (bad(w) || gm.repair_gate(gm.unit(caster).owner, target) != 0).then_some(CastError::BadTarget)
         }
         UNSUMMON => bad("structure,player").then_some(CastError::BadTarget),
         _ => None,
@@ -588,13 +587,12 @@ impl Game {
 /// Timer kinds of this module (`SpellMsg::UnitSpell`, routed here by `unit_abilities_a::on_timer`).
 pub const KIND_REPAIR: u8 = 0x70;
 pub const KIND_PULSE: u8 = 0x72;
-/// Seconds between two repair ticks (a model choice, UNSURE: the original's repair progress is a per-tick task of the
-/// builder that was not read).
-pub const REPAIR_PERIOD: f32 = 0.5;
 
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, _aux: u32) {
     match kind {
-        KIND_REPAIR => game.borrow_mut().repair_tick(unit),
+        KIND_REPAIR => game.borrow_mut().repair_event(unit, false, false),
+        KIND_REPAIR_GOLD => game.borrow_mut().repair_event(unit, true, false),
+        KIND_REPAIR_LUMBER => game.borrow_mut().repair_event(unit, false, true),
         KIND_PULSE => {
             let dead = game.borrow_mut().pulse_tick(unit, base);
             for victim in dead {
@@ -655,51 +653,203 @@ impl Game {
     }
 }
 
-/// A running repair: the builder is the map key.
+/// Timer kinds of the repair: the one-second validation tick (message `0xD01C1`, kind [`KIND_REPAIR`]), the gold payment (`0xD01D0`) and
+/// the lumber payment (`0xD01D1`).
+pub const KIND_REPAIR_GOLD: u8 = 0x73;
+pub const KIND_REPAIR_LUMBER: u8 = 0x74;
+
+/// A running repair: the builder is the map key. CONFIRMED structure (V10): a life regeneration modifier on the target, a periodic
+/// payment timer per resource (one unit each time) and, when both periods are at least a second, a one-second validation tick.
 #[derive(Debug, Clone)]
 pub struct RepairJob {
     pub target: ObjKey,
-    /// `DataA`: the share of the target's cost a full repair costs (editor default 0.35).
-    ratio_cost: F32,
-    /// `DataB`: the share of the build time a full repair takes (editor default 1.5).
-    ratio_time: F32,
-    /// Life restored so far.
-    repaired: F32,
-    /// Gold and lumber (x10) already paid.
-    paid: [i32; 2],
-    /// Where the builder stood when it started (it leaves the job by moving).
+    modifier: Option<crate::agile::ModId>,
+    timers: Vec<TimerId>,
+    /// Where the builder stood when it started (it leaves the job by moving; UNSURE, the original re-checks the range instead).
     at: (F32, F32),
-    timer: TimerId,
 }
 
 fn nonzero(x: F32) -> bool {
     x.to_bits() & 0x7FFF_FFFF != 0
 }
 
+fn lt87(a: F32, b: F32) -> bool {
+    f64::from(a.to_f32()) < f64::from(b.to_f32())
+}
+
+/// The inputs of the repair start for a finished building (no `ABnP` ability on the target): the level fields `DataA` (cost share) and
+/// `DataB` (time share), the target type's `goldRep`, `lumberRep` and `reptm` (UnitBalance), its maximum life and whether the builder's
+/// owner can pay one unit of each resource (`0x6F02D730` / `0x6F02D760`).
+#[derive(Debug, Clone, Copy)]
+pub struct RepairStartIn {
+    pub data_a: F32,
+    pub data_b: F32,
+    pub gold_rep: i32,
+    pub lumber_rep: i32,
+    pub rep_time: i32,
+    pub max_life: F32,
+    pub gold_ok: bool,
+    pub lumber_ok: bool,
+}
+
+/// What the repair start does, in order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RepairEvent {
+    /// The can-pay test for one unit of gold / lumber.
+    CanPay { gold: bool },
+    /// One unit is paid (`0x6F416A00(-1, 0, 0, 0)`, the wrapper scales by 10).
+    Pay { gold: bool },
+    /// A periodic timer: message `0xD01D0` / `0xD01D1` (payments) or `0xD01C1` (validation tick).
+    Timer { msg: u32, period: F32 },
+    /// The life regeneration modifier of the target (`0x6F02DC60`, second argument `0.0`).
+    Modifier { rate: F32 },
+}
+
+/// The repair start `0x6F070AB0` for a finished building (CONFIRMED by Unicorn, V10 `rep_start`): `T = max(5.0, DataB * reptm)`; the totals
+/// are `DataA * goldRep` and `DataA * lumberRep`; a nonzero total needs one unit to be payable (else nothing starts); then each nonzero
+/// total pays one unit at once and starts a periodic timer of `T / total` seconds; the one-second tick starts when both periods are at
+/// least 1.0 (a missing period counts as 1.0); the target gets a life regeneration of `max life / T` per second.
+pub fn repair_start_plan(inp: &RepairStartIn, div: &dyn Fn(F32, F32) -> F32) -> Vec<RepairEvent> {
+    use softfloat::conv::i2r;
+    let mut ev = Vec::new();
+    let gold_total = arith::mul(inp.data_a, i2r(inp.gold_rep));
+    let lumber_total = arith::mul(inp.data_a, i2r(inp.lumber_rep));
+    let mut time = arith::mul(inp.data_b, i2r(inp.rep_time));
+    let floor = F32::from_bits(0x40A0_0000);
+    if lt87(time, floor) {
+        time = floor;
+    }
+    let gold = lt87(F32::ZERO, gold_total);
+    let lumber = lt87(F32::ZERO, lumber_total);
+    if gold {
+        ev.push(RepairEvent::CanPay { gold: true });
+        if !inp.gold_ok {
+            return ev;
+        }
+    }
+    if lumber {
+        ev.push(RepairEvent::CanPay { gold: false });
+        if !inp.lumber_ok {
+            return ev;
+        }
+    }
+    let (mut gold_period, mut lumber_period) = (F32::ONE, F32::ONE);
+    if gold {
+        gold_period = div(time, gold_total);
+        ev.push(RepairEvent::Pay { gold: true });
+        ev.push(RepairEvent::Timer { msg: 0xD01D0, period: gold_period });
+    }
+    if lumber {
+        lumber_period = div(time, lumber_total);
+        ev.push(RepairEvent::Pay { gold: false });
+        ev.push(RepairEvent::Timer { msg: 0xD01D1, period: lumber_period });
+    }
+    let one_le = |p: F32| f64::from(F32::ONE.to_f32()) <= f64::from(p.to_f32());
+    if one_le(gold_period) && one_le(lumber_period) {
+        ev.push(RepairEvent::Timer { msg: 0xD01C1, period: F32::ONE });
+    }
+    ev.push(RepairEvent::Modifier { rate: div(inp.max_life, time) });
+    ev
+}
+
+/// The target gate of Repair (slot `0x3F0` = `0x6F04BF70`, CONFIRMED by Unicorn, V10 `rep_gate`) for a target without an `ABnP` ability:
+/// `152` for a locked unit (`+0x5C & 0x100`), `30` when `max - life` is ordered below 1.0, `161` with an `Buns` buff, `162` for an
+/// illusion, `8` / `9` when the repair needs gold / lumber (`goldRep` / `lumberRep` nonzero) and one unit cannot be paid, else `0`.
+pub fn repair_gate_code(flags: u32, life: F32, max_life: F32, unsummoning: bool, gold_rep: i32, lumber_rep: i32, gold_ok: bool, lumber_ok: bool) -> u32 {
+    if flags & 0x100 != 0 {
+        return 152;
+    }
+    if lt87(arith::sub(max_life, life), F32::ONE) {
+        return 30;
+    }
+    if unsummoning {
+        return 161;
+    }
+    if flags & 0x4000_0000 != 0 {
+        return 162;
+    }
+    if gold_rep != 0 && !gold_ok {
+        return 8;
+    }
+    if lumber_rep != 0 && !lumber_ok {
+        return 9;
+    }
+    0
+}
+
+const BUFF_UNSUMMON: u32 = code(b"Buns");
+
+impl Game {
+    /// The gate code of a repair of `target` by a builder of `owner` (see [`repair_gate_code`]).
+    pub(crate) fn repair_gate(&self, owner: u32, target: ObjKey) -> u32 {
+        let u = self.unit(target);
+        let (gold_rep, lumber_rep) = self.unit_types().get(u.type_id).map_or((0, 0), |t| (t.gold_rep, t.lumber_rep));
+        let can = |res| self.economy.get(owner as usize).is_some_and(|p| p.stored(res) / 10 >= 1);
+        let flags = if u.illusion { 0x4000_0000 } else { 0 };
+        repair_gate_code(
+            flags,
+            u.life,
+            u.max_life,
+            self.buff_position(target, BUFF_UNSUMMON).is_some(),
+            gold_rep,
+            lumber_rep,
+            can(crate::economy::Res::Gold),
+            can(crate::economy::Res::Lumber),
+        )
+    }
+}
+
 /// Repair, Renew, Restoration (`CAbilityRepair < CAbilityAutoTargetSpell`, `CAbilityRenew` and `CAbilityRestoration <
-/// CAbilityRepair`): the builder restores the target's life at `max life / (bldtm * DataB)` per second and pays
-/// `DataA * cost * repaired / max life` of gold and lumber as it goes; it stops when the target is whole, when the
-/// owner cannot pay, or when the builder moves. LIKELY structure (the editor meaning of `DataA` / `DataB`, the
-/// 0.35 / 1.5 defaults of `AbilityData.slk`), UNSURE: the 0.5 s tick, paying as it goes, `bldtm` as the base time
-/// (there is no repair-time column in `UnitBalance.slk`), and `DataC` / `DataD` (power build) are not modelled.
+/// CAbilityRepair`), effect slot `0x424` = `0x6F070AB0` for a finished building: see [`repair_start_plan`]. Not modelled: a target that
+/// is still under construction (the `ABnP` branches: taking over or joining a construction, the "power build" `DataC` / `DataD`).
 fn start_repair(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let mut gm = game.borrow_mut();
     if !gm.alive(target) {
         return;
     }
-    if let Some(old) = gm.spells.m.repairs.remove(&rec.caster) {
-        gm.timers.cancel(old.timer);
-    }
-    let timer = gm.timers.start(
-        REPAIR_PERIOD,
-        false,
-        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPAIR, unit: rec.caster, base: rec.base, aux: 0 }),
-    );
+    gm.end_repair(rec.caster);
+    let owner = gm.unit(rec.caster).owner;
+    let (type_id, max_life) = (gm.unit(target).type_id, gm.unit(target).max_life);
+    let (gold_rep, lumber_rep, rep_time) =
+        gm.unit_types().get(type_id).map_or((0, 0, 0), |t| (t.gold_rep, t.lumber_rep, t.repair_time));
+    let can = |gm: &Game, res| gm.economy.get(owner as usize).is_some_and(|p| p.stored(res) / 10 >= 1);
+    let inp = RepairStartIn {
+        data_a: rec.level.data[0],
+        data_b: rec.level.data[1],
+        gold_rep,
+        lumber_rep,
+        rep_time,
+        max_life,
+        gold_ok: can(&gm, crate::economy::Res::Gold),
+        lumber_ok: can(&gm, crate::economy::Res::Lumber),
+    };
     let at = (gm.unit(rec.caster).x, gm.unit(rec.caster).y);
-    gm.spells.m.repairs.insert(
-        rec.caster,
-        RepairJob { target, ratio_cost: rec.level.data[0], ratio_time: rec.level.data[1], repaired: F32::ZERO, paid: [0, 0], at, timer },
-    );
+    let mut job = RepairJob { target, modifier: None, timers: Vec::new(), at };
+    let plan = repair_start_plan(&inp, &|a, b| gm.soft_div(a, b));
+    for e in plan {
+        match e {
+            RepairEvent::CanPay { .. } => {}
+            RepairEvent::Pay { gold } => {
+                let res = if gold { crate::economy::Res::Gold } else { crate::economy::Res::Lumber };
+                crate::economy::change(&mut gm.economy, owner as usize, res, -10, crate::economy::Flags::NONE);
+            }
+            RepairEvent::Timer { msg, period } => {
+                let kind = match msg {
+                    0xD01D0 => KIND_REPAIR_GOLD,
+                    0xD01D1 => KIND_REPAIR_LUMBER,
+                    _ => KIND_REPAIR,
+                };
+                let t = gm.timers.start(
+                    period.to_f32(),
+                    true,
+                    Payload::Spell(SpellMsg::UnitSpell { kind, unit: rec.caster, base: rec.base, aux: 0 }),
+                );
+                job.timers.push(t);
+            }
+            RepairEvent::Modifier { rate } => job.modifier = gm.add_life_regen_modifier(target, rate),
+        }
+    }
+    gm.spells.m.repairs.insert(rec.caster, job);
 }
 
 impl Game {
@@ -708,84 +858,42 @@ impl Game {
         self.spells.m.repairs.get(&builder).map(|j| j.target)
     }
 
+    /// The stop of the ability (`0x6F06BBB0`): the payment and tick timers end and the regeneration modifier is released.
     fn end_repair(&mut self, builder: ObjKey) {
         if let Some(j) = self.spells.m.repairs.remove(&builder) {
-            self.timers.cancel(j.timer);
+            for t in j.timers {
+                self.timers.cancel(t);
+            }
+            if let Some(m) = j.modifier {
+                self.release_modifier(m);
+            }
         }
     }
 
-    fn repair_tick(&mut self, builder: ObjKey) {
+    /// A repair timer fired (`0x6F070FE0`): the target gate is checked again (a target that is whole, a builder that cannot pay, a
+    /// vanished target all stop the repair), then a payment event takes one unit. LIKELY (the validation inside `0x6F035070` is
+    /// summarised by the gate, the alive tests and the builder staying put; the range re-check and re-order are not modelled).
+    fn repair_event(&mut self, builder: ObjKey, gold: bool, lumber: bool) {
         let Some(job) = self.spells.m.repairs.get(&builder).cloned() else {
             return;
         };
-        let (target, mut paid) = (job.target, job.paid);
         let moved = {
             let b = self.unit(builder);
             b.x.to_bits() != job.at.0.to_bits() || b.y.to_bits() != job.at.1.to_bits()
         };
-        if !self.alive(builder) || !self.alive(target) || moved || self.is_stunned(builder) {
+        if !self.alive(builder) || !self.alive(job.target) || moved || self.is_stunned(builder) {
             self.end_repair(builder);
             return;
         }
-        let (type_id, owner) = (self.unit(target).type_id, self.unit(target).owner);
-        let bldtm = self.production().build_seconds.get(&type_id).copied().unwrap_or(0);
-        let (life, max) = (self.unit(target).life, self.unit(target).max_life);
-        let deficit = arith::sub(max, life);
-        if bldtm <= 0 || !nonzero(max) || !arith::lt(F32::ZERO, deficit) {
+        let owner = self.unit(builder).owner;
+        if self.repair_gate(owner, job.target) != 0 {
             self.end_repair(builder);
             return;
         }
-        // Life per tick: max life * period / (bldtm * time ratio).
-        let period = F32::from_bits(REPAIR_PERIOD.to_bits());
-        let secs = arith::mul(softfloat::conv::i2r(bldtm), job.ratio_time);
-        if !arith::lt(F32::ZERO, secs) {
-            self.end_repair(builder);
-            return;
-        }
-        let mut gain = self.soft_div(arith::mul(max, period), secs);
-        if arith::lt(deficit, gain) {
-            gain = deficit;
-        }
-        let repaired = arith::add(job.repaired, gain);
-        // What has been earned in resources so far, x10, and what is still to pay.
-        let ty = self.unit_types().get(type_id).map(|t| (t.gold_cost, t.wood_cost)).unwrap_or((0, 0));
-        let frac = self.soft_div(repaired, max);
-        let mut due = [0i32; 2];
-        for (i, cost) in [ty.0, ty.1].into_iter().enumerate() {
-            let total = softfloat::conv::f2i(arith::mul(softfloat::conv::i2r(cost.saturating_mul(10)), job.ratio_cost));
-            due[i] = softfloat::conv::f2i(arith::mul(softfloat::conv::i2r(total), frac)).max(paid[i]);
-        }
-        let need = [due[0] - paid[0], due[1] - paid[1]];
-        let affordable = self.economy.get(owner as usize).is_some_and(|p| {
-            p.stored(crate::economy::Res::Gold) >= need[0] && p.stored(crate::economy::Res::Lumber) >= need[1]
-        });
-        if !affordable {
-            // The owner cannot pay: the repair stops (the original raises an error and the builder idles, UNSURE).
-            self.end_repair(builder);
-            return;
-        }
-        for (i, res) in [crate::economy::Res::Gold, crate::economy::Res::Lumber].into_iter().enumerate() {
-            if need[i] > 0 {
-                crate::economy::change(&mut self.economy, owner as usize, res, -need[i], crate::economy::Flags::NONE);
-                paid[i] = due[i];
+        for (on, res) in [(gold, crate::economy::Res::Gold), (lumber, crate::economy::Res::Lumber)] {
+            if on {
+                crate::economy::change(&mut self.economy, owner as usize, res, -10, crate::economy::Flags::NONE);
             }
-        }
-        let next = arith::add(life, gain);
-        crate::natives::set_life(self, target, if arith::lt(max, next) { max } else { next });
-        let whole = !arith::lt(self.unit(target).life, max);
-        if whole {
-            self.end_repair(builder);
-            return;
-        }
-        let timer = self.timers.start(
-            REPAIR_PERIOD,
-            false,
-            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPAIR, unit: builder, base: REPAIR, aux: 0 }),
-        );
-        if let Some(j) = self.spells.m.repairs.get_mut(&builder) {
-            j.repaired = repaired;
-            j.paid = paid;
-            j.timer = timer;
         }
     }
 }
@@ -859,10 +967,6 @@ pub enum ReplenishEvent {
     Pay(F32),
     /// The cooldown start (`Cool + ability +0x13C`, flag 1).
     Cooldown(F32),
-}
-
-fn lt87(a: F32, b: F32) -> bool {
-    f64::from(a.to_f32()) < f64::from(b.to_f32())
 }
 
 /// The precheck value of the Moon Well, slot `0x374` = `0x6F1DBCC0` (CONFIRMED by Unicorn, V10 `rep_precheck`): `0.0 + I2R(F2I(DataE) *
