@@ -47,6 +47,7 @@ struct Args {
     /// `--sim-sync`: with `--replay` and a map, run the full engine and compare every 0x22 record.
     sim_sync: bool,
     sync_trace: bool,
+    draw_trace: u32,
     sync_after: bool,
     sync_slots: usize,
     sync_constant: u32,
@@ -124,6 +125,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--check-sync" => args.check_sync = true,
             "--sim-sync" => args.sim_sync = true,
             "--sync-trace" => args.sync_trace = true,
+            "--draw-trace" => args.draw_trace = parse_seed(&value("--draw-trace")?)?,
             "--sync-after" => args.sync_after = true,
             "--sync-defer-main" => args.sync_defer_main = true,
             "--sync-register" => args.sync_register = true,
@@ -214,6 +216,10 @@ fn run(argv: &[String]) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let parsed = w3g::Replay::parse(&bytes).map_err(|e| format!("--replay {path}: {e}"))?;
         let inputs = cli::inputs(&args.boot)?;
+        if args.draw_trace > 0 {
+            sim::rng::trace::enable();
+            sim::rng::trace::set_ctx("boot");
+        }
         let (mut engine, setup) = engine::Engine::boot_from_replay(&bytes, inputs).map_err(|e| e.to_string())?;
         let opts = engine::sim_sync::Options {
             after_commands: args.sync_after,
@@ -229,6 +235,10 @@ fn run(argv: &[String]) -> Result<(), String> {
         let mut report = engine::sim_sync::run(&mut engine, &parsed, &opts);
         report.notes.extend(setup.notes.iter().cloned());
         print!("{}", report.render());
+        if args.draw_trace > 0 {
+            let gptr = &engine.host().rng().global as *const sim::rng::Rng as usize;
+            print_draw_trace(&args, setup.seed, args.draw_trace as usize, gptr);
+        }
         {
             let shared = engine.ai().shared().borrow();
             println!("ai unimplemented calls: {:?}", shared.unimplemented);
@@ -405,4 +415,29 @@ fn draw_index_for(args: &Args, seed: u32) -> std::collections::HashMap<u32, u32>
         rng.next_u32(&table);
     }
     map
+}
+
+/// `--draw-trace N`: prints the first N steps of the global generator (recognised by their state in the fixed-seed
+/// sequence) with the phase and caller label recorded by `sim::rng::trace`.
+fn print_draw_trace(args: &Args, seed: u32, limit: usize, gptr: usize) {
+    let Some(path) = args.boot.dll.as_deref() else { return };
+    let Ok(bytes) = std::fs::read(path) else { return };
+    let Ok(table) = sim::rng::RngTable::from_game_dll(&bytes) else { return };
+    let mut rng = sim::rng::Rng::seeded(seed);
+    let mut states = std::collections::HashMap::new();
+    let mut values = Vec::new();
+    for n in 0..200_000u32 {
+        states.insert((rng.a, rng.b), n);
+        values.push(rng.next_u32(&table));
+    }
+    let mut shown = 0usize;
+    for e in sim::rng::trace::take() {
+        if let (true, Some(&n)) = (e.ptr == gptr, states.get(&(e.a, e.b))) {
+            if shown < limit {
+                println!("draw {n} = {:08x}: {}", values[n as usize], e.ctx);
+            }
+            shown += 1;
+        }
+    }
+    println!("global draws recorded: {shown}");
 }

@@ -246,6 +246,7 @@ impl PushHost for GameHost<'_> {
     fn random_direction(&mut self) -> (F32, F32) {
         match self.game.rng_parts() {
             Some((table, streams)) => {
+                crate::rng::trace::note(|| "push-apart".into());
                 let u = streams.global.random_fraction(table);
                 mover::direction_of(u, self.t)
             }

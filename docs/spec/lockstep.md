@@ -1685,3 +1685,56 @@ creates any is open. The loading flag `0x6FA73A90` (`0x6F2AB0E0`) is a debug dra
 3. X0, Y0 after the load: need the creation count of the whole load.
 4. Agent ids: a pair is `(table index, serial)` in the agent table `0x6FAB7788` (`0x6F03FA30` checks `[entry+4]+24 == serial`); both words are equal on the
    replay, i.e. the index of a fresh agent. A peasant takes 22 table slots, the hall 53 before the first peasant; the counts per type are not decoded.
+
+## 21. Pass 18 (2026-10-17): the global-generator draws before the first record (R4)
+
+Replay `echoisles_ai_1.w3g`. New tools (committed): `sim::rng::trace` (every generator step with a phase label and a caller note),
+`w3boot --draw-trace N` (the global generator's first N draws with phase, value and caller), `cargo run -p engine --example genfit`
+(fits recorded hidden-word changes to windows of the fixed-seed sequence; `GENFIT_STAT`, `GENFIT_AB=a,b`). Diagnostic knob
+`SIM_EXTRA_LOAD_DRAWS=n` adds n unattributed draws after the placement (to test hypotheses; default 0).
+
+### 21.1 What the file says (numbers exact)
+* Only 1.5 to 3 percent of generator moves leave no bit above bit 21 of the hidden-word change (`GENFIT_STAT`), so a record whose change has
+  no bit above 21 contains no generator move. Records 1 to 31 have such a change except 2, 12 and 32. The only generator-sized anchor there is
+  record 32 (draw 28 -> 29, residual `0x2980`); records 42, 51, 102 are exact (29, 30, 31). **The generator is at 28 draws when record 32's
+  ticks run**; the load, the AI start and the first AI sleep account for all of them.
+* Record 2 (`0x07de1e40`): no window `(a, b)` with `a >= 8`, `b <= 28` fits it, so its high bits come from the game/rand slots, not from the
+  generator. The AI hero pick (3 draws) is therefore before record 1 or hidden. The Sleep rolls (`GetRandomInt(1,3)`) of draws 28 and 29 are both 1,
+  matching the gaps 32 -> 42 -> 51 (10 and 9 slots); the earlier gaps do not fit: UNSURE.
+
+### 21.2 Draw sources, decoded from the machine code (IDA, Hex-Rays; not yet run in Unicorn)
+* **Placement** `0x6F3AA700` (after the races, before the script): case 3 with `settings+56 & 0x40` clear falls back to the random path: per team
+  `0x6F3A5090` collects the open slots of the team and `0x6F4ACF60` shuffles them (for `i` in `1..n`: one draw, swap `i` with `(r*(i+1))>>32`),
+  so n open slots cost n - 1 draws (EchoIsles: 1; draw 2 has its top bit set, no swap, as the replay shows: the human starts at start location 0).
+  The teams-together branch `0x6F3AA2A0` / `0x6F3A51A0` costs one shuffle of the free slots plus one of the team's players (2 draws here).
+  Implemented: `replay_setup::placement_draws`.
+* **Wander** (`CAbilityWander`): arming `0x6F159420` draws once through the ability's slot `+0x2F4` (`0x6F170D60`) and restarts the ability's ONE embedded
+  timer (`+0x6C`; a new arm replaces the running timer but still draws). Arm sites: the ability init `0x6F162820` (if the unit has the idle flag
+  `unit+0x20 & 0x200`), message `0xD0148` (`0x6F1628F0`: move ability not disabled and `ability+0x3C <= 0`) and message `0xD0178` (`0x6F162930`:
+  idle flag and `+0x3C <= 0`). `+0x3C` is a suppression counter (messages `0xD014C` / `0xD0177` go to `0x6F159410` / `0x6F159480`), not a pending count.
+  `0x6F29DA00` posts `0xD0148, 0xD014A, 0xD0178, 0xD0144` together (unit reset paths `0x6F2A64A0`, `0x6F2A7E60`), so both arm messages arrive as a pair.
+  The sim now arms `CREATE_ARMS = 3` times at creation and `IDLE_ARMS = 2` times when the order list empties (FITTED, see 21.3).
+* Other direct users of the world generator, none of them reached at load on this map: pool selectors, hero proper names `0x6F430DF0` (only types
+  with `nameCount > 1`; no UnitData cell has one besides heroes), push-apart `0x6F4961C0`, path-follow repath interval `0x6F49B340` (`2` or `7 + rand(2)`
+  every time the follower's counter reaches 0; moving units only), the placement search `0x6F473A80` -> `0x6F4A3E80` (`SetUnitPosition`, item
+  creation, summons: two draws per failed try; NOT `CreateUnit`, which uses `0x6F29F990` -> vf107 without a search), the footprint scatter
+  `0x6F2ADE80` (two draws per unit standing in a new building's footprint), the order helper `0x6F2A50C0` (placement validation of orders/build). All other
+  callers of `0x6F011390` use objects of their own (particles, sound, lighting, the setup shuffle `0x6F5C37A0`).
+
+### 21.3 Numbers (EchoIsles, `--sim-sync --draw-trace`)
+| step | draws before record 1 | cumulative sim/real at records 32, 42, 51, 102, 150, 384, 700 |
+|---|---|---|
+| start of this pass (2 races + 6 wander arms + 3 AI) | 11 | 13/29, 14/30, 14/31, 15/32, 21/45, 35/63, 65/104 |
+| + placement shuffle (1) | 12 | |
+| + wander `CREATE_ARMS = 3`, `IDLE_ARMS = 2` | 21 | 26/29, 26/30, 26/31, 27/32, 37/45, 58/63, 103/104 |
+| `SIM_EXTRA_LOAD_DRAWS=2` (diagnostic) | 23 | 29/29, 29/30, 30/31, 31/32, 42/45, 59/63, 103/104 |
+
+(Real = draws visible in that record; sim = draws made before it.) The burst of 12 draws in records 103 to 149 (6 critters x 2 arms at the end of
+their first walk) fixed `IDLE_ARMS = 2`; the creation count 3 leaves only 2 draws unexplained at record 32. Absolute exact records stay 0 of 5,504
+(first mismatch slot 0); consecutive-pair exact 380 (was 385; not a score). Later deficits (real 1,315 draws, sim 923) are the path-follow repath
+draws (`0x6F49B340`) and the push-apart, which the sim does not draw like the original.
+
+### 21.4 Open
+1. Two (or three) draws before record 32 are still unexplained; the AI's first sleep draw is at slot 3 in the sim, probably later in the original.
+2. Run the decoded sources in Unicorn: placement `0x6F3AA700`, the wander message pair at unit creation (poster not found), the repath draw of the mover.
+3. The registry slots 5 to 9 and 12 to 19 and X0/Y0 are untouched (R4 stopped at the generator).
