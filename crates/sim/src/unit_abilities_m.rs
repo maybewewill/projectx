@@ -234,8 +234,6 @@ pub struct State {
     pub pending_deaths: Vec<(ObjKey, ObjKey)>,
     /// Running repairs by builder (S52).
     repairs: BTreeMap<ObjKey, RepairJob>,
-    /// Running replenish channels by caster (S52).
-    replenish: BTreeMap<ObjKey, ReplenishJob>,
     /// Running permanent-immolation pulses by (unit, ability) (S52).
     pulses: BTreeMap<(ObjKey, u32), TimerId>,
 }
@@ -248,13 +246,7 @@ pub fn register_orders(ids: &mut BTreeMap<u32, u32>) {
 
 /// Abilities cast without a target (Call to Arms).
 pub(crate) fn takes_no_target(base: u32) -> bool {
-    matches!(base, MILITIA | MILITIA_CONVERT | RETURN | TAUNT)
-}
-
-/// Classes whose `Cast` field is the length of the effect (a channel of `Cast / Dur` ticks), not a delay before it:
-/// the replenish family (UNSURE, see the spec). `cast.rs` skips its stage-2 wait for them.
-pub(crate) fn cast_field_is_duration(base: u32) -> bool {
-    matches!(base, REPLENISH | REPLENISH_LIFE | REPLENISH_MANA)
+    matches!(base, MILITIA | MILITIA_CONVERT | RETURN | TAUNT | REPLENISH | REPLENISH_LIFE | REPLENISH_MANA)
 }
 
 pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey) -> Option<CastError> {
@@ -278,19 +270,7 @@ pub(crate) fn target_error(gm: &Game, caster: ObjKey, base: u32, target: ObjKey)
             } else {
                 "mechanical,friend,nonancient,ground,air,structure,bridge,alive,dead,invu,vuln"
             };
-            let u = gm.unit(target);
-            (bad(w) || !arith::lt(u.life, u.max_life)).then_some(CastError::BadTarget)
-        }
-        REPLENISH | REPLENISH_LIFE | REPLENISH_MANA => {
-            let u = gm.unit(target);
-            let hurt = arith::lt(u.life, u.max_life);
-            let dry = arith::lt(u.mana, u.max_mana);
-            let needs = match base {
-                REPLENISH_LIFE => hurt,
-                REPLENISH_MANA => dry,
-                _ => hurt || dry,
-            };
-            (bad("ground,air,friend,self,organic,vuln,invu") || !needs).then_some(CastError::BadTarget)
+            (bad(w) || gm.repair_gate(gm.unit(caster).owner, target) != 0).then_some(CastError::BadTarget)
         }
         UNSUMMON => bad("structure,player").then_some(CastError::BadTarget),
         _ => None,
@@ -332,9 +312,7 @@ pub(crate) fn run_effect(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, rec: 
             true
         }
         REPLENISH | REPLENISH_LIFE | REPLENISH_MANA => {
-            if let CastTarget::Unit(t) = rec.target {
-                start_replenish(game, rec, t);
-            }
+            replenish_pulse(game, rec);
             true
         }
         UNSUMMON => {
@@ -608,16 +586,13 @@ impl Game {
 
 /// Timer kinds of this module (`SpellMsg::UnitSpell`, routed here by `unit_abilities_a::on_timer`).
 pub const KIND_REPAIR: u8 = 0x70;
-pub const KIND_REPLENISH: u8 = 0x71;
 pub const KIND_PULSE: u8 = 0x72;
-/// Seconds between two repair ticks (a model choice, UNSURE: the original's repair progress is a per-tick task of the
-/// builder that was not read).
-pub const REPAIR_PERIOD: f32 = 0.5;
 
 pub(crate) fn on_timer(game: &RefCell<Game>, rt: &mut dyn ScriptRuntime, kind: u8, unit: ObjKey, base: u32, _aux: u32) {
     match kind {
-        KIND_REPAIR => game.borrow_mut().repair_tick(unit),
-        KIND_REPLENISH => game.borrow_mut().replenish_tick(unit),
+        KIND_REPAIR => game.borrow_mut().repair_event(unit, false, false),
+        KIND_REPAIR_GOLD => game.borrow_mut().repair_event(unit, true, false),
+        KIND_REPAIR_LUMBER => game.borrow_mut().repair_event(unit, false, true),
         KIND_PULSE => {
             let dead = game.borrow_mut().pulse_tick(unit, base);
             for victim in dead {
@@ -678,62 +653,203 @@ impl Game {
     }
 }
 
-/// A running repair: the builder is the map key.
+/// Timer kinds of the repair: the one-second validation tick (message `0xD01C1`, kind [`KIND_REPAIR`]), the gold payment (`0xD01D0`) and
+/// the lumber payment (`0xD01D1`).
+pub const KIND_REPAIR_GOLD: u8 = 0x73;
+pub const KIND_REPAIR_LUMBER: u8 = 0x74;
+
+/// A running repair: the builder is the map key. CONFIRMED structure (V10): a life regeneration modifier on the target, a periodic
+/// payment timer per resource (one unit each time) and, when both periods are at least a second, a one-second validation tick.
 #[derive(Debug, Clone)]
 pub struct RepairJob {
     pub target: ObjKey,
-    /// `DataA`: the share of the target's cost a full repair costs (editor default 0.35).
-    ratio_cost: F32,
-    /// `DataB`: the share of the build time a full repair takes (editor default 1.5).
-    ratio_time: F32,
-    /// Life restored so far.
-    repaired: F32,
-    /// Gold and lumber (x10) already paid.
-    paid: [i32; 2],
-    /// Where the builder stood when it started (it leaves the job by moving).
+    modifier: Option<crate::agile::ModId>,
+    timers: Vec<TimerId>,
+    /// Where the builder stood when it started (it leaves the job by moving; UNSURE, the original re-checks the range instead).
     at: (F32, F32),
-    timer: TimerId,
-}
-
-/// A running replenish channel (the Moon Well).
-#[derive(Debug, Clone)]
-pub struct ReplenishJob {
-    pub target: ObjKey,
-    life: F32,
-    mana: F32,
-    ticks_left: u32,
-    period: f32,
-    timer: TimerId,
 }
 
 fn nonzero(x: F32) -> bool {
     x.to_bits() & 0x7FFF_FFFF != 0
 }
 
+fn lt87(a: F32, b: F32) -> bool {
+    f64::from(a.to_f32()) < f64::from(b.to_f32())
+}
+
+/// The inputs of the repair start for a finished building (no `ABnP` ability on the target): the level fields `DataA` (cost share) and
+/// `DataB` (time share), the target type's `goldRep`, `lumberRep` and `reptm` (UnitBalance), its maximum life and whether the builder's
+/// owner can pay one unit of each resource (`0x6F02D730` / `0x6F02D760`).
+#[derive(Debug, Clone, Copy)]
+pub struct RepairStartIn {
+    pub data_a: F32,
+    pub data_b: F32,
+    pub gold_rep: i32,
+    pub lumber_rep: i32,
+    pub rep_time: i32,
+    pub max_life: F32,
+    pub gold_ok: bool,
+    pub lumber_ok: bool,
+}
+
+/// What the repair start does, in order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RepairEvent {
+    /// The can-pay test for one unit of gold / lumber.
+    CanPay { gold: bool },
+    /// One unit is paid (`0x6F416A00(-1, 0, 0, 0)`, the wrapper scales by 10).
+    Pay { gold: bool },
+    /// A periodic timer: message `0xD01D0` / `0xD01D1` (payments) or `0xD01C1` (validation tick).
+    Timer { msg: u32, period: F32 },
+    /// The life regeneration modifier of the target (`0x6F02DC60`, second argument `0.0`).
+    Modifier { rate: F32 },
+}
+
+/// The repair start `0x6F070AB0` for a finished building (CONFIRMED by Unicorn, V10 `rep_start`): `T = max(5.0, DataB * reptm)`; the totals
+/// are `DataA * goldRep` and `DataA * lumberRep`; a nonzero total needs one unit to be payable (else nothing starts); then each nonzero
+/// total pays one unit at once and starts a periodic timer of `T / total` seconds; the one-second tick starts when both periods are at
+/// least 1.0 (a missing period counts as 1.0); the target gets a life regeneration of `max life / T` per second.
+pub fn repair_start_plan(inp: &RepairStartIn, div: &dyn Fn(F32, F32) -> F32) -> Vec<RepairEvent> {
+    use softfloat::conv::i2r;
+    let mut ev = Vec::new();
+    let gold_total = arith::mul(inp.data_a, i2r(inp.gold_rep));
+    let lumber_total = arith::mul(inp.data_a, i2r(inp.lumber_rep));
+    let mut time = arith::mul(inp.data_b, i2r(inp.rep_time));
+    let floor = F32::from_bits(0x40A0_0000);
+    if lt87(time, floor) {
+        time = floor;
+    }
+    let gold = lt87(F32::ZERO, gold_total);
+    let lumber = lt87(F32::ZERO, lumber_total);
+    if gold {
+        ev.push(RepairEvent::CanPay { gold: true });
+        if !inp.gold_ok {
+            return ev;
+        }
+    }
+    if lumber {
+        ev.push(RepairEvent::CanPay { gold: false });
+        if !inp.lumber_ok {
+            return ev;
+        }
+    }
+    let (mut gold_period, mut lumber_period) = (F32::ONE, F32::ONE);
+    if gold {
+        gold_period = div(time, gold_total);
+        ev.push(RepairEvent::Pay { gold: true });
+        ev.push(RepairEvent::Timer { msg: 0xD01D0, period: gold_period });
+    }
+    if lumber {
+        lumber_period = div(time, lumber_total);
+        ev.push(RepairEvent::Pay { gold: false });
+        ev.push(RepairEvent::Timer { msg: 0xD01D1, period: lumber_period });
+    }
+    let one_le = |p: F32| f64::from(F32::ONE.to_f32()) <= f64::from(p.to_f32());
+    if one_le(gold_period) && one_le(lumber_period) {
+        ev.push(RepairEvent::Timer { msg: 0xD01C1, period: F32::ONE });
+    }
+    ev.push(RepairEvent::Modifier { rate: div(inp.max_life, time) });
+    ev
+}
+
+/// The target gate of Repair (slot `0x3F0` = `0x6F04BF70`, CONFIRMED by Unicorn, V10 `rep_gate`) for a target without an `ABnP` ability:
+/// `152` for a locked unit (`+0x5C & 0x100`), `30` when `max - life` is ordered below 1.0, `161` with an `Buns` buff, `162` for an
+/// illusion, `8` / `9` when the repair needs gold / lumber (`goldRep` / `lumberRep` nonzero) and one unit cannot be paid, else `0`.
+pub fn repair_gate_code(flags: u32, life: F32, max_life: F32, unsummoning: bool, gold_rep: i32, lumber_rep: i32, gold_ok: bool, lumber_ok: bool) -> u32 {
+    if flags & 0x100 != 0 {
+        return 152;
+    }
+    if lt87(arith::sub(max_life, life), F32::ONE) {
+        return 30;
+    }
+    if unsummoning {
+        return 161;
+    }
+    if flags & 0x4000_0000 != 0 {
+        return 162;
+    }
+    if gold_rep != 0 && !gold_ok {
+        return 8;
+    }
+    if lumber_rep != 0 && !lumber_ok {
+        return 9;
+    }
+    0
+}
+
+const BUFF_UNSUMMON: u32 = code(b"Buns");
+
+impl Game {
+    /// The gate code of a repair of `target` by a builder of `owner` (see [`repair_gate_code`]).
+    pub(crate) fn repair_gate(&self, owner: u32, target: ObjKey) -> u32 {
+        let u = self.unit(target);
+        let (gold_rep, lumber_rep) = self.unit_types().get(u.type_id).map_or((0, 0), |t| (t.gold_rep, t.lumber_rep));
+        let can = |res| self.economy.get(owner as usize).is_some_and(|p| p.stored(res) / 10 >= 1);
+        let flags = if u.illusion { 0x4000_0000 } else { 0 };
+        repair_gate_code(
+            flags,
+            u.life,
+            u.max_life,
+            self.buff_position(target, BUFF_UNSUMMON).is_some(),
+            gold_rep,
+            lumber_rep,
+            can(crate::economy::Res::Gold),
+            can(crate::economy::Res::Lumber),
+        )
+    }
+}
+
 /// Repair, Renew, Restoration (`CAbilityRepair < CAbilityAutoTargetSpell`, `CAbilityRenew` and `CAbilityRestoration <
-/// CAbilityRepair`): the builder restores the target's life at `max life / (bldtm * DataB)` per second and pays
-/// `DataA * cost * repaired / max life` of gold and lumber as it goes; it stops when the target is whole, when the
-/// owner cannot pay, or when the builder moves. LIKELY structure (the editor meaning of `DataA` / `DataB`, the
-/// 0.35 / 1.5 defaults of `AbilityData.slk`), UNSURE: the 0.5 s tick, paying as it goes, `bldtm` as the base time
-/// (there is no repair-time column in `UnitBalance.slk`), and `DataC` / `DataD` (power build) are not modelled.
+/// CAbilityRepair`), effect slot `0x424` = `0x6F070AB0` for a finished building: see [`repair_start_plan`]. Not modelled: a target that
+/// is still under construction (the `ABnP` branches: taking over or joining a construction, the "power build" `DataC` / `DataD`).
 fn start_repair(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
     let mut gm = game.borrow_mut();
     if !gm.alive(target) {
         return;
     }
-    if let Some(old) = gm.spells.m.repairs.remove(&rec.caster) {
-        gm.timers.cancel(old.timer);
-    }
-    let timer = gm.timers.start(
-        REPAIR_PERIOD,
-        false,
-        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPAIR, unit: rec.caster, base: rec.base, aux: 0 }),
-    );
+    gm.end_repair(rec.caster);
+    let owner = gm.unit(rec.caster).owner;
+    let (type_id, max_life) = (gm.unit(target).type_id, gm.unit(target).max_life);
+    let (gold_rep, lumber_rep, rep_time) =
+        gm.unit_types().get(type_id).map_or((0, 0, 0), |t| (t.gold_rep, t.lumber_rep, t.repair_time));
+    let can = |gm: &Game, res| gm.economy.get(owner as usize).is_some_and(|p| p.stored(res) / 10 >= 1);
+    let inp = RepairStartIn {
+        data_a: rec.level.data[0],
+        data_b: rec.level.data[1],
+        gold_rep,
+        lumber_rep,
+        rep_time,
+        max_life,
+        gold_ok: can(&gm, crate::economy::Res::Gold),
+        lumber_ok: can(&gm, crate::economy::Res::Lumber),
+    };
     let at = (gm.unit(rec.caster).x, gm.unit(rec.caster).y);
-    gm.spells.m.repairs.insert(
-        rec.caster,
-        RepairJob { target, ratio_cost: rec.level.data[0], ratio_time: rec.level.data[1], repaired: F32::ZERO, paid: [0, 0], at, timer },
-    );
+    let mut job = RepairJob { target, modifier: None, timers: Vec::new(), at };
+    let plan = repair_start_plan(&inp, &|a, b| gm.soft_div(a, b));
+    for e in plan {
+        match e {
+            RepairEvent::CanPay { .. } => {}
+            RepairEvent::Pay { gold } => {
+                let res = if gold { crate::economy::Res::Gold } else { crate::economy::Res::Lumber };
+                crate::economy::change(&mut gm.economy, owner as usize, res, -10, crate::economy::Flags::NONE);
+            }
+            RepairEvent::Timer { msg, period } => {
+                let kind = match msg {
+                    0xD01D0 => KIND_REPAIR_GOLD,
+                    0xD01D1 => KIND_REPAIR_LUMBER,
+                    _ => KIND_REPAIR,
+                };
+                let t = gm.timers.start(
+                    period.to_f32(),
+                    true,
+                    Payload::Spell(SpellMsg::UnitSpell { kind, unit: rec.caster, base: rec.base, aux: 0 }),
+                );
+                job.timers.push(t);
+            }
+            RepairEvent::Modifier { rate } => job.modifier = gm.add_life_regen_modifier(target, rate),
+        }
+    }
+    gm.spells.m.repairs.insert(rec.caster, job);
 }
 
 impl Game {
@@ -742,175 +858,295 @@ impl Game {
         self.spells.m.repairs.get(&builder).map(|j| j.target)
     }
 
+    /// The stop of the ability (`0x6F06BBB0`): the payment and tick timers end and the regeneration modifier is released.
     fn end_repair(&mut self, builder: ObjKey) {
         if let Some(j) = self.spells.m.repairs.remove(&builder) {
-            self.timers.cancel(j.timer);
+            for t in j.timers {
+                self.timers.cancel(t);
+            }
+            if let Some(m) = j.modifier {
+                self.release_modifier(m);
+            }
         }
     }
 
-    fn repair_tick(&mut self, builder: ObjKey) {
+    /// A repair timer fired (`0x6F070FE0`): the target gate is checked again (a target that is whole, a builder that cannot pay, a
+    /// vanished target all stop the repair), then a payment event takes one unit. LIKELY (the validation inside `0x6F035070` is
+    /// summarised by the gate, the alive tests and the builder staying put; the range re-check and re-order are not modelled).
+    fn repair_event(&mut self, builder: ObjKey, gold: bool, lumber: bool) {
         let Some(job) = self.spells.m.repairs.get(&builder).cloned() else {
             return;
         };
-        let (target, mut paid) = (job.target, job.paid);
         let moved = {
             let b = self.unit(builder);
             b.x.to_bits() != job.at.0.to_bits() || b.y.to_bits() != job.at.1.to_bits()
         };
-        if !self.alive(builder) || !self.alive(target) || moved || self.is_stunned(builder) {
+        if !self.alive(builder) || !self.alive(job.target) || moved || self.is_stunned(builder) {
             self.end_repair(builder);
             return;
         }
-        let (type_id, owner) = (self.unit(target).type_id, self.unit(target).owner);
-        let bldtm = self.production().build_seconds.get(&type_id).copied().unwrap_or(0);
-        let (life, max) = (self.unit(target).life, self.unit(target).max_life);
-        let deficit = arith::sub(max, life);
-        if bldtm <= 0 || !nonzero(max) || !arith::lt(F32::ZERO, deficit) {
+        let owner = self.unit(builder).owner;
+        if self.repair_gate(owner, job.target) != 0 {
             self.end_repair(builder);
             return;
         }
-        // Life per tick: max life * period / (bldtm * time ratio).
-        let period = F32::from_bits(REPAIR_PERIOD.to_bits());
-        let secs = arith::mul(softfloat::conv::i2r(bldtm), job.ratio_time);
-        if !arith::lt(F32::ZERO, secs) {
-            self.end_repair(builder);
-            return;
-        }
-        let mut gain = self.soft_div(arith::mul(max, period), secs);
-        if arith::lt(deficit, gain) {
-            gain = deficit;
-        }
-        let repaired = arith::add(job.repaired, gain);
-        // What has been earned in resources so far, x10, and what is still to pay.
-        let ty = self.unit_types().get(type_id).map(|t| (t.gold_cost, t.wood_cost)).unwrap_or((0, 0));
-        let frac = self.soft_div(repaired, max);
-        let mut due = [0i32; 2];
-        for (i, cost) in [ty.0, ty.1].into_iter().enumerate() {
-            let total = softfloat::conv::f2i(arith::mul(softfloat::conv::i2r(cost.saturating_mul(10)), job.ratio_cost));
-            due[i] = softfloat::conv::f2i(arith::mul(softfloat::conv::i2r(total), frac)).max(paid[i]);
-        }
-        let need = [due[0] - paid[0], due[1] - paid[1]];
-        let affordable = self.economy.get(owner as usize).is_some_and(|p| {
-            p.stored(crate::economy::Res::Gold) >= need[0] && p.stored(crate::economy::Res::Lumber) >= need[1]
-        });
-        if !affordable {
-            // The owner cannot pay: the repair stops (the original raises an error and the builder idles, UNSURE).
-            self.end_repair(builder);
-            return;
-        }
-        for (i, res) in [crate::economy::Res::Gold, crate::economy::Res::Lumber].into_iter().enumerate() {
-            if need[i] > 0 {
-                crate::economy::change(&mut self.economy, owner as usize, res, -need[i], crate::economy::Flags::NONE);
-                paid[i] = due[i];
+        for (on, res) in [(gold, crate::economy::Res::Gold), (lumber, crate::economy::Res::Lumber)] {
+            if on {
+                crate::economy::change(&mut self.economy, owner as usize, res, -10, crate::economy::Flags::NONE);
             }
-        }
-        let next = arith::add(life, gain);
-        crate::natives::set_life(self, target, if arith::lt(max, next) { max } else { next });
-        let whole = !arith::lt(self.unit(target).life, max);
-        if whole {
-            self.end_repair(builder);
-            return;
-        }
-        let timer = self.timers.start(
-            REPAIR_PERIOD,
-            false,
-            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPAIR, unit: builder, base: REPAIR, aux: 0 }),
-        );
-        if let Some(j) = self.spells.m.repairs.get_mut(&builder) {
-            j.repaired = repaired;
-            j.paid = paid;
-            j.timer = timer;
         }
     }
 }
 
-/// Replenish Mana and Life / Life / Mana (`CAbilityReplenish`, `...Life`, `...Mana`; the Moon Well). UNSURE model: the
-/// `Cast` field is the channel length (`cast_field_is_duration`), `Dur` the tick period, and every tick gives the
-/// target `DataA` life (Arpb, Arpl) and `DataB` mana (Arpb, Arpm); the generic cast paid `Cost` mana once for the
-/// whole channel. The first tick is immediate.
-fn start_replenish(game: &RefCell<Game>, rec: &CastRec, target: ObjKey) {
+// ---- Replenish (the Moon Well), CONFIRMED by Unicorn (V10, `tools/emu/v10_emu.py` checks `rep_effect`, `rep_precheck`) ----
+
+/// The marker buffs of the Moon Well (`CBuffReplenish < CBuffHeal`, id getters `0x6F1D34E0`, `0x6F1D3560`, `0x6F1D35E0`).
+pub const BUFF_REPLENISH: u32 = code(b"Brpb");
+pub const BUFF_REPLENISH_LIFE: u32 = code(b"Brpl");
+pub const BUFF_REPLENISH_MANA: u32 = code(b"Brpm");
+
+/// The inputs of the Moon Well pulse (`CAbilityReplenish`, `Arpb`; `CAbilityReplenishLife` `Arpl` and `...Mana` `Arpm` differ only in
+/// slots `0x478` / `0x47C`, which return `0.0` for the missing half). All values are level-record fields (`Cast` +4, `Dur` +8,
+/// `HeroDur` +0xC, `Cost` +0x10, `Cool` +0x14, `DataA` +0x20, `DataB` +0x24, `DataE` +0x30) or ability fields (`extra` +0x9C,
+/// `extra_cool` +0x13C).
+#[derive(Debug, Clone, Copy)]
+pub struct ReplenishIn {
+    pub base: u32,
+    pub cast: F32,
+    pub dur: F32,
+    pub hero_dur: F32,
+    pub extra: F32,
+    pub cost: i32,
+    pub cool: F32,
+    pub data_a: F32,
+    pub data_b: F32,
+    pub data_e: F32,
+    pub extra_cool: F32,
+    /// Misc `IllusionsCanRestoreLife` / `IllusionsCanRestoreMana`.
+    pub misc_life: bool,
+    pub misc_mana: bool,
+    /// Misc `EtherealHealBonus`.
+    pub ethereal_bonus: F32,
+}
+
+/// One candidate of the group, in the collector's order, with every value the callback `0x6F1FAAA0` reads.
+#[derive(Debug, Clone, Copy)]
+pub struct ReplenishUnit {
+    pub hero: bool,
+    pub life: F32,
+    pub max_life: F32,
+    pub mana: F32,
+    pub max_mana: F32,
+    pub illusion: bool,
+    /// The ethereal count (`+0x158`, a signed compare).
+    pub ethereal: i32,
+    /// Whether the unit already carries each marker buff the callback could look up (`Brpb`, `Brpl`, `Brpm`).
+    pub existing: [bool; 3],
+    /// The per-unit gate, slot `0x3EC` (`0x6F04F7A0`), nonzero = the unit is refused.
+    pub refused: bool,
+}
+
+/// What the pulse does, in order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReplenishEvent {
+    /// The target effect `0x6F052EC0` (presentation).
+    Fx(usize),
+    /// The marker lookup `0x6F0787D0(unit, id, 0, 0, 1, 1)`.
+    Lookup { unit: usize, id: u32 },
+    /// The marker exists: slot `0x350` with the duration.
+    Refresh { unit: usize, id: u32, dur: F32 },
+    /// The marker is created: `0x324`, `0x354(unit, &dur, caster)`, registered on the unit.
+    Create { unit: usize, id: u32, dur: F32 },
+    /// The life adder `0x6F277C20` gets `amount`.
+    Life { unit: usize, amount: F32 },
+    /// The mana adder `0x6F279140` gets `amount`.
+    Mana { unit: usize, amount: F32 },
+    /// The caster effect `0x6F053040` after the group.
+    CasterFx,
+    /// The mana payment `0x6F283DB0(caster, &out, &cost, 1)`.
+    Pay(F32),
+    /// The cooldown start (`Cool + ability +0x13C`, flag 1).
+    Cooldown(F32),
+}
+
+/// The precheck value of the Moon Well, slot `0x374` = `0x6F1DBCC0` (CONFIRMED by Unicorn, V10 `rep_precheck`): `0.0 + I2R(F2I(DataE) *
+/// Cost)` by soft add (the base slot `0x36C` returns `0.0`). The readiness test compares the caster's mana with it (slot `0x370`
+/// `0x6F1D36A0`: a value equal to `0.0` passes, otherwise the mana check `0x6F283C70`). The generic payment of the cast body is skipped
+/// (slot `0x3D4` returns 0): the effect pays itself.
+pub fn replenish_precheck(data_e: F32, cost: i32) -> F32 {
+    let product = softfloat::conv::f2i(data_e).wrapping_mul(cost);
+    arith::add(F32::ZERO, softfloat::conv::i2r(product))
+}
+
+/// The readiness test of the Moon Well for a caster with `mana` (slot `0x370` = `0x6F1D36A0`, CONFIRMED by reading: a precheck value equal to
+/// `0.0` passes, otherwise the unit-side mana check). `None` for abilities with the generic rule.
+pub(crate) fn precheck_ok(base: u32, level: &crate::cast::SpellLevel, mana: F32) -> Option<bool> {
+    if !pays_in_effect(base) {
+        return None;
+    }
+    let need = replenish_precheck(level.data[4], level.cost);
+    Some(!nonzero(need) || crate::cast::mana_check(mana, need))
+}
+
+/// The classes whose cost slot `0x3D4` returns 0, so the generic cast body pays nothing (`0x6F05C840`): the effect pays itself.
+pub(crate) fn pays_in_effect(base: u32) -> bool {
+    matches!(base, REPLENISH | REPLENISH_LIFE | REPLENISH_MANA)
+}
+
+/// The pulse of the Moon Well (effect slot `0x428` = `0x6F1FADC0` and its per-unit callback `0x6F1FAAA0`; CONFIRMED by Unicorn, V10
+/// `rep_effect`): an immediate pulse with no target. The callback runs for the candidates of the group (targs flags, `Area` around the
+/// caster) in collector order; the record it shares holds the life amount (`DataA`) and the mana amount (`DataB`) and **is changed in
+/// place** by the ethereal bonus, so a later unit sees the scaled value. Per unit: stop when `F2I(Cast)` is nonzero and that many
+/// units were taken; skip a unit that needs nothing (an amount is "set" when nonzero, "needed" when `0.0 < max - current`) or that slot
+/// `0x3EC` refuses; otherwise count it, look up / refresh / create the marker (`Brpb` both amounts, `Brpl` life only, `Brpm` mana
+/// only) with `HeroDur` for a hero else `Dur + extra`, then (unless an illusion is blocked by the two Misc switches) scale the life
+/// amount for an ethereal unit and hand the amounts to the adders. After the group the caster pays `max(1, min(count, F2I(DataE))) *
+/// Cost` and starts its cooldown.
+pub fn replenish_plan(inp: &ReplenishIn, units: &[ReplenishUnit]) -> Vec<ReplenishEvent> {
+    let mut ev = Vec::new();
+    let mut life_amt = if inp.base == REPLENISH_MANA { F32::ZERO } else { inp.data_a };
+    let mana_amt = if inp.base == REPLENISH_LIFE { F32::ZERO } else { inp.data_b };
+    let limit = softfloat::conv::f2i(inp.cast);
+    let normal_dur = arith::add(inp.dur, inp.extra);
+    let mut count: i32 = 0;
+    for (i, u) in units.iter().enumerate() {
+        if limit != 0 && count == limit {
+            break;
+        }
+        let life_set = nonzero(life_amt);
+        let mana_set = nonzero(mana_amt);
+        let life_need = life_set && lt87(F32::ZERO, arith::sub(u.max_life, u.life));
+        let mana_need = mana_set && lt87(F32::ZERO, arith::sub(u.max_mana, u.mana));
+        if !((life_set || mana_set) && (life_need || mana_need)) || u.refused {
+            continue;
+        }
+        ev.push(ReplenishEvent::Fx(i));
+        count = count.wrapping_add(1);
+        let dur = if u.hero { inp.hero_dur } else { normal_dur };
+        let (id, slot) = match (life_set, mana_set) {
+            (true, true) => (BUFF_REPLENISH, 0),
+            (true, false) => (BUFF_REPLENISH_LIFE, 1),
+            _ => (BUFF_REPLENISH_MANA, 2),
+        };
+        ev.push(ReplenishEvent::Lookup { unit: i, id });
+        if u.existing[slot] {
+            ev.push(ReplenishEvent::Refresh { unit: i, id, dur });
+        } else {
+            ev.push(ReplenishEvent::Create { unit: i, id, dur });
+        }
+        if (u.illusion && !inp.misc_life && life_need) || (u.illusion && !inp.misc_mana && mana_need) {
+            continue;
+        }
+        if u.ethereal > 0 {
+            life_amt = arith::mul(life_amt, inp.ethereal_bonus);
+        }
+        if life_need {
+            ev.push(ReplenishEvent::Life { unit: i, amount: life_amt });
+        }
+        if mana_need {
+            ev.push(ReplenishEvent::Mana { unit: i, amount: mana_amt });
+        }
+    }
+    ev.push(ReplenishEvent::CasterFx);
+    let cap = softfloat::conv::f2i(inp.data_e) as u32;
+    let mut n = if (count as u32) < cap { count as u32 } else { cap };
+    if n == 0 {
+        n = 1;
+    }
+    ev.push(ReplenishEvent::Pay(softfloat::conv::i2r((n as i32).wrapping_mul(inp.cost))));
+    ev.push(ReplenishEvent::Cooldown(arith::add(inp.cool, inp.extra_cool)));
+    ev
+}
+
+/// The Moon Well pulse in the game: collects the candidates like the other area effects (circle of `Area` around the caster, the
+/// level's targs flags `ground,air,friend,self,organic,vuln,invu`), runs [`replenish_plan`] and applies the events.
+fn replenish_pulse(game: &RefCell<Game>, rec: &CastRec) {
     let mut gm = game.borrow_mut();
-    if !gm.alive(target) {
+    if !gm.alive(rec.caster) {
         return;
     }
-    if let Some(old) = gm.spells.m.replenish.remove(&rec.caster) {
-        gm.timers.cancel(old.timer);
+    let (cx, cy) = {
+        let c = gm.unit(rec.caster);
+        (c.x, c.y)
+    };
+    let word = targs_word("ground,air,friend,self,organic,vuln,invu");
+    let mut keys: Vec<ObjKey> = Vec::new();
+    for k in crate::natives::group::circle_candidates(&gm, cx, cy, rec.level.area) {
+        let u = gm.unit(k);
+        if !gm.alive(k) || u.hidden || u.removed || !targs_ok(&gm, rec.caster, k, word) {
+            continue;
+        }
+        keys.push(k);
     }
-    let l = &rec.level;
-    let life = if rec.base == REPLENISH_MANA { F32::ZERO } else { l.data[0] };
-    let mana = if rec.base == REPLENISH_LIFE { F32::ZERO } else { l.data[1] };
-    let period = if arith::lt(F32::ZERO, l.dur) { l.dur.to_f32() } else { 1.0 };
-    let ticks = if arith::lt(F32::ZERO, l.cast) { (l.cast.to_f32() / period).floor().max(1.0) as u32 } else { 1 };
-    let timer = gm.timers.start(
-        period,
-        false,
-        Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPLENISH, unit: rec.caster, base: rec.base, aux: 0 }),
-    );
-    gm.spells.m.replenish.insert(rec.caster, ReplenishJob { target, life, mana, ticks_left: ticks, period, timer });
-    // The first tick now (the job's remaining count excludes it).
-    gm.replenish_tick_now(rec.caster);
+    let units: Vec<ReplenishUnit> = keys
+        .iter()
+        .map(|&k| {
+            let u = gm.unit(k);
+            ReplenishUnit {
+                hero: gm.target_hero(k),
+                life: u.life,
+                max_life: u.max_life,
+                mana: u.mana,
+                max_mana: u.max_mana,
+                illusion: u.illusion,
+                ethereal: u.ethereal as i32,
+                existing: [BUFF_REPLENISH, BUFF_REPLENISH_LIFE, BUFF_REPLENISH_MANA].map(|b| gm.buff_position(k, b).is_some()),
+                refused: false,
+            }
+        })
+        .collect();
+    let d = &rec.level.data;
+    let inp = ReplenishIn {
+        base: rec.base,
+        cast: rec.level.cast,
+        dur: rec.level.dur,
+        hero_dur: rec.level.hero_dur,
+        extra: F32::ZERO,
+        cost: rec.level.cost,
+        cool: rec.level.cool,
+        data_a: d[0],
+        data_b: d[1],
+        data_e: d[4],
+        extra_cool: F32::ZERO,
+        misc_life: gm.spells.item.illusions_heal,
+        misc_mana: gm.spells.item.illusions_mana,
+        ethereal_bonus: gm.spells.unit.ethereal_heal_bonus,
+    };
+    let plan = replenish_plan(&inp, &units);
+    for e in plan {
+        match e {
+            ReplenishEvent::Create { unit, id, dur } => gm.replenish_mark(keys[unit], id, dur),
+            ReplenishEvent::Refresh { unit, id, dur } => gm.replenish_mark(keys[unit], id, dur),
+            ReplenishEvent::Life { unit, amount } => crate::item_abilities::add_life(&mut gm, keys[unit], amount),
+            ReplenishEvent::Mana { unit, amount } => crate::item_abilities::add_mana(&mut gm, keys[unit], amount),
+            ReplenishEvent::Pay(cost) => {
+                let mana = gm.unit(rec.caster).mana;
+                let (_, new_mana) = crate::cast::pay_mana(mana, cost);
+                gm.write_mana(rec.caster, new_mana);
+            }
+            // The cooldown is started by the cast body after the effect (`Cool`, no ability bonus in the model).
+            ReplenishEvent::Fx(_) | ReplenishEvent::Lookup { .. } | ReplenishEvent::CasterFx | ReplenishEvent::Cooldown(_) => {}
+        }
+    }
 }
 
 impl Game {
-    fn replenish_tick_now(&mut self, caster: ObjKey) {
-        let Some(job) = self.spells.m.replenish.get(&caster).cloned() else {
-            return;
+    /// Puts (or refreshes, by the set-duration rule) a Moon Well marker on `target`.
+    fn replenish_mark(&mut self, target: ObjKey, id: u32, duration: F32) {
+        let serial = match self.buff_position(target, id) {
+            Some(i) => self.unit(target).buffs[i].serial,
+            None => {
+                let serial = self.next_buff_serial();
+                self.unit_mut(target).buffs.push(crate::abilities::Buff {
+                    serial,
+                    base: id,
+                    predicates: buff_predicates(id),
+                    ..crate::abilities::Buff::default()
+                });
+                serial
+            }
         };
-        if !self.alive(caster) || !self.alive(job.target) {
-            self.end_replenish(caster);
-            return;
-        }
-        let t = job.target;
-        let (life, max_life, mana, max_mana) = {
-            let u = self.unit(t);
-            (u.life, u.max_life, u.mana, u.max_mana)
-        };
-        if nonzero(job.life) {
-            let sum = arith::add(life, job.life);
-            crate::natives::set_life(self, t, if arith::lt(max_life, sum) { max_life } else { sum });
-        }
-        if nonzero(job.mana) {
-            let sum = arith::add(mana, job.mana);
-            self.write_mana(t, if arith::lt(max_mana, sum) { max_mana } else { sum });
-        }
-        if let Some(j) = self.spells.m.replenish.get_mut(&caster) {
-            j.ticks_left = j.ticks_left.saturating_sub(1);
-        }
-    }
-
-    fn end_replenish(&mut self, caster: ObjKey) {
-        if let Some(j) = self.spells.m.replenish.remove(&caster) {
-            self.timers.cancel(j.timer);
-        }
-    }
-
-    fn replenish_tick(&mut self, caster: ObjKey) {
-        let Some(job) = self.spells.m.replenish.get(&caster).cloned() else {
-            return;
-        };
-        if job.ticks_left == 0 {
-            self.end_replenish(caster);
-            return;
-        }
-        self.replenish_tick_now(caster);
-        let left = self.spells.m.replenish.get(&caster).map_or(0, |j| j.ticks_left);
-        if left == 0 {
-            self.end_replenish(caster);
-            return;
-        }
-        let timer = self.timers.start(
-            job.period,
-            false,
-            Payload::Spell(SpellMsg::UnitSpell { kind: KIND_REPLENISH, unit: caster, base: REPLENISH, aux: 0 }),
-        );
-        if let Some(j) = self.spells.m.replenish.get_mut(&caster) {
-            j.timer = timer;
-        }
-    }
-
-    /// The target of a running replenish channel of `caster`.
-    pub fn m_replenishing(&self, caster: ObjKey) -> Option<ObjKey> {
-        self.spells.m.replenish.get(&caster).map(|j| j.target)
+        self.set_buff_duration(target, serial, duration);
     }
 }
 

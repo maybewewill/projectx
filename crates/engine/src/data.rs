@@ -456,6 +456,9 @@ fn sim_unit_type(ty: &UnitTypeData) -> UnitType {
             .collect(),
         gold_cost: ty.gold_cost,
         wood_cost: ty.lumber_cost,
+        gold_rep: ty.gold_rep,
+        lumber_rep: ty.lumber_rep,
+        repair_time: ty.repair_time,
         // Classification inputs of IsUnitType / IsUnitIdType (docs/spec/unit-classification.md).
         classification: ty.classification,
         movement: ty.movement,

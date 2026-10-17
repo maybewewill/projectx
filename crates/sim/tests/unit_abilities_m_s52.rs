@@ -94,7 +94,7 @@ function repair_foe takes nothing returns nothing
     set accepted = IssueTargetOrderById(repairer, 852024, foe_bld)
 endfunction
 function replenish_it takes nothing returns nothing
-    set accepted = IssueTargetOrderById(well, 852542, hurt)
+    set accepted = IssueImmediateOrderById(well, 852542)
 endfunction
 function taunt_it takes nothing returns nothing
     set accepted = IssueImmediateOrderById(taunter, 852520)
@@ -158,10 +158,14 @@ const PHX_TYPE: u32 = u32::from_be_bytes(*b"negg");
 fn host() -> ScriptHost {
     let prog = jass::parse(SRC).expect("parse");
     let module = compile(&[prog]).expect("compile");
-    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), None).expect("vm");
+    let tables = std::env::var("GAME_DLL")
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| softfloat::Tables::from_game_dll(&b).ok());
+    let h = ScriptHost::new(module, NativeRegistry::with_builtins(), tables).expect("vm");
     {
         let mut g = h.game_mut();
-        let b = |cost: (i32, i32)| UnitType { gold_cost: cost.0, wood_cost: cost.1, classification: 0x8, ..ut(1000.0, vec![]) };
+        let b = |cost: (i32, i32)| UnitType { gold_cost: cost.0, wood_cost: cost.1, gold_rep: cost.0, lumber_rep: cost.1, repair_time: 60, classification: 0x8, ..ut(1000.0, vec![]) };
         g.unit_types_mut().insert(c(b"nrpr"), ut(300.0, vec![REPAIR]));
         g.unit_types_mut().insert(c(b"nbld"), b((100, 50)));
         g.unit_types_mut().set_building(c(b"nbld"), true);
@@ -196,7 +200,7 @@ fn host() -> ScriptHost {
         };
         // AbilityData.slk rows (patch 1.26a).
         g.set_spell_levels(REPAIR, vec![lv(0.0, 0.0, 0, 50.0, 0.0, &[0.35, 1.5, 0.0, 0.0, 75.0], 0)]);
-        g.set_spell_levels(REPLENISH, vec![lv(6.0, 1.0, 6, 250.0, 700.0, &[25.0, 25.0, 0.0, 0.0, 5.0], 0)]);
+        g.set_spell_levels(REPLENISH, vec![lv(0.0, 1.0, 6, 250.0, 700.0, &[25.0, 25.0, 0.0, 0.0, 5.0], 0)]);
         g.set_spell_levels(TAUNT, vec![lv(0.0, 0.0, 0, 0.0, 450.0, &[10.0], 0)]);
         g.set_spell_levels(UNSUMMON, vec![lv(0.0, 0.0, 0, 0.0, 0.0, &[0.5, 50.0], 0)]);
         g.set_spell_levels(AURA_REGEN_LIFE, vec![lv(0.0, 0.0, 0, 0.0, 500.0, &[0.02, 1.0], 0)]);
@@ -262,6 +266,9 @@ fn the_s52_codes_are_modelled_in_the_table() {
 
 #[test]
 fn repair_restores_life_at_the_build_time_rate_and_pays_a_share_of_the_cost() {
+    if std::env::var("GAME_DLL").is_err() {
+        return; // the regeneration modifier needs the soft-float tables
+    }
     let mut h = started();
     let (bld, foe_bld) = (unit(&h, "bld"), unit(&h, "foe_bld"));
     call(&mut h, "repair_foe");
@@ -277,24 +284,23 @@ fn repair_restores_life_at_the_build_time_rate_and_pays_a_share_of_the_cost() {
     // 1000 life / (60 s * 1.5) = 11.11 life per second.
     let l = life(&h, bld);
     assert!(l > 600.0 && l < 615.0, "life {l}");
-    // A full repair costs 0.35 of 100 gold (x10 = 350 raw); this one restored `(l - 500) / 1000` of it.
+    // V10 (CONFIRMED against `0x6F070AB0`): the repair takes 1.5 * reptm = 90 s and costs 0.35 * goldRep = 35 gold over it, paid as
+    // single units: one at the start, then one every 90 / 35 = 2.57 s (4 or 5 units after 10 s).
     let paid = gold0 - h.game().player_economy(0).unwrap().stored(Res::Gold);
-    let expect = (350.0 * (l - 500.0) / 1000.0).floor() as i32;
-    assert!((paid - expect).abs() <= 1, "paid {paid}, expected about {expect}");
-    // Lumber too: 0.35 of 50 -> 175 raw for a full repair.
+    assert!(paid == 40 || paid == 50, "paid {paid}");
+    // Lumber: 0.35 * 50 = 17.5 over 90 s, one unit every 5.14 s (3 units after 10.3 s).
     let wood = 10_000 - h.game().player_economy(0).unwrap().stored(Res::Lumber);
-    let expect_wood = (175.0 * (l - 500.0) / 1000.0).floor() as i32;
-    assert!((wood - expect_wood).abs() <= 1, "wood {wood}, expected about {expect_wood}");
+    assert!(wood == 20 || wood == 30, "wood {wood}");
 }
 
 #[test]
 fn repair_stops_when_the_owner_cannot_pay() {
     let mut h = started();
     let bld = unit(&h, "bld");
-    // No lumber: the first payment that needs one raw unit of it fails and the job ends.
+    // No lumber: the target gate answers 9 (V10, CONFIRMED against `0x6F04BF70`) and the order is refused.
     call(&mut h, "repair_it");
     run(&mut h, 3);
-    assert!(accepted(&h));
+    assert!(!accepted(&h));
     run(&mut h, 200);
     assert!(h.game().m_repairing(bld).is_none());
     assert!(life(&h, bld) < 520.0, "life {}", life(&h, bld));
@@ -302,6 +308,9 @@ fn repair_stops_when_the_owner_cannot_pay() {
 
 #[test]
 fn repair_runs_to_the_end_when_it_can_pay_and_stops_whole() {
+    if std::env::var("GAME_DLL").is_err() {
+        return;
+    }
     let mut h = started();
     let bld = unit(&h, "bld");
     h.game_mut().credit_resource(0, Res::Lumber, 1000, sim::economy::Flags::NONE);
@@ -309,33 +318,33 @@ fn repair_runs_to_the_end_when_it_can_pay_and_stops_whole() {
     run(&mut h, 3);
     assert!(accepted(&h));
     run(&mut h, 480); // 48 s: 500 life at 11.11 per second
-    assert_eq!(life(&h, bld), 1000.0);
+    // The gate answers 30 once less than 1.0 life is missing, so the repair ends there (V10).
+    assert!(life(&h, bld) > 999.0, "life {}", life(&h, bld));
     assert!(h.game().m_repairing(bld).is_none());
-    // Half the building was missing: half of 0.35 * 100 gold and of 0.35 * 50 lumber.
+    // Half the building was missing: about half of 0.35 * 100 gold and of 0.35 * 50 lumber, paid in single units on a timer.
     let g = h.game();
     let e = g.player_economy(0).unwrap();
     let gold = (10_000 - e.stored(Res::Gold)) as f32 / 10.0;
     let wood = (10_000 - e.stored(Res::Lumber)) as f32 / 10.0;
-    assert!((gold - 17.5).abs() < 0.5, "gold {gold}");
-    assert!((wood - 8.75).abs() < 0.5, "lumber {wood}");
+    assert!((gold - 17.5).abs() < 2.0, "gold {gold}");
+    assert!((wood - 8.75).abs() < 2.0, "lumber {wood}");
 }
 
 #[test]
-fn replenish_channels_life_and_mana_into_the_target() {
+fn replenish_pulses_once_into_every_unit_that_needs_it() {
     let mut h = started();
     let (well, hurt) = (unit(&h, "well"), unit(&h, "hurt"));
     call(&mut h, "replenish_it");
     run(&mut h, 3);
     assert!(accepted(&h));
-    // The first tick is immediate: +25 life and +25 mana, the cost of 6 mana is paid once.
+    // One pulse (V10, CONFIRMED against `0x6F1FADC0`): +25 life and +25 mana for the one unit that needs them, the caster pays
+    // `max(1, min(units, F2I(DataE))) * Cost` = 6 mana; there is no channel.
     assert_eq!(life(&h, hurt), 525.0);
     assert_eq!(mana(&h, hurt), 25.0);
     assert_eq!(mana(&h, well), 594.0);
     run(&mut h, 80);
-    // Six ticks in all (Cast 6 / Dur 1).
-    assert_eq!(life(&h, hurt), 650.0);
-    assert_eq!(mana(&h, hurt), 150.0);
-    assert!(h.game().m_replenishing(well).is_none());
+    assert_eq!(life(&h, hurt), 525.0);
+    assert_eq!(mana(&h, hurt), 25.0);
 }
 
 #[test]
