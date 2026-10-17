@@ -31,6 +31,7 @@ pub mod construction;
 pub mod damage;
 pub mod daynight;
 pub mod economy;
+pub mod follow;
 pub mod handles;
 pub mod heroes;
 pub mod human_heroes;
